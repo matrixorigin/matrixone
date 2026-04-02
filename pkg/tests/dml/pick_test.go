@@ -487,10 +487,10 @@ func runPickMixedOperations(t *testing.T, parentCtx context.Context, db *sql.DB)
 	execSQLDB(t, ctx, db, "data branch create table src from base")
 
 	// Mixed operations on src:
-	execSQLDB(t, ctx, db, "delete from src where a=2")                      // DELETE
-	execSQLDB(t, ctx, db, "update src set b=99, c='updated' where a=3")     // UPDATE
-	execSQLDB(t, ctx, db, "insert into src values (6,60,'inserted')")       // INSERT
-	execSQLDB(t, ctx, db, "delete from src where a=5")                      // DELETE
+	execSQLDB(t, ctx, db, "delete from src where a=2")                     // DELETE
+	execSQLDB(t, ctx, db, "update src set b=99, c='updated' where a=3")    // UPDATE
+	execSQLDB(t, ctx, db, "insert into src values (6,60,'inserted')")      // INSERT
+	execSQLDB(t, ctx, db, "delete from src where a=5")                     // DELETE
 	execSQLDB(t, ctx, db, "insert into src values (7,70,'also_inserted')") // INSERT
 
 	execSQLDB(t, ctx, db, "data branch pick src into base keys(1,2,3,4,5,6,7)")

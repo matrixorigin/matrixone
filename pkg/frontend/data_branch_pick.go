@@ -655,7 +655,7 @@ func buildPKFilterFromVec(vec *vector.Vector, pkType types.Type, pkColIdx int) *
 }
 
 func unescapeMySQLString(s string) string {
-	if strings.IndexByte(s, '\\') < 0 && strings.Index(s, "''") < 0 {
+	if strings.IndexByte(s, '\\') < 0 && !strings.Contains(s, "''") {
 		return s
 	}
 	buf := make([]byte, 0, len(s))
@@ -731,9 +731,9 @@ type segmentBuilder struct {
 	pkType types.Type
 
 	// Current segment state.
-	curMin   []byte  // min PK raw bytes (owned copy)
-	curMax   []byte  // max PK raw bytes (owned copy)
-	curCount int     // values in current segment
+	curMin   []byte // min PK raw bytes (owned copy)
+	curMax   []byte // max PK raw bytes (owned copy)
+	curCount int    // values in current segment
 
 	// Gap statistics (numeric PKs only).
 	gapSum    float64
