@@ -63,6 +63,7 @@ REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1
 drop table bug_22340;
 
 drop database replace_db;
+use `replace`;
 
 -- test NULL on unique key column: multiple NULLs should not conflict
 drop table if exists t_null_uk;

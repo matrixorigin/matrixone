@@ -30,10 +30,11 @@ insert into t1 values (1,1,1), (2,2,2), (3,3,3);
 replace t1 values (1,2,3), (2,3,4);
 select a, b, c from t1;
 a    b    c
-1    1    1
-2    2    2
-3    3    3
 1    2    3
+1    2    3
+1    2    3
+2    3    4
+2    3    4
 2    3    4
 create table t4 (a int unique key, b varchar(64));
 replace into t4 values (1, 'a');
@@ -86,3 +87,60 @@ mo_ctl(dn, flush, replace_db.bug_22340)
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 drop table bug_22340;
 drop database replace_db;
+use `replace`;
+drop table if exists t_null_uk;
+create table t_null_uk(id int primary key, a int, b varchar(64), unique key(a));
+replace into t_null_uk values (1, NULL, 'first');
+replace into t_null_uk values (2, NULL, 'second');
+select id, a, b from t_null_uk order by id;
+id    a    b
+1    null    first
+2    null    second
+replace into t_null_uk values (3, 1, 'third');
+replace into t_null_uk values (4, 1, 'fourth');
+Duplicate entry '1' for key 'a'
+select id, a, b from t_null_uk order by id;
+id    a    b
+1    null    first
+2    null    second
+3    1    third
+drop table t_null_uk;
+drop table if exists t_fake_pk;
+create table t_fake_pk(a int unique key, b varchar(64));
+replace into t_fake_pk values (1, 'hello');
+select * from t_fake_pk;
+a    b
+1    hello
+replace into t_fake_pk values (1, 'world');
+select * from t_fake_pk;
+a    b
+1    world
+replace into t_fake_pk values (2, 'foo');
+select * from t_fake_pk order by a;
+a    b
+1    world
+2    foo
+drop table t_fake_pk;
+drop table if exists t_odku;
+create table t_odku(id int primary key, name varchar(64), val int);
+insert into t_odku values (1, 'a', 10);
+insert into t_odku values (1, 'b', 20) on duplicate key update name = values(name), val = values(val);
+select * from t_odku;
+id    name    val
+1    b    20
+drop table t_odku;
+drop table if exists t_pk_uk;
+create table t_pk_uk(id int primary key, a int unique, b varchar(64));
+insert into t_pk_uk values (1, 10, 'first'), (2, 20, 'second');
+replace into t_pk_uk values (1, 30, 'updated');
+select * from t_pk_uk order by id;
+id    a    b
+1    30    updated
+2    20    second
+replace into t_pk_uk values (3, 20, 'conflict_uk');
+Duplicate entry '20' for key 'a'
+select * from t_pk_uk order by id;
+id    a    b
+1    30    updated
+2    20    second
+drop table t_pk_uk;
