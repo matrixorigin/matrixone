@@ -2760,6 +2760,7 @@ func (tbl *txnTable) MergeObjects(
 	if err != nil {
 		return nil, err
 	}
+	defer taskHost.Release()
 
 	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
 	if err != nil {
@@ -2840,9 +2841,17 @@ func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 }
 
 func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
+	// Count only non-deleted (non-sentinel) rows for the size threshold check.
 	rowCnt := 0
-	for _, m := range mergeTask.transferMaps {
-		rowCnt += len(m)
+	tt := mergeTask.transferTable
+	nblks := tt.Len()
+	for i := 0; i < nblks; i++ {
+		m := tt.GetBlockMap(i)
+		for _, pos := range m {
+			if pos.ObjIdx != api.NoTransfer {
+				rowCnt++
+			}
+		}
 	}
 
 	// If transfer info is small, send it to tn directly.
@@ -2850,25 +2859,25 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
 	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
 	if rowCnt < 500000 {
-		size := len(mergeTask.transferMaps)
-		mappings := make([]api.BlkTransMap, size)
-		for i := 0; i < size; i++ {
-			mappings[i] = api.BlkTransMap{
-				M: make(map[int32]api.TransDestPos, len(mergeTask.transferMaps[i])),
-			}
-		}
-		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
-			Mappings: mappings,
-		}
-
-		for i, m := range mergeTask.transferMaps {
+		avgPerBlk := rowCnt / nblks
+		mappings := make([]api.BlkTransMap, nblks)
+		for i := 0; i < nblks; i++ {
+			m := tt.GetBlockMap(i)
+			mapping := make(map[int32]api.TransDestPos, avgPerBlk)
 			for r, pos := range m {
-				mergeTask.commitEntry.Booking.Mappings[i].M[int32(r)] = api.TransDestPos{
+				if pos.ObjIdx == api.NoTransfer {
+					continue
+				}
+				mapping[int32(r)] = api.TransDestPos{
 					ObjIdx: int32(pos.ObjIdx),
 					BlkIdx: int32(pos.BlkIdx),
 					RowIdx: int32(pos.RowIdx),
 				}
 			}
+			mappings[i] = api.BlkTransMap{M: mapping}
+		}
+		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
+			Mappings: mappings,
 		}
 		return mergeTask.commitEntry, nil
 	}
@@ -2904,16 +2913,18 @@ func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 }
 
 func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
-	bookingMaps := taskHost.transferMaps
+	tt := taskHost.transferTable
 
-	blkCnt := int32(len(bookingMaps))
+	nblks := tt.Len()
+	blkCnt := int32(nblks)
 	totalRows := 0
 
 	// BookingLoc layout:
 	// | blockCnt | Blk1RowCnt | Blk2RowCnt | ... | filepath1 | filepath2 | ... |
 	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
 		commonUtil.UnsafeBytesToString(types.EncodeInt32(&blkCnt)))
-	for _, m := range bookingMaps {
+	for i := 0; i < nblks; i++ {
+		m := tt.GetBlockMap(i)
 		rowCnt := int32(len(m))
 		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
 			commonUtil.UnsafeBytesToString(types.EncodeInt32(&rowCnt)))
@@ -2935,23 +2946,34 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		buffer.Vecs[i] = vec
 		releases[i] = release
 	}
+	defer func() {
+		for _, rel := range releases {
+			if rel != nil {
+				rel()
+			}
+		}
+	}()
 	objRowCnt := 0
-	for blkIdx, transMap := range bookingMaps {
+	for blkIdx := 0; blkIdx < nblks; blkIdx++ {
+		transMap := tt.GetBlockMap(blkIdx)
 		for rowIdx, destPos := range transMap {
+			if destPos.ObjIdx == api.NoTransfer {
+				continue
+			}
 			if err = vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool()); err != nil {
 				return err
 			}
-			if err = vector.AppendFixed(buffer.Vecs[1], rowIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+			if err = vector.AppendFixed(buffer.Vecs[1], uint32(rowIdx), false, taskHost.GetMPool()); err != nil {
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 			if err = vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool()); err != nil {
-				return nil
+				return err
 			}
 
 			buffer.SetRowCount(buffer.RowCount() + 1)

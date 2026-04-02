@@ -579,6 +579,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if err != nil {
 		return
 	}
+	defer res.Close()
 
 	if len(rt.BackgroundQueries) > 0 {
 		rt.BackgroundQueries[0] = res.LogicalPlan
@@ -610,8 +611,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			distances = append(distances, dist)
 		}
 	}
-
-	res.Close()
 
 	return resid, distances, nil
 }

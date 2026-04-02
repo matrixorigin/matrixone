@@ -174,8 +174,17 @@ func (exec *countColumnExec) SetExtraInformation(partialResult any, _ int) error
 	return nil
 }
 
-func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
+func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	if exec.IsDistinct() {
 		if exec.extra != 0 {
 			panic(moerr.NewInternalErrorNoCtx("extra is not supported for distinct count"))
@@ -183,7 +192,9 @@ func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
 			vecs[i].SetLength(int(exec.state[i].length))
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 			for j := range vals {

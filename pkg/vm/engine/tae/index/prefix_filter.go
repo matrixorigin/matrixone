@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,23 +31,42 @@ type prefixBloomFilter struct {
 	bloomFilter
 }
 
+// NewPrefixBloomFilter builds a BinaryFuse8 bloom filter over prefix-transformed values.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
 func NewPrefixBloomFilter(
 	data containers.Vector,
 	prefixFnId uint8,
 	prefixFn func([]byte) []byte,
+	buf *[]uint64,
+	builder *xorfilter.BinaryFuseBuilder,
+	alloc func(int) []byte,
 ) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
+	n := data.Length()
+	var hashes []uint64
+	if buf != nil {
+		if cap(*buf) < n {
+			*buf = make([]uint64, 0, n)
+		} else {
+			*buf = (*buf)[:0]
+		}
+		hashes = *buf
+	} else {
+		hashes = make([]uint64, 0, n)
+	}
 	op := func(v []byte, _ bool, _ int) error {
-		hash := hashV1(prefixFn(v))
-		hashes = append(hashes, hash)
+		hashes = append(hashes, hashV1(prefixFn(v)))
 		return nil
 	}
 	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, data.Length(), op, nil,
+		data.GetDownstreamVector(), 0, n, op, nil,
 	); err != nil {
 		return nil, err
 	}
-	bf, err := buildFuseFilter(hashes)
+	if buf != nil {
+		*buf = hashes
+	}
+	bf, err := buildFuseFilterReuse(builder, hashes, alloc)
 	if err != nil {
 		return nil, err
 	}

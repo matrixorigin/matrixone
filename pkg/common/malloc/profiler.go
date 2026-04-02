@@ -42,6 +42,7 @@ type Profiler[T any, P interface {
 	stackOmittedSample SampleInfo[T]
 
 	nextID atomic.Uint64
+	name   string
 }
 
 type SampleInfo[T any] struct {
@@ -69,8 +70,10 @@ type FunctionKey struct {
 func NewProfiler[T any, P interface {
 	*T
 	SampleValues[P]
-}]() *Profiler[T, P] {
-	ret := &Profiler[T, P]{}
+}](name string) *Profiler[T, P] {
+	ret := &Profiler[T, P]{
+		name: name,
+	}
 
 	ret.stackOmittedSample.Locations = []*profile.Location{
 		ret.getMockLocation("| stack omitted |"),
@@ -280,6 +283,10 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	prof := &profile.Profile{
 		SampleType:        ptr.SampleTypes(),
 		DefaultSampleType: ptr.DefaultSampleType(),
+		Mapping: []*profile.Mapping{{
+			ID:   1,
+			File: p.name,
+		}},
 	}
 
 	prof.Sample = append(prof.Sample, &profile.Sample{

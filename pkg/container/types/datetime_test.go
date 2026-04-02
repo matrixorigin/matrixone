@@ -323,6 +323,56 @@ func TestParseDatetime(t *testing.T) {
 			args: "2024-12-20T23:59:59",
 			want: "2024-12-20 23:59:59.000000",
 		},
+		// 7. leading-zero seconds field wider than 2 digits (MySQL compat)
+		// Fast path only matches len==19 or s[19]=='.'; wider second fields fall to slow path.
+		{
+			name: "3-digit seconds with leading zero",
+			args: "1998-01-01 00:00:009",
+			want: "1998-01-01 00:00:09.000000",
+		},
+		{
+			name: "3-digit seconds with leading zero and microseconds",
+			args: "1998-01-01 00:00:009.5",
+			want: "1998-01-01 00:00:09.500000",
+		},
+		{
+			name: "3-digit seconds ISO T separator",
+			args: "1998-01-01T00:00:009",
+			want: "1998-01-01 00:00:09.000000",
+		},
+		// 8. slash date separator
+		{
+			name: "slash separator yyyy/mm/dd hh:mm:ss",
+			args: "2000/01/01 12:30:45",
+			want: "2000-01-01 12:30:45.000000",
+		},
+		{
+			name: "slash separator with microseconds",
+			args: "2000/06/15 08:00:00.123456",
+			want: "2000-06-15 08:00:00.123456",
+		},
+		// 9. variable-width fields (slow path)
+		{
+			name: "1-digit month and day",
+			args: "2000-1-2 3:4:5",
+			want: "2000-01-02 03:04:05.000000",
+		},
+		{
+			name: "trailing colon in time",
+			args: "2022-09-01 23:11:",
+			want: "2022-09-01 23:11:00.000000",
+		},
+		// 10. microsecond carry across second boundary
+		{
+			name: "microsecond carry to next microsecond",
+			args: "2022-01-01 00:00:00.0000006",
+			want: "2022-01-01 00:00:00.000001",
+		},
+		{
+			name: "microsecond carry to next second",
+			args: "2000-01-01 00:00:00.9999999",
+			want: "2000-01-01 00:00:01.000000",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
