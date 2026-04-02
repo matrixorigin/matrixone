@@ -969,6 +969,176 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
+func BuildReplaceDeleteCondition(tableDef *plan.TableDef, stmt *tree.Replace) string {
+	keys := getAllReplaceKeys(tableDef)
+	if keys == nil {
+		return ""
+	}
+
+	if len(stmt.Columns) != 0 {
+		row := stmt.Rows.Select.(*tree.ValuesClause).Rows[0]
+		keyToRow := getReplaceKeyToRowMatch(stmt.Columns)
+		keepKeys := filterReplaceKeys(keys, stmt.Columns)
+		disjunction := make([]string, 0, len(keepKeys))
+		for _, key := range keepKeys {
+			disjunction = append(disjunction, buildReplaceConjunction(key, row, keyToRow))
+		}
+		return strings.Join(disjunction, " or ")
+	}
+
+	keyToRow := make(map[string]int, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		keyToRow[col.Name] = i
+	}
+
+	rows := stmt.Rows.Select.(*tree.ValuesClause).Rows
+	disjunction := make([]string, 0, len(rows)*len(keys))
+	for _, row := range rows {
+		for _, key := range keys {
+			disjunction = append(disjunction, buildReplaceConjunction(key, row, keyToRow))
+		}
+	}
+	return strings.Join(disjunction, " or ")
+}
+
+func GenSqlsForCheckReplaceSelfReferParentDelete(
+	ctx context.Context,
+	dbName, tblName, deleteCond string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+) ([]string, error) {
+	qualifiedDeleteCond := qualifyReplaceDeleteCond(deleteCond, cols)
+	ret := make([]string, 0)
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		if fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION &&
+			fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_SET_DEFAULT {
+			continue
+		}
+
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+
+		joinConds := make([]string, len(fkCols))
+		for i := range fkCols {
+			joinConds[i] = fmt.Sprintf("p.`%s` = c.`%s`", referCols[i], fkCols[i])
+		}
+
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from ("+
+				"select 1 from `%s`.`%s` p join `%s`.`%s` c on %s where %s limit 1"+
+				")",
+			dbName, tblName,
+			dbName, tblName,
+			strings.Join(joinConds, " and "),
+			qualifiedDeleteCond,
+		)
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
+func getAllReplaceKeys(tableDef *plan.TableDef) []map[string]struct{} {
+	n := 0
+	for _, index := range tableDef.Indexes {
+		if index.Unique {
+			n++
+		}
+	}
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+
+	keys := make([]map[string]struct{}, 0, n)
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		keys = append(keys, make(map[string]struct{}))
+		for _, part := range tableDef.Pkey.Names {
+			keys[0][part] = struct{}{}
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index.Unique {
+			keys = append(keys, make(map[string]struct{}))
+			for _, key := range index.Parts {
+				keys[len(keys)-1][catalog.ResolveAlias(key)] = struct{}{}
+			}
+		}
+	}
+	return keys
+}
+
+func getReplaceInsertedCol(cols tree.IdentifierList) map[string]struct{} {
+	insertedCol := make(map[string]struct{}, len(cols))
+	for _, col := range cols {
+		insertedCol[string(col)] = struct{}{}
+	}
+	return insertedCol
+}
+
+func filterReplaceKeys(keys []map[string]struct{}, cols tree.IdentifierList) []map[string]struct{} {
+	keepKeys := keys[:0]
+	insertedCol := getReplaceInsertedCol(cols)
+	for _, key := range keys {
+		if isMapSubset(insertedCol, key) {
+			keepKeys = append(keepKeys, key)
+		}
+	}
+	for i := len(keepKeys); i < len(keys); i++ {
+		keys[i] = nil
+	}
+	return keepKeys
+}
+
+func getReplaceKeyToRowMatch(columns tree.IdentifierList) map[string]int {
+	keyToRow := make(map[string]int, len(columns))
+	for i, col := range columns {
+		keyToRow[string(col)] = i
+	}
+	return keyToRow
+}
+
+func buildReplaceConjunction(key map[string]struct{}, row tree.Exprs, keyToRow map[string]int) string {
+	conjunctions := make([]string, 0, len(key))
+	for k := range key {
+		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		row[keyToRow[k]].Format(fmtctx)
+		conjunctions = append(conjunctions, fmt.Sprintf("`%s` = %s", k, fmtctx.String()))
+	}
+	return "(" + strings.Join(conjunctions, " and ") + ")"
+}
+
+func isMapSubset(m, sub map[string]struct{}) bool {
+	if len(sub) > len(m) {
+		return false
+	}
+	for k := range sub {
+		if _, ok := m[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func qualifyReplaceDeleteCond(deleteCond string, cols []*plan.ColDef) string {
+	qualified := deleteCond
+	for _, col := range cols {
+		qualified = strings.ReplaceAll(qualified, fmt.Sprintf("`%s`", col.Name), fmt.Sprintf("p.`%s`", col.Name))
+	}
+	return qualified
+}
+
 func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")

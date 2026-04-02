@@ -1272,3 +1272,67 @@ func Test_bind_delete(t *testing.T) {
 	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
 	assert.Error(t, err)
 }
+
+func TestBindAndOptimizeReplaceKeepsSelfReferDetectSqls(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.ctx = context.Background()
+	ctx.isDml = true
+	ctx.objects["names"] = &ObjectRef{
+		SchemaName: "db",
+		ObjName:    "names",
+	}
+	ctx.tables["names"] = &TableDef{
+		TblId:     1,
+		DbName:    "db",
+		Name:      "names",
+		TableType: catalog.SystemOrdinaryRel,
+		Name2ColIndex: map[string]int32{
+			"id":           0,
+			"name":         1,
+			"age":          2,
+			"b":            3,
+			catalog.Row_ID: 4,
+		},
+		Cols: []*ColDef{
+			{Name: "id", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "name", ColId: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+			{Name: "age", ColId: 3, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", ColId: 4, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.Row_ID, ColId: 5, Typ: plan.Type{Id: int32(types.T_Rowid)}, Hidden: true},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Fkeys: []*plan.ForeignKeyDef{
+			{
+				Name:        "c1",
+				Cols:        []uint64{4},
+				ForeignCols: []uint64{1},
+				ForeignTbl:  0,
+			},
+		},
+	}
+
+	stmts, err := mysql.Parse(ctx.GetContext(), "replace into db.names(id, name, age, b) values (1, 'Abby', 24, 1)", 1)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	stmt, ok := stmts[0].(*tree.Replace)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+
+	plan0, err := bindAndOptimizeReplaceQuery(ctx, stmt, false, true)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	query := plan0.GetQuery()
+	assert.NotNil(t, query)
+	assert.NotEmpty(t, query.GetDetectSqls())
+}

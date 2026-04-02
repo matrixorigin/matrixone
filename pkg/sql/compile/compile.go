@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -409,8 +410,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Replace:
-		return s.replace(c)
 	case TableClone:
 		return s.TableClone(c)
 	}
@@ -500,6 +499,10 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.PostDmlSqlList.Clear()
 		c.proc.Base.StageCache.Clear()
 	}()
+
+	if err = detectReplaceSelfReferDelete(c); err != nil {
+		return err
+	}
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -607,13 +610,6 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		switch qry.Query.StmtType {
-		case plan.Query_REPLACE:
-			return []*Scope{
-				newScope(Replace).
-					withPlan(pn),
-			}, nil
-		}
 		scopes, err := c.compileQuery(qry.Query)
 		if err != nil {
 			return nil, err
@@ -4784,6 +4780,71 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 		}
 	}
 
+	return nil
+}
+
+func detectReplaceSelfReferDelete(c *Compile) error {
+	query := c.pn.GetQuery()
+	if query == nil || len(query.GetSteps()) == 0 {
+		return nil
+	}
+
+	rootNode := query.GetNodes()[query.GetSteps()[len(query.GetSteps())-1]]
+	if rootNode == nil || rootNode.GetNodeType() != plan.Node_MULTI_UPDATE || len(rootNode.GetUpdateCtxList()) == 0 {
+		return nil
+	}
+
+	tableDef := rootNode.GetUpdateCtxList()[0].GetTableDef()
+	objRef := rootNode.GetUpdateCtxList()[0].GetObjRef()
+	if tableDef == nil || objRef == nil || len(tableDef.GetFkeys()) == 0 {
+		return nil
+	}
+
+	hasSelfRefer := false
+	for _, fk := range tableDef.GetFkeys() {
+		if fk.GetForeignTbl() == 0 {
+			hasSelfRefer = true
+			break
+		}
+	}
+	if !hasSelfRefer {
+		return nil
+	}
+
+	stmts, err := mysql.Parse(c.proc.Ctx, c.sql, 1)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != 1 {
+		return nil
+	}
+	stmt, ok := stmts[0].(*tree.Replace)
+	if !ok {
+		return nil
+	}
+
+	deleteCond := plan2.BuildReplaceDeleteCondition(tableDef, stmt)
+	if deleteCond == "" {
+		return nil
+	}
+
+	sqls, err := plan2.GenSqlsForCheckReplaceSelfReferParentDelete(
+		c.proc.Ctx,
+		objRef.GetSchemaName(),
+		tableDef.GetName(),
+		deleteCond,
+		tableDef.GetCols(),
+		tableDef.GetFkeys(),
+	)
+	if err != nil {
+		return err
+	}
+	for _, sql := range sqls {
+		if err = runDetectSql(c, sql); err != nil {
+			c.debugLogFor19288(err, sql)
+			return err
+		}
+	}
 	return nil
 }
 

@@ -616,14 +616,7 @@ message InsertCtx {
   TableDef table_def = 4;
 }
 
-message ReplaceCtx {
-  ObjectRef ref = 1;
-  bool add_affected_rows = 2;
-  bool is_cluster_table = 3;
-  TableDef table_def = 4;
-  string delete_cond = 5;
-  bool rewrite_from_on_duplicate_key = 9;
-}
+// ReplaceCtx message removed — legacy replace path eliminated.
 
 message AnalyzeInfo {
   int64 input_rows = 1;
@@ -743,7 +736,7 @@ message Node {
     // DML
     INSERT = 30;
     DELETE = 31;
-    REPLACE = 32;
+    reserved 32; // was REPLACE
     LOCK_OP = 33;
     ON_DUPLICATE_KEY = 34;
     PRE_INSERT = 35;
@@ -866,7 +859,7 @@ message Node {
   ClusterTable cluster_table = 28;
   bool not_cacheable = 29;
   InsertCtx insert_ctx = 30;
-  ReplaceCtx replace_ctx = 31;
+  reserved 31; // was replace_ctx
 
   IndexReaderParam index_reader_param = 32;
 
@@ -1063,7 +1056,7 @@ message Query {
     UNKNOWN = 0;
     SELECT = 1;
     INSERT = 2;
-    REPLACE = 3;
+    reserved 3; // was REPLACE
     DELETE = 4;
     UPDATE = 5;
     MERGE = 6;

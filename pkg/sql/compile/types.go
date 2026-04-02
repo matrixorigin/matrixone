@@ -71,7 +71,7 @@ const (
 	CreateSequence
 	DropSequence
 	AlterSequence
-	Replace
+	_ // was Replace, removed
 	TableClone
 )
 
@@ -113,8 +113,6 @@ func (m magicType) String() string {
 		return "DropSequence"
 	case AlterSequence:
 		return "AlterSequence"
-	case Replace:
-		return "Replace"
 	default:
 		return "Unknown"
 	}

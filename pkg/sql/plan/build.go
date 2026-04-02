@@ -108,9 +108,6 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 
 	rootId, err := builder.bindReplace(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			return buildReplace(stmt, ctx, false, isPrepareStmt)
-		}
 		return nil, err
 	}
 	ctx.SetViews(bindCtx.views)
@@ -121,6 +118,24 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "replace does not support multi-table")
+	}
+	sqls, err := genSqlsForCheckFKSelfRefer(
+		ctx.GetContext(),
+		tblInfo.objRef[0].SchemaName,
+		tblInfo.tableDefs[0].Name,
+		tblInfo.tableDefs[0].Cols,
+		tblInfo.tableDefs[0].Fkeys,
+	)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

@@ -85,4 +85,54 @@ mo_ctl(dn, flush, replace_db.bug_22340)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 drop table bug_22340;
+drop table if exists t_null_uk;
+create table t_null_uk(a int primary key, b int unique, c varchar(32));
+replace into t_null_uk values (1, NULL, 'first');
+replace into t_null_uk values (2, NULL, 'second');
+select * from t_null_uk order by a;
+a    b    c
+1    null    first
+2    null    second
+replace into t_null_uk values (1, NULL, 'updated');
+select * from t_null_uk order by a;
+a    b    c
+1    null    updated
+2    null    second
+drop table t_null_uk;
+drop table if exists t_fake_pk_uk;
+create table t_fake_pk_uk(a int, b int unique, c varchar(32));
+replace into t_fake_pk_uk values (1, 1, 'first');
+replace into t_fake_pk_uk values (2, 2, 'second');
+select * from t_fake_pk_uk order by b;
+a    b    c
+1    1    first
+2    2    second
+replace into t_fake_pk_uk values (3, 1, 'replaced');
+select * from t_fake_pk_uk order by b;
+a    b    c
+3    1    replaced
+2    2    second
+drop table t_fake_pk_uk;
+drop table if exists t_odku;
+create table t_odku(a int primary key, b int, c varchar(32));
+insert into t_odku values (1, 10, 'hello');
+insert into t_odku values (1, 20, 'world') on duplicate key update b=values(b), c=values(c);
+select * from t_odku;
+a    b    c
+1    20    world
+drop table t_odku;
+drop table if exists t_pk_uk_conflict;
+create table t_pk_uk_conflict(a int primary key, b int unique, c varchar(32));
+insert into t_pk_uk_conflict values (1, 10, 'first');
+insert into t_pk_uk_conflict values (2, 20, 'second');
+select * from t_pk_uk_conflict order by a;
+a    b    c
+1    10    first
+2    20    second
+replace into t_pk_uk_conflict values (1, 10, 'replaced');
+select * from t_pk_uk_conflict order by a;
+a    b    c
+1    10    replaced
+2    20    second
+drop table t_pk_uk_conflict;
 drop database replace_db;

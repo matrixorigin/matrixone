@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -27,7 +29,12 @@ import (
 
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
+	// REPLACE has dedicated conflict handling and must not be rejected by the generic
+	// FK table gate in ResolveTables; legacy REPLACE also allowed these tables.
+	origCtx := builder.GetContext()
+	builder.compCtx.SetContext(context.WithValue(origCtx, defines.IgnoreForeignKey{}, true))
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	builder.compCtx.SetContext(origCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -50,10 +57,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
+	hasTruePK := pkName != catalog.FakePrimaryKeyColName
 
-	if pkName == catalog.FakePrimaryKeyColName {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "fake primary key")
-		//return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
+	if !hasTruePK {
+		hasUniqueKey := false
+		for _, idx := range tableDef.Indexes {
+			if idx.Unique {
+				hasUniqueKey = true
+				break
+			}
+		}
+		if !hasUniqueKey {
+			// No PK and no UK: REPLACE is equivalent to INSERT (no conflict possible).
+			return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
+		}
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
@@ -143,38 +160,83 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 		}
 
-		pkPos := tableDef.Name2ColIndex[pkName]
-		pkTyp := tableDef.Cols[pkPos].Typ
-		leftExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: selectTag,
-					ColPos: colName2Idx[tableDef.Name+"."+pkName],
+		// LEFT JOIN main table to get old row columns
+		if hasTruePK {
+			// join on PK
+			pkPos := tableDef.Name2ColIndex[pkName]
+			pkTyp := tableDef.Cols[pkPos].Typ
+			leftExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: colName2Idx[tableDef.Name+"."+pkName],
+					},
 				},
-			},
-		}
-		rightExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: oldScanTag,
-					ColPos: pkPos,
+			}
+			rightExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: oldScanTag,
+						ColPos: pkPos,
+					},
 				},
-			},
+			}
+
+			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				leftExpr,
+				rightExpr,
+			})
+
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{lastNodeID, oldScanNodeID},
+				JoinType: plan.Node_LEFT,
+				OnList:   []*plan.Expr{joinCond},
+			}, bindCtx)
+		} else {
+			// fake PK with UK: join on first unique key columns
+			var joinConds []*plan.Expr
+			for _, idxDef := range tableDef.Indexes {
+				if !idxDef.Unique {
+					continue
+				}
+				for _, part := range idxDef.Parts {
+					colName := catalog.ResolveAlias(part)
+					colIdx := tableDef.Name2ColIndex[colName]
+					colTyp := tableDef.Cols[colIdx].Typ
+					leftExpr := &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectTag,
+								ColPos: colName2Idx[tableDef.Name+"."+colName],
+							},
+						},
+					}
+					rightExpr := &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: oldScanTag,
+								ColPos: colIdx,
+							},
+						},
+					}
+					cond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
+					joinConds = append(joinConds, cond)
+				}
+				break // use first unique key only
+			}
+
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{lastNodeID, oldScanNodeID},
+				JoinType: plan.Node_LEFT,
+				OnList:   joinConds,
+			}, bindCtx)
 		}
-
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			leftExpr,
-			rightExpr,
-		})
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeID, oldScanNodeID},
-			JoinType: plan.Node_LEFT,
-			OnList:   []*plan.Expr{joinCond},
-		}, bindCtx)
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
