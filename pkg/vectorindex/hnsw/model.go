@@ -411,41 +411,6 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 	return idx.Index.Contains(uint64(key))
 }
 
-// load chunk from database
-func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	stream_chan chan executor.Result,
-	error_chan chan error,
-	buffer []byte) (stream_closed bool, err error) {
-	var res executor.Result
-	var ok bool
-
-	procCtx := sqlproc.GetContext()
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
-	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-	for i, chunkId := range chunkIds {
-		data := bat.Vecs[1].GetRawBytesAt(i)
-		offset := chunkId * vectorindex.MaxChunkSize
-		copy(buffer[offset:], data)
-	}
-	return false, nil
-}
-
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -454,6 +419,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	view bool) (err error) {
 
 	var (
+		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
 		error_chan  = make(chan error, 2)
 		wg          sync.WaitGroup
@@ -469,16 +435,29 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
-	if idx.buffer == nil {
-		// model buffer is nil
+	if len(idx.Path) == 0 {
+		// Stream index chunks from DB into a temp file, then let usearch
+		// mmap it via View(). This keeps the index data entirely off the
+		// Go heap, eliminating GC pressure for multi-GB indexes.
 
-		idx.buffer = make([]byte, idx.FileSize)
+		fp, err = os.CreateTemp("", "hnsw")
+		if err != nil {
+			return err
+		}
 		defer func() {
+			if fp != nil {
+				fp.Close()
+			}
 			if err != nil {
-				// release buffer when error
+				// clean up on error
 				idx.Destroy()
 			}
 		}()
+
+		err = fallocate.Fallocate(fp, 0, idx.FileSize)
+		if err != nil {
+			return err
+		}
 
 		// run streaming sql
 		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
@@ -502,7 +481,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// incremental load from database
 		sql_closed := false
 		for !sql_closed {
-			sql_closed, err = idx.loadChunkFromBuffer(ctx, sqlproc, stream_chan, error_chan, idx.buffer)
+			sql_closed, err = idx.loadChunk(ctx, sqlproc, stream_chan, error_chan, fp)
 			if err != nil {
 				// notify the producer to stop the sql streaming
 				cancel(err)
@@ -532,11 +511,18 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 			return
 		}
 
+		idx.Path = fp.Name()
+		fp.Close()
+		fp = nil
 	}
 
-	chksum := vectorindex.CheckSumFromBuffer(idx.buffer)
+	// verify checksum from file
+	chksum, err := vectorindex.CheckSum(idx.Path)
+	if err != nil {
+		return err
+	}
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index buffer")
+		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
@@ -554,7 +540,9 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 
-	err = usearchidx.ViewBuffer(idx.buffer, uint(idx.FileSize))
+	// View() mmaps the file — data stays off Go heap, OS can page out
+	// under memory pressure. File must remain until Destroy().
+	err = usearchidx.View(idx.Path)
 	if err != nil {
 		return err
 	}
