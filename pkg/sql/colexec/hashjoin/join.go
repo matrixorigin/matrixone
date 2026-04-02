@@ -291,10 +291,20 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				}
 			}
 
-			// Create writers for probe side (files created lazily on first write)
+			// Create writers for probe side (files created lazily on first write).
+			// Disable writers for empty-build buckets so scatter discards those
+			// probe rows immediately, matching the re-spill validBuckets pattern.
 			spillWriters, err := createRootProbeSpillBucketFiles()
 			if err != nil {
 				return err
+			}
+			needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+			if !needsProbeForEmpty {
+				for i := range spilledBuildFds {
+					if spilledBuildFds[i] == nil {
+						spillWriters[i].name = ""
+					}
+				}
 			}
 			spillBuffers := make([]*batch.Batch, spillNumBuckets)
 

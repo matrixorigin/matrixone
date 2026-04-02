@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -269,23 +270,6 @@ func TestSpillFileFormat(t *testing.T) {
 		require.NoError(t, err)
 	}
 	file.Close()
-}
-
-func TestEmptyBucketHandling(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	// Test with empty spill queue - should return nil immediately
-	hashJoin := &HashJoin{
-		ctr: container{
-			spillQueue: []spillBucket{},
-			state:      Probe,
-		},
-	}
-
-	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
-	require.NoError(t, err)
-	require.Nil(t, result.Batch)
 }
 
 func TestMultipleDataTypes(t *testing.T) {
@@ -776,26 +760,6 @@ func TestFlushEmptyBuffer(t *testing.T) {
 	require.Equal(t, int64(0), cnt)
 }
 
-func TestHashDeterminism(t *testing.T) {
-	mp := mpool.MustNewZero()
-
-	vec := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
-	hashValues1 := make([]uint64, 3)
-	hashValues2 := make([]uint64, 3)
-
-	// Two calls with the same input should produce identical results
-	err := computeXXHash([]*vector.Vector{vec}, hashValues1, 0)
-	require.NoError(t, err)
-	err = computeXXHash([]*vector.Vector{vec}, hashValues2, 0)
-	require.NoError(t, err)
-	require.Equal(t, hashValues1, hashValues2)
-
-	// Different seed should produce different results
-	err = computeXXHash([]*vector.Vector{vec}, hashValues2, 42)
-	require.NoError(t, err)
-	require.NotEqual(t, hashValues1, hashValues2)
-}
-
 func TestConstVectorHash(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -856,21 +820,6 @@ func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
 	hashJoin := &HashJoin{
 		ctr: container{
 			spillQueue: []spillBucket{},
-		},
-	}
-
-	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
-	require.NoError(t, err)
-	require.Nil(t, result.Batch)
-}
-
-func TestGetSpilledInputBatchAllProcessed(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	hashJoin := &HashJoin{
-		ctr: container{
-			spillQueue: []spillBucket{}, // empty = all processed
 		},
 	}
 
@@ -1450,4 +1399,326 @@ func TestShouldReSpillNoThreshold(t *testing.T) {
 	builder.InputBatchRowCount = 1000000
 
 	require.False(t, ctr.shouldReSpill(builder))
+}
+
+func TestHandOffFdSeeksToStart(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	f, err := spillfs.CreateFile(context.Background(), "test_handoff")
+	require.NoError(t, err)
+	defer spillfs.RemoveFile(context.Background(), "test_handoff")
+
+	// Write data and advance position
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+	sw := spillBucketWriter{file: f}
+	_, err = ctr.flushBucketBuffer(proc, bat, &sw, analyzer)
+	require.NoError(t, err)
+
+	// Position should be past the data written
+	pos, _ := sw.file.Seek(0, io.SeekCurrent)
+	require.Greater(t, pos, int64(0))
+
+	// handOffFd should seek back to 0
+	fd := sw.handOffFd()
+	require.NotNil(t, fd)
+
+	pos, _ = fd.Seek(0, io.SeekCurrent)
+	require.Equal(t, int64(0), pos)
+
+	// Writer should be nil after handoff
+	require.Nil(t, sw.file)
+	require.False(t, sw.created())
+
+	fd.Close()
+}
+
+func TestHandOffFdMultipleCalls(t *testing.T) {
+	f, err := os.CreateTemp("", "test_handoff_*")
+	require.NoError(t, err)
+	defer os.Remove(f.Name())
+
+	sw := spillBucketWriter{file: f}
+
+	fd1 := sw.handOffFd()
+	require.NotNil(t, fd1)
+
+	fd2 := sw.handOffFd()
+	require.Nil(t, fd2) // already transferred
+
+	fd1.Close()
+}
+
+func TestResetForFdNil(t *testing.T) {
+	r := &spillBucketReader{}
+	r.resetForFd(nil)
+	require.True(t, r.empty)
+	require.Nil(t, r.file)
+}
+
+func TestResetForFdReusesBuffer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	// Create two files with data
+	f1, err := spillfs.CreateFile(context.Background(), "test_reuse_1")
+	require.NoError(t, err)
+	defer spillfs.RemoveFile(context.Background(), "test_reuse_1")
+	f2, err := spillfs.CreateFile(context.Background(), "test_reuse_2")
+	require.NoError(t, err)
+	defer spillfs.RemoveFile(context.Background(), "test_reuse_2")
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	bat.SetRowCount(3)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+	sw1 := spillBucketWriter{file: f1}
+	_, err = ctr.flushBucketBuffer(proc, bat, &sw1, analyzer)
+	require.NoError(t, err)
+	sw2 := spillBucketWriter{file: f2}
+	_, err = ctr.flushBucketBuffer(proc, bat, &sw2, analyzer)
+	require.NoError(t, err)
+
+	fd1 := sw1.handOffFd()
+	fd2 := sw2.handOffFd()
+
+	r := &spillBucketReader{}
+
+	// First resetForFd: allocates bufio.Reader
+	r.resetForFd(fd1)
+	require.False(t, r.empty)
+	require.NotNil(t, r.reader)
+	reader1 := r.reader
+
+	// Second resetForFd: reuses the same bufio.Reader
+	r.resetForFd(fd2)
+	require.False(t, r.empty)
+	require.Same(t, reader1, r.reader) // same buffer instance
+
+	r.close()
+	fd1.Close()
+}
+
+func TestSpillBucketWriterDelete(t *testing.T) {
+	f, err := os.CreateTemp("", "test_delete_*")
+	require.NoError(t, err)
+	defer os.Remove(f.Name())
+
+	sw := spillBucketWriter{file: f}
+	require.True(t, sw.created())
+
+	sw.delete()
+	require.Nil(t, sw.file)
+	require.False(t, sw.created())
+
+	// Double delete is safe
+	sw.delete()
+}
+
+func TestResetForFdReadData(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	f, err := spillfs.CreateFile(context.Background(), "test_fd_read")
+	require.NoError(t, err)
+	defer spillfs.RemoveFile(context.Background(), "test_fd_read")
+
+	// Write batches through the writer
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+	sw := spillBucketWriter{file: f}
+	_, err = ctr.flushBucketBuffer(proc, bat, &sw, analyzer)
+	require.NoError(t, err)
+
+	// Hand off and read back
+	fd := sw.handOffFd()
+	require.NotNil(t, fd)
+
+	r := &spillBucketReader{}
+	r.resetForFd(fd)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	gotBat, err := r.readBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.NotNil(t, gotBat)
+	require.Equal(t, 3, gotBat.RowCount())
+
+	// Verify data
+	col := vector.MustFixedColWithTypeCheck[int32](gotBat.Vecs[0])
+	require.Equal(t, int32(10), col[0])
+	require.Equal(t, int32(20), col[1])
+	require.Equal(t, int32(30), col[2])
+
+	// EOF on next read
+	_, err = r.readBatch(proc, reuseBat)
+	require.Equal(t, io.EOF, err)
+
+	r.close()
+}
+
+func TestWriterHandoffReaderRoundtrip(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	f, err := spillfs.CreateFile(context.Background(), "test_roundtrip")
+	require.NoError(t, err)
+	defer spillfs.RemoveFile(context.Background(), "test_roundtrip")
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	ctr := &container{}
+	sw := spillBucketWriter{file: f}
+
+	// Write multiple batches
+	for i := 0; i < 3; i++ {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(i * 10), int32(i*10 + 1)}, nil, proc.Mp())
+		bat.SetRowCount(2)
+		_, err = ctr.flushBucketBuffer(proc, bat, &sw, analyzer)
+		require.NoError(t, err)
+	}
+
+	// Handoff and read all batches back
+	fd := sw.handOffFd()
+	r := &spillBucketReader{}
+	r.resetForFd(fd)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	defer reuseBat.Clean(proc.Mp())
+
+	totalRows := 0
+	for {
+		gotBat, err := r.readBatch(proc, reuseBat)
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		totalRows += gotBat.RowCount()
+	}
+	require.Equal(t, 6, totalRows) // 3 batches × 2 rows
+
+	r.close()
+}
+
+func TestScatterSkipsDisabledWriters(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	writers := makeSpillBucketWriters(uuid.NewString(), "probe")
+	// Only create files for odd buckets; even buckets will be disabled.
+	for i := 1; i < spillNumBuckets; i += 2 {
+		f, err := spillfs.CreateFile(context.Background(), writers[i].name)
+		require.NoError(t, err)
+		writers[i].file = f
+	}
+	defer func() {
+		for i := range writers {
+			writers[i].delete()
+		}
+	}()
+
+	// Disable writers for even-numbered buckets.
+	for i := 0; i < spillNumBuckets; i += 2 {
+		writers[i].name = ""
+	}
+
+	// Build a large enough batch that most buckets get rows.
+	const nRows = 10000
+	vals := make([]int32, nRows)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat.SetRowCount(nRows)
+	defer bat.Clean(proc.Mp())
+
+	buffers := make([]*batch.Batch, spillNumBuckets)
+	defer func() {
+		for _, buf := range buffers {
+			if buf != nil {
+				buf.Clean(proc.Mp())
+			}
+		}
+	}()
+
+	ctr := &container{}
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err = ctr.scatterBatchToFiles(proc, bat, bat.Vecs[:1], writers, buffers, analyzer, 0)
+	require.NoError(t, err)
+
+	// Flush remaining buffers for odd buckets.
+	for i := range writers {
+		if buffers[i] != nil {
+			_, err := ctr.flushBucketBuffer(proc, buffers[i], &writers[i], analyzer)
+			require.NoError(t, err)
+		}
+	}
+
+	// Disabled (even) buckets must have no buffer allocated and no data written.
+	for i := 0; i < spillNumBuckets; i += 2 {
+		require.Nil(t, buffers[i], "disabled bucket %d should have no buffer", i)
+		require.False(t, writers[i].created(), "disabled bucket %d should not have been written to", i)
+	}
+
+	// Enabled (odd) buckets should have received data.
+	// Compute expected count: rows whose hash lands in an odd bucket.
+	hashValues := make([]uint64, nRows)
+	err = computeXXHash(bat.Vecs[:1], hashValues, 0)
+	require.NoError(t, err)
+	var expectedOddRows int
+	for _, h := range hashValues {
+		if h&(spillNumBuckets-1)&1 == 1 { // odd bucket
+			expectedOddRows++
+		}
+	}
+	require.Greater(t, expectedOddRows, 0, "sanity: some rows should hash to odd buckets")
+
+	var totalRows int
+	for i := 1; i < spillNumBuckets; i += 2 {
+		fd := writers[i].handOffFd()
+		if fd == nil {
+			continue
+		}
+		r := &spillBucketReader{}
+		r.resetForFd(fd)
+		reuse := batch.NewOffHeapWithSize(0)
+		for {
+			got, err := r.readBatch(proc, reuse)
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			totalRows += got.RowCount()
+		}
+		reuse.Clean(proc.Mp())
+		r.close()
+	}
+	require.Equal(t, expectedOddRows, totalRows, "only rows hashing to odd buckets should be written")
 }

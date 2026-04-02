@@ -70,7 +70,7 @@ type container struct {
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
-	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastRow]
+	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastIdx]
 	vsIdx int
 	zvs   []int64
 	vs    []uint64

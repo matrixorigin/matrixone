@@ -15,7 +15,7 @@
 package message
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,4 +118,188 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 		debug.FreeOSMemory()
 		return destroyed.Load() == 1
 	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func TestTakeSpillBuildFds(t *testing.T) {
+	t.Run("transfers_ownership", func(t *testing.T) {
+		f1, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f1.Name())
+		f2, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f2.Name())
+
+		jm := &JoinMap{SpillBuildFds: []*os.File{f1, f2}}
+		fds := jm.TakeSpillBuildFds()
+
+		require.Len(t, fds, 2)
+		require.Same(t, f1, fds[0])
+		require.Same(t, f2, fds[1])
+		require.Nil(t, jm.SpillBuildFds)
+
+		// Cleanup
+		f1.Close()
+		f2.Close()
+	})
+
+	t.Run("second_call_returns_nil", func(t *testing.T) {
+		f, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+		defer f.Close()
+
+		jm := &JoinMap{SpillBuildFds: []*os.File{f}}
+		jm.TakeSpillBuildFds()
+
+		fds := jm.TakeSpillBuildFds()
+		require.Nil(t, fds)
+	})
+
+	t.Run("nil_fds", func(t *testing.T) {
+		jm := &JoinMap{SpillBuildFds: nil}
+		fds := jm.TakeSpillBuildFds()
+		require.Nil(t, fds)
+	})
+}
+
+func TestFreeMemoryClosesSpillFds(t *testing.T) {
+	t.Run("closes_all_fds", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		f1, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f1.Name())
+		f2, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f2.Name())
+
+		jm := &JoinMap{
+			valid:         true,
+			mpool:         mp,
+			SpillBuildFds: []*os.File{f1, f2},
+		}
+		jm.FreeMemory()
+
+		require.Nil(t, jm.SpillBuildFds)
+		require.False(t, jm.valid)
+
+		// Verify fds are closed
+		_, err = f1.Stat()
+		require.Error(t, err)
+		_, err = f2.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("handles_nil_in_fd_slice", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		f, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+
+		jm := &JoinMap{
+			valid:         true,
+			mpool:         mp,
+			SpillBuildFds: []*os.File{f, nil},
+		}
+		jm.FreeMemory() // must not panic on nil entry
+		require.Nil(t, jm.SpillBuildFds)
+	})
+
+	t.Run("take_then_free_does_not_double_close", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		f, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+
+		jm := &JoinMap{
+			valid:         true,
+			mpool:         mp,
+			SpillBuildFds: []*os.File{f},
+		}
+
+		fds := jm.TakeSpillBuildFds()
+		require.Len(t, fds, 1)
+
+		// FreeMemory after TakeSpillBuildFds should not close the fds
+		jm.FreeMemory()
+
+		// fd is still open (caller owns it)
+		_, err = f.Stat()
+		require.NoError(t, err)
+		f.Close()
+	})
+
+	t.Run("double_free_safe", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		jm := &JoinMap{
+			valid: true,
+			mpool: mp,
+		}
+		jm.FreeMemory()
+		jm.FreeMemory() // must not panic
+	})
+}
+
+func TestIsDeleted(t *testing.T) {
+	t.Run("nil_bitmap", func(t *testing.T) {
+		jm := &JoinMap{delRows: nil}
+		require.False(t, jm.IsDeleted(0))
+		require.False(t, jm.IsDeleted(100))
+	})
+
+	t.Run("with_bitmap", func(t *testing.T) {
+		var bm bitmap.Bitmap
+		bm.InitWithSize(64)
+		bm.Add(5)
+		bm.Add(42)
+
+		jm := &JoinMap{delRows: &bm}
+		require.False(t, jm.IsDeleted(0))
+		require.True(t, jm.IsDeleted(5))
+		require.True(t, jm.IsDeleted(42))
+		require.False(t, jm.IsDeleted(10))
+	})
+}
+
+func TestNewJoinMap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+	require.True(t, jm.IsValid())
+	require.False(t, jm.IsSpilled())
+	require.Nil(t, jm.SpillBuildFds)
+	require.Nil(t, jm.GetBatches())
+	require.Equal(t, int64(0), jm.GetRowCount())
+}
+
+func TestJoinMapGettersSetters(t *testing.T) {
+	mp := mpool.MustNewZero()
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+
+	jm.SetRowCount(100)
+	require.Equal(t, int64(100), jm.GetRowCount())
+
+	require.False(t, jm.PushedRuntimeFilterIn())
+	jm.SetPushedRuntimeFilterIn(true)
+	require.True(t, jm.PushedRuntimeFilterIn())
+}
+
+func TestJoinMapRefCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	shm, err := hashmap.NewStrHashMap(false, mp)
+	require.NoError(t, err)
+
+	jm := NewJoinMap(GroupSels{}, nil, shm, nil, nil, mp)
+	require.Equal(t, int64(0), jm.GetRefCount())
+
+	jm.IncRef(2)
+	require.Equal(t, int64(2), jm.GetRefCount())
+
+	// First Free decrements but doesn't release
+	jm.Free()
+	require.Equal(t, int64(1), jm.GetRefCount())
+	require.True(t, jm.IsValid())
+
+	// Second Free releases memory
+	jm.Free()
+	require.False(t, jm.IsValid())
+	require.Nil(t, jm.shm)
 }
