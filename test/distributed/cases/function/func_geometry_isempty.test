@@ -1,0 +1,5 @@
+select st_isempty(st_geomfromtext('POINT EMPTY')) as empty_point;
+select st_isempty(st_geomfromtext('POINT(1 2)')) as non_empty_point;
+select st_isempty(st_geomfromtext('LINESTRING EMPTY')) as empty_linestring;
+select st_isempty(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection;
+select st_isempty(st_geomfromtext(null)) as null_isempty;

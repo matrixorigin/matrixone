@@ -589,10 +589,22 @@ const (
 	CAST_INDEX_TO_SET_VALUE       = 407
 	CAST_SET_VALUE_TO_INDEX       = 408
 	CAST_SET_INDEX_VALUE_TO_INDEX = 409
+	CAST_GEOMETRY_TO_SUBTYPE      = 410
+	ST_ASTEXT                     = 411
+	ST_GEOMFROMTEXT               = 412
+	ST_GEOMETRYTYPE               = 413
+	ST_X                          = 414
+	ST_Y                          = 415
+	ST_NUMGEOMETRIES              = 416
+	ST_GEOMETRYN                  = 417
+	ST_ISEMPTY                    = 418
+	ST_DISTANCE                   = 419
+	ST_SRID                       = 420
+	ST_LENGTH                     = 421
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 410
+	FUNCTION_END_NUMBER = 422
 )
 
 // functionIdRegister is what function we have registered already.
@@ -970,6 +982,18 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_set_value":        CAST_INDEX_TO_SET_VALUE,
 	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
+	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"st_astext":                      ST_ASTEXT,
+	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geometrytype":                ST_GEOMETRYTYPE,
+	"st_x":                           ST_X,
+	"st_y":                           ST_Y,
+	"st_numgeometries":               ST_NUMGEOMETRIES,
+	"st_geometryn":                   ST_GEOMETRYN,
+	"st_isempty":                     ST_ISEMPTY,
+	"st_distance":                    ST_DISTANCE,
+	"st_srid":                        ST_SRID,
+	"st_length":                      ST_LENGTH,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,

@@ -1,0 +1,12 @@
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)')) as d1;
+➤ d1[8,54,0]  𝄀
+5.0
+select st_distance(st_geomfromtext('POINT(-1 -1)'), st_geomfromtext('POINT(2 3)')) as d2;
+➤ d2[8,54,0]  𝄀
+5.0
+select st_distance(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as dnull;
+➤ dnull[8,54,0]  𝄀
+null
+select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(1 1)'));
+-- @regex("geometry is not a POINT", true)
+invalid input: geometry is not a POINT

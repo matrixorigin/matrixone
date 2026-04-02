@@ -259,6 +259,60 @@ func Test_CastFromDecimal256(t *testing.T) {
 	}
 }
 
+func Test_CastVarcharToGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "cast varchar to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 1)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(2 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(2 2)"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+
+	require.True(t, IfTypeCastSupported(types.T_varchar, types.T_geometry))
+	require.True(t, IfTypeCastSupported(types.T_geometry, types.T_geometry))
+
+	t.Run("cast null to geometry", func(t *testing.T) {
+		nullVec := vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+		defer nullVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{nullVec, targetType}, result, proc, 1, nil)
+		require.NoError(t, err)
+
+		resultVec := result.GetResultVector()
+		require.Equal(t, types.T_geometry, resultVec.GetType().Oid)
+		require.True(t, resultVec.GetNulls().Contains(0))
+	})
+}
+
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
 

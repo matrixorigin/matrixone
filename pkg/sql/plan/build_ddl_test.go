@@ -444,6 +444,40 @@ func TestBuildAlterTableError(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqlerrs := []string{
+		"CREATE TABLE geo_default_err (g GEOMETRY DEFAULT 'POINT(1 1)');",
+		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
+		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
+		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestGeometryColumnValidationSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqls := []string{
+		"CREATE TABLE geo_point_ok (g POINT);",
+		"CREATE TABLE geo_any_ok (g GEOMETRY);",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestCreateSingleTable(t *testing.T) {
 	sql := "create cluster table a (a int);"
 	mock := NewMockOptimizer(false)

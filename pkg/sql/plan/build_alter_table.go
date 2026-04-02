@@ -638,6 +638,7 @@ func storageAgnosticType(
 	if err != nil {
 		return
 	}
+	applyColumnAttributesToType(&nTy, nCol.Attributes)
 
 	oTy := oCol.Typ
 

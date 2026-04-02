@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -237,6 +238,9 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 			}
+			if typ.Oid == types.T_geometry {
+				return functionUtil.QuickStrToBytes("GEOMETRY"), nil
+			}
 
 			return functionUtil.QuickStrToBytes(ts), nil
 		}
@@ -254,6 +258,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			} else if typ.Oid == types.T_geometry {
+				ret = "GEOMETRY"
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -334,6 +340,34 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		typeName := "ENUM"
 		if typ.Oid == types.T_uint64 {
 			typeName = "SET"
+		} else if typ.Oid == types.T_geometry {
+			subtype := ""
+			sridDefined := false
+			var sridValue uint64
+			for idx, part := range strings.Split(enumStr, ";") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				if idx == 0 && !strings.HasPrefix(strings.ToUpper(part), "SRID=") {
+					subtype = strings.ToUpper(part)
+					continue
+				}
+				if len(part) >= len("SRID=") && strings.EqualFold(part[:5], "SRID=") {
+					parsed, parseErr := strconv.ParseUint(strings.TrimSpace(part[5:]), 10, 32)
+					if parseErr == nil {
+						sridDefined = true
+						sridValue = parsed
+					}
+				}
+			}
+			if subtype == "" {
+				subtype = "GEOMETRY"
+			}
+			if sridDefined {
+				subtype = fmt.Sprintf("%s SRID %d", subtype, sridValue)
+			}
+			return functionUtil.QuickStrToBytes(subtype), nil
 		} else if typ.Oid != types.T_enum {
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}

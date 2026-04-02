@@ -18,8 +18,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_buildTestShowCreateTable(t *testing.T) {
@@ -213,4 +215,25 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 	return showSQL, nil
+}
+
+func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	require.Equal(t, "POINT", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "POINT",
+	}))
+
+	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
+		Id: int32(types.T_geometry),
+	}))
+
+	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "POINT;SRID=4326",
+	}))
+
+	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "SRID=0",
+	}))
 }

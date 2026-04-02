@@ -101,6 +101,51 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			},
 			wantErr: assert.NoError,
 		},
+		{
+			name: "geometry subtype mismatch",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "LINESTRING"},
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "geometry generic target accepts subtype",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "geometry identical subtype",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "geometry srid mismatch",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=0"},
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "geometry identical srid",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+				to:     &plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+			},
+			wantErr: assert.NoError,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

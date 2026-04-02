@@ -16,6 +16,9 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +40,99 @@ func isSetPlanType(typ *plan.Type) bool {
 
 func isEnumOrSetPlanType(typ *plan.Type) bool {
 	return isEnumPlanType(typ) || isSetPlanType(typ)
+}
+
+func isGeometryPlanType(typ *plan.Type) bool {
+	return typ != nil && typ.Id == int32(types.T_geometry)
+}
+
+func geometrySubtypeName(typ *plan.Type) string {
+	if !isGeometryPlanType(typ) {
+		return ""
+	}
+	subtype, _, _ := decodeGeometryMetadata(typ.GetEnumvalues())
+	return subtype
+}
+
+func geometrySRIDValue(typ *plan.Type) (uint32, bool) {
+	if !isGeometryPlanType(typ) {
+		return 0, false
+	}
+	_, srid, ok := decodeGeometryMetadata(typ.GetEnumvalues())
+	return srid, ok
+}
+
+func geometryMetadataString(subtype string, srid uint32, sridDefined bool) string {
+	subtype = normalizeGeometrySubtype(subtype)
+	if !sridDefined {
+		return subtype
+	}
+	if subtype == "" {
+		return fmt.Sprintf("SRID=%d", srid)
+	}
+	return fmt.Sprintf("%s;SRID=%d", subtype, srid)
+}
+
+func decodeGeometryMetadata(metadata string) (subtype string, srid uint32, sridDefined bool) {
+	metadata = strings.TrimSpace(metadata)
+	if metadata == "" {
+		return "", 0, false
+	}
+	parts := strings.Split(metadata, ";")
+	start := 0
+	head := strings.TrimSpace(parts[0])
+	if !strings.HasPrefix(strings.ToUpper(head), "SRID=") {
+		subtype = normalizeGeometrySubtype(head)
+		start = 1
+	}
+	for _, part := range parts[start:] {
+		part = strings.TrimSpace(part)
+		if len(part) < len("SRID=") || !strings.EqualFold(part[:5], "SRID=") {
+			continue
+		}
+		value := strings.TrimSpace(part[5:])
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			continue
+		}
+		return subtype, uint32(parsed), true
+	}
+	return subtype, 0, false
+}
+
+func normalizeGeometrySubtype(subtype string) string {
+	subtype = strings.ToUpper(strings.TrimSpace(subtype))
+	switch subtype {
+	case "", "GEOMETRY":
+		return ""
+	default:
+		return subtype
+	}
+}
+
+func geometrySubtypeCompatible(columnSubtype, valueSubtype string) bool {
+	columnSubtype = strings.ToUpper(columnSubtype)
+	valueSubtype = strings.ToUpper(valueSubtype)
+	if columnSubtype == "" || columnSubtype == "GEOMETRY" {
+		return true
+	}
+	if valueSubtype == "GEOMETRY" {
+		return true
+	}
+	if valueSubtype == "" {
+		return false
+	}
+	return columnSubtype == valueSubtype
+}
+
+func formatGeometrySRIDForError(srid uint32, defined bool) string {
+	if !defined {
+		return "UNSPECIFIED"
+	}
+	return strconv.FormatUint(uint64(srid), 10)
 }
 
 func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
@@ -79,4 +175,31 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 			astExpr,
 		},
 	}, nil
+}
+
+func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isGeometryPlanType(&targetType) {
+		return expr, nil
+	}
+	targetMetadata := targetType.Enumvalues
+	if isGeometryPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetMetadata {
+		expr.Typ = targetType
+		return expr, nil
+	}
+
+	args := make([]*Expr, 2)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	targetSubtypeExpr, err := binder.BindExpr(tree.NewNumVal(targetMetadata, targetMetadata, false, tree.P_char), 0, false)
+	if err != nil {
+		return nil, err
+	}
+	args[0] = targetSubtypeExpr
+	args[1] = expr
+
+	castedExpr, err := BindFuncExprImplByPlanExpr(ctx, moGeometryCastToSubtypeFun, args)
+	if err != nil {
+		return nil, err
+	}
+	castedExpr.Typ = targetType
+	return castedExpr, nil
 }

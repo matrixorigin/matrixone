@@ -272,6 +272,66 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
+	require.NoError(t, err)
+
+	tc := tcTemp{
+		info: "show visible bin geometry",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typNormal}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"GEOMETRY"}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+
+	tc = tcTemp{
+		info: "show visible bin geometry with subtype metadata",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT"}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"POINT"}, nil),
+	}
+	tcc = NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBinEnum)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, tc.info, info)
+
+	tc = tcTemp{
+		info: "show visible bin geometry with srid metadata",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes), string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT;SRID=4326", "SRID=0"}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"POINT SRID 4326", "GEOMETRY SRID 0"}, nil),
+	}
+	tcc = NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBinEnum)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typeBytes, err := types.Encode(&types.Type{Oid: types.T_geometry})
+	require.NoError(t, err)
+
+	tc := tcTemp{
+		info: "show visible bin geometry with len uses geometry without synthetic width",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"GEOMETRY"}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInMoShowVisibleBin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
 func Test_BuiltIn_Repeat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{

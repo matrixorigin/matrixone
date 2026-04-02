@@ -817,6 +817,8 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+			} else if typ.Oid == types.T_geometry {
+				vec, err = vector.NewConstBytes(typ, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
 				if err1 != nil {
@@ -934,7 +936,11 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 				veccol[i] = types.Timestamp(val.Timestampval)
 			case *plan.Literal_Sval:
 				sval := val.Sval
-				err = vector.SetStringAt(vec, i, sval, proc.Mp())
+				if expr.Typ.Id == int32(types.T_geometry) {
+					err = vector.SetBytesAt(vec, i, []byte(sval), proc.Mp())
+				} else {
+					err = vector.SetStringAt(vec, i, sval, proc.Mp())
+				}
 				if err != nil {
 					return nil, err
 				}

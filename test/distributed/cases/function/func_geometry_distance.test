@@ -1,0 +1,5 @@
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)')) as d1;
+select st_distance(st_geomfromtext('POINT(-1 -1)'), st_geomfromtext('POINT(2 3)')) as d2;
+select st_distance(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as dnull;
+-- @regex("geometry is not a POINT",true)
+select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(1 1)'));

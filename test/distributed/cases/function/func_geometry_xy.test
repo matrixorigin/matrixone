@@ -1,0 +1,6 @@
+select st_x(st_geomfromtext('POINT(1 2)')) as point_x;
+select st_y(st_geomfromtext('POINT(1 2)')) as point_y;
+select st_x(st_geomfromtext('POINT(-3.5 4.25)')) as point_x_neg;
+select st_y(st_geomfromtext('POINT(-3.5 4.25)')) as point_y_neg;
+select st_x(st_geomfromtext(null)) as null_x;
+select st_y(st_geomfromtext(null)) as null_y;

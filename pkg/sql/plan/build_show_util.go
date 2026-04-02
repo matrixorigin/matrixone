@@ -584,6 +584,12 @@ func FormatColType(colType plan.Type) string {
 	if isSetPlanType(&colType) {
 		ts = "SET"
 	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+	}
+	if srid, ok := geometrySRIDValue(&colType); ok {
+		ts = fmt.Sprintf("%s SRID %d", ts, srid)
+	}
 
 	suffix := ""
 	switch types.T(colType.Id) {

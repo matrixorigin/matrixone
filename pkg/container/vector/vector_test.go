@@ -2052,6 +2052,103 @@ func TestSortAndCompact(t *testing.T) {
 	require.NoError(t, err)
 	v.InplaceSortAndCompact()
 	require.Equal(t, v.length, 1)
+
+	v = NewVec(types.T_geometry.ToType())
+	err = AppendBytesList(v, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(1 1)"), []byte("POINT(1 1)")}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, 2, v.length)
+	require.Equal(t, [][]byte{[]byte("POINT(1 1)"), []byte("POINT(2 2)")}, InefficientMustBytesCol(v))
+	v.Free(mp)
+}
+
+func TestGeometryVarlenPlumbing(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	src := NewVec(types.T_geometry.ToType())
+	err := AppendBytesList(src, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, nil, mp)
+	require.NoError(t, err)
+
+	dst := NewVec(types.T_geometry.ToType())
+	err = dst.UnionOne(src, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+
+	dst.Shrink([]int64{0}, false)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+
+	err = dst.UnionOne(src, 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(dst))
+
+	err = dst.Shuffle([]int64{1, 0}, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(3 3)"), []byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+	require.Equal(t, "[POINT(3 3) POINT(2 2)]", dst.String())
+	require.Equal(t, "POINT(2 2)", dst.RowToString(1))
+	require.Equal(t, []byte("POINT(3 3)"), GetAny(dst, 0, false).([]byte))
+
+	sf := GetConstSetFunction(types.T_geometry.ToType(), mp)
+	constVec := NewConstNull(types.T_geometry.ToType(), 0, mp)
+	err = sf(constVec, src, 2, 1)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(3 3)")}, InefficientMustBytesCol(constVec))
+
+	unionAll := GetUnionAllFunction(types.T_geometry.ToType(), mp)
+	unionDst := NewVec(types.T_geometry.ToType())
+	err = unionAll(unionDst, src)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, InefficientMustBytesCol(unionDst))
+
+	minmax := NewVec(types.T_geometry.ToType())
+	err = AppendAny(minmax, []byte("POINT(2 2)"), false, mp)
+	require.NoError(t, err)
+	err = AppendAny(minmax, []byte("POINT(1 1)"), false, mp)
+	require.NoError(t, err)
+	err = AppendAny(minmax, []byte("POINT(3 3)"), false, mp)
+	require.NoError(t, err)
+	ok, minv, maxv := minmax.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, []byte("POINT(1 1)"), minv)
+	require.Equal(t, []byte("POINT(3 3)"), maxv)
+	minmax.InplaceSort()
+	require.Equal(t, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+	}, InefficientMustBytesCol(minmax))
+
+	var bm bitmap.Bitmap
+	bm.InitWithSize(2)
+	bm.AddMany([]uint64{0, 1})
+	maskVec := NewVec(types.T_geometry.ToType())
+	err = AppendBytesList(maskVec, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, nil, mp)
+	require.NoError(t, err)
+	maskVec.ShrinkByMask(&bm, false, 1)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(maskVec))
+
+	maskVec.Free(mp)
+	minmax.Free(mp)
+	unionDst.Free(mp)
+	constVec.Free(mp)
+	dst.Free(mp)
+	src.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestSetFunction2(t *testing.T) {

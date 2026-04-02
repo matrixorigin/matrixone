@@ -1,0 +1,9 @@
+select st_astext(st_geomfromtext('POINT(1 2)')) as point_text;
+select st_astext(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as polygon_text;
+select st_astext(st_geomfromtext(null)) as null_text;
+
+drop table if exists t1;
+create table t1(g geometry);
+insert into t1 values (st_geomfromtext('LINESTRING(0 0,1 1)')), (st_geomfromtext('POINT(3 4)'));
+select st_astext(g) as geom_text from t1 order by 1;
+drop table t1;

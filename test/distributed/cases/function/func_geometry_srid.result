@@ -1,0 +1,43 @@
+create database if not exists geo_srid_db;
+use geo_srid_db;
+drop table if exists geo_srid_show;
+create table geo_srid_show (
+id int primary key,
+location point not null srid 4326
+);
+show create table geo_srid_show;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+geo_srid_show  ¦  CREATE TABLE `geo_srid_show` (
+  `id` int NOT NULL,
+  `location` point srid 4326 NOT NULL,
+  PRIMARY KEY (`id`)
+)
+desc geo_srid_show;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+location  ¦  POINT SRID 4326  ¦  NO  ¦    ¦  null  ¦    ¦  
+show columns from geo_srid_show;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+location  ¦  POINT SRID 4326  ¦  NO  ¦    ¦  null  ¦    ¦  
+drop table geo_srid_show;
+drop table if exists geo_srid_value_ok;
+create table geo_srid_value_ok(g point not null srid 4326);
+insert into geo_srid_value_ok values (st_geomfromtext('POINT(1 1)', 4326));
+select st_astext(g) as point_text, st_srid(g) as point_srid from geo_srid_value_ok;
+➤ point_text[12,-1,0]  ¦  point_srid[4,32,0]  𝄀
+POINT(1 1)  ¦  4326
+drop table geo_srid_value_ok;
+drop table if exists geo_srid_value_bad;
+create table geo_srid_value_bad(g point not null srid 4326);
+insert into geo_srid_value_bad values (st_geomfromtext('POINT(1 1)', 0));
+-- @regex("The SRID of the geometry does not match the SRID of the column", true)
+invalid input: The SRID of the geometry does not match the SRID of the column 'POINT'. The SRID of the geometry is 0, but the SRID of the column is 4326. Consider changing the SRID of the geometry or the SRID property of the column.
+drop table geo_srid_value_bad;
+drop table if exists geo_srid_alter_bad;
+create table geo_srid_alter_bad(g point not null srid 4326);
+alter table geo_srid_alter_bad modify column g point not null srid 0;
+-- @regex("currently unsupport change from original geometry SRID 4326 to 0", true)
+not supported: currently unsupport change from original geometry SRID 4326 to 0
+drop table geo_srid_alter_bad;
+drop database geo_srid_db;

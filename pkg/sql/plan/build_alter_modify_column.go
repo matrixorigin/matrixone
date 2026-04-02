@@ -38,6 +38,7 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
+	applyColumnAttributesToType(&nTy, nColSpec.Attributes)
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err
@@ -144,6 +145,24 @@ func checkChangeTypeCompatible(
 ) error {
 	// Deal with the same type.
 	if origin.Id == to.Id {
+		if isGeometryPlanType(origin) && !geometrySubtypeCompatible(geometrySubtypeName(to), geometrySubtypeName(origin)) {
+			return moerr.NewNotSupportedf(ctx,
+				"currently unsupport change from original geometry subtype %s to %s",
+				geometrySubtypeName(origin),
+				geometrySubtypeName(to),
+			)
+		}
+		if isGeometryPlanType(origin) {
+			originSRID, originHasSRID := geometrySRIDValue(origin)
+			targetSRID, targetHasSRID := geometrySRIDValue(to)
+			if originHasSRID != targetHasSRID || (originHasSRID && originSRID != targetSRID) {
+				return moerr.NewNotSupportedf(ctx,
+					"currently unsupport change from original geometry SRID %s to %s",
+					formatGeometrySRIDForError(originSRID, originHasSRID),
+					formatGeometrySRIDForError(targetSRID, targetHasSRID),
+				)
+			}
+		}
 		return nil
 	}
 	// The enumeration type has an independent cast function to handle it

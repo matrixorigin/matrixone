@@ -173,6 +173,12 @@ func init() {
 		reuse.DefaultOptions[AttributeOnUpdate](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeSRID](
+		func() *AttributeSRID { return &AttributeSRID{} },
+		func(a *AttributeSRID) { a.reset() },
+		reuse.DefaultOptions[AttributeSRID](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[IndexOption](
 		func() *IndexOption { return &IndexOption{} },
 		func(i *IndexOption) { i.reset() },
@@ -1374,6 +1380,8 @@ func (node *ColumnTableDef) reset() {
 				panic("currently not used")
 			case *AttributeOnUpdate:
 				opt.Free()
+			case *AttributeSRID:
+				opt.Free()
 			case *AttributeVisable:
 				opt.Free()
 			case *KeyPart:
@@ -1992,6 +2000,32 @@ func NewAttributeOnUpdate(e Expr) *AttributeOnUpdate {
 	ao := reuse.Alloc[AttributeOnUpdate](nil)
 	ao.Expr = e
 	return ao
+}
+
+type AttributeSRID struct {
+	columnAttributeImpl
+	Value uint32
+}
+
+func (node *AttributeSRID) Format(ctx *FmtCtx) {
+	ctx.WriteString("srid ")
+	ctx.WriteString(strconv.FormatUint(uint64(node.Value), 10))
+}
+
+func (node AttributeSRID) TypeName() string { return "tree.AttributeSRID" }
+
+func (node *AttributeSRID) reset() {
+	*node = AttributeSRID{}
+}
+
+func (node *AttributeSRID) Free() {
+	reuse.Free[AttributeSRID](node, nil)
+}
+
+func NewAttributeSRID(v uint32) *AttributeSRID {
+	a := reuse.Alloc[AttributeSRID](nil)
+	a.Value = v
+	return a
 }
 
 type IndexType int

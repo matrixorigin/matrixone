@@ -7784,6 +7784,20 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
+func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		x1, y1, err := parsePointXYFromPayload(v1)
+		if err != nil {
+			return 0, err
+		}
+		x2, y2, err := parsePointXYFromPayload(v2)
+		if err != nil {
+			return 0, err
+		}
+		return math.Hypot(x1-x2, y1-y2), nil
+	}, selectList)
+}
+
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)

@@ -963,6 +963,474 @@ func TestSoundex(t *testing.T) {
 	}
 }
 
+func initStAsTextTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_astext point and polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_astext null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,1 1)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStAsText(t *testing.T) {
+	testCases := initStAsTextTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StAsText)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStGeomFromTextTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geomfromtext point and polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_geomfromtext null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"LINESTRING(0 0,1 1)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeomFromText(t *testing.T) {
+	testCases := initStGeomFromTextTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeomFromText)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStGeomFromTextWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)"}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+}
+
+func TestStSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 0}, []bool{false, false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+}
+
+func initStGeometryTypeTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geometrytype basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "LINESTRING(0 0,1 1)", "POLYGON((0 0,1 0,1 1,0 0))", "MULTIPOINT((1 2),(3 4))"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"POINT", "LINESTRING", "POLYGON", "MULTIPOINT"},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_geometrytype null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeometryType(t *testing.T) {
+	testCases := initStGeometryTypeTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeometryType)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStXYTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_x point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POINT(-3.5 4.25)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, -3.5},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_y point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POINT(-3.5 4.25)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{2, 4.25},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_xy null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStX(t *testing.T) {
+	testCases := initStXYTestCase()
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, testCases[0].inputs, testCases[0].expect, StX)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[0].info, info))
+
+	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StX)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+func TestStY(t *testing.T) {
+	testCases := initStXYTestCase()
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, testCases[1].inputs, testCases[1].expect, StY)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[1].info, info))
+
+	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StY)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+func TestStXYRejectNonPoint(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StX)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POINT")
+
+	fcTC = NewFunctionTestCase(proc, inputs, expect, StY)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POINT")
+}
+
+func initStNumGeometriesTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_numgeometries basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"MULTIPOINT((1 2),(3 4))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+					},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 2, 2, 2, 2},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test st_numgeometries null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStNumGeometries(t *testing.T) {
+	testCases := initStNumGeometriesTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StNumGeometries)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStGeometryNTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geometryn basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"MULTIPOINT((1 2),(3 4))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+					},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2, 1, 2, 2},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(3 4)",
+					"LINESTRING(0 0,1 1)",
+					"POLYGON((2 2,3 2,3 3,2 2))",
+					"LINESTRING(0 0,1 1)",
+				},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_geometryn geometry null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"MULTIPOINT((1 2),(3 4))"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		{
+			info: "test st_geometryn index null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"MULTIPOINT((1 2),(3 4))"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeometryN(t *testing.T) {
+	testCases := initStGeometryNTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeometryN)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStGeometryNRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	nonCollectionInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 2)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{1},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, nonCollectionInputs, expect, StGeometryN)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a collection")
+
+	outOfRangeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((1 2),(3 4))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{3},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, outOfRangeInputs, expect, StGeometryN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry index out of range")
+}
+
+func initStIsEmptyTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isempty basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT EMPTY",
+						"POINT(1 2)",
+						"LINESTRING EMPTY",
+						"GEOMETRYCOLLECTION()",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, true},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_isempty null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsEmpty(t *testing.T) {
+	testCases := initStIsEmptyTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsEmpty)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStLengthTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_length basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(0 0,3 4,6 4)",
+						"MULTILINESTRING((0 0,3 4),(3 4,6 8))",
+						"SRID=4326;LINESTRING(0 0,3 4)",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{5, 8, 10, 5},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_length null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStLength(t *testing.T) {
+	testCases := initStLengthTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StLength)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStLengthRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StLength)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING or MULTILINESTRING")
+}
+
 func initBinTestCase() []tcTemp {
 	return []tcTemp{
 		{

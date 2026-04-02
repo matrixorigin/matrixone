@@ -5069,6 +5069,69 @@ func TestCosineSimilarityArray(t *testing.T) {
 }
 
 // L2 Distance
+func initStDistanceTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_distance point to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)", "POINT(-1 -1)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(3 4)", "POINT(2 3)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{5, 5},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(3 4)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStDistance(t *testing.T) {
+	testCases := initStDistanceTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StDistance)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStDistanceRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,1 1)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "geometry is not a POINT")
+}
+
+// L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{
 		{

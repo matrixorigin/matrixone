@@ -53,6 +53,7 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
+	applyColumnAttributesToType(&colType, specNewColumn.Attributes)
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}
@@ -251,6 +252,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
 	}
+	if isGeometryPlanType(&colType) {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", columnName))
+	}
 	return nil
 }
 
@@ -269,6 +273,9 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in unique index", columnName))
+	}
+	if isGeometryPlanType(&colType) {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", columnName))
 	}
 	return nil
 }

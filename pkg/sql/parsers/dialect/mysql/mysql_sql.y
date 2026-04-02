@@ -458,6 +458,7 @@ import (
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> GET_FORMAT
+%token <str> SRID
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -623,7 +624,7 @@ import (
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
-%type <str> integer_opt
+%type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
@@ -9913,6 +9914,19 @@ column_attribute_elem:
         }
         $$ = tree.NewAttributeOnUpdate(expr)
     }
+|   SRID INTEGRAL
+    {
+        v, errStr := util.GetInt64($2)
+        if errStr != "" {
+            yylex.Error(errStr)
+            goto ret1
+        }
+        if v < 0 || v > 4294967295 {
+            yylex.Error("SRID should be between 0 and 4294967295")
+            goto ret1
+        }
+        $$ = tree.NewAttributeSRID(uint32(v))
+    }
 |   LOW_CARDINALITY
     {
 	    $$ = tree.NewAttributeLowCardinality()
@@ -12845,7 +12859,7 @@ declare_stmt:
     }
 
 spatial_type:
-    GEOMETRY
+    spatial_type_name
     {
         locale := ""
         $$ = &tree.T{
@@ -12857,13 +12871,16 @@ spatial_type:
             },
         }
     }
-// |   POINT
-// |   LINESTRING
-// |   POLYGON
-// |   GEOMETRYCOLLECTION
-// |   MULTIPOINT
-// |   MULTILINESTRING
-// |   MULTIPOLYGON
+
+spatial_type_name:
+    GEOMETRY
+|   POINT
+|   LINESTRING
+|   POLYGON
+|   GEOMETRYCOLLECTION
+|   MULTIPOINT
+|   MULTILINESTRING
+|   MULTIPOLYGON
 
 // TODO:
 // need to encode SQL string
@@ -13351,6 +13368,7 @@ non_reserved_keyword:
 |   PITR
 |   RECOVERY_WINDOW
 |   SPATIAL
+|   SRID
 |   START
 |   STATUS
 |   STORAGE

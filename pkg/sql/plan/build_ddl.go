@@ -336,6 +336,7 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			if err != nil {
 				return err
 			}
+			applyColumnAttributesToType(&colType, def.Attributes)
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
@@ -1040,6 +1041,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+			applyColumnAttributesToType(&colType, def.Attributes)
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
@@ -1090,6 +1092,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
 
 					}
+					if isGeometryPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", colNameOrigin))
+					}
 					pks = append(pks, colName)
 				case *tree.AttributeComment:
 					comment = attribute.CMT.String()
@@ -1108,6 +1113,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
+					}
+					if isGeometryPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -1190,6 +1198,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if isSetPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", name))
 					}
+					if isGeometryPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", name))
+					}
 				}
 
 				primaryKeys = append(primaryKeys, name)
@@ -1209,6 +1220,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if col, ok := colMap[name]; ok {
 					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+					}
+					if isGeometryPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", name))
 					}
 				}
 
@@ -1230,6 +1244,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isSetPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", name))
+					}
+					if isGeometryPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", name))
 					}
 				}
 
@@ -1519,6 +1536,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+		if isGeometryPlanType(&colMap[str].Typ) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", str))
 		}
 	}
 
@@ -1870,6 +1890,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
 			}
+			if isGeometryPlanType(&colMap[name].Typ) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
+			}
 
 			indexParts = append(indexParts, name)
 		}
@@ -2187,6 +2210,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 		if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
+		}
+		if isGeometryPlanType(&colMap[name].Typ) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
 		}
 
 		if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {

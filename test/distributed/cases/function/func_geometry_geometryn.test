@@ -1,0 +1,5 @@
+select st_astext(st_geometryn(st_geomfromtext('MULTIPOINT((1 2),(3 4))'), 2)) as second_point;
+select st_astext(st_geometryn(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))'), 1)) as first_line;
+select st_astext(st_geometryn(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))'), 2)) as second_polygon;
+select st_astext(st_geometryn(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))'), 2)) as second_geometry;
+select st_astext(st_geometryn(st_geomfromtext(null), 1)) as null_geometry;

@@ -1,0 +1,23 @@
+drop table if exists geo_point_ok;
+create table geo_point_ok(g point);
+insert into geo_point_ok values (st_geomfromtext('POINT(1 1)'));
+select st_astext(g) as point_text from geo_point_ok;
+drop table geo_point_ok;
+
+drop table if exists geo_any_ok;
+create table geo_any_ok(g geometry);
+insert into geo_any_ok values (st_geomfromtext('LINESTRING(0 0,1 1)'));
+select st_astext(g) as geom_text from geo_any_ok;
+drop table geo_any_ok;
+
+drop table if exists geo_point_bad;
+create table geo_point_bad(g point);
+-- @regex("cannot store LINESTRING in POINT column",true)
+insert into geo_point_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
+drop table geo_point_bad;
+
+drop table if exists geo_alter_bad;
+create table geo_alter_bad(g point);
+-- @regex("currently unsupport change from original geometry subtype POINT to LINESTRING",true)
+alter table geo_alter_bad modify column g linestring;
+drop table geo_alter_bad;
