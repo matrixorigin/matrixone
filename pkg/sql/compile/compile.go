@@ -4990,7 +4990,7 @@ func runDetectParentDeleteDetectSql(c *Compile, sql string) error {
 		if vs != nil && vs[0].Length() > 0 {
 			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if !yes {
-				return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+				return moerr.NewInternalError(c.proc.Ctx, moerr.NewErrFKRowIsReferenced(c.proc.Ctx).Error())
 			}
 		}
 	}
