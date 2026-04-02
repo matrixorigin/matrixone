@@ -745,18 +745,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	constraintTestSchema["self_ref"] = &Schema{
 		tblId: 99999,
 		cols: []col{
-			{"id", types.T_int32, true, 32, 0},         // ColId=0
-			{"parent_id", types.T_int32, true, 32, 0},  // ColId=1
-			{"name", types.T_varchar, true, 64, 0},      // ColId=2
+			{"id", types.T_int32, true, 32, 0},            // ColId=0
+			{"parent_id", types.T_int32, true, 32, 0},     // ColId=1
+			{"name", types.T_varchar, true, 64, 0},        // ColId=2
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0}, // ColId=3
 		},
 		pks: []int{0}, // primary key "id"
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_self_parent",
-				Cols:        []uint64{1},  // parent_id (ColId=1)
-				ForeignTbl:  0,            // 0 = self-referencing
-				ForeignCols: []uint64{0},  // id (ColId=0)
+				Cols:        []uint64{1}, // parent_id (ColId=1)
+				ForeignTbl:  0,           // 0 = self-referencing
+				ForeignCols: []uint64{0}, // id (ColId=0)
 				OnDelete:    plan.ForeignKeyDef_RESTRICT,
 				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
 			},

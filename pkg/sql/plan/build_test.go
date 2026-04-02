@@ -732,7 +732,7 @@ func TestReplacePKTable(t *testing.T) {
 
 	// should error
 	sqls = []string{
-		"REPLACE INTO nonexistent VALUES (1, 'a')",        // table not exist
+		"REPLACE INTO nonexistent VALUES (1, 'a')",         // table not exist
 		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)

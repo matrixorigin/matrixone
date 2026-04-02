@@ -534,7 +534,6 @@ func getReverseList2(rootOp vm.Operator, stack []vm.OpType) []vm.OpType {
 	return stack
 }
 
-
 type fakeStreamSender2 struct {
 	morpc.Stream
 	number int
