@@ -191,8 +191,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			if err != nil {
 				return err
 			}
-			ctr.spillUID = uid.String()
-			logutil.Infof("entering spill mode, uid: %s", ctr.spillUID)
+			ctr.spillUUID = uid.String()
+			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
 
 			spillFiles = make([]*os.File, spillNumBuckets)
 			spillBuffers = ctr.acquireSpillBuffers(proc)

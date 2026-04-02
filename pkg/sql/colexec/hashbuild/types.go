@@ -46,7 +46,7 @@ type container struct {
 	hashmapBuilder  HashmapBuilder
 	spilledFds      []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
 	spillFS         fileservice.MutableFileService
-	spillUID        string // unique prefix for anonymous file paths
+	spillUUID       string // unique prefix for anonymous file paths
 	spillThreshold  int64
 
 	// reusable buffers for spill operations

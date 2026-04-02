@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -86,11 +87,14 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 	if files[bucket] != nil {
 		return files[bucket], nil
 	}
+	if ctr.spillUUID == "" {
+		return nil, moerr.NewInternalErrorNoCtx("ensureSpillFile: spillUUID not initialized")
+	}
 	spillfs, err := ctr.getSpillFS(proc)
 	if err != nil {
 		return nil, err
 	}
-	name := fmt.Sprintf("join_%s_%d_build", ctr.spillUID, bucket)
+	name := fmt.Sprintf("join_%s_%d_build", ctr.spillUUID, bucket)
 	f, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
 	if err != nil {
 		return nil, err
