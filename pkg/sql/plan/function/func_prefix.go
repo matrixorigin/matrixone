@@ -94,10 +94,6 @@ func newImplPrefixIn() *implPrefixIn {
 
 func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 	op.ready = true
-	if rvec == nil {
-		op.vals = nil
-		return nil
-	}
 	op.vals = make([][]byte, rvec.Length())
 	vlen := 0
 
@@ -138,25 +134,18 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 
-	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
-	if len(op.vals) == 0 {
-		for i := 0; i < length; i++ {
-			res[i] = false
-		}
-		return nil
-	}
-
 	lvec := parameters[0]
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 	lvecHasNull := lvec.HasNull()
-	lvecIsConst := lvec.IsConst()
 
-	if lvec.GetSorted() && !lvecHasNull && !lvecIsConst {
+	if lvec.GetSorted() && !lvecHasNull {
 		rval := op.vals[0]
 		rpos := 0
 		rlen := len(op.vals)
 
-		for i := 0; i < length; i++ {
+		for i := range length {
 			lval := lcol[i].GetByteSlice(larea)
 			for types.PrefixCompare(lval, rval) > 0 {
 				rpos++
@@ -181,12 +170,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 					res[i] = false
 					rNulls.Add(i)
 				} else {
-					var lval []byte
-					if lvecIsConst {
-						lval = lcol[0].GetByteSlice(larea)
-					} else {
-						lval = lcol[i].GetByteSlice(larea)
-					}
+					lval := lcol[i].GetByteSlice(larea)
 					rpos, _ := sort.Find(len(op.vals), func(j int) int {
 						return types.PrefixCompare(lval, op.vals[j])
 					})
@@ -195,13 +179,8 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 				}
 			}
 		} else {
-			for i := 0; i < length; i++ {
-				var lval []byte
-				if lvecIsConst {
-					lval = lcol[0].GetByteSlice(larea)
-				} else {
-					lval = lcol[i].GetByteSlice(larea)
-				}
+			for i := range length {
+				lval := lcol[i].GetByteSlice(larea)
 				rpos, _ := sort.Find(len(op.vals), func(j int) int {
 					return types.PrefixCompare(lval, op.vals[j])
 				})
