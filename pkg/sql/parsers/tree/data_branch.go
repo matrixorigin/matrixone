@@ -417,8 +417,8 @@ const (
 // PickKeys represents the KEYS clause of a PICK statement.
 type PickKeys struct {
 	Type     PickKeysType
-	KeyExprs []Expr         // for PickKeysValues: literal expressions
-	Select   *Select        // for PickKeysSubquery
+	KeyExprs []Expr  // for PickKeysValues: literal expressions
+	Select   *Select // for PickKeysSubquery
 }
 
 // DataBranchPick represents:
