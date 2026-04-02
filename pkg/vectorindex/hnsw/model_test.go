@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -33,22 +34,6 @@ import (
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
-
-/*
-// give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
-       return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
-}
-
-// give blob
-func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-
-       res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
-       ch <- res
-       return executor.Result{}, nil
-}
-*/
 
 // give blob
 func mock_runSql_streaming_error(
@@ -376,11 +361,159 @@ func TestModelNil(t *testing.T) {
 
 }
 
+// mock that sends error to error_chan first, then sends data to stream_chan
+// after context cancellation, so the drain loop has data to drain.
+func mock_runSql_streaming_drain(
+	ctx context.Context,
+	sqlproc *sqlexec.SqlProcess,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
+	proc := sqlproc.Proc
+	// Send error immediately — loadChunk will pick it up.
+	err_chan <- moerr.NewInternalErrorNoCtx("drain test error")
+	// Wait for context cancellation (main loop calls cancel(err)).
+	<-ctx.Done()
+	// Send data that must be drained by the caller.
+	ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
+	return executor.Result{}, nil
+}
+
 // hnswTempFiles returns paths matching the temp file pattern used by
 // LoadIndex/LoadIndexFromBuffer (os.CreateTemp("", "hnsw")).
 func hnswTempFiles() []string {
 	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "hnsw*"))
 	return matches
+}
+
+// TestNewHnswModelForBuild covers NewHnswModelForBuild + initIndex (lines 66-112).
+func TestNewHnswModelForBuild(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+
+	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64)
+	require.NoError(t, err)
+	require.NotNil(t, idx.Index)
+	defer idx.Destroy()
+
+	require.Equal(t, "build-test", idx.Id)
+	require.Equal(t, uint(1), idx.NThread)
+	require.Equal(t, uint(64), idx.MaxCapacity)
+
+	empty, err := idx.Empty()
+	require.NoError(t, err)
+	require.True(t, empty)
+
+	// Add a vector and verify it's there.
+	err = idx.Add(42, []float32{1, 2, 3})
+	require.NoError(t, err)
+
+	found, err := idx.Contains(42)
+	require.NoError(t, err)
+	require.True(t, found)
+}
+
+// TestLoadIndex_EmptyChecksum covers the "checksum is empty" guard (lines 657-660).
+func TestLoadIndex_EmptyChecksum(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	idx := &HnswModel[float32]{FileSize: 1024, Checksum: ""}
+	defer idx.Destroy()
+
+	err := idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "checksum is empty")
+}
+
+// TestLoadIndex_NewlyCreated covers the FileSize==0 + Path=="" → initIndex path (lines 652-655).
+func TestLoadIndex_NewlyCreated(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
+		IndexCapacity: 64}
+
+	// FileSize=0, Path="" triggers the initIndex path.
+	idx := &HnswModel[float32]{MaxCapacity: 64, NThread: 1}
+	defer idx.Destroy()
+
+	err := idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, idx.Index)
+
+	empty, err := idx.Empty()
+	require.NoError(t, err)
+	require.True(t, empty)
+}
+
+// TestSearch_WrongDimension covers the dimension mismatch guard (lines 878-880).
+func TestSearch_WrongDimension(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+
+	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16)
+	require.NoError(t, err)
+	defer idx.Destroy()
+
+	// Search with a 2-element vector on a 3-dim index.
+	_, _, err = idx.Search([]float32{1, 2}, 4)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dimension not match")
+}
+
+// TestStreamingDrain covers the stream_chan drain loop (lines 499-501 in
+// LoadIndexFromBuffer, lines 729-731 in LoadIndex) where pending Results
+// must be drained and closed after an error cancels the producer.
+func TestStreamingDrain(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	runSql = mock_runSql
+	runSql_streaming = mock_runSql_streaming_drain
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	// Test LoadIndex drain path.
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	require.NoError(t, err)
+	idx0 := models[0]
+	defer idx0.Destroy()
+
+	before := hnswTempFiles()
+	err = idx0.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain test error")
+	after := hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndex drain")
+
+	// Test LoadIndexFromBuffer drain path.
+	models, err = LoadMetadata[float32](sqlproc, "db", "meta")
+	require.NoError(t, err)
+	idx1 := models[0]
+	defer idx1.Destroy()
+
+	before = hnswTempFiles()
+	err = idx1.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain test error")
+	after = hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndexFromBuffer drain")
 }
 
 func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
