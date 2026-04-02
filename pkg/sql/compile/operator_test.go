@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -125,6 +126,16 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func TestDupOperatorApplyWithoutTableFunction(t *testing.T) {
+	op := apply.NewArgument()
+	op.ApplyType = apply.CROSS
+
+	dup := dupOperator(op, 0, 1).(*apply.Apply)
+	require.Nil(t, dup.TableFunction)
+	require.Nil(t, dup.Runner)
+	require.Equal(t, op.ApplyType, dup.ApplyType)
 }
 
 func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {

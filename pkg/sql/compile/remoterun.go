@@ -759,13 +759,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColList:   colList,
 			Types:     convertToPlanTypes(t.Typs),
 		}
-		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.TableFunction.Attrs,
-			Rets:     t.TableFunction.Rets,
-			Args:     t.TableFunction.Args,
-			Params:   t.TableFunction.Params,
-			Name:     t.TableFunction.FuncName,
-			IsSingle: t.TableFunction.IsSingle,
+		if t.TableFunction != nil {
+			in.TableFunction = &pipeline.TableFunction{
+				Attrs:    t.TableFunction.Attrs,
+				Rets:     t.TableFunction.Rets,
+				Args:     t.TableFunction.Args,
+				Params:   t.TableFunction.Params,
+				Name:     t.TableFunction.FuncName,
+				IsSingle: t.TableFunction.IsSingle,
+			}
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1204,13 +1206,15 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.TableFunction = table_function.NewArgument()
-		arg.TableFunction.Attrs = opr.TableFunction.Attrs
-		arg.TableFunction.Rets = opr.TableFunction.Rets
-		arg.TableFunction.Args = opr.TableFunction.Args
-		arg.TableFunction.FuncName = opr.TableFunction.Name
-		arg.TableFunction.Params = opr.TableFunction.Params
-		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+		if opr.TableFunction != nil {
+			arg.TableFunction = table_function.NewArgument()
+			arg.TableFunction.Attrs = opr.TableFunction.Attrs
+			arg.TableFunction.Rets = opr.TableFunction.Rets
+			arg.TableFunction.Args = opr.TableFunction.Args
+			arg.TableFunction.FuncName = opr.TableFunction.Name
+			arg.TableFunction.Params = opr.TableFunction.Params
+			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+		}
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

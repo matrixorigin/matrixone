@@ -2711,18 +2711,17 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 
 func (c *Compile) compileApply(step int32, node *plan.Node, rightNodeID int32, nodes []*plan.Node, rs []*Scope) []*Scope {
 	right := nodes[rightNodeID]
-	var runner apply.SubqueryRunner
-	if right.NodeType != plan.Node_FUNCTION_SCAN {
-		var err error
-		runner, err = newCorrelatedApplyRunner(c, step, rightNodeID)
-		if err != nil {
-			panic(err)
-		}
-	}
-
 	switch node.ApplyType {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
+			var runner apply.SubqueryRunner
+			if right.NodeType != plan.Node_FUNCTION_SCAN {
+				var err error
+				runner, err = newCorrelatedApplyRunner(c, step, rightNodeID)
+				if err != nil {
+					panic(err)
+				}
+			}
 			op := constructApply(node, right, apply.CROSS, c.proc)
 			op.Runner = runner
 			if op.TableFunction != nil && op.TableFunction.IsSingle {
@@ -2733,6 +2732,14 @@ func (c *Compile) compileApply(step int32, node *plan.Node, rightNodeID int32, n
 		}
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
+			var runner apply.SubqueryRunner
+			if right.NodeType != plan.Node_FUNCTION_SCAN {
+				var err error
+				runner, err = newCorrelatedApplyRunner(c, step, rightNodeID)
+				if err != nil {
+					panic(err)
+				}
+			}
 			op := constructApply(node, right, apply.OUTER, c.proc)
 			op.Runner = runner
 			op.SetIdx(c.anal.curNodeIdx)

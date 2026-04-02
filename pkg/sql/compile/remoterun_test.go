@@ -293,6 +293,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
+		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
 		{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}},
 		{Op: int32(vm.RightDedupJoin), RightDedupJoin: &pipeline.RightDedupJoin{}},
@@ -301,6 +302,30 @@ func Test_convertToVmInstruction(t *testing.T) {
 		_, err := convertToVmOperator(instruction, ctx, nil)
 		require.Nil(t, err)
 	}
+}
+
+func TestApplySerializationWithoutTableFunction(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	op := apply.NewArgument()
+	op.ApplyType = apply.CROSS
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, instruction.Apply)
+	require.Nil(t, instruction.TableFunction)
+
+	restored, err := convertToVmOperator(instruction, ctx, nil)
+	require.NoError(t, err)
+	restoredApply := restored.(*apply.Apply)
+	require.Nil(t, restoredApply.TableFunction)
+	require.Equal(t, op.ApplyType, restoredApply.ApplyType)
 }
 
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
