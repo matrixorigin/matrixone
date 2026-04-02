@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -131,5 +132,72 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 			require.Equal(t, int64(i), keys[offset])
 			require.Equal(t, float64(0), distances[offset])
 		}
+	}
+}
+
+func TestGpuSearchFloat32(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dimension := uint(16)
+	dsize := 100
+	dataset := make([][]float32, dsize)
+	for i := range dataset {
+		dataset[i] = make([]float32, dimension)
+		for j := range dataset[i] {
+			dataset[i][j] = rand.Float32()
+		}
+	}
+
+	qsize := 5
+	queries := make([][]float32, qsize)
+	for i := range queries {
+		queries[i] = make([]float32, dimension)
+		for j := range queries[i] {
+			queries[i][j] = rand.Float32()
+		}
+	}
+
+	limit := uint(3)
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	elemsz := uint(4)
+
+	indices := []struct {
+		name string
+		fn   func([][]float32, uint, metric.MetricType, uint, uint) (cache.VectorIndexSearchIf, error)
+	}{
+		{"GpuBruteForce", NewGpuBruteForceIndex[float32]},
+		{"GpuAdhocBruteForce", func(d [][]float32, dim uint, m metric.MetricType, es uint, nt uint) (cache.VectorIndexSearchIf, error) {
+			return NewGpuAdhocBruteForceIndex[float32](d, dim, m, es)
+		}},
+	}
+
+	for _, tc := range indices {
+		t.Run(tc.name, func(t *testing.T) {
+			idx, err := tc.fn(dataset, dimension, metric.Metric_L2sqDistance, elemsz, 1)
+			require.NoError(t, err)
+			defer idx.Destroy()
+
+			err = idx.Load(sqlproc)
+			require.NoError(t, err)
+
+			// 1. Get baseline from standard Search
+			keysAny, dists64, err := idx.Search(sqlproc, queries, rt)
+			require.NoError(t, err)
+			expectedKeys := keysAny.([]int64)
+
+			// 2. Test SearchFloat32
+			outKeys := make([]int64, qsize*int(limit))
+			outDists := make([]float32, qsize*int(limit))
+			err = idx.SearchFloat32(sqlproc, queries, rt, outKeys, outDists)
+			require.NoError(t, err)
+
+			// 3. Compare results
+			require.Equal(t, expectedKeys, outKeys)
+			for i := range dists64 {
+				require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
+			}
+		})
 	}
 }

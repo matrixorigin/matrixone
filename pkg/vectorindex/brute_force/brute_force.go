@@ -169,9 +169,7 @@ func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _q
 	if keys == nil {
 		return nil
 	}
-	for i, k := range keys.([]int64) {
-		outKeys[i] = k
-	}
+	copy(outKeys, keys.([]int64))
 	for i, d := range dists {
 		outDists[i] = float32(d)
 	}

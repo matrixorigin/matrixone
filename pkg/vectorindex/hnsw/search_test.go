@@ -86,6 +86,58 @@ func mock_runSql_streaming_2files(
 	return executor.Result{}, nil
 }
 
+func TestHnswSearchFloat32(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	// mock Search call by providing a minimal environment where Search might return nil or some values
+	// Since s.Indexes is empty, Search will return nil, nil, nil or error.
+
+	rt := vectorindex.RuntimeConfig{Limit: 4}
+	query := []float32{1, 2, 3}
+
+	// 1. Test with nil results (no indexes loaded)
+	outKeys := make([]int64, 4)
+	outDists := make([]float32, 4)
+	err := s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	// 2. Mock some indexes to test copying logic
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+
+	err = idx.Reserve(1)
+	require.NoError(t, err)
+	err = idx.Add(0, []float32{1, 2, 3})
+	require.NoError(t, err)
+
+	s.Indexes = []*HnswModel[float32]{
+		{
+			Id:    "abc-0",
+			Index: idx,
+		},
+	}
+
+	keysAny, dists64, err := s.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	expectedKeys := keysAny.([]int64)
+
+	err = s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	require.Equal(t, expectedKeys, outKeys[:len(expectedKeys)])
+	for i := range dists64 {
+		require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
+	}
+}
+
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)

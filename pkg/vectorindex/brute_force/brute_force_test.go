@@ -153,6 +153,67 @@ func TestUsearchBruteForceConcurrent(t *testing.T) {
 	runBruteForceConcurrent(t, true)
 }
 
+func TestSearchFloat32(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dimension := uint(16)
+	dsize := 100
+	dataset := make([][]float32, dsize)
+	for i := range dataset {
+		dataset[i] = make([]float32, dimension)
+		for j := range dataset[i] {
+			dataset[i][j] = rand.Float32()
+		}
+	}
+
+	qsize := 5
+	queries := make([][]float32, qsize)
+	for i := range queries {
+		queries[i] = make([]float32, dimension)
+		for j := range queries[i] {
+			queries[i][j] = rand.Float32()
+		}
+	}
+
+	limit := uint(3)
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 2}
+	elemsz := uint(4)
+
+	indices := []struct {
+		name string
+		fn   func([][]float32, uint, metric.MetricType, uint) (cache.VectorIndexSearchIf, error)
+	}{
+		{"GoBruteForce", NewGoBruteForceIndex[float32]},
+		{"UsearchBruteForce", NewUsearchBruteForceIndex[float32]},
+	}
+
+	for _, tc := range indices {
+		t.Run(tc.name, func(t *testing.T) {
+			idx, err := tc.fn(dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+			require.NoError(t, err)
+
+			// 1. Get baseline from standard Search
+			keysAny, dists64, err := idx.Search(sqlproc, queries, rt)
+			require.NoError(t, err)
+			expectedKeys := keysAny.([]int64)
+
+			// 2. Test SearchFloat32
+			outKeys := make([]int64, qsize*int(limit))
+			outDists := make([]float32, qsize*int(limit))
+			err = idx.SearchFloat32(sqlproc, queries, rt, outKeys, outDists)
+			require.NoError(t, err)
+
+			// 3. Compare results
+			require.Equal(t, expectedKeys, outKeys)
+			for i := range dists64 {
+				require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
+			}
+		})
+	}
+}
+
 func TestGoBruteForceHeapLogic(t *testing.T) {
 	// Generate random dataset
 	dsize := 1000

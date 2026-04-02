@@ -251,8 +251,15 @@ func (s *HnswSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt ve
 	if keys == nil {
 		return nil
 	}
-	for i, k := range keys.([]int64) {
-		outKeys[i] = k
+	switch ks := keys.(type) {
+	case []int64:
+		copy(outKeys, ks)
+	case []any:
+		for i, k := range ks {
+			outKeys[i] = k.(int64)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtx("HnswSearch: unknown keys type")
 	}
 	for i, d := range dists {
 		outDists[i] = float32(d)
