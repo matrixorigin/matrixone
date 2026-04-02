@@ -47,11 +47,10 @@ const (
 	// balances memory pressure vs write-syscall frequency.
 	spillRowBufferSize = 8192
 	// spillIOBufferSize is the size of the bufio.Reader read-ahead buffer used
-	// when reading spill files. A large buffer (4 MiB) dramatically reduces the
-	// number of read() syscalls when scanning multi-hundred-MB spill files during
-	// multi-level re-spill, which is the primary source of IO-related performance
-	// degradation reported by users.
-	spillIOBufferSize = 1024 * 1024
+	// when reading spill files. A large buffer reduces the number of read()
+	// syscalls when scanning multi-hundred-MB spill files during multi-level
+	// re-spill.
+	spillIOBufferSize = 4 * 1024 * 1024
 )
 
 // getSpillFS returns the cached spill file service, initialising it on first call.
@@ -379,11 +378,14 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	return cnt, nil
 }
 
-func createRootProbeSpillBucketFiles() []spillBucketWriter {
-	uid, _ := uuid.NewV7()
+func createRootProbeSpillBucketFiles() ([]spillBucketWriter, error) {
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
 	uidStr := uid.String()
-	logutil.Infof("creating probe spill files, base: %s", uidStr)
-	return makeSpillBucketWriters(uidStr, "probe")
+	logutil.Debugf("creating probe spill files, base: %s", uidStr)
+	return makeSpillBucketWriters(uidStr, "probe"), nil
 }
 
 func (ctr *container) appendProbeBatchToSpillFiles(proc *process.Process, bat *batch.Batch, writers []spillBucketWriter, buffers []*batch.Batch, analyzer process.Analyzer, seed uint64) error {
@@ -456,7 +458,7 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 // it re-spills into sub-buckets (prepended to spillQueue) and returns nil, nil.
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket spillBucket, analyzer process.Analyzer) (jm *message.JoinMap, reSpilled bool, err error) {
 	ctr := &hashJoin.ctr
-	logutil.Infof("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth)
+	logutil.Debugf("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth)
 
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
@@ -469,32 +471,10 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	}
 
 	// Stream batches from build file — reuse the cached reader (and its 4 MiB buffer).
-	spillfs, fsErr := ctr.getSpillFS(proc)
-	if fsErr != nil {
-		cleanupBuilder()
-		return nil, false, fsErr
-	}
-
-	// Delete the named build file on any exit path (normal or error).
-	// The bucket was already popped from spillQueue, so cleanupSpillFiles won't find it.
-	// fd-based build files are closed by reader.close() (deferred below).
-	// Use context.Background() so cleanup succeeds even when proc.Ctx is cancelled.
-	ownsBuildFile := bucket.buildFile != ""
-	defer func() {
-		if ownsBuildFile && bucket.buildFile != "" {
-			spillfs.RemoveFile(context.Background(), bucket.buildFile)
-		}
-	}()
-
 	if ctr.spillBuildReader == nil {
 		ctr.spillBuildReader = &spillBucketReader{}
 	}
-	if bucket.buildFd != nil {
-		ctr.spillBuildReader.resetForFd(bucket.buildFd)
-	} else if rdErr := ctr.spillBuildReader.resetForFile(proc.Ctx, spillfs, bucket.buildFile); rdErr != nil {
-		cleanupBuilder()
-		return nil, false, rdErr
-	}
+	ctr.spillBuildReader.resetForFd(bucket.buildFd)
 	reader := ctr.spillBuildReader
 	defer reader.close()
 
@@ -523,15 +503,11 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 
 		// Check threshold mid-build (only if we can go deeper)
 		if bucket.depth < spillMaxPass && ctr.shouldReSpill(builder) {
-			// Transfer build file ownership to reSpillBucket.
-			ownsBuildFile = false
 			_, reSpillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
 			cleanupBuilder()
 			return nil, true, reSpillErr
 		}
 	}
-
-	// Build file will be deleted by the defer above.
 
 	// Build hashmap
 	if buildErr := builder.BuildHashmap(hashJoin.HashOnPK, !hashJoin.HashOnPK, false, proc); buildErr != nil {
@@ -547,8 +523,8 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		// For left outer/single/anti the probe rows must still be output as non-matches
 		// (NULLs on the build side); keep the probe file and return nil so the caller
 		// opens it with ctr.mp == nil — the existing emptyProbe path handles this.
-		isLeftOuterOrSingleOrAnti := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
-		if !isLeftOuterOrSingleOrAnti {
+		needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+		if !needsProbeForEmpty {
 			// Close probe fd — the inode is released (file was created via CreateAndRemoveFile).
 			if bucket.probeFd != nil {
 				bucket.probeFd.Close()
@@ -569,10 +545,9 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 // Sub-bucket files are created lazily: a file is only written when it actually receives data.
 func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucket, builder *hashbuild.HashmapBuilder, reader *spillBucketReader, nextDepth int, analyzer process.Analyzer) (*message.JoinMap, error) {
 	ctr := &hashJoin.ctr
-	logutil.Infof("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth, nextDepth)
+	logutil.Debugf("re-spilling bucket: %s, depth: %d -> %d", bucket.baseName, bucket.depth, nextDepth)
 
-	spillfs, err := ctr.getSpillFS(proc)
-	if err != nil {
+	if _, err := ctr.getSpillFS(proc); err != nil {
 		return nil, err
 	}
 
@@ -583,7 +558,6 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	subProbeWriters := makeSpillBucketWriters(bucket.baseName, "probe")
 
 	// Defer file closing and cleanup on error.
-	var respillErr error
 	defer func() {
 		for i := range subBuildWriters {
 			subBuildWriters[i].close()
@@ -592,11 +566,6 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 			subProbeWriters[i].close()
 		}
 		ctr.freeSpillBuildExprExecs()
-		// Delete named build file on any exit path. Use context.Background() so
-		// cleanup succeeds even when proc.Ctx is cancelled.
-		if bucket.buildFile != "" {
-			spillfs.RemoveFile(context.Background(), bucket.buildFile)
-		}
 	}()
 
 	// Initialize spill executors once for reuse across all batches
@@ -611,8 +580,8 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 
 	// Re-partition all accumulated build batches
 	for _, b := range builder.Batches.Buf {
-		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildWriters, subBuildBufs, execs, seed, analyzer); respillErr != nil {
-			return nil, respillErr
+		if err := hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildWriters, subBuildBufs, execs, seed, analyzer); err != nil {
+			return nil, err
 		}
 	}
 
@@ -623,26 +592,21 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 			break
 		}
 		if err != nil {
-			respillErr = err
-			return nil, respillErr
+			return nil, err
 		}
-		if respillErr = hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildWriters, subBuildBufs, execs, seed, analyzer); respillErr != nil {
-			return nil, respillErr
+		if err := hashJoin.appendBuildBatchToSubFiles(proc, b, subBuildWriters, subBuildBufs, execs, seed, analyzer); err != nil {
+			return nil, err
 		}
 	}
 
-	// Flush build sub-buffers; use writer.created() as ground truth since a
-	// mid-scatter flush may have written data even if the final buffer is empty.
-	var validBuckets [spillNumBuckets]bool
+	// Flush build sub-buffers.
 	for i, buf := range subBuildBufs {
-		if buf != nil && buf.RowCount() > 0 {
-			if _, err := ctr.flushBucketBuffer(proc, buf, &subBuildWriters[i], analyzer); err != nil {
-				respillErr = err
-				return nil, respillErr
-			}
-		}
-		validBuckets[i] = subBuildWriters[i].created()
 		if buf != nil {
+			if buf.RowCount() > 0 {
+				if _, err := ctr.flushBucketBuffer(proc, buf, &subBuildWriters[i], analyzer); err != nil {
+					return nil, err
+				}
+			}
 			buf.CleanOnlyData()
 		}
 	}
@@ -650,6 +614,17 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	// Re-partition the probe file.
 	// reader is the build-file reader, already at EOF. Reuse its 4 MiB buffer
 	// by resetting it to point at the probe fd.
+	//
+	// Disable probe writers for empty sub-build buckets so scatter discards
+	// those probe rows immediately (same pattern as root probe scatter).
+	needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+	if !needsProbeForEmpty {
+		for i := range subProbeWriters {
+			if !subBuildWriters[i].created() {
+				subProbeWriters[i].name = ""
+			}
+		}
+	}
 	reader.resetForFd(bucket.probeFd)
 	probeReader := reader
 	defer probeReader.close()
@@ -663,75 +638,46 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 			break
 		}
 		if err != nil {
-			respillErr = err
-			return nil, respillErr
+			return nil, err
 		}
-		if respillErr = ctr.appendProbeBatchToSpillFiles(proc, pb, subProbeWriters, subProbeBufs, analyzer, seed); respillErr != nil {
-			return nil, respillErr
+		if err := ctr.appendProbeBatchToSpillFiles(proc, pb, subProbeWriters, subProbeBufs, analyzer, seed); err != nil {
+			return nil, err
 		}
 	}
 
-	// Flush probe sub-buffers and decide which sub-buckets to enqueue.
-	//
-	// A sub-bucket can produce output when:
-	//   • inner/semi/anti-not-exist: both sides non-empty.
-	//   • left outer/single/anti: probe non-empty (build may be empty → emptyProbe path).
-	//   • right outer/single/anti: build non-empty (probe may be empty → no probe rows but
-	//     unmatched build rows are still output).
-	isRightOuterOrSingleOrAnti := hashJoin.IsRightOuter() || hashJoin.IsRightSingle() || hashJoin.IsRightAnti()
-	isLeftOuterOrSingleOrAnti := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
-
+	// Flush probe sub-buffers.
+	needsBuildForEmpty := hashJoin.IsRightOuter() || hashJoin.IsRightSingle() || hashJoin.IsRightAnti()
 	for i, buf := range subProbeBufs {
-		// hasProbeData is true if there is data in the buffer or already flushed to file.
-		hasProbeData := (buf != nil && buf.RowCount() > 0) || subProbeWriters[i].created()
-
-		if hasProbeData || isRightOuterOrSingleOrAnti {
-			if _, err := ctr.flushBucketBuffer(proc, buf, &subProbeWriters[i], analyzer); err != nil {
-				respillErr = err
-				return nil, respillErr
-			}
-			// For left outer/single/anti: probe rows output as non-matches even with empty build.
-			if isLeftOuterOrSingleOrAnti && hasProbeData {
-				validBuckets[i] = true
-			}
-			// Sub-bucket still invalid: no output possible, clean up.
-			if !validBuckets[i] {
-				subProbeWriters[i].delete()
-				if buf != nil {
-					buf.CleanOnlyData()
-				}
-				continue
-			}
-		} else {
-			// Probe is empty and not right outer/single/anti: no output possible.
-			// Clean up any build file that was lazily created.
-			subBuildWriters[i].delete()
-			validBuckets[i] = false
-			if buf != nil {
-				buf.CleanOnlyData()
-			}
-			continue
-		}
 		if buf != nil {
+			if buf.RowCount() > 0 {
+				if _, err := ctr.flushBucketBuffer(proc, buf, &subProbeWriters[i], analyzer); err != nil {
+					return nil, err
+				}
+			}
 			buf.CleanOnlyData()
 		}
 	}
 
-	// Named build file is deleted by the defer above.
-	// buildFd is owned by ctr.spillBuildReader; closed when reader.resetForFd(bucket.probeFd)
-	// was called above (r.close() fired then). probeFd is now owned by probeReader (same struct).
-
-	// Prepend only valid sub-buckets to spillQueue.
-	// Use probeFd=nil when no probe data was written; resetForFd(nil) gives an empty reader.
+	// Prepend only useful sub-buckets to spillQueue. A sub-bucket can produce
+	// output when both sides are non-empty, or when one side is empty but the
+	// join type requires outputting unmatched rows from the other side.
 	subBuckets := make([]spillBucket, 0, spillNumBuckets)
 	for i := 0; i < spillNumBuckets; i++ {
-		if validBuckets[i] {
+		hasBuild := subBuildWriters[i].created()
+		hasProbe := subProbeWriters[i].created()
+		enqueue := (hasBuild && hasProbe) ||
+			(hasBuild && needsBuildForEmpty) ||
+			(hasProbe && needsProbeForEmpty)
+		if enqueue {
 			subBuckets = append(subBuckets, spillBucket{
 				buildFd:  subBuildWriters[i].handOffFd(),
 				probeFd:  subProbeWriters[i].handOffFd(),
 				baseName: fmt.Sprintf("%s_%d", bucket.baseName, i),
 				depth:    nextDepth,
 			})
+		} else {
+			subBuildWriters[i].delete()
+			subProbeWriters[i].delete()
 		}
 	}
 	ctr.spillQueue = append(subBuckets, ctr.spillQueue...)
@@ -798,6 +744,9 @@ func (ctr *container) scatterBatchToFiles(proc *process.Process, bat *batch.Batc
 	}
 
 	for _, bucketId := range ctr.spillNonEmptyBuckets {
+		if writers[bucketId].name == "" {
+			continue // empty build bucket — discard probe rows
+		}
 		sels := bucketRowIds[bucketId]
 		buf := buffers[bucketId]
 		if buf == nil {

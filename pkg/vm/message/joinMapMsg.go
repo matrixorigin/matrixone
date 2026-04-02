@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"os"
 	"strconv"
 	"sync/atomic"
 
@@ -141,29 +142,21 @@ type JoinMap struct {
 	batches          []*batch.Batch
 
 	// spill support
-	Spilled      bool
-	SpillBuckets []string // bucket file names
-	SpillRowCnts []int64  // rows per bucket
-
-	// spillCleanup deletes spill bucket files when this JoinMap is freed.
-	// Called from FreeMemory so files are cleaned up even if the receiver
-	// (hashjoin) cancelled before reading the message. Files may already
-	// be deleted by hashjoin in the normal path — errors are ignored.
-	spillCleanup func()
+	Spilled       bool
+	SpillBuildFds []*os.File // anonymous build-side file descriptors
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
-		valid:        true,
-		mpool:        m,
-		shm:          shm,
-		ihm:          ihm,
-		sels:         sels,
-		delRows:      delRows,
-		batches:      batches,
-		Spilled:      false,
-		SpillBuckets: nil,
-		SpillRowCnts: nil,
+		valid:         true,
+		mpool:         m,
+		shm:           shm,
+		ihm:           ihm,
+		sels:          sels,
+		delRows:       delRows,
+		batches:       batches,
+		Spilled:       false,
+		SpillBuildFds: nil,
 	}
 }
 
@@ -243,12 +236,13 @@ func (jm *JoinMap) IsSpilled() bool {
 	return jm.Spilled
 }
 
-func (jm *JoinMap) GetSpillBuckets() ([]string, []int64) {
-	return jm.SpillBuckets, jm.SpillRowCnts
-}
-
-func (jm *JoinMap) SetSpillCleanup(f func()) {
-	jm.spillCleanup = f
+// TakeSpillBuildFds transfers ownership of anonymous build-side file
+// descriptors from the JoinMap to the caller. After this call the JoinMap
+// no longer owns the fds; FreeMemory will not close them.
+func (jm *JoinMap) TakeSpillBuildFds() []*os.File {
+	fds := jm.SpillBuildFds
+	jm.SpillBuildFds = nil
+	return fds
 }
 
 func (jm *JoinMap) IsDeleted(row uint64) bool {
@@ -256,10 +250,13 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 }
 
 func (jm *JoinMap) FreeMemory() {
-	if jm.spillCleanup != nil {
-		jm.spillCleanup()
-		jm.spillCleanup = nil
+	for i, fd := range jm.SpillBuildFds {
+		if fd != nil {
+			fd.Close()
+			jm.SpillBuildFds[i] = nil
+		}
 	}
+	jm.SpillBuildFds = nil
 	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()
@@ -272,8 +269,6 @@ func (jm *JoinMap) FreeMemory() {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
-	jm.SpillBuckets = nil
-	jm.SpillRowCnts = nil
 	jm.valid = false
 }
 
