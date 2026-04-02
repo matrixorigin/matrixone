@@ -359,6 +359,18 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
+			case catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX + MO_OFF:
+				vec = vector.NewVec(typ)
+				for k := 0; k < Rows; k++ {
+					err := vector.AppendFixed(vec, int8(0), false, mp)
+					require.NoError(t, err)
+				}
+			case catalog.MO_COLUMNS_ATT_GENERATED_IDX + MO_OFF:
+				vec = vector.NewVec(typ)
+				for k := 0; k < Rows; k++ {
+					err := vector.AppendBytes(vec, []byte(""), false, mp)
+					require.NoError(t, err)
+				}
 			default:
 				vec = testutil.NewVector(Rows, typ, mp, false, nil)
 			}

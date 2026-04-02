@@ -624,9 +624,14 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	columnIsNull := make(map[string]bool)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
+	colIdxToProjPos := make(map[int32]int32)
+	genColIdxToProj1Pos := make(map[int]int)
+	genColIdxToProj2Pos := make(map[int]int)
+	generatedColIdxs := make([]int, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: oldExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -640,13 +645,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-			//
-			//for k, part := range tableDef.Pkey.Names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
@@ -658,14 +656,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
-			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			//args := make([]*plan.Expr, len(names))
-			//
-			//for k, part := range names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,
@@ -676,6 +666,14 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					},
 				},
 			})
+		} else if col.GeneratedCol != nil {
+			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
+			// Defer them until base/default columns are in projList1 so forward references resolve.
+			genColIdxToProj1Pos[i] = len(projList1)
+			genColIdxToProj2Pos[i] = len(projList2)
+			generatedColIdxs = append(generatedColIdxs, i)
+			projList1 = append(projList1, nil)
+			projList2 = append(projList2, nil)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -690,6 +688,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 			}
 
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -703,6 +702,25 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		}
 
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
+	}
+
+	for _, i := range generatedColIdxs {
+		col := tableDef.Cols[i]
+		genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+		proj1Pos := genColIdxToProj1Pos[i]
+		projList1[proj1Pos] = genExpr
+		pos := int32(proj1Pos)
+		colIdxToProjPos[int32(i)] = pos
+		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
+			Typ: genExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: projTag1,
+					ColPos: pos,
+				},
+			},
+		}
 	}
 
 	validIndexes, hasIrregularIndex := getValidIndexes(tableDef)

@@ -21,12 +21,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -408,6 +410,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
 			{"attr_seqnum", types.T_int8, false, 0, 0},
 			{"attr_enum", types.T_varchar, false, 2048, 0},
+			{"attr_has_generated", types.T_int8, false, 0, 0},
+			{"attr_generated", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -1274,7 +1278,14 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
-	return testutil.NewProc(nil)
+	proc := testutil.NewProc(nil)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+	)
+	return proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
