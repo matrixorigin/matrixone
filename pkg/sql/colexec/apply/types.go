@@ -48,6 +48,15 @@ type container struct {
 	sels     []int32
 }
 
+type SubqueryRunner interface {
+	Prepare(proc *process.Process) error
+	Start(input *batch.Batch, row int, proc *process.Process, analyzer process.Analyzer) error
+	Call(proc *process.Process) (vm.CallResult, error)
+	End(proc *process.Process) error
+	Reset(proc *process.Process, pipelineFailed bool, err error)
+	Free(proc *process.Process, pipelineFailed bool, err error)
+}
+
 type Apply struct {
 	ctr       container
 	ApplyType int
@@ -55,6 +64,7 @@ type Apply struct {
 	Typs      []types.Type
 
 	TableFunction *table_function.TableFunction
+	Runner        SubqueryRunner
 	vm.OperatorBase
 }
 
@@ -102,6 +112,9 @@ func (apply *Apply) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if apply.TableFunction != nil {
 		apply.TableFunction.Reset(proc, pipelineFailed, err)
 	}
+	if apply.Runner != nil {
+		apply.Runner.Reset(proc, pipelineFailed, err)
+	}
 }
 
 func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -115,6 +128,9 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 	if apply.TableFunction != nil {
 		apply.TableFunction.Free(proc, pipelineFailed, err)
+	}
+	if apply.Runner != nil {
+		apply.Runner.Free(proc, pipelineFailed, err)
 	}
 }
 

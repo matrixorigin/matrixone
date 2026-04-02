@@ -41,6 +41,15 @@ func init() {
 			WithEnableChecker(),
 	)
 
+	reuse.CreatePool[CorrExpressionExecutor](
+		func() *CorrExpressionExecutor {
+			return &CorrExpressionExecutor{}
+		},
+		func(s *CorrExpressionExecutor) { *s = CorrExpressionExecutor{} },
+		reuse.DefaultOptions[CorrExpressionExecutor]().
+			WithEnableChecker(),
+	)
+
 	reuse.CreatePool[ParamExpressionExecutor](
 		func() *ParamExpressionExecutor {
 			return &ParamExpressionExecutor{}
@@ -98,6 +107,15 @@ func (expr ColumnExpressionExecutor) TypeName() string {
 
 func NewColumnExpressionExecutor() *ColumnExpressionExecutor {
 	ce := reuse.Alloc[ColumnExpressionExecutor](nil)
+	return ce
+}
+
+func (expr CorrExpressionExecutor) TypeName() string {
+	return "CorrExpressionExecutor"
+}
+
+func NewCorrExpressionExecutor() *CorrExpressionExecutor {
+	ce := reuse.Alloc[CorrExpressionExecutor](nil)
 	return ce
 }
 

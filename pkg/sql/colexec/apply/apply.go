@@ -52,20 +52,28 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 		apply.ctr.sels = make([]int32, 0)
 	}
 
-	if apply.TableFunction == nil {
-		return moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	if apply.TableFunction == nil && apply.Runner == nil {
+		return moerr.NewInvalidState(proc.Ctx, "apply operator missing table function or subquery runner")
 	}
 
-	err = apply.TableFunction.ApplyPrepare(proc)
-	if err != nil {
-		return
+	if apply.TableFunction != nil {
+		err = apply.TableFunction.ApplyPrepare(proc)
+		if err != nil {
+			return
+		}
+	}
+	if apply.Runner != nil {
+		err = apply.Runner.Prepare(proc)
+		if err != nil {
+			return
+		}
 	}
 	return
 }
 
 func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
-	if apply.TableFunction == nil {
-		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing table function")
+	if apply.TableFunction == nil && apply.Runner == nil {
+		return vm.CancelResult, moerr.NewInvalidState(proc.Ctx, "apply operator missing table function or subquery runner")
 	}
 
 	analyzer := apply.OpAnalyzer
@@ -84,18 +92,34 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inbat == nil {
 				result.Batch = nil
 				result.Status = vm.ExecStop
-				err := apply.TableFunction.ApplyEnd(proc)
-				if err != nil {
-					return result, err
+				if apply.TableFunction != nil {
+					err := apply.TableFunction.ApplyEnd(proc)
+					if err != nil {
+						return result, err
+					}
+				}
+				if apply.Runner != nil {
+					err := apply.Runner.End(proc)
+					if err != nil {
+						return result, err
+					}
 				}
 				return result, nil
 			}
 			if ctr.inbat.Last() {
 				// last batch
 				result.Batch = ctr.inbat
-				err := apply.TableFunction.ApplyEnd(proc)
-				if err != nil {
-					return result, err
+				if apply.TableFunction != nil {
+					err := apply.TableFunction.ApplyEnd(proc)
+					if err != nil {
+						return result, err
+					}
+				}
+				if apply.Runner != nil {
+					err := apply.Runner.End(proc)
+					if err != nil {
+						return result, err
+					}
 				}
 				return result, nil
 			}
@@ -105,7 +129,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.batIdx = 0
 			ctr.tfFinish = true
-			apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
+			if apply.TableFunction != nil {
+				apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
+			}
 		}
 		if ctr.rbat == nil {
 			ctr.rbat = batch.NewWithSize(len(apply.Result))
@@ -137,7 +163,11 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 	var err error
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
-			err = ap.TableFunction.ApplyStart(i, proc, analyzer)
+			if ap.TableFunction != nil {
+				err = ap.TableFunction.ApplyStart(i, proc, analyzer)
+			} else {
+				err = ap.Runner.Start(ctr.inbat, i, proc, analyzer)
+			}
 			ctr.tfNull = true
 			if err != nil {
 				return err
@@ -145,7 +175,11 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 			ctr.tfFinish = false
 		}
 		for {
-			tfResult, err = ap.TableFunction.ApplyCall(proc)
+			if ap.TableFunction != nil {
+				tfResult, err = ap.TableFunction.ApplyCall(proc)
+			} else {
+				tfResult, err = ap.Runner.Call(proc)
+			}
 			if err != nil {
 				return err
 			}

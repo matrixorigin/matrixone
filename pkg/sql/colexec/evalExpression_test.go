@@ -287,6 +287,84 @@ func TestColumnExpressionExecutor_RelIndexOutOfRange(t *testing.T) {
 	require.Equal(t, 5, vec.Length())
 }
 
+func TestCorrExpressionExecutor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	corr := &plan.Expr{
+		Expr: &plan.Expr_Corr{
+			Corr: &plan.CorrColRef{
+				RelPos: 0,
+				ColPos: 0,
+				Depth:  1,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+
+	executor, err := NewExpressionExecutor(proc, corr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	outerBat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil, proc.Mp()),
+		},
+		[]int64{1, 1, 1},
+	)
+	innerBat := testutil.NewBatch(
+		[]types.Type{types.T_int8.ToType()},
+		true, 4, proc.Mp(),
+	)
+	proc.BuildPipelineContext(WithCorrelatedBatches(proc.Ctx, []*batch.Batch{outerBat}, 1))
+
+	vec, err := executor.Eval(proc, []*batch.Batch{innerBat}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.IsConst())
+	require.Equal(t, 4, vec.Length())
+	require.Equal(t, int64(22), vector.GetFixedAtNoTypeCheck[int64](vec, 0))
+}
+
+func TestCorrExpressionExecutor_Null(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	corr := &plan.Expr{
+		Expr: &plan.Expr_Corr{
+			Corr: &plan.CorrColRef{
+				RelPos: 0,
+				ColPos: 0,
+				Depth:  1,
+			},
+		},
+		Typ: plan.Type{
+			Id: int32(types.T_int64),
+		},
+	}
+
+	executor, err := NewExpressionExecutor(proc, corr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	outerBat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.MakeInt64Vector([]int64{11, 22, 33}, []uint64{1}, proc.Mp()),
+		},
+		[]int64{1, 1, 1},
+	)
+	innerBat := testutil.NewBatch(
+		[]types.Type{types.T_int8.ToType()},
+		true, 3, proc.Mp(),
+	)
+	proc.BuildPipelineContext(WithCorrelatedBatches(proc.Ctx, []*batch.Batch{outerBat}, 1))
+
+	vec, err := executor.Eval(proc, []*batch.Batch{innerBat}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.IsConstNull())
+	require.Equal(t, 3, vec.Length())
+}
+
 func TestFunctionExpressionExecutor(t *testing.T) {
 	{
 		proc := testutil.NewProcess(t)

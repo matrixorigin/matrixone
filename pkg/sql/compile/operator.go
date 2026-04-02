@@ -1786,7 +1786,9 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right, nil)
+	if right.NodeType == plan.Node_FUNCTION_SCAN {
+		arg.TableFunction = constructTableFunction(right, nil)
+	}
 	return arg
 }
 
