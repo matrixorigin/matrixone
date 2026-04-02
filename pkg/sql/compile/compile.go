@@ -409,8 +409,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Replace:
-		return s.replace(c)
 	case TableClone:
 		return s.TableClone(c)
 	}
@@ -607,13 +605,6 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		switch qry.Query.StmtType {
-		case plan.Query_REPLACE:
-			return []*Scope{
-				newScope(Replace).
-					withPlan(pn),
-			}, nil
-		}
 		scopes, err := c.compileQuery(qry.Query)
 		if err != nil {
 			return nil, err

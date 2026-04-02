@@ -63,3 +63,43 @@ REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1
 drop table bug_22340;
 
 drop database replace_db;
+
+-- test NULL on unique key column: multiple NULLs should not conflict
+drop table if exists t_null_uk;
+create table t_null_uk(id int primary key, a int, b varchar(64), unique key(a));
+replace into t_null_uk values (1, NULL, 'first');
+replace into t_null_uk values (2, NULL, 'second');
+select id, a, b from t_null_uk order by id;
+replace into t_null_uk values (3, 1, 'third');
+replace into t_null_uk values (4, 1, 'fourth');
+select id, a, b from t_null_uk order by id;
+drop table t_null_uk;
+
+-- test fake PK table with unique key only
+drop table if exists t_fake_pk;
+create table t_fake_pk(a int unique key, b varchar(64));
+replace into t_fake_pk values (1, 'hello');
+select * from t_fake_pk;
+replace into t_fake_pk values (1, 'world');
+select * from t_fake_pk;
+replace into t_fake_pk values (2, 'foo');
+select * from t_fake_pk order by a;
+drop table t_fake_pk;
+
+-- test INSERT ON DUPLICATE KEY UPDATE rewrite to REPLACE
+drop table if exists t_odku;
+create table t_odku(id int primary key, name varchar(64), val int);
+insert into t_odku values (1, 'a', 10);
+insert into t_odku values (1, 'b', 20) on duplicate key update name = values(name), val = values(val);
+select * from t_odku;
+drop table t_odku;
+
+-- test PK + UK conflict
+drop table if exists t_pk_uk;
+create table t_pk_uk(id int primary key, a int unique, b varchar(64));
+insert into t_pk_uk values (1, 10, 'first'), (2, 20, 'second');
+replace into t_pk_uk values (1, 30, 'updated');
+select * from t_pk_uk order by id;
+replace into t_pk_uk values (3, 20, 'conflict_uk');
+select * from t_pk_uk order by id;
+drop table t_pk_uk;
