@@ -21,31 +21,52 @@ import (
 	"math"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/pierrec/lz4/v4"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/pierrec/lz4/v4"
+	"go.uber.org/zap"
 )
 
+// arenaMaxSize caps WriteArena backing-array growth to bound memory use
+// for unusually large block write cycles.
+const arenaMaxSize = 128 * 1024 * 1024
+
+// arenaMPool is a dedicated off-heap allocator for WriteArena buffers.
+// Using mpool with offHeap=true routes through C.calloc/C.free, keeping
+// the backing arrays out of Go's heap and invisible to pprof inuse_space.
+var arenaMPool = mpool.MustNew("write-arena")
+
 type WriteArena struct {
-	data       []byte
-	usedOffset int
+	data           []byte
+	usedOffset     int
+	compressBuf    []byte
+	serialBuf      bytes.Buffer // reused for column serialization across write cycles
+	totalRequested int          // sum of all Alloc sizes in the current cycle
+	sizeLimit      int          // max data growth; 0 means arenaMaxSize
 }
 
 func NewArena(size int) *WriteArena {
+	data, err := arenaMPool.Alloc(size, true)
+	if err != nil {
+		panic(err)
+	}
 	return &WriteArena{
-		data: make([]byte, size),
+		data: data,
 	}
 }
 
+// Alloc returns a slice of exactly size bytes.  When the arena has
+// insufficient space it falls back to a plain make so callers are
+// never blocked.  totalRequested is always updated so that Reset can
+// grow the backing array for the next cycle, eliminating the fallback
+// for future rounds of similar demand.
 func (a *WriteArena) Alloc(size int) []byte {
+	a.totalRequested += size
 	if a.usedOffset+size > len(a.data) {
 		return make([]byte, size)
 	}
@@ -54,13 +75,83 @@ func (a *WriteArena) Alloc(size int) []byte {
 	return a.data[offset:a.usedOffset]
 }
 
+// Reset prepares the arena for a new write cycle.  If the previous
+// cycle overflowed (totalRequested > len(data)) and the required
+// capacity is within sizeLimit, the backing array is grown to a
+// power-of-two capacity large enough to hold an equivalent cycle
+// without any fallback allocations.
 func (a *WriteArena) Reset() {
+	limit := a.sizeLimit
+	if limit <= 0 {
+		limit = arenaMaxSize
+	}
+	if needed := a.totalRequested; needed > len(a.data) && needed <= limit {
+		newCap := arenaNextPow2(needed)
+		if newCap > limit {
+			newCap = limit
+		}
+		arenaMPool.Free(a.data)
+		a.data = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
+		var err error
+		a.data, err = arenaMPool.Alloc(newCap, true)
+		if err != nil {
+			panic(err)
+		}
+	}
 	a.usedOffset = 0
+	a.totalRequested = 0
+}
+
+func arenaNextPow2(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	n--
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	n |= n >> 32
+	n++
+	return n
+}
+
+// CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
+// The buffer is retained across arena Reset() calls.  We round up to the next
+// power of 2 so that minor size variations don't trigger repeated allocations.
+func (a *WriteArena) CompressBuf(minSize int) []byte {
+	if len(a.compressBuf) < minSize {
+		if a.compressBuf != nil {
+			arenaMPool.Free(a.compressBuf)
+			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
+		}
+		var err error
+		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return a.compressBuf[:minSize]
+}
+
+// FreeBuffers releases the off-heap data and compressBuf allocations.
+// Call this before dropping an arena that won't be returned to the pool.
+func (a *WriteArena) FreeBuffers() {
+	if a.data != nil {
+		arenaMPool.Free(a.data)
+		a.data = nil
+	}
+	if a.compressBuf != nil {
+		arenaMPool.Free(a.compressBuf)
+		a.compressBuf = nil
+	}
 }
 
 type objectWriterV1 struct {
 	sync.RWMutex
 	arena             *WriteArena
+	lz4c              lz4.Compressor
 	schemaVer         uint32
 	seqnums           *Seqnums
 	object            *Object
@@ -73,6 +164,7 @@ type objectWriterV1 struct {
 	lastId            uint32
 	name              ObjectName
 	compressBuf       []byte
+	buf               bytes.Buffer
 	bloomFilter       []byte
 	objStats          ObjectStats
 	sortKeySeqnum     uint16
@@ -265,6 +357,15 @@ func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte, typ uint
 	return
 }
 
+// AllocFromArena allocates size bytes from the writer's arena.
+// Falls back to make when there is no arena.
+func (w *objectWriterV1) AllocFromArena(size int) []byte {
+	if w.arena != nil {
+		return w.arena.Alloc(size)
+	}
+	return make([]byte, size)
+}
+
 func (w *objectWriterV1) SetAppendable() {
 	w.appendable = true
 }
@@ -337,7 +438,9 @@ func (w *objectWriterV1) prepareObjectMeta(blocks []blockData, objectMeta object
 	extent := NewExtent(compress.None, offset, 0, length)
 	objectMeta.BlockHeader().SetMetaLocation(extent)
 
-	var buf bytes.Buffer
+	// Pre-size to avoid repeated bytes.Buffer growth.  length already holds the exact
+	// total byte count of what we will write.
+	buf := bytes.NewBuffer(make([]byte, 0, int(length)))
 	buf.Write(objectMeta)
 	buf.Write(blockIndex)
 	// writer block metadata
@@ -380,42 +483,48 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32, blocks []blockData, col
 }
 
 func (w *objectWriterV1) prepareBloomFilter(blocks []blockData, blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	buf := new(bytes.Buffer)
 	h := IOEntryHeader{IOET_BF, IOET_BloomFilter_CurrVer}
-	buf.Write(EncodeIOEntryHeader(&h))
-	bloomFilterStart := uint32(0)
 	bloomFilterIndex := BuildBlockIndex(blockCount + 1)
 	bloomFilterIndex.SetBlockCount(blockCount + 1)
-	bloomFilterStart += bloomFilterIndex.Length()
+	// bloomFilterStart tracks byte offset within the BF content area (i.e., after the header).
+	bloomFilterStart := uint32(bloomFilterIndex.Length())
 	for i, block := range blocks {
 		n := uint32(len(block.bloomFilter))
 		bloomFilterIndex.SetBlockMetaPos(uint32(i), bloomFilterStart, n)
 		bloomFilterStart += n
 	}
 	bloomFilterIndex.SetBlockMetaPos(blockCount, bloomFilterStart, uint32(len(w.bloomFilter)))
-	buf.Write(bloomFilterIndex)
+	total := IOEntryHeaderSize + int(bloomFilterStart) + len(w.bloomFilter)
+	data := w.AllocFromArena(total)
+	off := 0
+	copy(data[off:], EncodeIOEntryHeader(&h))
+	off += IOEntryHeaderSize
+	copy(data[off:], bloomFilterIndex)
+	off += len(bloomFilterIndex)
 	for _, block := range blocks {
-		buf.Write(block.bloomFilter)
+		copy(data[off:], block.bloomFilter)
+		off += len(block.bloomFilter)
 	}
-	buf.Write(w.bloomFilter)
-	length := uint32(len(buf.Bytes()))
+	copy(data[off:], w.bloomFilter)
+	length := uint32(total)
 	extent := NewExtent(compress.None, offset, length, length)
-	return buf.Bytes(), extent, nil
+	return data, extent, nil
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint32, offset uint32) ([]byte, Extent, error) {
-	buf := new(bytes.Buffer)
 	h := IOEntryHeader{IOET_ZM, IOET_ZoneMap_CurrVer}
-	buf.Write(EncodeIOEntryHeader(&h))
-	zoneMapAreaStart := uint32(0)
 	zoneMapAreaIndex := BuildBlockIndex(blockCount)
 	zoneMapAreaIndex.SetBlockCount(blockCount)
-	zoneMapAreaStart += zoneMapAreaIndex.Length()
+	zoneMapAreaStart := uint32(zoneMapAreaIndex.Length())
 	for i, block := range blocks {
 		n := uint32(block.meta.GetMetaColumnCount() * ZoneMapSize)
 		zoneMapAreaIndex.SetBlockMetaPos(uint32(i), zoneMapAreaStart, n)
 		zoneMapAreaStart += n
 	}
+	// Pre-size to avoid repeated bytes.Buffer growth during Write calls.
+	total := IOEntryHeaderSize + int(zoneMapAreaStart)
+	buf := bytes.NewBuffer(make([]byte, 0, total))
+	buf.Write(EncodeIOEntryHeader(&h))
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range blocks {
 		for seqnum := uint16(0); seqnum < block.meta.GetMetaColumnCount(); seqnum++ {
@@ -637,22 +746,28 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
-	var tmpData []byte
 	dataLen := len(buf)
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
-	if len(w.compressBuf) < compressBlockBound {
-		w.compressBuf = make([]byte, compressBlockBound)
+	var compressBuf []byte
+	if w.arena != nil {
+		compressBuf = w.arena.CompressBuf(compressBlockBound)
+	} else {
+		if len(w.compressBuf) < compressBlockBound {
+			w.compressBuf = make([]byte, compressBlockBound)
+		}
+		compressBuf = w.compressBuf[:compressBlockBound]
 	}
-	if tmpData, err = compress.Compress(buf, w.compressBuf[:compressBlockBound], compress.Lz4); err != nil {
+	n, err := w.lz4c.CompressBlock(buf, compressBuf)
+	if err != nil {
 		return
 	}
-	length := uint32(len(tmpData))
+	length := uint32(n)
 	if w.arena != nil {
 		data = w.arena.Alloc(int(length))
 	} else {
 		data = make([]byte, length)
 	}
-	copy(data, tmpData[:length])
+	copy(data, compressBuf[:length])
 	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return
 }
@@ -664,7 +779,6 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 
 	block := blockData{meta: blockMeta, seqnums: seqnums}
 	var data []byte
-	var buf bytes.Buffer
 	var rows int
 	var size int
 	for i, vec := range bat.Vecs {
@@ -677,15 +791,29 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			}
 			logutil.Debugf("%s unmatched length, expect %d, get %d", attr, rows, vec.Length())
 		}
-		buf.Reset()
+		// Use the arena's serialization buffer when available so it is
+		// reused across write cycles (avoids a fresh bytes.Buffer growth
+		// for every new objectWriterV1 instance).
+		var sbuf *bytes.Buffer
+		if w.arena != nil {
+			sbuf = &w.arena.serialBuf
+		} else {
+			sbuf = &w.buf
+		}
+		sbuf.Reset()
+		// Pre-size buffer to avoid repeated growSlice during MarshalBinaryWithBuffer.
+		// vec.Size() ≈ data + area; add overhead for header, lengths, nsp, sorted flag.
+		if needed := vec.Size() + 64; needed > sbuf.Cap() {
+			sbuf.Grow(needed)
+		}
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
-		buf.Write(EncodeIOEntryHeader(&h))
-		err := vec.MarshalBinaryWithBuffer(&buf)
-		if err != nil {
+		sbuf.Write(EncodeIOEntryHeader(&h))
+		if err := vec.MarshalBinaryWithBuffer(sbuf); err != nil {
 			return 0, err
 		}
 		var ext Extent
-		if data, ext, err = w.WriteWithCompress(0, buf.Bytes()); err != nil {
+		var err error
+		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
 			return 0, err
 		}
 		size += len(data)

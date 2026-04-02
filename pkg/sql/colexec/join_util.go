@@ -136,9 +136,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	n := (len(sels)-1)/DefaultBatchSize + 1
 	newBuf := make([]*batch.Batch, n)
 	for i := range newBuf {
-		newBuf[i] = batch.NewWithSize(len(bs.Buf[i].Vecs))
+		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[i].Vecs))
 		for j, vec := range bs.Buf[0].Vecs {
-			newBuf[i].Vecs[j] = vector.NewVec(*vec.GetType())
+			newBuf[i].Vecs[j] = vector.NewOffHeapVecWithType(*vec.GetType())
 		}
 		var newsels []int32
 		if (i+1)*DefaultBatchSize <= len(sels) {
@@ -150,6 +150,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 			idx1, idx2 := sel/DefaultBatchSize, sel%DefaultBatchSize
 			for j, vec := range bs.Buf[idx1].Vecs {
 				if err := newBuf[i].Vecs[j].UnionOne(vec, int64(idx2), proc.Mp()); err != nil {
+					for k := 0; k <= i; k++ {
+						newBuf[k].Clean(proc.Mp())
+					}
 					return err
 				}
 			}

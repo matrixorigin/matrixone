@@ -57,7 +57,9 @@ attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 account_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -374,7 +376,9 @@ attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 account_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
@@ -691,7 +695,9 @@ attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 desc	mo_catalog.mo_user                    ;
@@ -986,7 +992,9 @@ attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
+attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
 show columns from	mo_catalog.mo_user                    ;

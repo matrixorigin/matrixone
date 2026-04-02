@@ -158,8 +158,17 @@ func (exec *jsonArrayAggExec) SetExtraInformation(_ any, _ int) error {
 	return nil
 }
 
-func (exec *jsonArrayAggExec) Flush() ([]*vector.Vector, error) {
+func (exec *jsonArrayAggExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
@@ -345,8 +354,17 @@ func (exec *jsonObjectAggExec) SetExtraInformation(_ any, _ int) error {
 	return nil
 }
 
-func (exec *jsonObjectAggExec) Flush() ([]*vector.Vector, error) {
+func (exec *jsonObjectAggExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {

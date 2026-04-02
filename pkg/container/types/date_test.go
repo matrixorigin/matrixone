@@ -107,6 +107,30 @@ func TestParseDateCast(t *testing.T) {
 			},
 			want: "2005-02-03",
 		},
+		// 7. valid leap year (year 2000 is a leap year)
+		{
+			name: "leap_year_valid",
+			args: args{s: "2000-02-29"},
+			want: "2000-02-29",
+		},
+		// 8. 7-digit compact (3-digit year)
+		{
+			name: "7-digit_compact",
+			args: args{s: "2220919"},
+			want: "0222-09-19",
+		},
+		// 9. date extraction from datetime string
+		{
+			name: "datetime_string_returns_date",
+			args: args{s: "2005-02-23 10:20:30"},
+			want: "2005-02-23",
+		},
+		// 10. leading/trailing whitespace trimmed
+		{
+			name: "whitespace_trimmed",
+			args: args{s: "  2005-02-23  "},
+			want: "2005-02-23",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

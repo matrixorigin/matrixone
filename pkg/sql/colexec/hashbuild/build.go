@@ -16,12 +16,13 @@ package hashbuild
 
 import (
 	"bytes"
-	"context"
+	"io"
 	"os"
-	"slices"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -90,25 +91,15 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			var jm *message.JoinMap
-			spillMode := len(ctr.spilledBuckets) > 0
+			spillMode := len(ctr.spilledFds) > 0
 
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				if spillMode {
-					// In spill mode: send empty JoinMap with spill info, no batches
+					// In spill mode: send empty JoinMap with spill fds, no batches
 					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
-					jm.SpillBuckets = ctr.spilledBuckets
-					// Register a cleanup so FreeMemory deletes the spill files even if
-					// hashjoin cancels before receiving this message. Files may already
-					// be deleted by hashjoin in the normal path — errors are ignored.
-					if spillfs, fsErr := proc.GetSpillFileService(); fsErr == nil {
-						buckets := slices.Clone(ctr.spilledBuckets)
-						jm.SetSpillCleanup(func() {
-							for _, b := range buckets {
-								_ = spillfs.RemoveFile(context.Background(), b)
-							}
-						})
-					}
+					jm.SpillBuildFds = ctr.spilledFds
+					ctr.spilledFds = nil // ownership transferred
 				} else {
 					// Normal mode: send hashmap and batches
 					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
@@ -139,7 +130,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &hashBuild.ctr
 	spillMode := false
-	var spilledBuckets []string
 	var spillFiles []*os.File
 	var spillBuffers []*batch.Batch
 
@@ -196,11 +186,15 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 					return err
 				}
 			}
-			// Create spill files once
-			spilledBuckets, spillFiles, err = createSpillFiles(proc)
+			// Generate unique prefix for anonymous file paths
+			uid, err := uuid.NewV7()
 			if err != nil {
 				return err
 			}
+			ctr.spillUUID = uid.String()
+			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
+
+			spillFiles = make([]*os.File, spillNumBuckets)
 			spillBuffers = ctr.acquireSpillBuffers(proc)
 
 			// Spill all batches collected so far
@@ -215,15 +209,30 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 	}
 
-	// Flush remaining buffered data and close spill files
+	// Flush remaining buffered data
 	if spillMode {
 		for i, buf := range spillBuffers {
-			if _, err := ctr.flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
-				return err
+			if buf != nil && buf.RowCount() > 0 {
+				file, err := ctr.ensureSpillFile(proc, spillFiles, i)
+				if err != nil {
+					return err
+				}
+				if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
+					return err
+				}
 			}
 		}
-
-		ctr.spilledBuckets = spilledBuckets
+		// Seek all files to beginning for reading by hashjoin
+		for _, f := range spillFiles {
+			if f != nil {
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return err
+				}
+			}
+		}
+		// Transfer ownership to container; nil local slice so defer won't close
+		ctr.spilledFds = spillFiles
+		spillFiles = nil
 	}
 
 	// If we never entered spill mode, build the hashmap
