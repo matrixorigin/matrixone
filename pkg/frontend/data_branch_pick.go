@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -431,9 +432,9 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 // For subquery KEYS, the subquery is stored in a temp table and read back
 // via ORDER BY for globally sorted streaming.
 //
-// For composite PK (__mo_cpkey_col), only the hashmap is built — segment
-// construction is skipped because the opaque composite encoding cannot
-// be meaningfully range-pruned.
+// For composite PK (__mo_cpkey_col), literal tuples are encoded via the
+// serial() function and segment construction IS enabled — the encoded bytes
+// are lexicographically sortable by design.
 func materializePickKeysAndFilter(
 	ctx context.Context,
 	ses *Session,
@@ -453,9 +454,9 @@ func materializePickKeysAndFilter(
 		return nil, nil, err
 	}
 
-	// Segment construction only works for single-column, non-composite PK
-	// with types we can put into a vector and decode back to raw bytes.
-	canBuildSegments := tblStuff.def.pkKind == normalKind
+	// Segment construction works for single-column PK and composite PK
+	// (__mo_cpkey_col is lexicographically sortable). Only fake PK is excluded.
+	canBuildSegments := tblStuff.def.pkKind != fakeKind
 
 	switch stmt.Keys.Type {
 	case tree.PickKeysValues:
@@ -491,6 +492,18 @@ func materializeValuesUnified(
 	mp := ses.proc.Mp()
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 
+	if tblStuff.def.pkKind == compositeKind {
+		return materializeCompositeValuesUnified(ses, stmt, tblStuff, canBuildSegments, pickKeyHashmap)
+	}
+
+	// Single-column PK: validate that KEYS expressions are scalar, not tuples.
+	for _, expr := range stmt.Keys.KeyExprs {
+		if _, isTuple := expr.(*tree.Tuple); isTuple {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"KEYS contains tuples but table has a single-column primary key; use scalar values")
+		}
+	}
+
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
@@ -517,18 +530,90 @@ func materializeValuesUnified(
 
 	// Build ZoneMap segments from the sorted Vec.
 	if canBuildSegments {
-		pkFilter = buildPKFilterFromVec(vec, pkType, tblStuff.def.pkColIdx)
+		pkFilter = buildPKFilterFromVec(vec, pkType, tblStuff.def.pkSeqnum)
 	}
 	vec.Free(mp)
 	return pkFilter, nil
 }
 
+// materializeCompositeValuesUnified handles literal KEYS for composite PKs.
+// Each key expression must be a tuple matching the PK column count.
+// Tuples are encoded into __mo_cpkey_col format via the serial() function.
+func materializeCompositeValuesUnified(
+	ses *Session,
+	stmt *tree.DataBranchPick,
+	tblStuff tableStuff,
+	canBuildSegments bool,
+	pickKeyHashmap databranchutils.BranchHashmap,
+) (pkFilter *engine.PKFilter, err error) {
+	mp := ses.proc.Mp()
+	pkColIdxes := tblStuff.def.pkColIdxes
+	nPKCols := len(pkColIdxes)
+
+	// Build one component vector per PK column.
+	compVecs := make([]*vector.Vector, nPKCols)
+	for i, colIdx := range pkColIdxes {
+		compVecs[i] = vector.NewVec(tblStuff.def.colTypes[colIdx])
+	}
+	defer func() {
+		for _, v := range compVecs {
+			v.Free(mp)
+		}
+	}()
+
+	for _, expr := range stmt.Keys.KeyExprs {
+		tup, ok := expr.(*tree.Tuple)
+		if !ok {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"KEYS expression must be a tuple for composite primary key (expected %d columns)", nPKCols)
+		}
+		if len(tup.Exprs) != nPKCols {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"KEYS tuple has %d elements but composite primary key has %d columns",
+				len(tup.Exprs), nPKCols)
+		}
+		for i, elem := range tup.Exprs {
+			colType := tblStuff.def.colTypes[pkColIdxes[i]]
+			if appendErr := appendExprToVec(compVecs[i], elem, colType, mp); appendErr != nil {
+				return nil, appendErr
+			}
+		}
+	}
+
+	if compVecs[0].Length() == 0 {
+		return nil, nil
+	}
+
+	// Encode component vectors into __mo_cpkey_col via serial().
+	encodedVec, encErr := function.RunFunctionDirectly(
+		ses.proc, function.SerialFunctionEncodeID, compVecs, compVecs[0].Length())
+	if encErr != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", encErr)
+	}
+	defer encodedVec.Free(mp)
+
+	// Sort the encoded vector (lexicographic order preserves composite key ordering).
+	encodedVec.InplaceSort()
+
+	// Put into hashmap.
+	if err = pickKeyHashmap.PutByVectors([]*vector.Vector{encodedVec}, []int{0}); err != nil {
+		return nil, err
+	}
+
+	// Build ZoneMap segments.
+	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	if canBuildSegments {
+		pkFilter = buildPKFilterFromVec(encodedVec, pkType, tblStuff.def.pkSeqnum)
+	}
+	return pkFilter, nil
+}
+
 // materializeSubqueryUnified handles KEYS (SELECT ...):
 //
-//  1. Execute the user's subquery into a temp table
-//  2. Stream "SELECT pk_col FROM temp ORDER BY pk_col" via runSql streaming
-//  3. For each streamed batch: PutByVectors into pickKeyHashmap + segmentBuilder
-//  4. Finalize segments, drop temp table
+//  1. Execute the user's subquery via runSql streaming
+//  2. For single PK: stream results directly into hashmap + segmentBuilder
+//  3. For composite PK: validate column count, encode via serial() → __mo_cpkey_col
+//  4. Finalize segments
 //
 // The ORDER BY ensures globally sorted streaming, which the segmentBuilder
 // requires.  Streaming avoids buffering the entire result set in memory.
@@ -546,12 +631,11 @@ func materializeSubqueryUnified(
 	}
 
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+	isComposite := tblStuff.def.pkKind == compositeKind
+	nPKCols := len(tblStuff.def.pkColIdxes)
 
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
-	// streaming sorted results.  No temp table needed — the SQLExecutor in
-	// runSql will execute the composed query directly with the correct
-	// database context.  We use ORDER BY 1 (positional) so the subquery's
-	// output column name doesn't need to match the table's PK column name.
+	// streaming sorted results.
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
@@ -578,6 +662,8 @@ func materializeSubqueryUnified(
 		}
 	}()
 
+	mp := ses.proc.Mp()
+
 	// Consume streamed batches.
 	streamOpen, errOpen := true, true
 	for streamOpen || errOpen {
@@ -602,7 +688,39 @@ func materializeSubqueryUnified(
 				if bat == nil || bat.VectorCount() == 0 || bat.RowCount() == 0 {
 					continue
 				}
-				pkVec := bat.Vecs[0]
+
+				// Validate column count for composite PK.
+				if isComposite {
+					if bat.VectorCount() != nPKCols {
+						sqlRet.Close()
+						return nil, moerr.NewInvalidInputNoCtxf(
+							"KEYS subquery returns %d columns but composite primary key has %d columns",
+							bat.VectorCount(), nPKCols)
+					}
+				} else if bat.VectorCount() != 1 {
+					sqlRet.Close()
+					return nil, moerr.NewInvalidInputNoCtxf(
+						"KEYS subquery returns %d columns but table has a single-column primary key",
+						bat.VectorCount())
+				}
+
+				var pkVec *vector.Vector
+				if isComposite {
+					// Encode component columns into __mo_cpkey_col via serial().
+					compVecs := make([]*vector.Vector, nPKCols)
+					for i := 0; i < nPKCols; i++ {
+						compVecs[i] = bat.Vecs[i]
+					}
+					pkVec, err = function.RunFunctionDirectly(
+						ses.proc, function.SerialFunctionEncodeID, compVecs, bat.RowCount())
+					if err != nil {
+						sqlRet.Close()
+						return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", err)
+					}
+					defer pkVec.Free(mp)
+				} else {
+					pkVec = bat.Vecs[0]
+				}
 
 				// Put into hashmap.
 				if putErr := pickKeyHashmap.PutByVectors(
@@ -629,7 +747,7 @@ func materializeSubqueryUnified(
 		if len(segments) > 0 {
 			pkFilter = &engine.PKFilter{
 				Segments:      segments,
-				PrimarySeqnum: tblStuff.def.pkColIdx,
+				PrimarySeqnum: tblStuff.def.pkSeqnum,
 			}
 		}
 	}
@@ -640,7 +758,7 @@ func materializeSubqueryUnified(
 // buildPKFilterFromVec iterates a pre-sorted vector through the segmentBuilder
 // and returns a PKFilter.  Returns nil if the vector produces no segments.
 // Does NOT free the vector — the caller is responsible.
-func buildPKFilterFromVec(vec *vector.Vector, pkType types.Type, pkColIdx int) *engine.PKFilter {
+func buildPKFilterFromVec(vec *vector.Vector, pkType types.Type, pkSeqnum int) *engine.PKFilter {
 	if vec == nil || vec.Length() == 0 {
 		return nil
 	}
@@ -650,7 +768,7 @@ func buildPKFilterFromVec(vec *vector.Vector, pkType types.Type, pkColIdx int) *
 	}
 	return &engine.PKFilter{
 		Segments:      segments,
-		PrimarySeqnum: pkColIdx,
+		PrimarySeqnum: pkSeqnum,
 	}
 }
 
@@ -872,6 +990,14 @@ func numericGap(a, b []byte, pkType types.Type) float64 {
 		return math.Abs(float64(types.DecodeFloat32(b)) - float64(types.DecodeFloat32(a)))
 	case types.T_float64:
 		return math.Abs(types.DecodeFloat64(b) - types.DecodeFloat64(a))
+	case types.T_decimal64:
+		va := types.Decimal64ToFloat64(types.DecodeDecimal64(a), pkType.Scale)
+		vb := types.Decimal64ToFloat64(types.DecodeDecimal64(b), pkType.Scale)
+		return math.Abs(vb - va)
+	case types.T_decimal128:
+		va := types.Decimal128ToFloat64(types.DecodeDecimal128(a), pkType.Scale)
+		vb := types.Decimal128ToFloat64(types.DecodeDecimal128(b), pkType.Scale)
+		return math.Abs(vb - va)
 	default:
 		return 0
 	}
@@ -881,7 +1007,8 @@ func isNumericType(oid types.T) bool {
 	switch oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64:
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
 		return true
 	default:
 		return false
@@ -986,6 +1113,18 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
 		return vector.AppendBytes(vec, []byte(s), false, mp)
+	case types.T_decimal64:
+		v, err := types.ParseDecimal64(s, pkType.Width, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_decimal128:
+		v, err := types.ParseDecimal128(s, pkType.Width, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	default:
 		// For other types (decimal, date, etc.), skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported PK type for engine filter: %s", pkType.Oid.String())

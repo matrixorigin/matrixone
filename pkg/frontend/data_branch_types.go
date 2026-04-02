@@ -104,6 +104,7 @@ type tableStuff struct {
 		colTypes     []types.Type // all columns
 		visibleIdxes []int
 		pkColIdx     int
+		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
 		pkColIdxes   []int // expanded pk columns
 		pkKind       int
 	}

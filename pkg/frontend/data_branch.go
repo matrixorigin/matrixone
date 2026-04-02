@@ -943,6 +943,7 @@ func getTableStuff(
 	}
 
 	tblStuff.def.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
+	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[tblStuff.def.pkColIdx].Seqnum)
 
 	for i, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
