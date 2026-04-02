@@ -17,6 +17,8 @@ package hnsw
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -86,10 +88,16 @@ func TestModelStreamError(t *testing.T) {
 	idx := models[0]
 	defer idx.Destroy()
 
+	before := hnswTempFiles()
+
 	// load from file
 	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
 	fmt.Printf("err %v\n", err)
 	require.NotNil(t, err)
+
+	after := hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndex streaming error (view=false)")
 
 	// load from memory
 	// view == false
@@ -98,9 +106,14 @@ func TestModelStreamError(t *testing.T) {
 	require.NotNil(t, err)
 
 	// error from mock_runSql_streaming_error
+	before = hnswTempFiles()
 	err = idx.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
 	fmt.Printf("err %v\n", err)
 	require.NotNil(t, err)
+
+	after = hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndexFromBuffer streaming error")
 }
 
 func doModelSearchTest[T types.RealNumbers](t *testing.T, idx *HnswModel[T], key uint64, v []T) {
@@ -361,4 +374,55 @@ func TestModelNil(t *testing.T) {
 	_, _, err = idx.Search(nil, 0)
 	require.NotNil(t, err)
 
+}
+
+// hnswTempFiles returns paths matching the temp file pattern used by
+// LoadIndex/LoadIndexFromBuffer (os.CreateTemp("", "hnsw")).
+func hnswTempFiles() []string {
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "hnsw*"))
+	return matches
+}
+
+func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	// Good streaming so the file is written, but we corrupt the checksum.
+	runSql = mock_runSql
+	runSql_streaming = mock_runSql_streaming
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	// Test LoadIndexFromBuffer with bad checksum
+	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	require.NoError(t, err)
+	idx0 := models[0]
+	defer idx0.Destroy()
+	idx0.Checksum = "bad-checksum"
+
+	before := hnswTempFiles()
+	err = idx0.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Checksum mismatch")
+	after := hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndexFromBuffer checksum mismatch")
+
+	// Test LoadIndex with bad checksum (view=false)
+	models, err = LoadMetadata[float32](sqlproc, "db", "meta")
+	require.NoError(t, err)
+	idx1 := models[0]
+	defer idx1.Destroy()
+	idx1.Checksum = "bad-checksum"
+
+	before = hnswTempFiles()
+	err = idx1.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Checksum mismatch")
+	after = hnswTempFiles()
+	require.Equal(t, len(before), len(after),
+		"temp file leaked after LoadIndex checksum mismatch (view=false)")
 }

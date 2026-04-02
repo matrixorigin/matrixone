@@ -444,6 +444,10 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		if err != nil {
 			return err
 		}
+		// Assign Path immediately so the deferred cleanup can always
+		// find and remove the temp file, even if errors occur before
+		// the streaming phase completes.
+		idx.Path = fp.Name()
 		defer func() {
 			if fp != nil {
 				fp.Close()
@@ -511,7 +515,6 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 			return
 		}
 
-		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
 	}
@@ -529,6 +532,16 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			if idx.Index == usearchidx {
+				idx.Index.Destroy()
+				idx.Index = nil
+			} else {
+				usearchidx.Destroy()
+			}
+		}
+	}()
 
 	err = usearchidx.ChangeThreadsSearch(uint(nthread))
 	if err != nil {
@@ -628,7 +641,6 @@ func (idx *HnswModel[T]) LoadIndex(
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
 		error_chan  = make(chan error, 2)
-		fname       string
 		wg          sync.WaitGroup
 	)
 
@@ -655,22 +667,22 @@ func (idx *HnswModel[T]) LoadIndex(
 			return err
 		}
 
-		fname = fp.Name()
+		// Assign Path immediately so cleanup can find the file on error.
+		idx.Path = fp.Name()
 
-		// load index to memory
 		defer func() {
 			if fp != nil {
 				fp.Close()
 				fp = nil
 			}
 
-			if view {
-				// if view == true, remove the file.  right now view equals to read-only model when search.
-				// since model loads into memory anyway, we can safely remove the file after load.
-				// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
-				// for update, we need this file for Load() and unload().
-				if len(fname) > 0 {
-					os.Remove(fname)
+			if err != nil || view {
+				// On error: always remove the temp file.
+				// On success with view: Load() copies data to C heap,
+				// file is no longer needed.
+				if len(idx.Path) > 0 {
+					os.Remove(idx.Path)
+					idx.Path = ""
 				}
 			}
 		}()
@@ -733,7 +745,6 @@ func (idx *HnswModel[T]) LoadIndex(
 			return
 		}
 
-		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
 
@@ -752,6 +763,16 @@ func (idx *HnswModel[T]) LoadIndex(
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			if idx.Index == usearchidx {
+				idx.Index.Destroy()
+				idx.Index = nil
+			} else {
+				usearchidx.Destroy()
+			}
+		}
+	}()
 
 	err = usearchidx.ChangeThreadsSearch(uint(nthread))
 	if err != nil {
@@ -765,13 +786,19 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if view {
 		err = usearchidx.Load(idx.Path)
+		if err != nil {
+			return err
+		}
 		idx.View = true
 	} else {
 		err = usearchidx.Load(idx.Path)
-		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
+		err = usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		if err != nil {
+			return err
+		}
 	}
 
 	// always get the number of item and capacity when model loaded.
