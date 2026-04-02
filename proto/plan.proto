@@ -286,6 +286,7 @@ message ColDef {
   string db_name = 18;
   // get origin_name by ColDef.GetOriginCaseName(), letter case: origin
   string origin_name = 19;
+  GeneratedCol generated_col = 20;
 }
 
 message Default {
@@ -299,6 +300,12 @@ message Default {
 message OnUpdate {
   Expr expr = 1;
   string origin_string = 2;
+}
+
+message GeneratedCol {
+  Expr expr = 1;
+  string origin_string = 2;
+  bool is_stored = 3;
 }
 
 message IndexOption {
