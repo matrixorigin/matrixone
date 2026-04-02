@@ -152,3 +152,27 @@ func TestAnySegmentOverlaps_StringType(t *testing.T) {
 	// Object above all.
 	require.False(t, AnySegmentOverlaps(makeStrObjZM("peach", "plum"), segments))
 }
+
+// TestAnySegmentOverlaps_TypeMismatch verifies that AnySegmentOverlaps
+// returns true (include conservatively) when the object ZoneMap type
+// differs from the segment type.  This happens when tombstone objects
+// (T_Rowid sort key) are compared against PK filter segments (e.g. T_int32).
+func TestAnySegmentOverlaps_TypeMismatch(t *testing.T) {
+	// Create int32 segments.
+	segments := [][]byte{makeInt32Segment(10, 20)}
+
+	// Create object ZM with a different type (T_varchar).
+	objZM := NewZM(types.T_varchar, 0)
+	UpdateZM(objZM, []byte("hello"))
+	UpdateZM(objZM, []byte("world"))
+
+	// Type mismatch should return true (conservative, include the object).
+	require.True(t, AnySegmentOverlaps(objZM, segments))
+
+	// Same type should still compare normally.
+	objZM2 := makeObjZMInt32(15, 25) // overlaps [10, 20]
+	require.True(t, AnySegmentOverlaps(objZM2, segments))
+
+	objZM3 := makeObjZMInt32(25, 35) // does not overlap [10, 20]
+	require.False(t, AnySegmentOverlaps(objZM3, segments))
+}
