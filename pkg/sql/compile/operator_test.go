@@ -15,9 +15,11 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -162,6 +164,26 @@ func TestConstructApplyWithoutTableDef(t *testing.T) {
 	arg := constructApply(node, right, apply.CROSS, proc)
 	require.Len(t, arg.Typs, 1)
 	require.Equal(t, types.T_int64, arg.Typs[0].Oid)
+}
+
+func TestCorrelatedApplyRunnerFreeReleasesScopesOnce(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+
+	scope := newScope(Normal)
+	compile := allocateNewCompile(proc)
+	compile.scopes = []*Scope{scope}
+
+	runner := &correlatedApplyRunner{
+		compile: compile,
+		scopes:  []*Scope{scope},
+	}
+
+	require.NotPanics(t, func() {
+		runner.Free(proc, false, nil)
+	})
+	require.Nil(t, runner.compile)
+	require.Nil(t, runner.scopes)
 }
 
 func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {

@@ -150,7 +150,6 @@ func (r *correlatedApplyRunner) Reset(proc *process.Process, pipelineFailed bool
 func (r *correlatedApplyRunner) Free(proc *process.Process, pipelineFailed bool, err error) {
 	r.cleanOutput(proc)
 	if r.compile != nil {
-		ReleaseScopes(r.scopes)
 		if r.compile.anal != nil {
 			r.compile.anal.release()
 			r.compile.anal = nil
@@ -158,6 +157,7 @@ func (r *correlatedApplyRunner) Free(proc *process.Process, pipelineFailed bool,
 		reuse.Free[Compile](r.compile, nil)
 		r.compile = nil
 	}
+	r.scopes = nil
 }
 
 func (r *correlatedApplyRunner) captureBatch(bat *batch.Batch, _ *perfcounter.CounterSet) error {
