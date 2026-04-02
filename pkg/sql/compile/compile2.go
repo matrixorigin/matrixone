@@ -254,7 +254,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
 
-			if err = runC.runOnce(); err == nil {
+			handled, execErr := executeReplaceForIrregularIndexes(runC)
+			if execErr != nil {
+				err = execErr
+			} else if handled {
+				if runC.anal != nil {
+					runC.anal.retryTimes = retryTimes
+				}
+				break
+			} else if err = runC.runOnce(); err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}

@@ -1395,7 +1395,12 @@ func TestBindAndOptimizeReplaceWithHnswIndexUsesInsertPlan(t *testing.T) {
 	query := plan0.GetQuery()
 	assert.NotNil(t, query)
 	assert.Equal(t, plan.Query_INSERT, query.GetStmtType())
+	hasInsertNode := false
 	for _, node := range query.GetNodes() {
 		assert.NotEqual(t, plan.Node_MULTI_UPDATE, node.GetNodeType())
+		if node.GetNodeType() == plan.Node_INSERT {
+			hasInsertNode = true
+		}
 	}
+	assert.True(t, hasInsertNode)
 }

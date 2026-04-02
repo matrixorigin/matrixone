@@ -503,9 +503,6 @@ func (c *Compile) runOnce() (err error) {
 	if err = detectReplaceSelfReferDelete(c); err != nil {
 		return err
 	}
-	if err = executeReplaceDeleteForIrregularIndexes(c); err != nil {
-		return err
-	}
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -4697,15 +4694,13 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
-		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
+		WithDisableIncrStatement()
 
 	ctx := c.proc.Ctx
 	if ctx == nil {
@@ -4814,7 +4809,12 @@ func detectReplaceSelfReferDelete(c *Compile) error {
 		return nil
 	}
 
-	stmts, err := mysql.Parse(c.proc.Ctx, c.sql, 1)
+	sqlText := c.originSQL
+	if sqlText == "" {
+		sqlText = c.sql
+	}
+
+	stmts, err := mysql.Parse(c.proc.Ctx, sqlText, 1)
 	if err != nil {
 		return err
 	}
@@ -4843,7 +4843,7 @@ func detectReplaceSelfReferDelete(c *Compile) error {
 		return err
 	}
 	for _, sql := range sqls {
-		if err = runDetectSql(c, sql); err != nil {
+		if err = runDetectParentDeleteDetectSql(c, sql); err != nil {
 			c.debugLogFor19288(err, sql)
 			return err
 		}
@@ -4851,50 +4851,109 @@ func detectReplaceSelfReferDelete(c *Compile) error {
 	return nil
 }
 
-func executeReplaceDeleteForIrregularIndexes(c *Compile) error {
-	query := c.pn.GetQuery()
-	if query == nil || len(query.GetSteps()) == 0 {
-		return nil
-	}
-
-	rootNode := query.GetNodes()[query.GetSteps()[len(query.GetSteps())-1]]
-	if rootNode == nil || rootNode.GetNodeType() == plan.Node_MULTI_UPDATE {
-		return nil
-	}
-
-	var tableDef *plan.TableDef
-	var objRef *plan.ObjectRef
-	if rootNode.GetNodeType() == plan.Node_INSERT {
-		tableDef = rootNode.GetTableDef()
-		objRef = rootNode.GetObjRef()
-	}
-	if tableDef == nil || objRef == nil || !plan2.HasIrregularIndexes(tableDef) {
-		return nil
-	}
-
-	stmts, err := mysql.Parse(c.proc.Ctx, c.sql, 1)
-	if err != nil {
-		return err
-	}
-	if len(stmts) != 1 {
-		return nil
-	}
-	stmt, ok := stmts[0].(*tree.Replace)
+func executeReplaceForIrregularIndexes(c *Compile) (bool, error) {
+	stmt, ok := c.stmt.(*tree.Replace)
 	if !ok {
-		return nil
+		sqlText := c.originSQL
+		if sqlText == "" {
+			sqlText = c.sql
+		}
+
+		stmts, err := mysql.Parse(c.proc.Ctx, sqlText, 1)
+		if err != nil {
+			return false, err
+		}
+		if len(stmts) != 1 {
+			return false, nil
+		}
+		stmt, ok = stmts[0].(*tree.Replace)
+		if !ok {
+			return false, nil
+		}
+	}
+
+	tblName, ok := stmt.Table.(*tree.TableName)
+	if !ok {
+		return false, nil
+	}
+
+	dbName := string(tblName.SchemaName)
+	if dbName == "" {
+		dbName = c.db
+	}
+	if dbName == "" {
+		return false, nil
+	}
+
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return false, err
+	}
+	rel, err := db.Relation(c.proc.Ctx, string(tblName.ObjectName), c.proc)
+	if err != nil {
+		return false, err
+	}
+
+	tableDef := rel.GetTableDef(c.proc.Ctx)
+	if tableDef == nil || !plan2.HasIrregularIndexes(tableDef) {
+		return false, nil
 	}
 
 	deleteCond := plan2.BuildReplaceDeleteCondition(tableDef, stmt)
-	if deleteCond == "" {
-		return nil
+	delAffectedRows := uint64(0)
+	if deleteCond != "" {
+		sql := fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tableDef.GetName(), deleteCond)
+		result, err := c.runSqlWithResult(sql, NoAccountId)
+		if err != nil {
+			c.debugLogFor19288(err, sql)
+			return false, err
+		}
+		delAffectedRows = result.AffectedRows
+		result.Close()
 	}
 
-	sql := fmt.Sprintf("delete from `%s`.`%s` where %s", objRef.GetSchemaName(), tableDef.GetName(), deleteCond)
-	if err = c.runSql(sql); err != nil {
-		c.debugLogFor19288(err, sql)
-		return err
+	insertSQL := buildInsertSQLFromReplace(c)
+	if insertSQL == "" {
+		return false, nil
 	}
-	return nil
+	result, err := c.runSqlWithResult(insertSQL, NoAccountId)
+	if err != nil {
+		c.debugLogFor19288(err, insertSQL)
+		return false, err
+	}
+	c.addAffectedRows(result.AffectedRows + delAffectedRows)
+	result.Close()
+	return true, nil
+}
+
+func buildInsertSQLFromReplace(c *Compile) string {
+	sqlText := c.originSQL
+	if sqlText == "" {
+		sqlText = c.sql
+	}
+	if sqlText == "" {
+		return ""
+	}
+	removed := removeStringBetween(sqlText, "/*", "*/")
+	trimmed := strings.TrimSpace(removed)
+	if len(trimmed) < len("replace") || !strings.EqualFold(trimmed[:len("replace")], "replace") {
+		return ""
+	}
+	return "insert " + strings.TrimSpace(trimmed[len("replace"):])
+}
+
+func removeStringBetween(s, start, end string) string {
+	startIndex := strings.Index(s, start)
+	for startIndex != -1 {
+		endIndex := strings.Index(s, end)
+		if endIndex == -1 || startIndex > endIndex {
+			return s
+		}
+
+		s = s[:startIndex] + s[endIndex+len(end):]
+		startIndex = strings.Index(s, start)
+	}
+	return s
 }
 
 // runDetectSql runs the fk detecting sql
@@ -4912,6 +4971,26 @@ func runDetectSql(c *Compile, sql string) error {
 			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
 			if !yes {
 				return moerr.NewErrFKNoReferencedRow2(c.proc.Ctx)
+			}
+		}
+	}
+	return nil
+}
+
+func runDetectParentDeleteDetectSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAtWithTypeCheck[bool](vs[0], 0)
+			if !yes {
+				return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 			}
 		}
 	}
