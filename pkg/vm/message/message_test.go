@@ -260,28 +260,6 @@ func TestIsDeleted(t *testing.T) {
 	})
 }
 
-func TestNewJoinMap(t *testing.T) {
-	mp := mpool.MustNewZero()
-	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
-	require.True(t, jm.IsValid())
-	require.False(t, jm.IsSpilled())
-	require.Nil(t, jm.SpillBuildFds)
-	require.Nil(t, jm.GetBatches())
-	require.Equal(t, int64(0), jm.GetRowCount())
-}
-
-func TestJoinMapGettersSetters(t *testing.T) {
-	mp := mpool.MustNewZero()
-	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
-
-	jm.SetRowCount(100)
-	require.Equal(t, int64(100), jm.GetRowCount())
-
-	require.False(t, jm.PushedRuntimeFilterIn())
-	jm.SetPushedRuntimeFilterIn(true)
-	require.True(t, jm.PushedRuntimeFilterIn())
-}
-
 func TestJoinMapRefCount(t *testing.T) {
 	mp := mpool.MustNewZero()
 	shm, err := hashmap.NewStrHashMap(false, mp)

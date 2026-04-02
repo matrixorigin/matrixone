@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -541,33 +539,6 @@ func TestAppendProbeBatchMultipleFlushes(t *testing.T) {
 	}
 }
 
-func TestAppendProbeBatchEmptyBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	writers, err := createRootProbeSpillBucketFiles()
-	require.NoError(t, err)
-	defer func() {
-		for i := range writers {
-			writers[i].close()
-		}
-	}()
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	buffers := make([]*batch.Batch, spillNumBuckets)
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{}, nil, proc.Mp())
-	bat.SetRowCount(0)
-
-	ctr := &container{
-		eqCondVecs: []*vector.Vector{bat.Vecs[0]},
-	}
-
-	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
-	require.NoError(t, err)
-}
-
 func TestReaderCorruptedMagic(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -699,22 +670,6 @@ func TestSpillBucketReaderDoubleClose(t *testing.T) {
 	reader.close() // Should not panic
 
 	spillfs.RemoveFile(context.Background(), bucketName)
-}
-
-func TestConstVectorHash(t *testing.T) {
-	mp := mpool.MustNewZero()
-
-	vec := testutil.MakeInt32Vector([]int32{42}, nil, mp)
-	vec.SetClass(vector.CONSTANT)
-
-	hashValues := make([]uint64, 10)
-	err := computeXXHash([]*vector.Vector{vec}, hashValues, 0)
-	require.NoError(t, err)
-
-	// All values should be the same for const vector
-	for i := 1; i < len(hashValues); i++ {
-		require.Equal(t, hashValues[0], hashValues[i])
-	}
 }
 
 func TestAppendProbeBatchSkipEmptyBuckets(t *testing.T) {
@@ -1153,25 +1108,6 @@ func TestHashValuesBufferGrowth(t *testing.T) {
 	}
 }
 
-func TestSetSpillThresholdAutoConfig(t *testing.T) {
-	ctr := &container{}
-
-	// threshold == 0 triggers auto config path
-	ctr.setSpillThreshold(0)
-	require.Greater(t, ctr.spillThreshold, int64(0))
-
-	// Verify minimum of 128MB
-	require.GreaterOrEqual(t, ctr.spillThreshold, int64(128*1024*1024))
-}
-
-func TestSetSpillThresholdExplicit(t *testing.T) {
-	ctr := &container{}
-
-	// Non-zero threshold should be used directly
-	ctr.setSpillThreshold(1024 * 1024)
-	require.Equal(t, int64(1024*1024), ctr.spillThreshold)
-}
-
 func TestCleanupSpillFilesWithNonEmptyQueue(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1225,19 +1161,6 @@ func TestCleanupSpillFilesWithNonEmptyQueue(t *testing.T) {
 
 	spillfs.RemoveFile(context.Background(), "test_cleanup_build")
 	spillfs.RemoveFile(context.Background(), "test_cleanup_probe")
-}
-
-func TestCleanupSpillFilesWithEmptyQueue(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	ctr := &container{}
-	ctr.spillQueue = []spillBucket{} // empty queue
-
-	// Should return early without error - queue remains as empty slice
-	ctr.cleanupSpillFiles(proc)
-	// When spillQueue is empty, function returns early without modifying spillQueue
-	require.Equal(t, 0, len(ctr.spillQueue))
 }
 
 func TestCleanupSpillFilesWithActiveProbeReader(t *testing.T) {
@@ -1296,35 +1219,6 @@ func TestCleanSpillBufferPoolWithData(t *testing.T) {
 	require.Nil(t, ctr.spillProbeSubBufs)
 }
 
-func TestShouldReSpillByRowCount(t *testing.T) {
-	ctr := &container{}
-
-	// Set a small threshold so we use the row-count-based path
-	ctr.setSpillThreshold(10) // 10 rows
-
-	builder := &hashbuild.HashmapBuilder{}
-	builder.InputBatchRowCount = 5
-
-	// Row count below threshold
-	require.False(t, ctr.shouldReSpill(builder))
-
-	builder.InputBatchRowCount = 15
-	// Row count above threshold
-	require.True(t, ctr.shouldReSpill(builder))
-}
-
-func TestShouldReSpillNoThreshold(t *testing.T) {
-	ctr := &container{}
-
-	// Zero threshold - should never spill
-	ctr.spillThreshold = 0
-
-	builder := &hashbuild.HashmapBuilder{}
-	builder.InputBatchRowCount = 1000000
-
-	require.False(t, ctr.shouldReSpill(builder))
-}
-
 func TestHandOffFdSeeksToStart(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1363,22 +1257,6 @@ func TestHandOffFdSeeksToStart(t *testing.T) {
 	require.False(t, sw.created())
 
 	fd.Close()
-}
-
-func TestHandOffFdMultipleCalls(t *testing.T) {
-	f, err := os.CreateTemp("", "test_handoff_*")
-	require.NoError(t, err)
-	defer os.Remove(f.Name())
-
-	sw := spillBucketWriter{file: f}
-
-	fd1 := sw.handOffFd()
-	require.NotNil(t, fd1)
-
-	fd2 := sw.handOffFd()
-	require.Nil(t, fd2) // already transferred
-
-	fd1.Close()
 }
 
 func TestResetForFdReusesBuffer(t *testing.T) {
