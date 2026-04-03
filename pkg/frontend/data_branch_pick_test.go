@@ -398,7 +398,7 @@ func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	require.NoError(t, err)
 	defer mp.Free(nil)
 
-	pkType := types.T_uuid.ToType()
+	pkType := types.T_json.ToType()
 	vec := vector.NewVec(pkType)
 	defer vec.Free(mp)
 
@@ -880,4 +880,93 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	index.UpdateZM(blockZM4, aboveEnc.GetRawBytesAt(0))
 	index.UpdateZM(blockZM4, aboveEnc.GetRawBytesAt(1))
 	require.False(t, index.AnySegmentOverlaps(blockZM4, pkFilter.Segments))
+}
+
+// TestAppendStrValToVec_DateTypes verifies that string literal KEYS values
+// for date/datetime/timestamp/time/uuid PK types are parsed and appended
+// as fixed-width values instead of panicking with an unsafe slice cast.
+func TestAppendStrValToVec_DateTypes(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	tests := []struct {
+		name   string
+		pkType types.Type
+		strVal string
+	}{
+		{"date", types.T_date.ToType(), "2025-01-03"},
+		{"datetime", types.New(types.T_datetime, 0, 0), "2025-01-03 12:30:45"},
+		{"timestamp", types.New(types.T_timestamp, 0, 0), "2025-01-03 12:30:45"},
+		{"time", types.New(types.T_time, 0, 0), "12:30:45"},
+		{"uuid", types.T_uuid.ToType(), "12345678-1234-1234-1234-123456789012"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.pkType)
+			defer vec.Free(mp)
+
+			// This used to panic with "unsafe slice cast" for fixed-width types.
+			err := appendStrValToVec(vec, tt.strVal, tt.pkType, mp)
+			require.NoError(t, err, "appendStrValToVec should not error for %s", tt.name)
+			require.Equal(t, 1, vec.Length(), "vector should have one element")
+		})
+	}
+}
+
+// TestAppendStrValToVec_PrunesCorrectly verifies that date PK values
+// parsed from string literals produce segments that correctly prune objects.
+func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_date.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	// Add three dates via string literal parsing.
+	for _, s := range []string{"2025-01-01", "2025-06-15", "2025-12-31"} {
+		require.NoError(t, appendStrValToVec(vec, s, pkType, mp))
+	}
+	require.Equal(t, 3, vec.Length())
+
+	vec.InplaceSort()
+
+	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
+	require.NotNil(t, pkFilter)
+	require.Greater(t, len(pkFilter.Segments), 0)
+
+	// Object spanning Jan-Dec → should match.
+	d1, _ := types.ParseDateCast("2025-01-01")
+	d2, _ := types.ParseDateCast("2025-12-31")
+	objZM := index.NewZM(types.T_date, 0)
+	index.UpdateZM(objZM, types.EncodeDate(&d1))
+	index.UpdateZM(objZM, types.EncodeDate(&d2))
+	require.True(t, index.AnySegmentOverlaps(objZM, pkFilter.Segments))
+
+	// Object entirely in 2024 → should not match.
+	d3, _ := types.ParseDateCast("2024-01-01")
+	d4, _ := types.ParseDateCast("2024-12-31")
+	objZM2 := index.NewZM(types.T_date, 0)
+	index.UpdateZM(objZM2, types.EncodeDate(&d3))
+	index.UpdateZM(objZM2, types.EncodeDate(&d4))
+	require.False(t, index.AnySegmentOverlaps(objZM2, pkFilter.Segments))
+}
+
+// TestAppendNumericStringToVec_DateAsNumber verifies that a numeric literal
+// like 20250103 is correctly parsed as a date PK value.
+func TestAppendNumericStringToVec_DateAsNumber(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_date.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	err = appendNumericStringToVec(vec, "20250103", pkType, mp)
+	require.NoError(t, err)
+	require.Equal(t, 1, vec.Length())
 }
