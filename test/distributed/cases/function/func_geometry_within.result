@@ -1,0 +1,21 @@
+select st_within(st_geomfromtext('POINT(5 5)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_inside;
+➤ within_inside[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POINT(15 15)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_outside;
+➤ within_outside[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('POINT(0 5)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_boundary;
+➤ within_boundary[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('POINT(5 5)', 4326), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))', 4326)) as within_srid;
+➤ within_srid[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext(null), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_null;
+➤ within_null[-7,1,0]  𝄀
+null
+select st_within(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(5 5)'));
+-- @regex("ST_WITHIN only supports POINT within POLYGON", true)
+invalid input: ST_WITHIN only supports POINT within POLYGON
+select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
+-- @regex("polygons with holes are not supported", true)
+invalid input: polygons with holes are not supported

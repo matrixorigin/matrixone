@@ -601,10 +601,27 @@ const (
 	ST_DISTANCE                   = 419
 	ST_SRID                       = 420
 	ST_LENGTH                     = 421
+	ST_AREA                       = 422
+	ST_CONTAINS                   = 423
+	ST_WITHIN                     = 424
+	ST_STARTPOINT                 = 425
+	ST_ENDPOINT                   = 426
+	ST_POINTN                     = 427
+	ST_EXTERIORRING               = 428
+	ST_NUMINTERIORRINGS           = 429
+	ST_INTERIORRINGN              = 430
+	ST_NUMPOINTS                  = 431
+	ST_ISCLOSED                   = 432
+	ST_ISCOLLECTION               = 433
+	ST_DIMENSION                  = 434
+	ST_ISSIMPLE                   = 435
+	ST_ISRING                     = 436
+	ST_ENVELOPE                   = 437
+	ST_CENTROID                   = 438
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 422
+	FUNCTION_END_NUMBER = 439
 )
 
 // functionIdRegister is what function we have registered already.
@@ -994,6 +1011,23 @@ var functionIdRegister = map[string]int32{
 	"st_distance":                    ST_DISTANCE,
 	"st_srid":                        ST_SRID,
 	"st_length":                      ST_LENGTH,
+	"st_area":                        ST_AREA,
+	"st_contains":                    ST_CONTAINS,
+	"st_within":                      ST_WITHIN,
+	"st_startpoint":                  ST_STARTPOINT,
+	"st_endpoint":                    ST_ENDPOINT,
+	"st_pointn":                      ST_POINTN,
+	"st_exteriorring":                ST_EXTERIORRING,
+	"st_numinteriorrings":            ST_NUMINTERIORRINGS,
+	"st_interiorringn":               ST_INTERIORRINGN,
+	"st_numpoints":                   ST_NUMPOINTS,
+	"st_isclosed":                    ST_ISCLOSED,
+	"st_iscollection":                ST_ISCOLLECTION,
+	"st_dimension":                   ST_DIMENSION,
+	"st_issimple":                    ST_ISSIMPLE,
+	"st_isring":                      ST_ISRING,
+	"st_envelope":                    ST_ENVELOPE,
+	"st_centroid":                    ST_CENTROID,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,

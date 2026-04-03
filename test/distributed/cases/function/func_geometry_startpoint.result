@@ -1,0 +1,15 @@
+select st_astext(st_startpoint(st_geomfromtext('LINESTRING(0 0,3 4)'))) as first_point;
+➤ first_point[12,-1,0]  𝄀
+POINT(0 0)
+select st_astext(st_startpoint(st_geomfromtext('LINESTRING(1 2,3 4,5 6)'))) as polyline_first_point;
+➤ polyline_first_point[12,-1,0]  𝄀
+POINT(1 2)
+select st_srid(st_startpoint(st_geomfromtext('LINESTRING(7 8,9 10)', 4326))) as srid_startpoint;
+➤ srid_startpoint[4,32,0]  𝄀
+4326
+select st_astext(st_startpoint(st_geomfromtext(null))) as null_startpoint;
+➤ null_startpoint[12,-1,0]  𝄀
+null
+select st_startpoint(st_geomfromtext('POINT(1 1)'));
+-- @regex("geometry is not a LINESTRING", true)
+invalid input: geometry is not a LINESTRING

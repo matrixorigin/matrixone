@@ -1,0 +1,21 @@
+select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(5 5)')) as contains_inside;
+➤ contains_inside[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(15 15)')) as contains_outside;
+➤ contains_outside[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(0 5)')) as contains_boundary;
+➤ contains_boundary[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))', 4326), st_geomfromtext('POINT(5 5)', 4326)) as contains_srid;
+➤ contains_srid[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext(null), st_geomfromtext('POINT(5 5)')) as contains_null;
+➤ contains_null[-7,1,0]  𝄀
+null
+select st_contains(st_geomfromtext('POINT(5 5)'), st_geomfromtext('POINT(5 5)'));
+-- @regex("ST_CONTAINS only supports POLYGON contains POINT", true)
+invalid input: ST_CONTAINS only supports POLYGON contains POINT
+select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)'));
+-- @regex("polygons with holes are not supported", true)
+invalid input: polygons with holes are not supported

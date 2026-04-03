@@ -1,0 +1,7 @@
+select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as ring_count_simple;
+select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))')) as ring_count_one_hole;
+select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))')) as ring_count_two_holes;
+select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))', 4326)) as ring_count_srid;
+select st_numinteriorrings(st_geomfromtext(null)) as null_ring_count;
+-- @regex("geometry is not a POLYGON",true)
+select st_numinteriorrings(st_geomfromtext('POINT(1 1)'));

@@ -5131,6 +5131,176 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "geometry is not a POINT")
 }
 
+func initStContainsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_contains polygon point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"SRID=4326;POLYGON((0 0,10 0,10 10,0 10,0 0))",
+					},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(5 5)",
+						"POINT(15 15)",
+						"POINT(0 5)",
+						"SRID=4326;POINT(5 5)",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_contains null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(5 5)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStContains(t *testing.T) {
+	testCases := initStContainsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StContains)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStContainsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(5 5)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(5 5)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_CONTAINS only supports POLYGON contains POINT")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)"},
+			[]bool{false}),
+	}
+	tcc = NewFunctionTestCase(proc, holeInputs, expect, StContains)
+	succeed, info = tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "polygons with holes are not supported")
+}
+
+func initStWithinTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_within point polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(5 5)",
+						"POINT(15 15)",
+						"POINT(0 5)",
+						"SRID=4326;POINT(5 5)",
+					},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"SRID=4326;POLYGON((0 0,10 0,10 10,0 10,0 0))",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_within null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(5 5)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStWithin(t *testing.T) {
+	testCases := initStWithinTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StWithin)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStWithinRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(5 5)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_WITHIN only supports POINT within POLYGON")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
+			[]bool{false}),
+	}
+	tcc = NewFunctionTestCase(proc, holeInputs, expect, StWithin)
+	succeed, info = tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "polygons with holes are not supported")
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{

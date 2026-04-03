@@ -1,0 +1,15 @@
+select st_isclosed(st_geomfromtext('LINESTRING(0 0,3 4)')) as open_line;
+➤ open_line[-7,1,0]  𝄀
+0
+select st_isclosed(st_geomfromtext('LINESTRING(0 0,3 4,0 0)')) as closed_line;
+➤ closed_line[-7,1,0]  𝄀
+1
+select st_isclosed(st_geomfromtext('LINESTRING(1 1,2 2,1 1)', 4326)) as srid_closed_line;
+➤ srid_closed_line[-7,1,0]  𝄀
+1
+select st_isclosed(st_geomfromtext(null)) as null_line;
+➤ null_line[-7,1,0]  𝄀
+null
+select st_isclosed(st_geomfromtext('POINT(1 1)'));
+-- @regex("geometry is not a LINESTRING", true)
+invalid input: geometry is not a LINESTRING

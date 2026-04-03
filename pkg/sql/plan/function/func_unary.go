@@ -1131,6 +1131,737 @@ func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
+func StPointN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexes := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		payload, null1 := source.GetStrValue(i)
+		n, null2 := indexes.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		point, err := lineStringPointNFromPayload(payload, n)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(point, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func StExteriorRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return polygonExteriorRingFromPayload(v)
+	}, selectList)
+}
+
+func StNumInteriorRings(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v []byte) (int64, error) {
+		return numInteriorRingsFromPayload(v)
+	}, selectList)
+}
+
+func StInteriorRingN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexes := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		payload, null1 := source.GetStrValue(i)
+		n, null2 := indexes.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ring, err := polygonInteriorRingNFromPayload(payload, n)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(ring, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func StNumPoints(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v []byte) (int64, error) {
+		return numPointsFromPayload(v)
+	}, selectList)
+}
+
+func StIsClosed(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
+		return isClosedFromPayload(v)
+	}, selectList)
+}
+
+func StIsCollection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
+		return isCollectionFromPayload(v)
+	}, selectList)
+}
+
+func StDimension(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v []byte) (int64, error) {
+		return dimensionFromPayload(v)
+	}, selectList)
+}
+
+func StIsSimple(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
+		return isSimpleFromPayload(v)
+	}, selectList)
+}
+
+func StIsRing(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
+		return isRingFromPayload(v)
+	}, selectList)
+}
+
+func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return envelopeFromPayload(v)
+	}, selectList)
+}
+
+func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return centroidFromPayload(v)
+	}, selectList)
+}
+
+func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return lineStringTerminalPointFromPayload(v, true)
+	}, selectList)
+}
+
+func StEndPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return lineStringTerminalPointFromPayload(v, false)
+	}, selectList)
+}
+
+func lineStringTerminalPointFromPayload(payload []byte, first bool) ([]byte, error) {
+	points, srid, sridDefined, err := lineStringPointsFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	point := points[0]
+	if !first {
+		point = points[len(points)-1]
+	}
+	return encodeGeometryPayload("POINT("+point+")", srid, sridDefined), nil
+}
+
+func polygonExteriorRingFromPayload(payload []byte) ([]byte, error) {
+	rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return encodeGeometryPayload("LINESTRING"+rings[0], srid, sridDefined), nil
+}
+
+func numInteriorRingsFromPayload(payload []byte) (int64, error) {
+	rings, _, _, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(rings) - 1), nil
+}
+
+func polygonInteriorRingNFromPayload(payload []byte, n int64) ([]byte, error) {
+	if n <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("ring index must be greater than 0")
+	}
+
+	rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(rings)-1) < n {
+		return nil, moerr.NewInvalidInputNoCtx("ring index out of range")
+	}
+	return encodeGeometryPayload("LINESTRING"+rings[n], srid, sridDefined), nil
+}
+
+func polygonRingsFromPayload(payload []byte) ([]string, uint32, bool, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if typeName != "POLYGON" {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON")
+	}
+
+	wkt, srid, sridDefined, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+	rings := splitTopLevelGeometryItems(content)
+	if len(rings) == 0 {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	for i, ring := range rings {
+		ring = strings.TrimSpace(ring)
+		if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+			return nil, 0, false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+		}
+		if _, err := parsePolygonRingPoints(ring[1 : len(ring)-1]); err != nil {
+			return nil, 0, false, err
+		}
+		rings[i] = ring
+	}
+	return rings, srid, sridDefined, nil
+}
+
+func numPointsFromPayload(payload []byte) (int64, error) {
+	points, _, _, err := lineStringPointsFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(points)), nil
+}
+
+func isClosedFromPayload(payload []byte) (bool, error) {
+	points, _, _, err := lineStringPointsFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return points[0] == points[len(points)-1], nil
+}
+
+func isCollectionFromPayload(payload []byte) (bool, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return strings.HasPrefix(typeName, "MULTI") || typeName == "GEOMETRYCOLLECTION", nil
+}
+
+func dimensionFromPayload(payload []byte) (int64, error) {
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	return geometryDimensionFromText(wkt)
+}
+
+func geometryDimensionFromText(wkt string) (int64, error) {
+	typeName, err := geometryTypeNameFromText(wkt)
+	if err != nil {
+		return 0, err
+	}
+
+	switch typeName {
+	case "POINT", "MULTIPOINT":
+		return 0, nil
+	case "LINESTRING", "MULTILINESTRING":
+		return 1, nil
+	case "POLYGON", "MULTIPOLYGON":
+		return 2, nil
+	case "GEOMETRYCOLLECTION":
+		openIdx := strings.IndexByte(wkt, '(')
+		closeIdx := strings.LastIndexByte(wkt, ')')
+		if openIdx < 0 || closeIdx <= openIdx {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry collection payload")
+		}
+		content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+		items := splitTopLevelGeometryItems(content)
+		if len(items) == 0 {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry collection payload")
+		}
+		maxDimension := int64(-1)
+		for _, item := range items {
+			dimension, err := geometryDimensionFromText(strings.TrimSpace(item))
+			if err != nil {
+				return 0, err
+			}
+			if dimension > maxDimension {
+				maxDimension = dimension
+			}
+		}
+		if maxDimension < 0 {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry collection payload")
+		}
+		return maxDimension, nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Dimension")
+	}
+}
+
+func isSimpleFromPayload(payload []byte) (bool, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+
+	switch typeName {
+	case "POINT":
+		if _, _, err := parsePointXYFromPayload(payload); err != nil {
+			return false, err
+		}
+		return true, nil
+	case "LINESTRING":
+		return lineStringIsSimpleFromPayload(payload)
+	default:
+		return false, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_IsSimple")
+	}
+}
+
+func lineStringIsSimpleFromPayload(payload []byte) (bool, error) {
+	points, err := lineStringGeometryPointsFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return lineStringPointsAreSimple(points), nil
+}
+
+func isRingFromPayload(payload []byte) (bool, error) {
+	points, err := lineStringGeometryPointsFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	if !sameGeometryPoint(points[0], points[len(points)-1]) {
+		return false, nil
+	}
+	return lineStringPointsAreSimple(points), nil
+}
+
+func envelopeFromPayload(payload []byte) ([]byte, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	switch typeName {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		_, srid, sridDefined, err := decodeGeometryPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return envelopeGeometryFromBounds(x, x, y, y, srid, sridDefined), nil
+	case "LINESTRING":
+		pointTexts, srid, sridDefined, err := lineStringPointsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		minX, maxX, minY, maxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid linestring payload")
+		if err != nil {
+			return nil, err
+		}
+		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
+	case "POLYGON":
+		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		minX, maxX, minY, maxY, err := polygonBoundsFromRings(rings)
+		if err != nil {
+			return nil, err
+		}
+		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Envelope")
+	}
+}
+
+func centroidFromPayload(payload []byte) ([]byte, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	switch typeName {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		_, srid, sridDefined, err := decodeGeometryPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	case "LINESTRING":
+		points, err := lineStringGeometryPointsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		x, y, err := lineStringCentroid(points)
+		if err != nil {
+			return nil, err
+		}
+		_, srid, sridDefined, err := decodeGeometryPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	case "POLYGON":
+		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		x, y, err := polygonCentroid(rings)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Centroid")
+	}
+}
+
+func lineStringPointsAreSimple(points []geometryPoint2D) bool {
+	segmentCount := len(points) - 1
+	closed := sameGeometryPoint(points[0], points[len(points)-1])
+	for i := 0; i < segmentCount; i++ {
+		if sameGeometryPoint(points[i], points[i+1]) {
+			return false
+		}
+		for j := i + 1; j < segmentCount; j++ {
+			if !lineSegmentsIntersect(points[i], points[i+1], points[j], points[j+1]) {
+				continue
+			}
+			if adjacentLineSegmentsMeetSimply(points, i, j, segmentCount, closed) {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func adjacentLineSegmentsMeetSimply(points []geometryPoint2D, i, j, segmentCount int, closed bool) bool {
+	if j == i+1 {
+		return segmentsMeetSimplyAtSharedEndpoint(points[i+1], points[i], points[j+1])
+	}
+	if closed && i == 0 && j == segmentCount-1 {
+		return segmentsMeetSimplyAtSharedEndpoint(points[0], points[1], points[segmentCount-1])
+	}
+	return false
+}
+
+func segmentsMeetSimplyAtSharedEndpoint(shared, other1, other2 geometryPoint2D) bool {
+	if collinearGeometryPoints(other1, shared, other2) {
+		dot := (other1.x-shared.x)*(other2.x-shared.x) + (other1.y-shared.y)*(other2.y-shared.y)
+		return dot < 0
+	}
+	return true
+}
+
+func lineSegmentsIntersect(a, b, c, d geometryPoint2D) bool {
+	o1 := geometryOrientation(a, b, c)
+	o2 := geometryOrientation(a, b, d)
+	o3 := geometryOrientation(c, d, a)
+	o4 := geometryOrientation(c, d, b)
+
+	if o1 != o2 && o3 != o4 {
+		return true
+	}
+	if o1 == 0 && pointOnSegment(c.x, c.y, a, b) {
+		return true
+	}
+	if o2 == 0 && pointOnSegment(d.x, d.y, a, b) {
+		return true
+	}
+	if o3 == 0 && pointOnSegment(a.x, a.y, c, d) {
+		return true
+	}
+	if o4 == 0 && pointOnSegment(b.x, b.y, c, d) {
+		return true
+	}
+	return false
+}
+
+func geometryOrientation(a, b, c geometryPoint2D) int {
+	const epsilon = 1e-9
+
+	cross := (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)
+	if math.Abs(cross) <= epsilon {
+		return 0
+	}
+	if cross > 0 {
+		return 1
+	}
+	return -1
+}
+
+func collinearGeometryPoints(a, b, c geometryPoint2D) bool {
+	return geometryOrientation(a, b, c) == 0
+}
+
+func lineStringPointNFromPayload(payload []byte, n int64) ([]byte, error) {
+	if n <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("point index must be greater than 0")
+	}
+
+	points, srid, sridDefined, err := lineStringPointsFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(points)) < n {
+		return nil, moerr.NewInvalidInputNoCtx("point index out of range")
+	}
+	return encodeGeometryPayload("POINT("+points[n-1]+")", srid, sridDefined), nil
+}
+
+func lineStringPointsFromPayload(payload []byte) ([]string, uint32, bool, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if typeName != "LINESTRING" {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING")
+	}
+
+	wkt, srid, sridDefined, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
+
+	points := splitTopLevelGeometryItems(wkt[openIdx+1 : closeIdx])
+	if len(points) < 2 {
+		return nil, 0, false, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
+	for i, point := range points {
+		point = strings.TrimSpace(point)
+		if _, _, err := parseCoordinatePairWithError(point, "invalid linestring payload"); err != nil {
+			return nil, 0, false, err
+		}
+		points[i] = point
+	}
+	return points, srid, sridDefined, nil
+}
+
+func lineStringGeometryPointsFromPayload(payload []byte) ([]geometryPoint2D, error) {
+	pointTexts, _, _, err := lineStringPointsFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	points := make([]geometryPoint2D, 0, len(pointTexts))
+	for _, pointText := range pointTexts {
+		x, y, err := parseCoordinatePairWithError(pointText, "invalid linestring payload")
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, geometryPoint2D{x: x, y: y})
+	}
+	return points, nil
+}
+
+func polygonBoundsFromRings(rings []string) (float64, float64, float64, float64, error) {
+	hasBounds := false
+	var minX, maxX, minY, maxY float64
+	for _, ring := range rings {
+		pointTexts := splitTopLevelGeometryItems(ring[1 : len(ring)-1])
+		ringMinX, ringMaxX, ringMinY, ringMaxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid polygon payload")
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		if !hasBounds {
+			minX, maxX, minY, maxY = ringMinX, ringMaxX, ringMinY, ringMaxY
+			hasBounds = true
+			continue
+		}
+		minX = math.Min(minX, ringMinX)
+		maxX = math.Max(maxX, ringMaxX)
+		minY = math.Min(minY, ringMinY)
+		maxY = math.Max(maxY, ringMaxY)
+	}
+	if !hasBounds {
+		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	return minX, maxX, minY, maxY, nil
+}
+
+func geometryBoundsFromCoordinateTexts(pointTexts []string, invalidMessage string) (float64, float64, float64, float64, error) {
+	if len(pointTexts) == 0 {
+		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx(invalidMessage)
+	}
+
+	firstX, firstY, err := parseCoordinatePairWithError(pointTexts[0], invalidMessage)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	minX, maxX, minY, maxY := firstX, firstX, firstY, firstY
+	for _, pointText := range pointTexts[1:] {
+		x, y, err := parseCoordinatePairWithError(pointText, invalidMessage)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		minX = math.Min(minX, x)
+		maxX = math.Max(maxX, x)
+		minY = math.Min(minY, y)
+		maxY = math.Max(maxY, y)
+	}
+	return minX, maxX, minY, maxY, nil
+}
+
+func pointGeometryPayload(x, y float64, srid uint32, sridDefined bool) []byte {
+	xText := strconv.FormatFloat(x, 'f', -1, 64)
+	yText := strconv.FormatFloat(y, 'f', -1, 64)
+	return encodeGeometryPayload("POINT("+xText+" "+yText+")", srid, sridDefined)
+}
+
+func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sridDefined bool) []byte {
+	minXText := strconv.FormatFloat(minX, 'f', -1, 64)
+	maxXText := strconv.FormatFloat(maxX, 'f', -1, 64)
+	minYText := strconv.FormatFloat(minY, 'f', -1, 64)
+	maxYText := strconv.FormatFloat(maxY, 'f', -1, 64)
+
+	switch {
+	case sameGeometryCoordinate(minX, maxX) && sameGeometryCoordinate(minY, maxY):
+		return pointGeometryPayload(minX, minY, srid, sridDefined)
+	case sameGeometryCoordinate(minX, maxX):
+		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+minXText+" "+maxYText+")", srid, sridDefined)
+	case sameGeometryCoordinate(minY, maxY):
+		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+maxXText+" "+minYText+")", srid, sridDefined)
+	default:
+		return encodeGeometryPayload(
+			"POLYGON(("+minXText+" "+minYText+","+maxXText+" "+minYText+","+maxXText+" "+maxYText+","+minXText+" "+maxYText+","+minXText+" "+minYText+"))",
+			srid,
+			sridDefined,
+		)
+	}
+}
+
+func sameGeometryCoordinate(a, b float64) bool {
+	const epsilon = 1e-9
+	return math.Abs(a-b) <= epsilon
+}
+
+func lineStringCentroid(points []geometryPoint2D) (float64, float64, error) {
+	totalLength := 0.0
+	sumX := 0.0
+	sumY := 0.0
+	for i := 0; i < len(points)-1; i++ {
+		dx := points[i+1].x - points[i].x
+		dy := points[i+1].y - points[i].y
+		segmentLength := math.Hypot(dx, dy)
+		if sameGeometryCoordinate(segmentLength, 0) {
+			continue
+		}
+		midX := (points[i].x + points[i+1].x) / 2
+		midY := (points[i].y + points[i+1].y) / 2
+		totalLength += segmentLength
+		sumX += midX * segmentLength
+		sumY += midY * segmentLength
+	}
+	if sameGeometryCoordinate(totalLength, 0) {
+		return points[0].x, points[0].y, nil
+	}
+	return sumX / totalLength, sumY / totalLength, nil
+}
+
+func polygonCentroid(rings []string) (float64, float64, error) {
+	totalArea := 0.0
+	sumX := 0.0
+	sumY := 0.0
+	for i, ring := range rings {
+		points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+		if err != nil {
+			return 0, 0, err
+		}
+		area, centroidX, centroidY, err := polygonRingAreaAndCentroid(points)
+		if err != nil {
+			return 0, 0, err
+		}
+		weight := math.Abs(area)
+		if i > 0 {
+			weight = -weight
+		}
+		totalArea += weight
+		sumX += centroidX * weight
+		sumY += centroidY * weight
+	}
+	if sameGeometryCoordinate(totalArea, 0) {
+		return 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	return sumX / totalArea, sumY / totalArea, nil
+}
+
+func polygonRingAreaAndCentroid(points []geometryPoint2D) (float64, float64, float64, error) {
+	crossSum := 0.0
+	centroidFactorX := 0.0
+	centroidFactorY := 0.0
+	for i := 0; i < len(points); i++ {
+		j := (i + 1) % len(points)
+		cross := points[i].x*points[j].y - points[j].x*points[i].y
+		crossSum += cross
+		centroidFactorX += (points[i].x + points[j].x) * cross
+		centroidFactorY += (points[i].y + points[j].y) * cross
+	}
+	area := crossSum / 2
+	if sameGeometryCoordinate(area, 0) {
+		return 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	return area, centroidFactorX / (6 * area), centroidFactorY / (6 * area), nil
+}
+
 func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
 		return geometryIsEmpty(v)
@@ -1140,6 +1871,12 @@ func StIsEmpty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 func StLength(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
 		return geometryLength(v)
+	}, selectList)
+}
+
+func StArea(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
+		return geometryArea(v)
 	}, selectList)
 }
 
@@ -1160,6 +1897,27 @@ func geometryLength(payload []byte) (float64, error) {
 		return multiLineStringLengthFromText(wkt)
 	default:
 		return 0, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING or MULTILINESTRING")
+	}
+}
+
+func geometryArea(payload []byte) (float64, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+
+	switch typeName {
+	case "POLYGON":
+		return polygonAreaFromText(wkt)
+	case "MULTIPOLYGON":
+		return multiPolygonAreaFromText(wkt)
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON or MULTIPOLYGON")
 	}
 }
 
@@ -1221,19 +1979,115 @@ func lineStringLengthFromContent(content string) (float64, error) {
 	return total, nil
 }
 
+func polygonAreaFromText(wkt string) (float64, error) {
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+	return polygonAreaFromPolygonContent(content)
+}
+
+func multiPolygonAreaFromText(wkt string) (float64, error) {
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return 0, moerr.NewInvalidInputNoCtx("invalid multipolygon payload")
+	}
+
+	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+	if content == "" {
+		return 0, moerr.NewInvalidInputNoCtx("invalid multipolygon payload")
+	}
+
+	items := splitTopLevelGeometryItems(content)
+	total := 0.0
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid multipolygon payload")
+		}
+		area, err := polygonAreaFromPolygonContent(item[1 : len(item)-1])
+		if err != nil {
+			return 0, err
+		}
+		total += area
+	}
+	return total, nil
+}
+
+func polygonAreaFromPolygonContent(content string) (float64, error) {
+	if content == "" {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	rings := splitTopLevelGeometryItems(content)
+	if len(rings) == 0 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	total := 0.0
+	for i, ring := range rings {
+		ring = strings.TrimSpace(ring)
+		if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+		}
+
+		area, err := polygonAreaFromRingContent(ring[1 : len(ring)-1])
+		if err != nil {
+			return 0, err
+		}
+		if i == 0 {
+			total = area
+		} else {
+			total -= area
+		}
+	}
+	return total, nil
+}
+
+func polygonAreaFromRingContent(content string) (float64, error) {
+	points := splitTopLevelGeometryItems(content)
+	if len(points) < 3 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	prevX, prevY, err := parseCoordinatePairWithError(points[len(points)-1], "invalid polygon payload")
+	if err != nil {
+		return 0, err
+	}
+
+	area := 0.0
+	for _, point := range points {
+		x, y, err := parseCoordinatePairWithError(point, "invalid polygon payload")
+		if err != nil {
+			return 0, err
+		}
+		area += prevX*y - x*prevY
+		prevX, prevY = x, y
+	}
+	return math.Abs(area) / 2, nil
+}
+
 func parseCoordinatePair(point string) (float64, float64, error) {
+	return parseCoordinatePairWithError(point, "invalid linestring payload")
+}
+
+func parseCoordinatePairWithError(point string, errMsg string) (float64, float64, error) {
 	coords := strings.Fields(strings.TrimSpace(point))
 	if len(coords) != 2 {
-		return 0, 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}
 
 	x, err := strconv.ParseFloat(coords[0], 64)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}
 	y, err := strconv.ParseFloat(coords[1], 64)
 	if err != nil {
-		return 0, 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}
 	return x, y, nil
 }

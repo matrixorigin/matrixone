@@ -3649,6 +3649,363 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `st_area`
+	{
+		functionId: ST_AREA,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StArea
+				},
+			},
+		},
+	},
+
+	// function `st_contains`
+	{
+		functionId: ST_CONTAINS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StContains
+				},
+			},
+		},
+	},
+
+	// function `st_within`
+	{
+		functionId: ST_WITHIN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StWithin
+				},
+			},
+		},
+	},
+
+	// function `st_startpoint`
+	{
+		functionId: ST_STARTPOINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StStartPoint
+				},
+			},
+		},
+	},
+
+	// function `st_endpoint`
+	{
+		functionId: ST_ENDPOINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StEndPoint
+				},
+			},
+		},
+	},
+
+	// function `st_pointn`
+	{
+		functionId: ST_POINTN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StPointN
+				},
+			},
+		},
+	},
+
+	// function `st_exteriorring`
+	{
+		functionId: ST_EXTERIORRING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StExteriorRing
+				},
+			},
+		},
+	},
+
+	// function `st_numinteriorrings`
+	{
+		functionId: ST_NUMINTERIORRINGS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StNumInteriorRings
+				},
+			},
+		},
+	},
+
+	// function `st_interiorringn`
+	{
+		functionId: ST_INTERIORRINGN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StInteriorRingN
+				},
+			},
+		},
+	},
+
+	// function `st_numpoints`
+	{
+		functionId: ST_NUMPOINTS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StNumPoints
+				},
+			},
+		},
+	},
+
+	// function `st_isclosed`
+	{
+		functionId: ST_ISCLOSED,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StIsClosed
+				},
+			},
+		},
+	},
+
+	// function `st_iscollection`
+	{
+		functionId: ST_ISCOLLECTION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StIsCollection
+				},
+			},
+		},
+	},
+
+	// function `st_dimension`
+	{
+		functionId: ST_DIMENSION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDimension
+				},
+			},
+		},
+	},
+
+	// function `st_issimple`
+	{
+		functionId: ST_ISSIMPLE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StIsSimple
+				},
+			},
+		},
+	},
+
+	// function `st_isring`
+	{
+		functionId: ST_ISRING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StIsRing
+				},
+			},
+		},
+	},
+
+	// function `st_envelope`
+	{
+		functionId: ST_ENVELOPE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StEnvelope
+				},
+			},
+		},
+	},
+
+	// function `st_centroid`
+	{
+		functionId: ST_CENTROID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StCentroid
+				},
+			},
+		},
+	},
+
 	// function `soundex`
 	{
 		functionId: SOUNDEX,

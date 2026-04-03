@@ -7798,6 +7798,179 @@ func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryContains(v1, v2)
+	}, selectList)
+}
+
+func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryWithin(v1, v2)
+	}, selectList)
+}
+
+type geometryPoint2D struct {
+	x float64
+	y float64
+}
+
+func geometryContains(container, target []byte) (bool, error) {
+	containerType, err := geometryTypeNameFromPayload(container)
+	if err != nil {
+		return false, err
+	}
+	targetType, err := geometryTypeNameFromPayload(target)
+	if err != nil {
+		return false, err
+	}
+
+	if containerType != "POLYGON" || targetType != "POINT" {
+		return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POLYGON contains POINT")
+	}
+
+	px, py, err := parsePointXYFromPayload(target)
+	if err != nil {
+		return false, err
+	}
+	wkt, _, _, err := decodeGeometryPayload(container)
+	if err != nil {
+		return false, err
+	}
+	return polygonContainsPointFromText(wkt, px, py)
+}
+
+func geometryWithin(candidate, container []byte) (bool, error) {
+	candidateType, err := geometryTypeNameFromPayload(candidate)
+	if err != nil {
+		return false, err
+	}
+	containerType, err := geometryTypeNameFromPayload(container)
+	if err != nil {
+		return false, err
+	}
+
+	if candidateType != "POINT" || containerType != "POLYGON" {
+		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT within POLYGON")
+	}
+
+	px, py, err := parsePointXYFromPayload(candidate)
+	if err != nil {
+		return false, err
+	}
+	wkt, _, _, err := decodeGeometryPayload(container)
+	if err != nil {
+		return false, err
+	}
+	return polygonContainsPointFromText(wkt, px, py)
+}
+
+func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+	if content == "" {
+		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	rings := splitTopLevelGeometryItems(content)
+	if len(rings) != 1 {
+		return false, moerr.NewInvalidInputNoCtx("polygons with holes are not supported")
+	}
+
+	ring := strings.TrimSpace(rings[0])
+	if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+	if err != nil {
+		return false, err
+	}
+	return pointInPolygon(points, px, py), nil
+}
+
+func parsePolygonRingPoints(content string) ([]geometryPoint2D, error) {
+	items := splitTopLevelGeometryItems(content)
+	if len(items) < 3 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	points := make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, err := parseCoordinatePairWithError(item, "invalid polygon payload")
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, geometryPoint2D{x: x, y: y})
+	}
+
+	if len(points) > 1 && sameGeometryPoint(points[0], points[len(points)-1]) {
+		points = points[:len(points)-1]
+	}
+	if len(points) < 3 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	return points, nil
+}
+
+func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
+	if pointOnPolygonBoundary(points, px, py) {
+		return false
+	}
+
+	inside := false
+	j := len(points) - 1
+	for i := 0; i < len(points); i++ {
+		xi, yi := points[i].x, points[i].y
+		xj, yj := points[j].x, points[j].y
+		if (yi > py) != (yj > py) {
+			crossX := (xj-xi)*(py-yi)/(yj-yi) + xi
+			if px < crossX {
+				inside = !inside
+			}
+		}
+		j = i
+	}
+	return inside
+}
+
+func pointOnPolygonBoundary(points []geometryPoint2D, px, py float64) bool {
+	j := len(points) - 1
+	for i := 0; i < len(points); i++ {
+		if pointOnSegment(px, py, points[j], points[i]) {
+			return true
+		}
+		j = i
+	}
+	return false
+}
+
+func pointOnSegment(px, py float64, start, end geometryPoint2D) bool {
+	const epsilon = 1e-9
+
+	cross := (px-start.x)*(end.y-start.y) - (py-start.y)*(end.x-start.x)
+	if math.Abs(cross) > epsilon {
+		return false
+	}
+	if px < math.Min(start.x, end.x)-epsilon || px > math.Max(start.x, end.x)+epsilon {
+		return false
+	}
+	if py < math.Min(start.y, end.y)-epsilon || py > math.Max(start.y, end.y)+epsilon {
+		return false
+	}
+	return true
+}
+
+func sameGeometryPoint(a, b geometryPoint2D) bool {
+	const epsilon = 1e-9
+	return math.Abs(a.x-b.x) <= epsilon && math.Abs(a.y-b.y) <= epsilon
+}
+
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
