@@ -139,7 +139,6 @@ type retBatchList struct {
 	tList []*batch.Batch
 
 	pinned map[*batch.Batch]struct{}
-	//debug  map[*batch.Batch]retBatchDebug
 
 	dataVecCnt    int
 	tombVecCnt    int

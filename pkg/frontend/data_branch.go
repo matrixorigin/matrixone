@@ -117,11 +117,6 @@ func (d *branchHashmapDeallocator) As(target malloc.Trait) bool {
 	return false
 }
 
-//type retBatchDebug struct {
-//	acquire string
-//	release string
-//}
-
 func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	if vec == nil {
 		return false
@@ -142,9 +137,6 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if retBatchPool.pinned == nil {
 		retBatchPool.pinned = make(map[*batch.Batch]struct{})
 	}
-	//if retBatchPool.debug == nil {
-	//	retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
-	//}
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
@@ -201,7 +193,6 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 done:
 	retBatchPool.pinned[bat] = struct{}{}
-	//retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
 	return bat
 }
 
@@ -213,13 +204,8 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
-	//trace := retBatchPool.debug[bat]
-
 	if _, ok := retBatchPool.pinned[bat]; !ok {
 		msg := "retBatchPool: release unknown or already released batch"
-		//if trace.acquire != "" || trace.release != "" {
-		//	msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
-		//}
 		panic(moerr.NewInternalErrorNoCtx(msg))
 	}
 
@@ -238,11 +224,6 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	} else {
 		retBatchPool.dList = append(retBatchPool.dList, bat)
 	}
-
-	//retBatchPool.debug[bat] = retBatchDebug{
-	//	acquire: trace.acquire,
-	//	release: string(debug.Stack()),
-	//}
 
 	delete(retBatchPool.pinned, bat)
 }
@@ -270,7 +251,6 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	retBatchPool.dList = nil
 	retBatchPool.tList = nil
 	retBatchPool.pinned = nil
-	//retBatchPool.debug = nil
 
 }
 
@@ -623,7 +603,6 @@ func diffMergeAgency(
 		cancel context.CancelFunc
 	)
 
-	//ctx = fileservice.WithParallelMode(execCtx.reqCtx, fileservice.ParallelForce)
 	ctx, cancel = context.WithCancel(execCtx.reqCtx)
 
 	var (
