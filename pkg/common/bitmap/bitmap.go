@@ -358,7 +358,13 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		return
 	}
 	if len(n.data) < newCap {
+		oldLen := len(n.data)
 		n.data = n.data[:newCap]
+		// Zero out newly exposed slots to avoid reading stale data
+		// left over from a previous use of the same backing array.
+		for i := oldLen; i < newCap; i++ {
+			n.data[i] = 0
+		}
 	}
 }
 
