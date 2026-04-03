@@ -21,14 +21,20 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -1077,4 +1083,529 @@ func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, 1, called)
 	require.Nil(t, pkFilter)
+}
+
+func TestMaterializeSubqueryUnified_RejectsNilSelect(t *testing.T) {
+	ses := newValidateSession(t)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		nil,
+		&tree.DataBranchPick{Keys: &tree.PickKeys{Type: tree.PickKeysSubquery}},
+		tableStuff{},
+		false,
+		nil,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "KEYS subquery is nil")
+	require.Nil(t, pkFilter)
+}
+
+func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(select k from source_keys)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	exec := &pickStreamingExecutor{
+		result: executor.Result{
+			Batches: []*batch.Batch{buildPickStreamingBatch(
+				t,
+				ses.proc.Mp(),
+				[]types.Type{types.T_int64.ToType()},
+				[][]any{{int64(7)}, {int64(9)}},
+			)},
+			Mp: ses.proc.Mp(),
+		},
+	}
+	bh := newPickStreamingBackExecForTest(t, ses, exec)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		true,
+		hm,
+	)
+	require.NoError(t, err)
+	require.Contains(t, exec.sql, "ORDER BY 1")
+	require.True(t, pkFilter == nil || len(pkFilter.Segments) > 0)
+	require.Greater(t, hm.ItemCount(), int64(0))
+
+	probe := vector.NewVec(types.T_int64.ToType())
+	defer probe.Free(ses.proc.Mp())
+	require.NoError(t, vector.AppendFixed(probe, int64(7), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(probe, int64(9), false, ses.proc.Mp()))
+
+	results, err := hm.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.True(t, result.Exists)
+	}
+}
+
+func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(select k1, k2 from composite_keys)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0, 1}
+	tblStuff.def.pkKind = compositeKind
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	exec := &pickStreamingExecutor{
+		result: executor.Result{
+			Batches: []*batch.Batch{buildPickStreamingBatch(
+				t,
+				ses.proc.Mp(),
+				[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+				nil,
+			)},
+			Mp: ses.proc.Mp(),
+		},
+	}
+	bh := newPickStreamingBackExecForTest(t, ses, exec)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		false,
+		hm,
+	)
+	require.NoError(t, err)
+	require.Nil(t, pkFilter)
+	require.Contains(t, exec.sql, "ORDER BY 1, 2")
+}
+
+func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(select k from source_keys)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+	wantErr := moerr.NewInternalErrorNoCtx("subquery failed")
+	bh := newPickStreamingBackExecForTest(t, ses, &pickStreamingExecutor{err: wantErr})
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		false,
+		hm,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "KEYS subquery streaming error")
+	require.Contains(t, err.Error(), wantErr.Error())
+	require.Nil(t, pkFilter)
+}
+
+func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	ses := newValidateSession(t)
+	loc := time.FixedZone("UTC+08", 8*60*60)
+	ses.SetTimeZone(loc)
+
+	dec64Type := types.New(types.T_decimal64, 10, 2)
+	dec64Val, err := types.ParseDecimal64("10.50", dec64Type.Width, dec64Type.Scale)
+	require.NoError(t, err)
+	dec128Type := types.New(types.T_decimal128, 20, 3)
+	dec128Val, err := types.ParseDecimal128("200.125", dec128Type.Width, dec128Type.Scale)
+	require.NoError(t, err)
+	dateVal, err := types.ParseDateCast("2025-01-03")
+	require.NoError(t, err)
+	datetimeType := types.New(types.T_datetime, 0, 0)
+	datetimeVal, err := types.ParseDatetime("2025-01-03 12:30:45", datetimeType.Scale)
+	require.NoError(t, err)
+	timestampType := types.New(types.T_timestamp, 0, 6)
+	timestampVal, err := types.ParseTimestamp(loc, "2025-01-03 12:30:45", timestampType.Scale)
+	require.NoError(t, err)
+	timeType := types.New(types.T_time, 0, 0)
+	timeVal, err := types.ParseTime("12:30:45", timeType.Scale)
+	require.NoError(t, err)
+	uuidVal := types.Uuid([16]byte{0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12})
+
+	tests := []struct {
+		name    string
+		typ     types.Type
+		append  func(*vector.Vector)
+		want    string
+		wantErr string
+	}{
+		{
+			name: "bool true",
+			typ:  types.T_bool.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, true, false, mp))
+			},
+			want: "1",
+		},
+		{
+			name: "bool false",
+			typ:  types.T_bool.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, false, false, mp))
+			},
+			want: "0",
+		},
+		{
+			name: "bit",
+			typ:  types.T_bit.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uint64(7), false, mp))
+			},
+			want: "7",
+		},
+		{
+			name: "int8",
+			typ:  types.T_int8.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, int8(-8), false, mp))
+			},
+			want: "-8",
+		},
+		{
+			name: "int16",
+			typ:  types.T_int16.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, int16(-16), false, mp))
+			},
+			want: "-16",
+		},
+		{
+			name: "int32",
+			typ:  types.T_int32.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, int32(-32), false, mp))
+			},
+			want: "-32",
+		},
+		{
+			name: "int64",
+			typ:  types.T_int64.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, int64(-64), false, mp))
+			},
+			want: "-64",
+		},
+		{
+			name: "uint8",
+			typ:  types.T_uint8.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uint8(8), false, mp))
+			},
+			want: "8",
+		},
+		{
+			name: "uint16",
+			typ:  types.T_uint16.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uint16(16), false, mp))
+			},
+			want: "16",
+		},
+		{
+			name: "uint32",
+			typ:  types.T_uint32.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uint32(32), false, mp))
+			},
+			want: "32",
+		},
+		{
+			name: "uint64",
+			typ:  types.T_uint64.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uint64(64), false, mp))
+			},
+			want: "64",
+		},
+		{
+			name: "float32",
+			typ:  types.T_float32.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, float32(1.25), false, mp))
+			},
+			want: "1.25",
+		},
+		{
+			name: "float64",
+			typ:  types.T_float64.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, float64(2.5), false, mp))
+			},
+			want: "2.5",
+		},
+		{
+			name: "varchar",
+			typ:  types.T_varchar.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendBytes(vec, []byte("alice"), false, mp))
+			},
+			want: "alice",
+		},
+		{
+			name: "decimal64",
+			typ:  dec64Type,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, dec64Val, false, mp))
+			},
+			want: dec64Val.Format(dec64Type.Scale),
+		},
+		{
+			name: "decimal128",
+			typ:  dec128Type,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, dec128Val, false, mp))
+			},
+			want: dec128Val.Format(dec128Type.Scale),
+		},
+		{
+			name: "date",
+			typ:  types.T_date.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, dateVal, false, mp))
+			},
+			want: dateVal.String(),
+		},
+		{
+			name: "datetime",
+			typ:  datetimeType,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, datetimeVal, false, mp))
+			},
+			want: datetimeVal.String(),
+		},
+		{
+			name: "timestamp",
+			typ:  timestampType,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, timestampVal, false, mp))
+			},
+			want: timestampVal.String2(loc, timestampType.Scale),
+		},
+		{
+			name: "time",
+			typ:  timeType,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, timeVal, false, mp))
+			},
+			want: timeVal.String(),
+		},
+		{
+			name: "uuid",
+			typ:  types.T_uuid.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, uuidVal, false, mp))
+			},
+			want: uuidVal.String(),
+		},
+		{
+			name: "enum",
+			typ:  types.T_enum.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, types.Enum(5), false, mp))
+			},
+			want: "5",
+		},
+		{
+			name: "unsupported json",
+			typ:  types.T_json.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendBytes(vec, []byte(`{"k":1}`), false, mp))
+			},
+			wantErr: "not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.typ)
+			defer vec.Free(mp)
+			tt.append(vec)
+
+			got, err := formatPickKeyVectorValueAsString(ses, vec, 0)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+type pickStreamingExecutor struct {
+	result executor.Result
+	err    error
+	sql    string
+}
+
+func (e *pickStreamingExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	e.sql = sql
+	if e.err != nil {
+		return executor.Result{}, e.err
+	}
+	if streamCh, _, ok := opts.Streaming(); ok {
+		streamCh <- e.result
+		return executor.Result{}, nil
+	}
+	return e.result, nil
+}
+
+func (e *pickStreamingExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+	return nil
+}
+
+func newPickStreamingBackExecForTest(t *testing.T, ses *Session, exec executor.SQLExecutor) *backExec {
+	t.Helper()
+
+	if ses.respr == nil {
+		ses.respr = &NullResp{}
+	}
+	if ses.txnCompileCtx == nil {
+		ses.txnCompileCtx = InitTxnCompilerContext("")
+	}
+	ses.SetDatabaseName("pick_test")
+
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		ses.GetService(),
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return time.Now().UnixNano() }, 0)),
+	)
+	moruntime.SetupServiceBasedRuntime(ses.GetService(), rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+
+	backSes := &backSession{}
+	backSes.service = ses.GetService()
+	backSes.txnHandler = InitTxnHandler(ses.GetService(), nil, context.Background(), nil)
+	return &backExec{backSes: backSes}
+}
+
+func buildPickStreamingBatch(t *testing.T, mp *mpool.MPool, colTypes []types.Type, rows [][]any) *batch.Batch {
+	t.Helper()
+
+	bat := batch.NewWithSize(len(colTypes))
+	for i, typ := range colTypes {
+		bat.Vecs[i] = vector.NewVec(typ)
+	}
+
+	for _, row := range rows {
+		require.Len(t, row, len(colTypes))
+		for colIdx, val := range row {
+			switch typed := val.(type) {
+			case int64:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
+			case string:
+				require.NoError(t, vector.AppendBytes(bat.Vecs[colIdx], []byte(typed), false, mp))
+			default:
+				require.Failf(t, "unsupported test row type", "col %d has value %#v", colIdx, val)
+			}
+		}
+	}
+	bat.SetRowCount(len(rows))
+	return bat
 }

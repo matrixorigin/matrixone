@@ -966,3 +966,33 @@ func commitTSBytes(ts types.TS) []byte {
 	copy(buf, ts[:])
 	return buf
 }
+
+func TestLCAProbeJoinCastType(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+		want string
+		ok   bool
+	}{
+		{name: "bit", typ: types.T_bit.ToType(), want: types.T_bit.ToType().DescString(), ok: true},
+		{name: "int32", typ: types.T_int32.ToType(), want: "INT", ok: true},
+		{name: "int64", typ: types.T_int64.ToType(), want: "BIGINT", ok: true},
+		{name: "uint32", typ: types.T_uint32.ToType(), want: "INT UNSIGNED", ok: true},
+		{name: "uint64", typ: types.T_uint64.ToType(), want: "BIGINT UNSIGNED", ok: true},
+		{name: "float32", typ: types.T_float32.ToType(), want: "FLOAT", ok: true},
+		{name: "float64", typ: types.T_float64.ToType(), want: "DOUBLE", ok: true},
+		{name: "varchar", typ: types.T_varchar.ToType(), want: "VARCHAR", ok: true},
+		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
+		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
+		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := lcaProbeJoinCastType(tt.typ)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
