@@ -122,6 +122,9 @@ func DebugShowScopes(ss []*Scope, level DebugLevel) string {
 // genReceiverMap recursively traverses the Scope tree and generates unique identifiers (integers) for
 // each WaitRegister in Scope.
 func genReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
+	if s == nil {
+		return
+	}
 	for i := range s.PreScopes {
 		genReceiverMap(s.PreScopes[i], mp)
 	}
@@ -147,6 +150,9 @@ func showScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, lev
 // It includes header information of Scope, data source information, and pipeline tree information.
 // In addition, it recursively displays information from any PreScopes.
 func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, level DebugLevel, buffer *bytes.Buffer) {
+	if scope == nil {
+		return
+	}
 	gapNextLine(gap, buffer)
 
 	// Scope Header

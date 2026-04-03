@@ -228,6 +228,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
+	if scope == nil {
+		return
+	}
 	scope.TxnOffset = txnOffset
 	for i := range scope.PreScopes {
 		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)

@@ -108,6 +108,9 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 //
 // it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
 func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	if s == nil {
+		return false
+	}
 	var regs = make(map[*process.WaitRegister]struct{})
 	var toScan []*Scope
 	// record which mergeReceivers this scope tree holds.
@@ -117,10 +120,17 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
 
+			if node == nil {
+				continue
+			}
+
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)
 			}
 
+			if node.Proc == nil {
+				continue
+			}
 			for i := range node.Proc.Reg.MergeReceivers {
 				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
 			}
@@ -136,6 +146,10 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 		for len(toScan) > 0 {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
+
+			if node == nil {
+				continue
+			}
 
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)

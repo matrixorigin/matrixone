@@ -295,6 +295,9 @@ func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 //----------------------------------------------------------------------------------------------------------------------
 
 func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
+	if scope == nil {
+		return models.PhyScope{}
+	}
 	phyScope := models.PhyScope{
 		Magic:        scope.Magic.String(),
 		Mcpu:         int8(scope.NodeInfo.Mcpu),
@@ -319,6 +322,9 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 }
 
 func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
+	if scope == nil {
+		return true
+	}
 	res := UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
 	if !res {
 		return false
@@ -714,6 +720,9 @@ func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, 
 // It includes header information of Scope, data source information, and pipeline tree information.
 // In addition, it recursively displays information from any PreScopes.
 func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {
+	if scope == nil {
+		return
+	}
 	gapNextLine(gap, buffer)
 
 	// Scope Header

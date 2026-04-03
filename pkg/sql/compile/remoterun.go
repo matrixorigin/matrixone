@@ -158,6 +158,9 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
 // according to source scope.
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
+	if s == nil {
+		return nil, ctxId, nil
+	}
 	var err error
 
 	p := &pipeline.Pipeline{}
@@ -254,6 +257,9 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 
 // fillInstructionsForPipeline fills pipeline's instructions.
 func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, ctxId int32) (int32, error) {
+	if s == nil {
+		return ctxId, nil
+	}
 	var err error
 
 	for i := range s.PreScopes {
