@@ -647,6 +647,9 @@ func (c *Compile) InitPipelineContextToRetryQuery() {
 // buildContextFromParentCtx build the context for the pipeline tree.
 // the input parameter is the whole tree's parent context.
 func (s *Scope) buildContextFromParentCtx(parentCtx context.Context) {
+	if s == nil {
+		return
+	}
 	receiverCtx := s.Proc.BuildPipelineContext(parentCtx)
 
 	// build context for receiver.
@@ -664,6 +667,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 
 	// build context for data entry.
 	for _, prePipeline := range parallelScope.PreScopes {
+		if prePipeline == nil {
+			continue
+		}
 		prePipeline.buildContextFromParentCtx(parallelScope.Proc.Ctx)
 	}
 }

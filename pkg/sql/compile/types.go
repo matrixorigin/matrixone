@@ -225,6 +225,9 @@ func (s *Scope) holdAnyCannotRemoteOperator() error {
 	}
 
 	for _, pre := range s.PreScopes {
+		if pre == nil {
+			continue
+		}
 		if err := pre.holdAnyCannotRemoteOperator(); err != nil {
 			return err
 		}
