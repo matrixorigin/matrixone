@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -804,6 +805,9 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
+	if _, err = buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select); err != nil {
+		return nil, err
+	}
 
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	isComposite := tblStuff.def.pkKind == compositeKind
@@ -835,12 +839,14 @@ func materializeSubqueryUnified(
 
 	streamChan := make(chan executor.Result, runtime.NumCPU())
 	errChan := make(chan error, 1)
+	subqueryCtx := compile.AttachInternalExecutorSession(ctx, ses)
+	subqueryCtx = compile.AttachInternalExecutorPrivilegeCheck(subqueryCtx)
 
 	// Launch the streaming SQL in a goroutine.
 	go func() {
 		defer close(streamChan)
 		defer close(errChan)
-		if _, err2 := runSql(ctx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
+		if _, err2 := runSql(subqueryCtx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
 			select {
 			case errChan <- err2:
 			default:

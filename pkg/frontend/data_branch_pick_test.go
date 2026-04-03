@@ -15,13 +15,18 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -1028,4 +1033,48 @@ func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
 	require.Contains(t, err.Error(), "not supported")
 	require.Nil(t, coerced)
 	require.False(t, owned)
+}
+
+func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(select k from secret_keys)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+
+	wantErr := moerr.NewInternalErrorNoCtx("permission denied")
+	called := 0
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		called++
+		return nil, wantErr
+	}
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		nil,
+		stmt,
+		tableStuff{},
+		false,
+		nil,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 1, called)
+	require.Nil(t, pkFilter)
 }
