@@ -93,14 +93,26 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
 
+		// Collect partition-by column references from all window specs.
+		// Only filters that exclusively reference partition-by columns can
+		// be safely pushed below the window node, because they merely
+		// eliminate entire partitions without changing row numbering.
+		partCols := make(map[[2]int32]bool)
+		for _, w := range node.WinSpecList {
+			if we := w.GetW(); we != nil {
+				for _, p := range we.PartitionBy {
+					collectColRefSet(p, partCols)
+				}
+			}
+		}
+
 		for _, filter := range filters {
-			// Keep any filter that references a window output above this window node.
-			// Pushing a filter on an earlier window output below a later window node
-			// changes the row set seen by the later window and can produce wrong results.
 			if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
-			} else {
+			} else if exprColRefsSubsetOf(filter, partCols) {
 				canPushdown = append(canPushdown, filter)
+			} else {
+				cantPushdown = append(cantPushdown, filter)
 			}
 		}
 
@@ -725,4 +737,39 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
+}
+
+// collectColRefSet adds all (RelPos, ColPos) pairs from expr into the set.
+func collectColRefSet(expr *plan.Expr, set map[[2]int32]bool) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		set[[2]int32{e.Col.RelPos, e.Col.ColPos}] = true
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			collectColRefSet(arg, set)
+		}
+	}
+}
+
+// exprColRefsSubsetOf returns true when every column reference in expr
+// belongs to the given set. An expression with no column references
+// (e.g. a constant) is considered a subset.
+func exprColRefsSubsetOf(expr *plan.Expr, set map[[2]int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return set[[2]int32{e.Col.RelPos, e.Col.ColPos}]
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if !exprColRefsSubsetOf(arg, set) {
+				return false
+			}
+		}
+	}
+	return true
 }
