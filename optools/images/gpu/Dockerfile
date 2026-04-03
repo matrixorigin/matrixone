@@ -1,4 +1,4 @@
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS builder
+FROM nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04 AS builder
 RUN apt-get update
 RUN apt-get install -y locales
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -47,7 +47,7 @@ ENV MO_CL_CUDA=1
 RUN make clean && make
 
 # build runtime docker image
-FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
 
 COPY --from=builder /matrixone/mo-service /mo-service
 COPY --from=builder /matrixone/etc /etc
