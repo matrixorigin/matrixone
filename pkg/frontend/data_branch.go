@@ -668,6 +668,12 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
+		if tblStuff.def.pkKind == fakeKind {
+			err = moerr.NewNotSupportedNoCtxf(
+				"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
+				pickStmt.SrcTable.ObjectName)
+			return
+		}
 	}
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(

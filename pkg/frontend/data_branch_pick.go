@@ -17,10 +17,12 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -635,12 +637,23 @@ func materializeSubqueryUnified(
 	nPKCols := len(tblStuff.def.pkColIdxes)
 
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
-	// streaming sorted results.
+	// streaming sorted results.  For composite PKs we ORDER BY all component
+	// columns so that serial()-encoded keys arrive in ascending byte order.
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
 
-	orderSQL := "SELECT * FROM (" + subquerySQL + ") AS __mo_pick_sub ORDER BY 1"
+	var orderCols string
+	if isComposite {
+		parts := make([]string, nPKCols)
+		for i := range parts {
+			parts[i] = strconv.Itoa(i + 1)
+		}
+		orderCols = strings.Join(parts, ", ")
+	} else {
+		orderCols = "1"
+	}
+	orderSQL := fmt.Sprintf("SELECT * FROM (%s) AS __mo_pick_sub ORDER BY %s", subquerySQL, orderCols)
 
 	var sb *segmentBuilder
 	if canBuildSegments {
@@ -1036,7 +1049,7 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 		}
 		return appendNumericStringToVec(vec, s, pkType, mp)
 	case *tree.StrVal:
-		return vector.AppendBytes(vec, []byte(unescapeMySQLString(e.String())), false, mp)
+		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, mp)
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
@@ -1125,9 +1138,82 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_date:
+		v, err := types.ParseDateCast(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_datetime:
+		v, err := types.ParseDatetime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_timestamp:
+		v, err := types.ParseTimestamp(time.UTC, s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_time:
+		v, err := types.ParseTime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_uuid:
+		v, err := types.ParseUuid(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	default:
 		// For other types (decimal, date, etc.), skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported PK type for engine filter: %s", pkType.Oid.String())
+	}
+}
+
+// appendStrValToVec handles string literal values for typed PK columns.
+// For varlen types (varchar, char, text, blob) it appends raw bytes directly.
+// For fixed-width types (date, datetime, timestamp, time, uuid) it parses the
+// string into the correct typed value before appending.
+func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, mp *mpool.MPool) error {
+	switch pkType.Oid {
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
+		return vector.AppendBytes(vec, []byte(s), false, mp)
+	case types.T_date:
+		v, err := types.ParseDateCast(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_datetime:
+		v, err := types.ParseDatetime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_timestamp:
+		v, err := types.ParseTimestamp(time.UTC, s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_time:
+		v, err := types.ParseTime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_uuid:
+		v, err := types.ParseUuid(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	default:
+		return moerr.NewInvalidInputNoCtxf("unsupported PK type for string literal: %s", pkType.Oid.String())
 	}
 }
 
