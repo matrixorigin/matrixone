@@ -256,9 +256,15 @@ func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 func checkPKDupGeneric[T comparable](
 	mp map[any]bool,
 	t *types.Type,
+	pk *vector.Vector,
 	vals []T,
 	start, count int) (bool, string) {
-	for _, v := range vals[start : start+count] {
+	nsp := pk.GetNulls()
+	for i, v := range vals[start : start+count] {
+		// SQL standard: NULL != NULL, skip NULLs from duplicate check
+		if nsp.Contains(uint64(start + i)) {
+			continue
+		}
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
 			return true, entry
@@ -276,76 +282,80 @@ func checkPKDup(
 	switch colType.Oid {
 	case types.T_bool:
 		vs := vector.MustFixedColNoTypeCheck[bool](pk)
-		return checkPKDupGeneric[bool](mp, colType, vs, start, count)
+		return checkPKDupGeneric[bool](mp, colType, pk, vs, start, count)
 	case types.T_bit:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedColNoTypeCheck[int8](pk)
-		return checkPKDupGeneric[int8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int8](mp, colType, pk, vs, start, count)
 	case types.T_int16:
 		vs := vector.MustFixedColNoTypeCheck[int16](pk)
-		return checkPKDupGeneric[int16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int16](mp, colType, pk, vs, start, count)
 	case types.T_int32:
 		vs := vector.MustFixedColNoTypeCheck[int32](pk)
-		return checkPKDupGeneric[int32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int32](mp, colType, pk, vs, start, count)
 	case types.T_int64:
 		vs := vector.MustFixedColNoTypeCheck[int64](pk)
-		return checkPKDupGeneric[int64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int64](mp, colType, pk, vs, start, count)
 	case types.T_uint8:
 		vs := vector.MustFixedColNoTypeCheck[uint8](pk)
-		return checkPKDupGeneric[uint8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint8](mp, colType, pk, vs, start, count)
 	case types.T_uint16:
 		vs := vector.MustFixedColNoTypeCheck[uint16](pk)
-		return checkPKDupGeneric[uint16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint16](mp, colType, pk, vs, start, count)
 	case types.T_uint32:
 		vs := vector.MustFixedColNoTypeCheck[uint32](pk)
-		return checkPKDupGeneric[uint32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint32](mp, colType, pk, vs, start, count)
 	case types.T_uint64:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_decimal64:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](pk)
-		return checkPKDupGeneric[types.Decimal64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal64](mp, colType, pk, vs, start, count)
 	case types.T_decimal128:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
-		return checkPKDupGeneric[types.Decimal128](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal128](mp, colType, pk, vs, start, count)
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
-		return checkPKDupGeneric[types.Uuid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Uuid](mp, colType, pk, vs, start, count)
 	case types.T_float32:
 		vs := vector.MustFixedColNoTypeCheck[float32](pk)
-		return checkPKDupGeneric[float32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float32](mp, colType, pk, vs, start, count)
 	case types.T_float64:
 		vs := vector.MustFixedColNoTypeCheck[float64](pk)
-		return checkPKDupGeneric[float64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float64](mp, colType, pk, vs, start, count)
 	case types.T_date:
 		vs := vector.MustFixedColNoTypeCheck[types.Date](pk)
-		return checkPKDupGeneric[types.Date](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Date](mp, colType, pk, vs, start, count)
 	case types.T_timestamp:
 		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](pk)
-		return checkPKDupGeneric[types.Timestamp](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Timestamp](mp, colType, pk, vs, start, count)
 	case types.T_time:
 		vs := vector.MustFixedColNoTypeCheck[types.Time](pk)
-		return checkPKDupGeneric[types.Time](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Time](mp, colType, pk, vs, start, count)
 	case types.T_datetime:
 		vs := vector.MustFixedColNoTypeCheck[types.Datetime](pk)
-		return checkPKDupGeneric[types.Datetime](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Datetime](mp, colType, pk, vs, start, count)
 	case types.T_enum:
 		vs := vector.MustFixedColNoTypeCheck[types.Enum](pk)
-		return checkPKDupGeneric[types.Enum](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Enum](mp, colType, pk, vs, start, count)
 	case types.T_TS:
 		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
-		return checkPKDupGeneric[types.TS](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.TS](mp, colType, pk, vs, start, count)
 	case types.T_Rowid:
 		vs := vector.MustFixedColNoTypeCheck[types.Rowid](pk)
-		return checkPKDupGeneric[types.Rowid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Rowid](mp, colType, pk, vs, start, count)
 	case types.T_Blockid:
 		vs := vector.MustFixedColNoTypeCheck[types.Blockid](pk)
-		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Blockid](mp, colType, pk, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
@@ -354,7 +364,11 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float32:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
@@ -363,7 +377,11 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float64:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)

@@ -2673,6 +2673,35 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 
 	v2.TxnPKMayBeChangedTotalCounter.Inc()
 
+	// SQL standard: NULL != NULL, filter out NULLs before duplicate checking.
+	// Also creates a owned copy so InplaceSort in PKPersistedBetween won't
+	// corrupt the caller's batch vector or its null bitmap.
+	mp := tbl.proc.Load().Mp()
+	if keysVector.HasNull() {
+		filtered := vector.NewVec(*keysVector.GetType())
+		nsp := keysVector.GetNulls()
+		for i := 0; i < keysVector.Length(); i++ {
+			if !nsp.Contains(uint64(i)) {
+				if err := filtered.UnionOne(keysVector, int64(i), mp); err != nil {
+					filtered.Free(mp)
+					return false, err
+				}
+			}
+		}
+		keysVector = filtered
+		defer keysVector.Free(mp)
+	} else {
+		var err error
+		keysVector, err = keysVector.Dup(mp)
+		if err != nil {
+			return false, err
+		}
+		defer keysVector.Free(mp)
+	}
+	if keysVector.Length() == 0 {
+		return false, nil
+	}
+
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
