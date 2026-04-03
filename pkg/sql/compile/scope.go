@@ -291,6 +291,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 				if err := ps.MergeRun(c); err != nil {
 					return err
 				}
+				// Release the scope now since it will be removed from
+				// s.PreScopes below and would otherwise leak in the
+				// reuse pool (release() only walks s.PreScopes).
+				ps.release()
+				s.PreScopes[i] = nil // prevent double-free if a later MergeRun errors
 			}
 		}
 		if len(connectorScopes) == 0 {
