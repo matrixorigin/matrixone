@@ -109,6 +109,9 @@ func TestDataBranchPick(t *testing.T) {
 			t.Log("pick with varchar primary key")
 			runPickVarcharPK(t, ctx, sqlDB)
 
+			t.Log("pick varchar delete/update conflict handles escaped keys on LCA path")
+			runPickVarcharPKLCAEscapedDeleteUpdate(t, ctx, sqlDB)
+
 			t.Log("pick consecutive: two picks from same source")
 			runPickConsecutive(t, ctx, sqlDB)
 
@@ -745,6 +748,30 @@ func runPickVarcharPK(t *testing.T, parentCtx context.Context, db *sql.DB) {
 		names[i] = r[0]
 	}
 	require.Equal(t, []string{"alice", "bob", "charlie", "eve"}, names)
+}
+
+func runPickVarcharPKLCAEscapedDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (name varchar(64) primary key, score int)")
+	execSQLDB(t, ctx, db,
+		"insert into base values ('o''hara',85),('slash\\\\path',90),('plain',95)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "delete from src where name in ('o''hara','slash\\\\path')")
+	execSQLDB(t, ctx, db, "update dst set score=999 where name='o''hara'")
+
+	execSQLDB(t, ctx, db,
+		"data branch pick src into dst keys('o''hara','slash\\\\path') when conflict accept")
+
+	rows := queryStringRows(t, ctx, db, "select name, score from dst order by name")
+	require.Equal(t, [][]string{{"plain", "95"}}, rows)
 }
 
 // runPickConsecutive: two consecutive picks from the same source.

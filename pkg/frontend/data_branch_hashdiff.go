@@ -129,21 +129,13 @@ func handleDelsOnLCA(
 		} else {
 			// real pk
 			valsBuf.Reset()
+			pkType := colTypes[expandedPKColIdxes[0]]
 			for i := range tBat.Vecs[0].Length() {
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				b := tBat.Vecs[0].GetRawBytesAt(i)
 				val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
-				switch x := val.(type) {
-				case []byte:
-					valsBuf.WriteString("'")
-					valsBuf.WriteString(string(x))
-					valsBuf.WriteString("'")
-				case string:
-					valsBuf.WriteString("'")
-					valsBuf.WriteString(string(x))
-					valsBuf.WriteString("'")
-				default:
-					valsBuf.WriteString(fmt.Sprintf("%v", x))
+				if err = formatValIntoString(ses, val, pkType, valsBuf); err != nil {
+					return nil, err
 				}
 				valsBuf.WriteString(")")
 				if i != tBat.Vecs[0].Length()-1 {
@@ -164,22 +156,9 @@ func handleDelsOnLCA(
 
 		for i := range pkNames {
 			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
-			switch typ := colTypes[expandedPKColIdxes[i]]; typ.Oid {
-			case types.T_int32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
-			case types.T_int64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
-			case types.T_uint32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
-			case types.T_uint64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
-			case types.T_float32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
-			case types.T_float64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
-			case types.T_varchar:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as VARCHAR)", pkNames[i]))
-			default:
+			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", pkNames[i], castType))
+			} else {
 				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
 			}
 			if i != len(pkNames)-1 {
@@ -341,6 +320,35 @@ func handleDelsOnLCA(
 	)
 
 	return
+}
+
+func lcaProbeJoinCastType(typ types.Type) (string, bool) {
+	switch typ.Oid {
+	case types.T_bit:
+		return typ.DescString(), true
+	case types.T_int8, types.T_int16, types.T_int32:
+		return "INT", true
+	case types.T_int64:
+		return "BIGINT", true
+	case types.T_uint8, types.T_uint16, types.T_uint32:
+		return "INT UNSIGNED", true
+	case types.T_uint64:
+		return "BIGINT UNSIGNED", true
+	case types.T_float32:
+		return "FLOAT", true
+	case types.T_float64:
+		return "DOUBLE", true
+	case types.T_char, types.T_varchar, types.T_text:
+		return "VARCHAR", true
+	case types.T_binary, types.T_varbinary:
+		return "VARBINARY", true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return typ.DescString(), true
+	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+		return typ.String(), true
+	default:
+		return "", false
+	}
 }
 
 // runLCAProbeWithReaderFallback reconstructs the same row shape as
