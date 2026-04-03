@@ -78,7 +78,9 @@ func (s *Scope) release() {
 		return
 	}
 	for i := range s.PreScopes {
-		s.PreScopes[i].release()
+		if s.PreScopes[i] != nil {
+			s.PreScopes[i].release()
+		}
 	}
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		op.Release()
@@ -97,6 +99,9 @@ func (s *Scope) Reset(c *Compile) error {
 		return err
 	}
 	for _, scope := range s.PreScopes {
+		if scope == nil {
+			continue
+		}
 		if err = scope.Reset(c); err != nil {
 			return err
 		}
@@ -215,6 +220,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 func (s *Scope) FreeOperator(c *Compile) {
 	for _, scope := range s.PreScopes {
+		if scope == nil {
+			continue
+		}
 		scope.FreeOperator(c)
 	}
 
@@ -230,6 +238,9 @@ func (s *Scope) InitAllDataSource(c *Compile) error {
 		return err
 	}
 	for _, scope := range s.PreScopes {
+		if scope == nil {
+			continue
+		}
 		err := scope.InitAllDataSource(c)
 		if err != nil {
 			return err
@@ -249,6 +260,9 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 	})
 
 	for _, scope := range s.PreScopes {
+		if scope == nil {
+			continue
+		}
 		scope.SetOperatorInfoRecursively(cb)
 	}
 }
@@ -311,9 +325,12 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	// step 1.
 	for i := range s.PreScopes {
-		wg.Add(1)
-
 		scope := s.PreScopes[i]
+		if scope == nil {
+			continue
+		}
+
+		wg.Add(1)
 
 		submitPreScope := ants.Submit(
 			func() {

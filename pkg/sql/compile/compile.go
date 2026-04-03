@@ -302,6 +302,9 @@ func (c *Compile) clear() {
 }
 
 func (c *Compile) addAllAffectedRows(s *Scope) {
+	if s == nil {
+		return
+	}
 	for _, ps := range s.PreScopes {
 		c.addAllAffectedRows(ps)
 	}
