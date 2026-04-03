@@ -245,7 +245,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap requires a non-nil allocator")
 	}
 	if bh.shardCount <= 0 {
-		cpu := runtime.NumCPU() * 4
+		cpu := runtime.NumCPU() / 2
 		bh.shardCount = cpu
 	}
 	if bh.shardCount < minShardCount {

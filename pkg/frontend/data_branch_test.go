@@ -104,6 +104,71 @@ func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	require.Contains(t, err.Error(), "not support type")
 }
 
+func TestShouldUseLCAReaderFallback(t *testing.T) {
+	ctx := context.Background()
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "stale read",
+			err:  moerr.NewErrStaleReadNoCtx("10-0", "9-0"),
+			want: true,
+		},
+		{
+			name: "file not found",
+			err:  moerr.NewFileNotFoundNoCtx("obj"),
+			want: true,
+		},
+		{
+			name: "unknown database",
+			err:  moerr.NewBadDB(ctx, "test"),
+			want: true,
+		},
+		{
+			name: "unknown table",
+			err:  moerr.NewNoSuchTable(ctx, "test", "t0"),
+			want: true,
+		},
+		{
+			name: "other error",
+			err:  moerr.NewInvalidInput(ctx, "other"),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldUseLCAReaderFallback(tc.err))
+		})
+	}
+}
+
+func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	varcharVec := vector.NewVec(types.New(types.T_varchar, 64, 0))
+	require.NoError(t, appendTupleValueToVector(varcharVec, []byte("hello"), mp))
+	require.Equal(t, 1, varcharVec.Length())
+	require.Equal(t, "hello", string(varcharVec.GetBytesAt(0)))
+
+	require.NoError(t, appendTupleValueToVector(varcharVec, nil, mp))
+	require.Equal(t, 2, varcharVec.Length())
+	require.True(t, varcharVec.GetNulls().Contains(1))
+
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
+}
+
 func TestNewSingleWriteAppender_WriteAndRelease(t *testing.T) {
 	ctx := context.Background()
 	worker, err := ants.NewPool(1)

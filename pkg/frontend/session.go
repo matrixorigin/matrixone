@@ -138,7 +138,13 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache *privilegeCache
+	cache       *privilegeCache
+	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
+	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// rewriteEnabled caches the enable_remap_hint system variable state
+	// to avoid expensive GetSessionSysVar calls on every SQL query
+	rewriteEnabled atomic.Bool
 
 	mu sync.Mutex
 
@@ -183,6 +189,10 @@ type Session struct {
 
 	statsCache   *plan2.StatsCache
 	seqCurValues map[uint64]string
+
+	// sqlModeNoAutoValueOnZero caches whether sql_mode contains NO_AUTO_VALUE_ON_ZERO
+	// -1: unknown, 0: false, 1: true
+	sqlModeNoAutoValueOnZero int32
 
 	/*
 		CORNER CASE:
@@ -262,6 +272,14 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	defer ses.mu.Unlock()
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+
+	// Initialize rewriteEnabled cache
+	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
+		if on, convErr := valueIsBoolTrue(v); convErr == nil {
+			ses.rewriteEnabled.Store(on)
+		}
+	}
 	return
 }
 
@@ -774,6 +792,54 @@ func (ses *Session) UpdateDebugString() {
 	ses.debugStr = sb.String()
 }
 
+func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	v := atomic.LoadInt32(&ses.sqlModeNoAutoValueOnZero)
+	if v == 1 {
+		return true, true
+	}
+	if v == 0 {
+		return false, true
+	}
+	if ses.sesSysVars == nil {
+		return false, false
+	}
+	val, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false, false
+	}
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		return false, false
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+	return has, true
+}
+
+func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+		return
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+}
+
+func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
+	mode, ok := val.(string)
+	if !ok {
+		return false, false
+	}
+	return strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO"), true
+}
+
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -784,6 +850,11 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
+
+	// Clear rule cache with proper locking
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
 }
 
 // GetBackgroundExec generates a background executor

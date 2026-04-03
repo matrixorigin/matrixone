@@ -89,6 +89,23 @@ func (sp *ShufflePool) Reset(m *mpool.MPool, force bool) {
 	sp.finished = 0
 }
 
+func (sp *ShufflePool) Size() int64 {
+	var sz int64
+	for i := range sp.batches {
+		sp.locks[i].Lock()
+		bs := sp.batches[i]
+		if bs != nil {
+			for j := 0; j < bs.Length(); j++ {
+				if b := bs.Get(j); b != nil {
+					sz += int64(b.Allocated())
+				}
+			}
+		}
+		sp.locks[i].Unlock()
+	}
+	return sz
+}
+
 func (sp *ShufflePool) Print() { // only for debug
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
