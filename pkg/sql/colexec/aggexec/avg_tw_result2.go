@@ -142,8 +142,17 @@ func (exec *avgTwResultFloatExec) SetExtraInformation(partialResult any, _ int) 
 	return nil
 }
 
-func (exec *avgTwResultFloatExec) Flush() ([]*vector.Vector, error) {
+func (exec *avgTwResultFloatExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
@@ -293,8 +302,17 @@ func (exec *avgTwResultDecimalExec) SetExtraInformation(partialResult any, _ int
 	return nil
 }
 
-func (exec *avgTwResultDecimalExec) Flush() ([]*vector.Vector, error) {
+func (exec *avgTwResultDecimalExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {

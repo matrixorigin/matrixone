@@ -545,6 +545,8 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	clusters := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedColWithTypeCheck[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
 	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
+	hasGenerateds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX + MO_OFF))
+	generatedExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_GENERATED_IDX + MO_OFF)
 	for i, account := range accounts {
 		ts := timestamps[i].ToTimestamp()
 		tblKey.Name = tableNames.GetStringAt(i)
@@ -561,6 +563,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			IsAutoIncrement: isAutos[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],
+			HasGenerated:    hasGenerateds[i],
 			ConstraintType:  constraintTypes.GetStringAt(i),
 			IsClusterBy:     clusters[i],
 			Seqnum:          seqnums[i],
@@ -569,6 +572,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 		col.Typ = append(col.Typ, typs.GetBytesAt(i)...)
 		col.UpdateExpr = append(col.UpdateExpr, updateExprs.GetBytesAt(i)...)
 		col.DefaultExpr = append(col.DefaultExpr, defaultExprs.GetBytesAt(i)...)
+		col.GeneratedExpr = append(col.GeneratedExpr, generatedExprs.GetBytesAt(i)...)
 		mp[tblKey] = append(mp[tblKey], col)
 	}
 	f(mp)
@@ -669,6 +673,12 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 			panic(err)
 		}
 	}
+	if col.HasGenerated == 1 {
+		attr.GeneratedCol = new(plan.GeneratedCol)
+		if err := types.Decode(col.GeneratedExpr, attr.GeneratedCol); err != nil {
+			panic(err)
+		}
+	}
 	if col.ConstraintType == catalog.SystemColPKConstraint {
 		attr.Primary = true
 	}
@@ -710,13 +720,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 					Enumvalues:  attr.Attr.EnumVlaues,
 				},
-				Primary:   attr.Attr.Primary,
-				Default:   attr.Attr.Default,
-				OnUpdate:  attr.Attr.OnUpdate,
-				Comment:   attr.Attr.Comment,
-				ClusterBy: attr.Attr.ClusterBy,
-				Hidden:    attr.Attr.IsHidden,
-				Seqnum:    uint32(attr.Attr.Seqnum),
+				Primary:      attr.Attr.Primary,
+				Default:      attr.Attr.Default,
+				OnUpdate:     attr.Attr.OnUpdate,
+				GeneratedCol: attr.Attr.GeneratedCol,
+				Comment:      attr.Attr.Comment,
+				ClusterBy:    attr.Attr.ClusterBy,
+				Hidden:       attr.Attr.IsHidden,
+				Seqnum:       uint32(attr.Attr.Seqnum),
 			})
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{

@@ -245,6 +245,7 @@ func (node *memoryNode) ApplyAppendLocked(
 ) (from int, err error) {
 	schema := node.writeSchema
 	from = int(node.mustData().Length())
+	rows := bat.Length()
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]
@@ -256,6 +257,15 @@ func (node *memoryNode) ApplyAppendLocked(
 		if in_logical_idx == -1 {
 			desc := node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
 			desc.Extend(bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID))
+		}
+	}
+	// Upgrade compat: replayed WAL batches may be encoded with an older schema
+	// and omit columns introduced later. Pad those missing columns with NULLs
+	// for the appended rows so every in-memory vector stays aligned.
+	expectedLen := from + rows
+	for _, destVec := range node.data.Vecs {
+		for destVec.Length() < expectedLen {
+			destVec.Append(nil, true)
 		}
 	}
 	return

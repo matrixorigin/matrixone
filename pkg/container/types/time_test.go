@@ -268,6 +268,36 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			scale:    0,
 			isErr:    false,
 		},
+		// ==================== 3-digit seconds with leading zero (MySQL compat) ====================
+		{
+			name:     "3-digit-seconds-leading-zero",
+			inputStr: "00:00:009",
+			expected: TimeFromClock(false, 0, 0, 9, 0),
+			scale:    6,
+			isErr:    false,
+		},
+		{
+			name:     "3-digit-seconds-nonzero",
+			inputStr: "00:01:009",
+			expected: TimeFromClock(false, 0, 1, 9, 0),
+			scale:    6,
+			isErr:    false,
+		},
+		{
+			name:     "3-digit-seconds-with-microseconds",
+			inputStr: "12:34:009.5",
+			expected: TimeFromClock(false, 12, 34, 9, 500000),
+			scale:    6,
+			isErr:    false,
+		},
+		// datetime string with 3-digit seconds delegates to ParseDatetime
+		{
+			name:     "datetime-3-digit-seconds",
+			inputStr: "1998-01-01 00:00:009",
+			expected: TimeFromClock(false, 0, 0, 9, 0),
+			scale:    6,
+			isErr:    false,
+		},
 	}
 
 	for _, c := range testCases {

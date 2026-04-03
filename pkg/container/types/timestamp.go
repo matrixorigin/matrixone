@@ -117,9 +117,22 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 		}
 		msecStr = msecStr[:scale]
 	} else if len(msecStr) < int(scale) {
-		lengthMsecStr := len(msecStr)
-		padZeros := int(scale) - lengthMsecStr
-		msecStr = msecStr + FillString[padZeros]
+		// Avoid string allocation: parse as-is then multiply by 10^padZeros
+		// to simulate right-padding with zeros.
+		padZeros := int(scale) - len(msecStr)
+		m, err := strconv.ParseUint(msecStr, 10, 64)
+		if err != nil {
+			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+		}
+		for i := 0; i < padZeros; i++ {
+			m *= 10
+		}
+		msecs = uint32(m) * scaleTable[scale]
+		if msecs == OneSecInMicroSeconds {
+			carry = 1
+			msecs = 0
+		}
+		return msecs, carry, nil
 	}
 	if len(msecStr) == 0 { // this means the scale is 0
 		return 0, msecCarry, nil

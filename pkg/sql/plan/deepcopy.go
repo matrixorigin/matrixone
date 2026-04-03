@@ -363,21 +363,22 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:      col.ColId,
-		Name:       col.Name,
-		OriginName: col.OriginName,
-		Alg:        col.Alg,
-		Typ:        col.Typ,
-		Default:    DeepCopyDefault(col.Default),
-		Primary:    col.Primary,
-		Pkidx:      col.Pkidx,
-		Comment:    col.Comment,
-		OnUpdate:   DeepCopyOnUpdate(col.OnUpdate),
-		ClusterBy:  col.ClusterBy,
-		Hidden:     col.Hidden,
-		Seqnum:     col.Seqnum,
-		TblName:    col.TblName,
-		DbName:     col.DbName,
+		ColId:        col.ColId,
+		Name:         col.Name,
+		OriginName:   col.OriginName,
+		Alg:          col.Alg,
+		Typ:          col.Typ,
+		Default:      DeepCopyDefault(col.Default),
+		Primary:      col.Primary,
+		Pkidx:        col.Pkidx,
+		Comment:      col.Comment,
+		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol: DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:    col.ClusterBy,
+		Hidden:       col.Hidden,
+		Seqnum:       col.Seqnum,
+		TblName:      col.TblName,
+		DbName:       col.DbName,
 	}
 }
 
@@ -446,6 +447,17 @@ func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
 	return &plan.OnUpdate{
 		Expr:         DeepCopyExpr(old.Expr),
 		OriginString: old.OriginString,
+	}
+}
+
+func DeepCopyGeneratedCol(old *plan.GeneratedCol) *plan.GeneratedCol {
+	if old == nil {
+		return nil
+	}
+	return &plan.GeneratedCol{
+		Expr:         DeepCopyExpr(old.Expr),
+		OriginString: old.OriginString,
+		IsStored:     old.IsStored,
 	}
 }
 
@@ -742,13 +754,17 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			CreateIndex: &plan.CreateIndex{
 				Database: df.CreateIndex.Database,
 				Table:    df.CreateIndex.Table,
+				TableDef: DeepCopyTableDef(df.CreateIndex.TableDef, true),
 				Index: &plan.CreateTable{
 					IfNotExists: df.CreateIndex.Index.IfNotExists,
 					Temporary:   df.CreateIndex.Index.Temporary,
 					Database:    df.CreateIndex.Index.Database,
+					Replace:     df.CreateIndex.Index.Replace,
 					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
+					IndexTables: DeepCopyTableDefList(df.CreateIndex.Index.GetIndexTables()),
 				},
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
+				TableExist:            df.CreateIndex.TableExist,
 			},
 		}
 

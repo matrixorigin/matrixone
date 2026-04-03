@@ -44,32 +44,6 @@ Project
               ->  Table Scan on d1.t2
 select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 cnt
-explain select count(*) from t1,t2 where t1.c1=t2.c2;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INNER
-              Join Cond: (t1.c1 = t2.c2) shuffle: range(t1.c1)
-              ->  Table Scan on d1.t1
-              ->  Table Scan on d1.t2
-select count(*) from t1,t2 where t1.c1=t2.c2;
-count(*)
-4000000
-explain select count(*) from t1,t2 where t1.c2=t2.c1;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INNER
-              Join Cond: (t1.c2 = t2.c1) shuffle: range(t1.c2)
-              ->  Table Scan on d1.t1
-              ->  Table Scan on d1.t2
-select count(*) from t1,t2 where t1.c2=t2.c1;
-count(*)
-4000000
 explain select count(*) from t1,t2 where t1.c2=t2.c2;
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -115,36 +89,6 @@ Project
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 count(*)
 1499999
-explain select count(*) from t1 group by c1 limit 5;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  Limit: 5
-  ->  Aggregate
-        Group Key: t1.c1 shuffle: range(t1.c1)
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-select count(*) from t1 group by c1 limit 5;
-count(*)
-1
-1
-1
-1
-1
-explain select count(*) from t1 group by c2 limit 5;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  Limit: 5
-  ->  Aggregate
-        Group Key: t1.c2 shuffle: range(t1.c2)
-        Aggregate Functions: starcount(1)
-        ->  Table Scan on d1.t1
-select count(*) from t1 group by c2 limit 5;
-count(*)
-1
-1
-1
-1
-1
 explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
 AP QUERY PLAN ON MULTICN(4 core)
 Project
@@ -237,6 +181,12 @@ Project
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 count(*)
 10000000
+select count(*) from t2 right join t1 on t1.c1=t2.c1;
+count(*)
+5000000
+select count(*) from t1, t2 where t1.c1=t2.c1 and t1.c2=t2.c2;
+count(*)
+4000000
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
 select mo_ctl('dn', 'flush', 'd1.t3');

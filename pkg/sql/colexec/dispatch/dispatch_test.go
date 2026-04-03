@@ -18,8 +18,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -49,6 +51,33 @@ func TestPrepareRemote(t *testing.T) {
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
+}
+
+func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
+	original := &container{sendCnt: 1}
+	target := &Dispatch{ctr: &container{sendCnt: 99}}
+	source := &Dispatch{ctr: original}
+
+	target.AdoptCleanupState(source)
+
+	require.Same(t, original, target.ctr)
+	require.Nil(t, source.ctr)
+}
+
+func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
+	source := &Dispatch{ctr: &container{sendCnt: 1}}
+
+	var nilDispatch *Dispatch
+	require.NotPanics(t, func() {
+		nilDispatch.AdoptCleanupState(source)
+	})
+	require.NotNil(t, source.ctr)
+
+	target := &Dispatch{}
+	require.NotPanics(t, func() {
+		target.AdoptCleanupState(nil)
+	})
+	require.Nil(t, target.ctr)
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
@@ -281,6 +310,114 @@ func Test_sendToAnyRemoteFunc_NetworkError(t *testing.T) {
 	t.Log("Network error path: lines 319-322 in sendfunc.go")
 	t.Log("Behavior: err != nil causes immediate return without retry")
 	t.Log("Covered by integration tests with real network stack")
+}
+
+func TestSendToAnyFunc_PropagatesLocalError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	want := moerr.NewInternalErrorNoCtx("local send failed")
+
+	stub := gostub.Stub(&sendToAnyLocal, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		return false, want
+	})
+	defer stub.Reset()
+
+	d := &Dispatch{
+		ctr: &container{
+			aliveRegCnt:  1,
+			localRegsCnt: 1,
+		},
+	}
+
+	end, err := sendToAnyFunc(bat, d, proc)
+	require.False(t, end)
+	require.ErrorIs(t, err, want)
+}
+
+func TestSendToAnyFunc_PropagatesRemoteError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	want := moerr.NewInternalErrorNoCtx("remote send failed")
+
+	stub := gostub.Stub(&sendToAnyRemote, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		return false, want
+	})
+	defer stub.Reset()
+
+	d := &Dispatch{
+		ctr: &container{
+			aliveRegCnt:  1,
+			localRegsCnt: 0,
+		},
+	}
+
+	end, err := sendToAnyFunc(bat, d, proc)
+	require.False(t, end)
+	require.ErrorIs(t, err, want)
+}
+
+func TestSendToAnyFunc_FallbackFromLocalToRemote(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+
+	localStub := gostub.Stub(&sendToAnyLocal, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		return true, nil
+	})
+	defer localStub.Reset()
+
+	remoteCalled := false
+	remoteStub := gostub.Stub(&sendToAnyRemote, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		remoteCalled = true
+		return false, nil
+	})
+	defer remoteStub.Reset()
+
+	d := &Dispatch{
+		ctr: &container{
+			aliveRegCnt:  2,
+			localRegsCnt: 1,
+		},
+	}
+
+	end, err := sendToAnyFunc(bat, d, proc)
+	require.False(t, end)
+	require.NoError(t, err)
+	require.True(t, remoteCalled)
+}
+
+func TestSendToAnyFunc_FallbackRemoteErrorIsPropagated(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	want := moerr.NewInternalErrorNoCtx("fallback remote failed")
+	localCalled := false
+
+	remoteStub := gostub.Stub(&sendToAnyRemote, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		return true, nil
+	})
+	defer remoteStub.Reset()
+
+	localStub := gostub.Stub(&sendToAnyLocal, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
+		localCalled = true
+		return false, want
+	})
+	defer localStub.Reset()
+
+	d := &Dispatch{
+		ctr: &container{
+			aliveRegCnt:  2,
+			localRegsCnt: 1,
+			sendCnt:      1,
+		},
+	}
+
+	end, err := sendToAnyFunc(bat, d, proc)
+	require.False(t, end)
+	require.ErrorIs(t, err, want)
+	require.True(t, localCalled)
 }
 
 // TestShuffleScenario_TargetReceiverFailed tests shuffle with specific target receiver failed

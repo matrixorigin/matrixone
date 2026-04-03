@@ -74,6 +74,9 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
+		// LOAD DATA reads each source file exactly once; caching its blocks
+		// only wastes memory cache space and adds GC pressure.
+		Policy: fileservice.SkipAllCache,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            param.FileStartOff,
