@@ -315,6 +315,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
+	// InplaceSort reorders data but NOT the null bitmap.
+	// Reset bitmap before sort to avoid corruption.
+	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
 	data, err := ctr.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {
