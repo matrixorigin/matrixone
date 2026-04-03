@@ -64,8 +64,44 @@ func TestDataBranchPick(t *testing.T) {
 			t.Log("pick conflict FAIL")
 			runPickConflictFail(t, ctx, sqlDB)
 
+			t.Log("pick update/update conflict SKIP")
+			runPickConflictSkipUpdateUpdate(t, ctx, sqlDB)
+
+			t.Log("pick update/update conflict ACCEPT")
+			runPickConflictAcceptUpdateUpdate(t, ctx, sqlDB)
+
+			t.Log("pick update/update conflict FAIL")
+			runPickConflictFailUpdateUpdate(t, ctx, sqlDB)
+
+			t.Log("pick update/delete conflict SKIP")
+			runPickConflictSkipUpdateDelete(t, ctx, sqlDB)
+
+			t.Log("pick update/delete conflict ACCEPT")
+			runPickConflictAcceptUpdateDelete(t, ctx, sqlDB)
+
+			t.Log("pick update/delete conflict FAIL")
+			runPickConflictFailUpdateDelete(t, ctx, sqlDB)
+
+			t.Log("pick delete/update conflict SKIP")
+			runPickConflictSkipDeleteUpdate(t, ctx, sqlDB)
+
+			t.Log("pick delete/update conflict ACCEPT")
+			runPickConflictAcceptDeleteUpdate(t, ctx, sqlDB)
+
+			t.Log("pick delete/update conflict FAIL")
+			runPickConflictFailDeleteUpdate(t, ctx, sqlDB)
+
 			t.Log("pick with subquery KEYS")
 			runPickSubqueryKeys(t, ctx, sqlDB)
+
+			t.Log("pick with subquery key coercion")
+			runPickSubqueryKeyCoercion(t, ctx, sqlDB)
+
+			t.Log("pick subquery rejects NULL keys")
+			runPickSubqueryRejectsNullKey(t, ctx, sqlDB)
+
+			t.Log("pick subquery rejects invalid key coercion")
+			runPickSubqueryRejectsInvalidCoercion(t, ctx, sqlDB)
 
 			t.Log("large-scale pick (1000 rows, pick 50)")
 			runPickLargeScale(t, ctx, sqlDB)
@@ -81,6 +117,12 @@ func TestDataBranchPick(t *testing.T) {
 
 			t.Log("pick with mixed INSERT + UPDATE + DELETE in source")
 			runPickMixedOperations(t, ctx, sqlDB)
+
+			t.Log("pick rejects destination snapshots")
+			runPickRejectDstSnapshot(t, ctx, sqlDB)
+
+			t.Log("pick rejects explicit transactions")
+			runPickRejectExplicitTransaction(t, ctx, sqlDB)
 		})
 }
 
@@ -324,6 +366,212 @@ func runPickConflictFail(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	require.Equal(t, 999, b)
 }
 
+func runPickConflictSkipUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
+
+	var b int
+	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
+	require.Equal(t, 999, b)
+}
+
+func runPickConflictAcceptUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
+
+	var b int
+	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
+	require.Equal(t, 111, b)
+}
+
+func runPickConflictFailUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into dst keys(1) when conflict fail")
+	require.Contains(t, strings.ToLower(errMsg), "conflict")
+
+	var b int
+	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
+	require.Equal(t, 999, b)
+}
+
+// runPickConflictSkipUpdateDelete: src updates a row while dst deletes it.
+func runPickConflictSkipUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "delete from dst where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
+
+	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
+}
+
+func runPickConflictAcceptUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "delete from dst where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
+
+	require.Equal(t, 1, queryRowCount(t, ctx, db, "select count(*) from dst where a=1 and b=111"))
+}
+
+// runPickConflictFailUpdateDelete: update/delete conflicts must not degrade to ACCEPT.
+func runPickConflictFailUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
+	execSQLDB(t, ctx, db, "delete from dst where a=1")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into dst keys(1) when conflict fail")
+	require.Contains(t, strings.ToLower(errMsg), "conflict")
+	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
+}
+
+func runPickConflictSkipDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "delete from src where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
+
+	var b int
+	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
+	require.Equal(t, 999, b)
+}
+
+func runPickConflictAcceptDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "delete from src where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
+
+	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
+}
+
+func runPickConflictFailDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "data branch create table dst from base")
+
+	execSQLDB(t, ctx, db, "delete from src where a=1")
+	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into dst keys(1) when conflict fail")
+	require.Contains(t, strings.ToLower(errMsg), "conflict")
+
+	var b int
+	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
+	require.Equal(t, 999, b)
+}
+
 // runPickSubqueryKeys: use a SELECT subquery to specify which PKs to pick.
 func runPickSubqueryKeys(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
@@ -354,6 +602,82 @@ func runPickSubqueryKeys(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	var b int
 	require.NoError(t, db.QueryRowContext(ctx, "select b from base where a=15").Scan(&b))
 	require.Equal(t, 150, b)
+}
+
+// runPickSubqueryKeyCoercion verifies subquery outputs are coerced to PK types.
+func runPickSubqueryKeyCoercion(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a bigint primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "insert into src values (10,100),(20,200)")
+	execSQLDB(t, ctx, db, "create table pick_keys (k int)")
+	execSQLDB(t, ctx, db, "insert into pick_keys values (10),(20)")
+	execSQLDB(t, ctx, db,
+		"data branch pick src into base keys(select k from pick_keys order by k)")
+
+	pks := queryIntColumn(t, ctx, db, "select cast(a as signed) from base order by a")
+	require.Equal(t, []int{1, 10, 20}, pks)
+
+	execSQLDB(t, ctx, db, "create table cbase (a bigint, b varchar(16), v int, primary key(a, b))")
+	execSQLDB(t, ctx, db, "insert into cbase values (1,'k1',10)")
+	execSQLDB(t, ctx, db, "data branch create table csrc from cbase")
+	execSQLDB(t, ctx, db, "insert into csrc values (10,'x',100),(20,'y',200)")
+	execSQLDB(t, ctx, db, "create table ckeys (a int, b char(16))")
+	execSQLDB(t, ctx, db, "insert into ckeys values (10,'x'),(20,'y')")
+	execSQLDB(t, ctx, db,
+		"data branch pick csrc into cbase keys(select a, b from ckeys order by a, b)")
+
+	require.Equal(t, 1, queryRowCount(t, ctx, db, "select count(*) from cbase where a=10 and b='x' and v=100"))
+	require.Equal(t, 1, queryRowCount(t, ctx, db, "select count(*) from cbase where a=20 and b='y' and v=200"))
+}
+
+func runPickSubqueryRejectsNullKey(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "insert into src values (10,100)")
+	execSQLDB(t, ctx, db, "create table pick_keys (k int)")
+	execSQLDB(t, ctx, db, "insert into pick_keys values (10),(null)")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into base keys(select k from pick_keys order by k)")
+	require.Contains(t, strings.ToLower(errMsg), "cannot be null")
+	require.Equal(t, []int{1}, queryIntColumn(t, ctx, db, "select a from base order by a"))
+}
+
+func runPickSubqueryRejectsInvalidCoercion(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "insert into src values (10,100)")
+	execSQLDB(t, ctx, db, "create table pick_keys (k varchar(20))")
+	execSQLDB(t, ctx, db, "insert into pick_keys values ('oops')")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into base keys(select k from pick_keys)")
+	require.Contains(t, strings.ToLower(errMsg), "cannot be converted")
+	require.Equal(t, []int{1}, queryIntColumn(t, ctx, db, "select a from base order by a"))
 }
 
 // runPickLargeScale: 1000-row table, branch inserts 500 more, pick 50 specific.
@@ -515,4 +839,44 @@ func runPickMixedOperations(t *testing.T, parentCtx context.Context, db *sql.DB)
 	require.NoError(t, db.QueryRowContext(ctx, "select b, c from base where a=6").Scan(&b, &c))
 	require.Equal(t, 60, b)
 	require.Equal(t, "inserted", c)
+}
+
+func runPickRejectDstSnapshot(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "create table dst like base")
+
+	errMsg := execExpectError(t, ctx, db,
+		"data branch pick src into dst{snapshot=sp_dst} keys(1)")
+	require.Contains(t, strings.ToLower(errMsg), "destination snapshot")
+	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst"))
+}
+
+func runPickRejectExplicitTransaction(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	defer cancel()
+
+	_, cleanup := pickDB(t, ctx, db)
+	defer cleanup()
+
+	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into base values (1,10)")
+	execSQLDB(t, ctx, db, "data branch create table src from base")
+	execSQLDB(t, ctx, db, "insert into src values (2,20)")
+
+	execSQLDB(t, ctx, db, "begin")
+	errMsg := execExpectError(t, ctx, db, "data branch pick src into base keys(2)")
+	require.Contains(t, strings.ToLower(errMsg), "explicit transactions")
+	execSQLDB(t, ctx, db, "rollback")
+
+	require.Equal(t, []int{1}, queryIntColumn(t, ctx, db, "select a from base order by a"))
 }

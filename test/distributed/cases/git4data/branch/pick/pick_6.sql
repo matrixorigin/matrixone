@@ -90,7 +90,7 @@ create table t2 like t1;
 insert into t2 values (1,'a'),(2,'b'),(4,'d'),(5,'e');
 create snapshot sp2 for table test t2;
 
--- pick pk=4 from t2 into t1
+-- destination snapshots are rejected because PICK always writes the live table
 data branch pick t2{snapshot="sp2"} into t1{snapshot="sp1"} keys(4);
 select * from t1 order by a asc;
 
@@ -189,6 +189,26 @@ select * from t2 order by a;
 
 select count(*) from t2;
 -- expect: 6
+
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 9: explicit transactions are rejected
+-- ----------------------------------------------------------------
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1);
+
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,1),(2,2);
+
+begin;
+data branch pick t2 into t1 keys(2) when conflict accept;
+rollback;
+
+select * from t1 order by a;
+-- expect: unchanged, only (1,1)
 
 drop table t1;
 drop table t2;

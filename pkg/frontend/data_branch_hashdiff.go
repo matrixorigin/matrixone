@@ -726,6 +726,7 @@ func hashDiffIfHasLCA(
 
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
+		var pickConflictBat *batch.Batch
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
@@ -740,6 +741,17 @@ func hashDiffIfHasLCA(
 			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
+		}
+
+		appendPickConflict := func(baseWrapped batchWithKind, rowIdx int) error {
+			if !copt.preservePickConflicts || copt.conflictOpt == nil ||
+				copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT {
+				return nil
+			}
+			if pickConflictBat == nil {
+				pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			}
+			return pickConflictBat.UnionOne(baseWrapped.batch, int64(rowIdx), ses.proc.Mp())
 		}
 
 		checkConflict := func(tarWrapped, baseWrapped batchWithKind) (sels1, sels2 []int64, err3 error) {
@@ -778,6 +790,25 @@ func hashDiffIfHasLCA(
 						i++
 						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT {
+						if tarWrapped.kind == diffDelete &&
+							baseWrapped.kind == diffDelete &&
+							!tarWrapped.fromUpdate && !baseWrapped.fromUpdate {
+							if cmp, err3 = compareRowInWrappedBatches(
+								ctx, ses, tblStuff, i, j, true,
+								tarWrapped, baseWrapped,
+							); err3 != nil {
+								return
+							} else if cmp == 0 {
+								sels1 = append(sels1, int64(i))
+								sels2 = append(sels2, int64(j))
+								i++
+								j++
+								continue
+							}
+						}
+						if err3 = appendPickConflict(baseWrapped, j); err3 != nil {
+							return
+						}
 						// only keep the rows from tar
 						sels2 = append(sels2, int64(j))
 						i++
@@ -877,6 +908,19 @@ func hashDiffIfHasLCA(
 		if wrapped.batch.RowCount() == 0 {
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			return
+		}
+
+		if pickConflictBat != nil {
+			if stop, e := emitBatch(emit, batchWithKind{
+				batch: pickConflictBat,
+				kind:  diffDelete,
+				name:  tblStuff.baseRel.GetTableName(),
+				side:  diffSideBase,
+			}, false, tblStuff.retPool); e != nil {
+				return e
+			} else if stop {
+				return nil
+			}
 		}
 
 		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
@@ -1251,10 +1295,11 @@ func findDeleteAndUpdateBat(
 						if updateDeleteBat != nil {
 							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
 							if err2 = send(batchWithKind{
-								name:  tblName,
-								side:  side,
-								batch: updateDeleteBat,
-								kind:  diffDelete,
+								name:       tblName,
+								side:       side,
+								fromUpdate: true,
+								batch:      updateDeleteBat,
+								kind:       diffDelete,
 							}); err2 != nil {
 								return err2
 							}

@@ -95,9 +95,9 @@ drop table t1;
 drop table t2;
 
 -- ----------------------------------------------------------------
--- case 4 (scenario f): src has pk, dst deleted pk → re-insert
--- Setup: LCA has pk=1,2,3.  dst deletes pk=2.  src updates pk=2.
--- PICK keys(2) should re-insert pk=2 with src's value.
+-- case 4 (scenario f): src has pk, dst deleted pk → ACCEPT re-inserts
+-- Setup: LCA has pk=1,2,3. dst deletes pk=2. src updates pk=2.
+-- Default/FAIL treats this as a conflict; ACCEPT re-inserts pk=2 with src's value.
 -- ----------------------------------------------------------------
 create table t0 (a int, b int, primary key(a));
 insert into t0 values (1,1),(2,2),(3,3);
@@ -113,13 +113,10 @@ update t2 set b = 200 where a = 2;
 -- before pick: t1 has pk=1,3 (pk=2 deleted)
 select * from t1 order by a asc;
 
--- pick keys(2): src has pk=2 with b=200, dst deleted it
--- In state-based PICK, this is NOT a conflict: source says pk=2 should be
--- (2,200), so we re-insert it into dst. No conflict detection fires because
--- only one side (target/src) has a live data change for pk=2.
-data branch pick t2 into t1 keys(2);
+data branch pick t2 into t1 keys(2) when conflict fail;
+data branch pick t2 into t1 keys(2) when conflict accept;
 
--- after pick: t1 should have pk=1,2,3 with pk=2 having b=200 (re-inserted)
+-- after ACCEPT: t1 should have pk=1,2,3 with pk=2 having b=200 (re-inserted)
 select * from t1 order by a asc;
 
 drop table t0;
