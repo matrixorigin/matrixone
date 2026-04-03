@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
@@ -318,11 +318,11 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 	defer mp.Free(nil)
 
 	tests := []struct {
-		name    string
-		pkType  types.Type // explicit type (if Oid==0, uses oid.ToType())
-		oid     types.T
-		input   string
-		verify  func(*vector.Vector)
+		name   string
+		pkType types.Type // explicit type (if Oid==0, uses oid.ToType())
+		oid    types.T
+		input  string
+		verify func(*vector.Vector)
 	}{
 		{"int8", types.Type{}, types.T_int8, "42", func(v *vector.Vector) {
 			require.Equal(t, int8(42), vector.GetFixedAtNoTypeCheck[int8](v, 0))
