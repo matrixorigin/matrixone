@@ -551,6 +551,138 @@ func newTransactionWithActivePKTableForTest(
 	return txn
 }
 
+// TestCheckPKDupSkipsNulls verifies that checkPKDup correctly skips NULL
+// values per SQL standard (NULL != NULL), preventing false duplicate errors.
+func TestCheckPKDupSkipsNulls(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	t.Run("int64_all_nulls_no_dup", func(t *testing.T) {
+		// All NULLs should never produce a duplicate
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.False(t, dup, "all-NULL rows must not report duplicate")
+		require.Empty(t, m, "NULL rows must not be added to the map")
+		pk.Free(mp)
+	})
+
+	t.Run("int64_mixed_nulls_and_values", func(t *testing.T) {
+		// Two NULLs + two distinct values: no duplicate
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL
+		require.NoError(t, vector.AppendFixed(pk, int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 4)
+		require.False(t, dup, "NULLs should be skipped, 1 and 2 are distinct")
+		require.Len(t, m, 2, "only non-NULL values should be in the map")
+		pk.Free(mp)
+	})
+
+	t.Run("int64_real_dup_among_nulls", func(t *testing.T) {
+		// Real duplicate among NULLs should still be caught
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL
+		require.NoError(t, vector.AppendFixed(pk, int64(1), false, mp)) // dup!
+
+		m := make(map[any]bool)
+		dup, entry := checkPKDup(m, pk, 0, 3)
+		require.True(t, dup, "real duplicate 1 must be caught")
+		require.Contains(t, entry, "1")
+		pk.Free(mp)
+	})
+
+	t.Run("varchar_nulls_no_dup", func(t *testing.T) {
+		// String type NULLs should be skipped
+		pk := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(pk, []byte("hello"), false, mp))
+		require.NoError(t, vector.AppendBytes(pk, nil, true, mp)) // NULL
+		require.NoError(t, vector.AppendBytes(pk, nil, true, mp)) // NULL
+		require.NoError(t, vector.AppendBytes(pk, []byte("world"), false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 4)
+		require.False(t, dup, "NULLs should be skipped for varchar")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+
+	t.Run("varchar_null_empty_string_no_collision", func(t *testing.T) {
+		// NULL and empty string "" are different: NULL is skipped, "" is a value
+		pk := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(pk, nil, true, mp))       // NULL
+		require.NoError(t, vector.AppendBytes(pk, []byte(""), false, mp)) // empty string
+		require.NoError(t, vector.AppendBytes(pk, nil, true, mp))       // NULL
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.False(t, dup, "NULL and empty string must not collide")
+		require.Len(t, m, 1, "only the empty string should be in the map")
+		pk.Free(mp)
+	})
+
+	t.Run("partial_range_with_nulls", func(t *testing.T) {
+		// Test start/count range with NULLs
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pk, int64(10), false, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL at pos 1
+		require.NoError(t, vector.AppendFixed(pk, int64(20), false, mp))
+		require.NoError(t, vector.AppendFixed(pk, int64(0), true, mp))  // NULL at pos 3
+
+		// Check only range [1,3) — NULL at 1, value 20 at 2
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 1, 2)
+		require.False(t, dup)
+		require.Len(t, m, 1, "only pos 2 (value 20) should be in map")
+		pk.Free(mp)
+	})
+
+	t.Run("array_float32_nulls", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, vector.AppendArray(pk, []float32{1.0, 2.0}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp)) // NULL
+		require.NoError(t, vector.AppendArray(pk, []float32{1.0, 2.0}, false, mp)) // dup!
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.True(t, dup, "real duplicate array should be caught")
+		pk.Free(mp)
+	})
+
+	t.Run("array_float32_all_nulls", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp))
+		require.NoError(t, vector.AppendArray(pk, []float32{0}, true, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.False(t, dup, "all-NULL arrays must not report duplicate")
+		require.Empty(t, m)
+		pk.Free(mp)
+	})
+
+	t.Run("array_float64_nulls", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_float64.ToType())
+		require.NoError(t, vector.AppendArray(pk, []float64{1.0}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []float64{0}, true, mp)) // NULL
+		require.NoError(t, vector.AppendArray(pk, []float64{2.0}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.False(t, dup, "NULLs should be skipped for float64 arrays")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+}
+
 func newInt64BatchForTest(
 	t *testing.T,
 	proc *process.Process,
