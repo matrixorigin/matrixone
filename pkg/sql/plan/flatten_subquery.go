@@ -129,12 +129,12 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
-	// The current pull-up-through-agg rewrite is not semantics-preserving for
-	// scalar aggregate subqueries with non-equality correlated predicates.
-	// Pulling those predicates above AGG can force inner expressions into
-	// GROUP BY and produce multiple rows for one outer row.
+	// When a scalar aggregate subquery has non-equality correlated predicates,
+	// pullupThroughAgg forces inner expressions into GROUP BY, producing
+	// multiple rows per outer row and breaking SINGLE JOIN semantics.
+	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(), "aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
+		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx)
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
@@ -444,6 +444,217 @@ func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+// flattenScalarSubqueryWithNonEqAgg handles scalar subqueries that have
+// aggregation with non-equality correlated predicates.
+//
+// After pullupThroughAgg, inner expressions from non-eq predicates are added
+// to GROUP BY, causing the AGG to produce multiple rows per outer row.
+// Instead of using SINGLE JOIN (which would fail), we:
+//  1. Bypass the inner AGG node
+//  2. Use LEFT JOIN with all predicates applied directly
+//  3. Add a new AGG on top that groups by outer columns
+//
+// This way the aggregate function operates on all matching raw rows,
+// producing the correct result.
+func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
+	nodeID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext,
+) (int32, *plan.Expr, error) {
+	// Find the AGG node in the subquery plan
+	aggNode := builder.findAggNodeBelow(subID)
+	if aggNode == nil {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregation with non equal predicate in scalar subquery will be supported in future version")
+	}
+
+	groupTag := aggNode.BindingTags[0]
+	innerID := aggNode.Children[0]
+
+	// pullupThroughProj may have rewritten predicates to reference the
+	// PROJECT tag.  Unwind PROJECT first, then AGG, so that predicates
+	// end up referencing columns from the scan below AGG.
+	projNode := builder.qry.Nodes[subID]
+	if projNode.NodeType == plan.Node_PROJECT && len(projNode.BindingTags) > 0 {
+		projTag := projNode.BindingTags[0]
+		for i, pred := range preds {
+			preds[i] = replaceGroupTagRefs(pred, projTag, projNode.ProjectList)
+		}
+	}
+
+	// Replace groupTag column refs in predicates with the actual GroupBy
+	// expressions so they reference columns below the AGG (the scan).
+	for i, pred := range preds {
+		preds[i] = replaceGroupTagRefs(pred, groupTag, aggNode.GroupBy)
+	}
+
+	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
+	if len(filterPreds) > 0 {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"correlated columns in scalar subquery deeper than 1 level will be supported in future version")
+	}
+
+	// Collect outer columns for GROUP BY.
+	// Reuse the outer binding tag as the AGG's group tag so that existing
+	// column references to the outer table remain valid after the AGG.
+	if len(ctx.bindings) == 0 {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregation with non equal predicate in scalar subquery will be supported in future version")
+	}
+	var outerGroupBy []*plan.Expr
+	for _, binding := range ctx.bindings {
+		for i := range binding.cols {
+			outerGroupBy = append(outerGroupBy, &plan.Expr{
+				Typ:  *binding.types[i],
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: int32(i)}},
+			})
+		}
+	}
+	// Use the first outer binding's tag as groupTag so outer column refs
+	// (RelPos == binding.tag) resolve through the AGG node directly.
+	reuseGroupTag := ctx.bindings[0].tag
+
+	// Build the aggregate expressions — deep copy so we don't mutate the
+	// original AGG node.
+	aggExprs := make([]*plan.Expr, len(aggNode.AggList))
+	for i, agg := range aggNode.AggList {
+		aggExprs[i] = DeepCopyExpr(agg)
+	}
+
+	// LEFT JOIN produces a NULL row for non-matching outer rows.
+	// starcount/count(*) would count that NULL row as 1 instead of 0.
+	// Fix: replace starcount(const) with count(inner_col) so NULLs are
+	// skipped.  We pick the first column from the inner scan node.
+	for _, agg := range aggExprs {
+		if f, ok := agg.Expr.(*plan.Expr_F); ok && f.F.Func.ObjName == "starcount" {
+			innerCol := builder.getFirstColRef(innerID)
+			if innerCol == nil {
+				continue
+			}
+			argType := makeTypeByPlan2Expr(innerCol)
+			fGet, err := function.GetFunctionByName(builder.GetContext(), "count", []types.Type{argType})
+			if err != nil {
+				return 0, nil, err
+			}
+			f.F.Func.ObjName = "count"
+			f.F.Func.Obj = fGet.GetEncodedOverloadID()
+			f.F.Args = []*plan.Expr{innerCol}
+			retType := fGet.GetReturnType()
+			agg.Typ = makePlan2Type(&retType)
+		}
+	}
+
+	// LEFT JOIN outer with inner scan, all predicates as join conditions
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{nodeID, innerID},
+		JoinType: plan.Node_LEFT,
+		OnList:   joinPreds,
+		SpillMem: builder.joinSpillMem,
+	}, ctx)
+
+	// New AGG: group by outer columns, compute aggregates on raw inner rows
+	newAggTag := builder.genNewBindTag()
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{nodeID},
+		GroupBy:     outerGroupBy,
+		AggList:     aggExprs,
+		BindingTags: []int32{reuseGroupTag, newAggTag},
+		SpillMem:    builder.aggSpillMem,
+	}, ctx)
+
+	retExpr := &plan.Expr{
+		Typ:  subCtx.results[0].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: newAggTag, ColPos: 0}},
+	}
+
+	// COUNT rewrite: LEFT JOIN produces NULLs for non-matching rows,
+	// COUNT should return 0 instead of NULL.
+	if builder.findAggrCount(aggExprs) {
+		argsType := []types.Type{makeTypeByPlan2Expr(retExpr)}
+		fGet, err := function.GetFunctionByName(builder.GetContext(), "isnull", argsType)
+		if err != nil {
+			return nodeID, retExpr, err
+		}
+		funcID, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
+		isNullExpr := &Expr{
+			Typ: makePlan2Type(&returnType),
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: getFunctionObjRef(funcID, "isnull"),
+				Args: []*Expr{retExpr},
+			}},
+		}
+		zeroExpr := makePlan2Int64ConstExprWithType(0)
+		argsType = []types.Type{
+			makeTypeByPlan2Expr(isNullExpr),
+			makeTypeByPlan2Expr(zeroExpr),
+			makeTypeByPlan2Expr(retExpr),
+		}
+		fGet, err = function.GetFunctionByName(builder.GetContext(), "case", argsType)
+		if err != nil {
+			return nodeID, retExpr, nil
+		}
+		funcID, returnType = fGet.GetEncodedOverloadID(), fGet.GetReturnType()
+		retExpr = &Expr{
+			Typ: makePlan2Type(&returnType),
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: getFunctionObjRef(funcID, "case"),
+				Args: []*Expr{isNullExpr, zeroExpr, DeepCopyExpr(retExpr)},
+			}},
+		}
+	}
+
+	return nodeID, retExpr, nil
+}
+
+// findAggNodeBelow walks down from nodeID through single-child nodes to find
+// the first AGG node.
+func (builder *QueryBuilder) findAggNodeBelow(nodeID int32) *plan.Node {
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_AGG {
+			return node
+		}
+		if len(node.Children) != 1 {
+			return nil
+		}
+		nodeID = node.Children[0]
+	}
+}
+
+// getFirstColRef returns a column reference to the first column of the
+// TABLE_SCAN node found at or below nodeID.
+func (builder *QueryBuilder) getFirstColRef(nodeID int32) *plan.Expr {
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && len(node.TableDef.Cols) > 0 {
+			return &plan.Expr{
+				Typ:  node.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: node.BindingTags[0], ColPos: 0}},
+			}
+		}
+		if len(node.Children) == 0 {
+			return nil
+		}
+		nodeID = node.Children[0]
+	}
+}
+
+// replaceGroupTagRefs replaces column references with RelPos == groupTag
+// with the corresponding GroupBy expression (deep-copied).
+func replaceGroupTagRefs(expr *plan.Expr, groupTag int32, groupBy []*plan.Expr) *plan.Expr {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == groupTag && int(e.Col.ColPos) < len(groupBy) {
+			return DeepCopyExpr(groupBy[e.Col.ColPos])
+		}
+	case *plan.Expr_F:
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceGroupTagRefs(arg, groupTag, groupBy)
+		}
+	}
+	return expr
 }
 
 func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindContext) (int32, []*plan.Expr, error) {
