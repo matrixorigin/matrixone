@@ -115,4 +115,25 @@ drop table t0;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 6: subquery keys must not contain NULL
+-- ----------------------------------------------------------------
+
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1);
+
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,1),(2,2),(3,3);
+
+create table pick_keys (k int);
+insert into pick_keys values (2),(null);
+
+data branch pick t2 into t1 keys(select k from pick_keys order by k);
+select * from t1 order by a asc;
+-- expect: unchanged because the statement is rejected
+
+drop table pick_keys;
+drop table t1;
+drop table t2;
+
 drop database test;

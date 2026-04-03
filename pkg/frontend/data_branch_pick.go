@@ -78,6 +78,9 @@ func handleBranchPick(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) (err error) {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return moerr.NewInternalError(execCtx.reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+	}
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
 			Opt: tree.CONFLICT_FAIL,
@@ -93,8 +96,83 @@ func handleBranchPick(
 		return moerr.NewInvalidInputNoCtx(
 			"BETWEEN SNAPSHOT and source table snapshot option cannot be used together")
 	}
+	if stmt.DstTable.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx(
+			"destination snapshot option is not supported for DATA BRANCH PICK")
+	}
+	if err = authenticatePickTablePrivileges(execCtx.reqCtx, ses, stmt); err != nil {
+		return err
+	}
 
 	return diffMergeAgency(ses, execCtx, stmt)
+}
+
+func authenticatePickTablePrivileges(ctx context.Context, ses *Session, stmt *tree.DataBranchPick) error {
+	if stmt == nil || getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() || ses.GetTenantInfo() == nil {
+		return nil
+	}
+
+	srcDB, srcTbl, err := resolvePickPrivilegeTableName(ses, stmt.SrcTable)
+	if err != nil {
+		return err
+	}
+	dstDB, dstTbl, err := resolvePickPrivilegeTableName(ses, stmt.DstTable)
+	if err != nil {
+		return err
+	}
+
+	if err = requirePickTablePrivilege(ctx, ses, srcDB, srcTbl, clusterTableSelect); err != nil {
+		return err
+	}
+	return requirePickTablePrivilege(ctx, ses, dstDB, dstTbl, clusterTableModify)
+}
+
+func resolvePickPrivilegeTableName(ses *Session, name tree.TableName) (string, string, error) {
+	dbName := name.SchemaName.String()
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := name.ObjectName.String()
+	if dbName == "" || tableName == "" {
+		return "", "", moerr.NewInternalErrorNoCtx("the base or target database cannot be empty")
+	}
+	return dbName, tableName, nil
+}
+
+func requirePickTablePrivilege(
+	ctx context.Context,
+	ses *Session,
+	dbName string,
+	tableName string,
+	clusterOp clusterTableOperationType,
+) error {
+	buildEntry := func(typ PrivilegeType) privilegeEntry {
+		entry := privilegeEntriesMap[typ]
+		entry.databaseName = dbName
+		entry.tableName = tableName
+		return entry
+	}
+
+	priv := &privilege{
+		kind:    privilegeKindGeneral,
+		objType: objectTypeTable,
+		entries: []privilegeEntry{
+			buildEntry(PrivilegeTypeTableAll),
+			buildEntry(PrivilegeTypeTableOwnership),
+		},
+		writeDatabaseAndTableDirectly: true,
+		isClusterTable:                isClusterTable(dbName, tableName),
+		clusterTableOperation:         clusterOp,
+	}
+
+	ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
+	return nil
 }
 
 // pickMergeDiffs is the consumer goroutine for PICK. It receives diff batches
@@ -509,7 +587,7 @@ func materializeValuesUnified(
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		if appendErr := appendExprToVec(vec, expr, pkType, mp); appendErr != nil {
+		if appendErr := appendExprToVec(vec, expr, pkType, ses.GetTimeZone(), mp); appendErr != nil {
 			vec.Free(mp)
 			return nil, appendErr
 		}
@@ -576,7 +654,7 @@ func materializeCompositeValuesUnified(
 		}
 		for i, elem := range tup.Exprs {
 			colType := tblStuff.def.colTypes[pkColIdxes[i]]
-			if appendErr := appendExprToVec(compVecs[i], elem, colType, mp); appendErr != nil {
+			if appendErr := appendExprToVec(compVecs[i], elem, colType, ses.GetTimeZone(), mp); appendErr != nil {
 				return nil, appendErr
 			}
 		}
@@ -608,6 +686,101 @@ func materializeCompositeValuesUnified(
 		pkFilter = buildPKFilterFromVec(encodedVec, pkType, tblStuff.def.pkSeqnum)
 	}
 	return pkFilter, nil
+}
+
+func formatPickKeyVectorValueAsString(ses *Session, vec *vector.Vector, rowIdx int) (string, error) {
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		if vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx) {
+			return "1", nil
+		}
+		return "0", nil
+	case types.T_bit:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), 10), nil
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int8](vec, rowIdx)), 10), nil
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int16](vec, rowIdx)), 10), nil
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtNoTypeCheck[int32](vec, rowIdx)), 10), nil
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtNoTypeCheck[int64](vec, rowIdx), 10), nil
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, rowIdx)), 10), nil
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, rowIdx)), 10), nil
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, rowIdx)), 10), nil
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), 10), nil
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx)), 'g', -1, 32), nil
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), 'g', -1, 64), nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+		return string(vec.GetBytesAt(rowIdx)), nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_date:
+		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx).String(), nil
+	case types.T_datetime:
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx).String(), nil
+	case types.T_timestamp:
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIdx).String2(ses.GetTimeZone(), vec.GetType().Scale), nil
+	case types.T_time:
+		return vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIdx).String(), nil
+	case types.T_uuid:
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx).String(), nil
+	case types.T_enum:
+		return strconv.FormatUint(uint64(vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx)), 10), nil
+	default:
+		return "", moerr.NewInvalidInputNoCtxf(
+			"KEYS subquery column type %s is not supported for primary-key coercion",
+			vec.GetType().Oid.String(),
+		)
+	}
+}
+
+func coercePickKeyVectorToType(
+	ses *Session,
+	srcVec *vector.Vector,
+	dstType types.Type,
+	mp *mpool.MPool,
+) (*vector.Vector, bool, error) {
+	if srcVec == nil {
+		return nil, false, moerr.NewInvalidInputNoCtx("KEYS subquery returned a nil vector")
+	}
+	if srcVec.GetNulls() != nil && !srcVec.GetNulls().IsEmpty() {
+		for rowIdx := 0; rowIdx < srcVec.Length(); rowIdx++ {
+			if srcVec.GetNulls().Contains(uint64(rowIdx)) {
+				return nil, false, moerr.NewInvalidInputNoCtx(
+					"KEYS subquery returned NULL, but DATA BRANCH PICK primary keys cannot be NULL",
+				)
+			}
+		}
+	}
+	if *srcVec.GetType() == dstType {
+		return srcVec, false, nil
+	}
+
+	dstVec := vector.NewVec(dstType)
+	for rowIdx := 0; rowIdx < srcVec.Length(); rowIdx++ {
+		s, err := formatPickKeyVectorValueAsString(ses, srcVec, rowIdx)
+		if err != nil {
+			dstVec.Free(mp)
+			return nil, false, err
+		}
+		if err = appendNumericStringToVec(dstVec, s, dstType, ses.GetTimeZone(), mp); err != nil {
+			dstVec.Free(mp)
+			return nil, false, moerr.NewInvalidInputNoCtxf(
+				"KEYS subquery column type %s cannot be converted to primary key type %s: %v",
+				srcVec.GetType().String(), dstType.String(), err,
+			)
+		}
+	}
+	return dstVec, true, nil
 }
 
 // materializeSubqueryUnified handles KEYS (SELECT ...):
@@ -717,28 +890,60 @@ func materializeSubqueryUnified(
 						bat.VectorCount())
 				}
 
-				var pkVec *vector.Vector
+				var (
+					pkVec   *vector.Vector
+					ownedPK bool
+				)
 				if isComposite {
-					// Encode component columns into __mo_cpkey_col via serial().
+					// Coerce component columns to the exact PK types before
+					// serial() so BranchHashmap probing uses the same key types
+					// as the source table batches.
 					compVecs := make([]*vector.Vector, nPKCols)
+					ownedCompVecs := make([]bool, nPKCols)
 					for i := 0; i < nPKCols; i++ {
-						compVecs[i] = bat.Vecs[i]
+						compVecs[i], ownedCompVecs[i], err = coercePickKeyVectorToType(
+							ses,
+							bat.Vecs[i],
+							tblStuff.def.colTypes[tblStuff.def.pkColIdxes[i]],
+							mp,
+						)
+						if err != nil {
+							sqlRet.Close()
+							for j, owned := range ownedCompVecs {
+								if owned && compVecs[j] != nil {
+									compVecs[j].Free(mp)
+								}
+							}
+							return nil, err
+						}
 					}
 					pkVec, err = function.RunFunctionDirectly(
 						ses.proc, function.SerialFunctionEncodeID, compVecs, bat.RowCount())
+					for i, owned := range ownedCompVecs {
+						if owned && compVecs[i] != nil {
+							compVecs[i].Free(mp)
+						}
+					}
 					if err != nil {
 						sqlRet.Close()
 						return nil, moerr.NewInternalErrorNoCtxf("failed to encode composite keys: %v", err)
 					}
-					defer pkVec.Free(mp)
+					ownedPK = true
 				} else {
-					pkVec = bat.Vecs[0]
+					pkVec, ownedPK, err = coercePickKeyVectorToType(ses, bat.Vecs[0], pkType, mp)
+					if err != nil {
+						sqlRet.Close()
+						return nil, err
+					}
 				}
 
 				// Put into hashmap.
 				if putErr := pickKeyHashmap.PutByVectors(
 					[]*vector.Vector{pkVec}, []int{0},
 				); putErr != nil {
+					if ownedPK {
+						pkVec.Free(mp)
+					}
 					sqlRet.Close()
 					return nil, putErr
 				}
@@ -748,6 +953,9 @@ func materializeSubqueryUnified(
 					for i := 0; i < pkVec.Length(); i++ {
 						sb.observe(pkVec.GetRawBytesAt(i))
 					}
+				}
+				if ownedPK {
+					pkVec.Free(mp)
 				}
 			}
 			sqlRet.Close()
@@ -1028,11 +1236,18 @@ func isNumericType(oid types.T) bool {
 	}
 }
 
+func normalizePickTimeZone(loc *time.Location) *time.Location {
+	if loc == nil {
+		return time.UTC
+	}
+	return loc
+}
+
 // appendExprToVec appends a literal AST expression value to a typed vector.
-func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *mpool.MPool) error {
+func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
 	switch e := expr.(type) {
 	case *tree.NumVal:
-		return appendNumValToVec(vec, e, pkType, mp)
+		return appendNumValToVec(vec, e, pkType, tz, mp)
 	case *tree.UnaryExpr:
 		num, ok := e.Expr.(*tree.NumVal)
 		if !ok {
@@ -1047,9 +1262,9 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
 		}
-		return appendNumericStringToVec(vec, s, pkType, mp)
+		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
-		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, mp)
+		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, tz, mp)
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
@@ -1058,11 +1273,11 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, mp *
 
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
-func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, mp *mpool.MPool) error {
-	return appendNumericStringToVec(vec, val.String(), pkType, mp)
+func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
 }
 
-func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, mp *mpool.MPool) error {
+func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
 	switch pkType.Oid {
 	case types.T_int8:
 		v, err := strconv.ParseInt(s, 10, 8)
@@ -1151,7 +1366,7 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 		}
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_timestamp:
-		v, err := types.ParseTimestamp(time.UTC, s, pkType.Scale)
+		v, err := types.ParseTimestamp(normalizePickTimeZone(tz), s, pkType.Scale)
 		if err != nil {
 			return err
 		}
@@ -1168,6 +1383,12 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_enum:
+		v, err := strconv.ParseUint(s, 10, 16)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, types.Enum(v), false, mp)
 	default:
 		// For other types (decimal, date, etc.), skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported PK type for engine filter: %s", pkType.Oid.String())
@@ -1178,7 +1399,7 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, m
 // For varlen types (varchar, char, text, blob) it appends raw bytes directly.
 // For fixed-width types (date, datetime, timestamp, time, uuid) it parses the
 // string into the correct typed value before appending.
-func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, mp *mpool.MPool) error {
+func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
 	switch pkType.Oid {
 	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
 		return vector.AppendBytes(vec, []byte(s), false, mp)
@@ -1195,7 +1416,7 @@ func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, mp *mpoo
 		}
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_timestamp:
-		v, err := types.ParseTimestamp(time.UTC, s, pkType.Scale)
+		v, err := types.ParseTimestamp(normalizePickTimeZone(tz), s, pkType.Scale)
 		if err != nil {
 			return err
 		}

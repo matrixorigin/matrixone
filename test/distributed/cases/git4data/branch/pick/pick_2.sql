@@ -128,15 +128,69 @@ update t1 set b = a * 10 where a % 2 = 0;
 update t2 set b = a * 100 where a % 3 = 0;
 insert into t2 values (21, 21), (22, 22), (23, 23);
 
--- pk=6,12,18: both sides updated — source wins (update conflicts not detected)
+-- pk=6,12,18: both sides updated — SKIP keeps t1's values
 -- pk=21,22,23: new inserts from t2
 data branch pick t2 into t1 keys(6, 12, 18, 21, 22, 23) when conflict skip;
 select * from t1 where a in (6, 12, 18, 21, 22, 23) order by a asc;
--- expect: 6→600, 12→1200, 18→1800 (src wins), 21→21, 22→22, 23→23
+-- expect: 6→60, 12→120, 18→180, 21→21, 22→22, 23→23
 
 data branch pick t2 into t1 keys(6) when conflict accept;
 select * from t1 where a = 6;
--- expect: (6, 600) — already t2's value
+-- expect: (6, 600) — ACCEPT takes t2's value
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 6: src UPDATE vs dst DELETE
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,10),(2,20);
+
+data branch create table t1 from t0;
+delete from t1 where a = 1;
+
+data branch create table t2 from t0;
+update t2 set b = 111 where a = 1;
+
+data branch pick t2 into t1 keys(1) when conflict fail;
+
+data branch pick t2 into t1 keys(1) when conflict skip;
+select count(*) from t1 where a = 1;
+-- expect: 0
+
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 where a = 1;
+-- expect: (1,111)
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- ----------------------------------------------------------------
+-- case 7: src DELETE vs dst UPDATE
+-- ----------------------------------------------------------------
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,10),(2,20);
+
+data branch create table t1 from t0;
+update t1 set b = 999 where a = 1;
+
+data branch create table t2 from t0;
+delete from t2 where a = 1;
+
+data branch pick t2 into t1 keys(1) when conflict fail;
+
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 where a = 1;
+-- expect: (1,999)
+
+data branch pick t2 into t1 keys(1) when conflict accept;
+select count(*) from t1 where a = 1;
+-- expect: 0
 
 drop table t0;
 drop table t1;

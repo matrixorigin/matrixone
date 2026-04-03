@@ -123,10 +123,11 @@ type tableStuff struct {
 }
 
 type batchWithKind struct {
-	name  string
-	kind  string
-	side  int
-	batch *batch.Batch
+	name       string
+	kind       string
+	side       int
+	fromUpdate bool
+	batch      *batch.Batch
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)
@@ -147,7 +148,8 @@ type retBatchList struct {
 }
 
 type compositeOption struct {
-	conflictOpt  *tree.ConflictOpt
-	outputSQL    bool
-	expandUpdate bool
+	conflictOpt           *tree.ConflictOpt
+	outputSQL             bool
+	expandUpdate          bool
+	preservePickConflicts bool
 }

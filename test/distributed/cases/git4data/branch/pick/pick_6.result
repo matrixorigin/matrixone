@@ -76,12 +76,12 @@ create table t2 like t1;
 insert into t2 values (1,'a'),(2,'b'),(4,'d'),(5,'e');
 create snapshot sp2 for table test t2;
 data branch pick t2{snapshot="sp2"} into t1{snapshot="sp1"} keys(4);
+invalid input: destination snapshot option is not supported for DATA BRANCH PICK
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
 1  ¦  a  𝄀
 2  ¦  b  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+3  ¦  c
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;
@@ -150,6 +150,19 @@ select * from t2 order by a;
 select count(*) from t2;
 ➤ count(*)[-5,64,0]  𝄀
 6
+drop table t1;
+drop table t2;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1);
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,1),(2,2);
+begin;
+data branch pick t2 into t1 keys(2) when conflict accept;
+internal error: DATA BRANCH PICK is not supported in explicit transactions
+rollback;
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
 drop table t1;
 drop table t2;
 drop database test;

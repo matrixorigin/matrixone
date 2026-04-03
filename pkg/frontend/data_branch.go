@@ -650,11 +650,12 @@ func diffMergeAgency(
 		}
 	} else {
 		// Always use ACCEPT at hashDiff level for PICK so that conflicts on
-		// non-picked keys do not abort the operation.  The user's actual
-		// conflict choice (FAIL/SKIP/ACCEPT) is enforced in the consumer
-		// (pickMergeDiffs), where only picked-key conflicts are considered.
+		// non-picked keys do not abort the operation. The user's actual
+		// conflict choice (FAIL/SKIP/ACCEPT) is enforced in the PICK pipeline
+		// via synthetic base-delete conflict markers plus the consumer logic.
 		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
 		copt.expandUpdate = true
+		copt.preservePickConflicts = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
 		); err != nil {

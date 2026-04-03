@@ -68,7 +68,9 @@ select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1  𝄀
 3  ¦  3
-data branch pick t2 into t1 keys(2);
+data branch pick t2 into t1 keys(2) when conflict fail;
+internal error: conflict: t2 INSERT and t1 INSERT on pk(2) with different values
+data branch pick t2 into t1 keys(2) when conflict accept;
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1  𝄀

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -385,7 +386,7 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 			vec := vector.NewVec(pkType)
 			defer vec.Free(mp)
 
-			err := appendNumericStringToVec(vec, tt.input, pkType, mp)
+			err := appendNumericStringToVec(vec, tt.input, pkType, time.UTC, mp)
 			require.NoError(t, err)
 			require.Equal(t, 1, vec.Length())
 			tt.verify(vec)
@@ -402,7 +403,7 @@ func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	vec := vector.NewVec(pkType)
 	defer vec.Free(mp)
 
-	err = appendNumericStringToVec(vec, "123", pkType, mp)
+	err = appendNumericStringToVec(vec, "123", pkType, time.UTC, mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported PK type")
 }
@@ -416,7 +417,7 @@ func TestAppendNumericStringToVec_ParseError(t *testing.T) {
 	vec := vector.NewVec(pkType)
 	defer vec.Free(mp)
 
-	err = appendNumericStringToVec(vec, "not_a_number", pkType, mp)
+	err = appendNumericStringToVec(vec, "not_a_number", pkType, time.UTC, mp)
 	require.Error(t, err)
 }
 
@@ -430,7 +431,7 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	defer vec.Free(mp)
 
 	expr := tree.NewStrVal("test_value")
-	err = appendExprToVec(vec, expr, pkType, mp)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
@@ -447,7 +448,7 @@ func TestAppendExprToVec_UnaryMinus(t *testing.T) {
 
 	num := tree.NewNumVal[int64](42, "42", false, tree.P_int64)
 	expr := tree.NewUnaryExpr(tree.UNARY_MINUS, num)
-	err = appendExprToVec(vec, expr, pkType, mp)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, int32(-42), vector.GetFixedAtNoTypeCheck[int32](vec, 0))
@@ -464,7 +465,7 @@ func TestAppendExprToVec_UnaryPlus(t *testing.T) {
 
 	num := tree.NewNumVal[int64](99, "99", false, tree.P_int64)
 	expr := tree.NewUnaryExpr(tree.UNARY_PLUS, num)
-	err = appendExprToVec(vec, expr, pkType, mp)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
 	require.NoError(t, err)
 	require.Equal(t, int64(99), vector.GetFixedAtNoTypeCheck[int64](vec, 0))
 }
@@ -479,7 +480,7 @@ func TestAppendExprToVec_UnsupportedExpr(t *testing.T) {
 	defer vec.Free(mp)
 
 	expr := &tree.UnresolvedName{}
-	err = appendExprToVec(vec, expr, pkType, mp)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported expression type")
 }
@@ -908,11 +909,34 @@ func TestAppendStrValToVec_DateTypes(t *testing.T) {
 			defer vec.Free(mp)
 
 			// This used to panic with "unsafe slice cast" for fixed-width types.
-			err := appendStrValToVec(vec, tt.strVal, tt.pkType, mp)
+			err := appendStrValToVec(vec, tt.strVal, tt.pkType, time.UTC, mp)
 			require.NoError(t, err, "appendStrValToVec should not error for %s", tt.name)
 			require.Equal(t, 1, vec.Length(), "vector should have one element")
 		})
 	}
+}
+
+func TestAppendStrValToVec_TimestampUsesSessionTimeZone(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_timestamp, 0, 6)
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	loc := time.FixedZone("UTC+08", 8*60*60)
+	require.NoError(t, appendStrValToVec(vec, "2025-01-03 12:30:45", pkType, loc, mp))
+	require.Equal(t, 1, vec.Length())
+
+	got := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, 0)
+	want, err := types.ParseTimestamp(loc, "2025-01-03 12:30:45", pkType.Scale)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	utcWant, err := types.ParseTimestamp(time.UTC, "2025-01-03 12:30:45", pkType.Scale)
+	require.NoError(t, err)
+	require.NotEqual(t, utcWant, got)
 }
 
 // TestAppendStrValToVec_PrunesCorrectly verifies that date PK values
@@ -928,7 +952,7 @@ func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
 
 	// Add three dates via string literal parsing.
 	for _, s := range []string{"2025-01-01", "2025-06-15", "2025-12-31"} {
-		require.NoError(t, appendStrValToVec(vec, s, pkType, mp))
+		require.NoError(t, appendStrValToVec(vec, s, pkType, time.UTC, mp))
 	}
 	require.Equal(t, 3, vec.Length())
 
@@ -966,7 +990,42 @@ func TestAppendNumericStringToVec_DateAsNumber(t *testing.T) {
 	vec := vector.NewVec(pkType)
 	defer vec.Free(mp)
 
-	err = appendNumericStringToVec(vec, "20250103", pkType, mp)
+	err = appendNumericStringToVec(vec, "20250103", pkType, time.UTC, mp)
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
+}
+
+func TestCoercePickKeyVectorToType_RejectsNullEvenWhenTypeMatches(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	srcVec := vector.NewVec(types.T_int32.ToType())
+	defer srcVec.Free(mp)
+
+	require.NoError(t, vector.AppendFixed(srcVec, int32(10), false, mp))
+	require.NoError(t, vector.AppendFixed(srcVec, int32(0), true, mp))
+
+	coerced, owned, err := coercePickKeyVectorToType(nil, srcVec, types.T_int32.ToType(), mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot be NULL")
+	require.Nil(t, coerced)
+	require.False(t, owned)
+}
+
+func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	srcVec := vector.NewVec(types.T_json.ToType())
+	defer srcVec.Free(mp)
+
+	require.NoError(t, vector.AppendBytes(srcVec, []byte(`{"k":1}`), false, mp))
+
+	coerced, owned, err := coercePickKeyVectorToType(nil, srcVec, types.T_int32.ToType(), mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not supported")
+	require.Nil(t, coerced)
+	require.False(t, owned)
 }
