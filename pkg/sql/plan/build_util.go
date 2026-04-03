@@ -969,6 +969,85 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
+// genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
+// no other row references the PK values being replaced (parent→child safety).
+// These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
+func genPreCheckSqlsForReplaceFKSelfRefer(
+	ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+	stmt *tree.Replace,
+) ([]string, error) {
+	if stmt.Rows == nil {
+		return nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil
+	}
+
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(referCols) != 1 || len(fkCols) != 1 {
+			continue
+		}
+
+		// Build column name → position in the Replace column list
+		colNameToPos := make(map[string]int)
+		if len(stmt.Columns) > 0 {
+			for i, col := range stmt.Columns {
+				colNameToPos[string(col)] = i
+			}
+		} else {
+			pos := 0
+			for _, col := range cols {
+				if col.Name == catalog.Row_ID {
+					continue
+				}
+				colNameToPos[col.Name] = pos
+				pos++
+			}
+		}
+
+		refPos, ok := colNameToPos[referCols[0]]
+		if !ok {
+			continue
+		}
+
+		var valStrs []string
+		for _, row := range valuesClause.Rows {
+			if refPos >= len(row) {
+				continue
+			}
+			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
+		}
+		if len(valStrs) == 0 {
+			continue
+		}
+
+		inList := strings.Join(valStrs, ",")
+		tableClause := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from %s where `%s` in (%s) and `%s` is not null and `%s` not in (%s)",
+			tableClause, fkCols[0], inList, fkCols[0], referCols[0], inList,
+		)
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
 func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")

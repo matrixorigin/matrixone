@@ -136,6 +136,22 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 			return nil, err
 		}
 		query.DetectSqls = sqls
+
+		// Generate pre-check SQLs for parent→child safety (RESTRICT).
+		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
+			ctx.GetContext(),
+			tblInfo.objRef[0].SchemaName,
+			tblInfo.tableDefs[0].Name,
+			tblInfo.tableDefs[0].Cols,
+			tblInfo.tableDefs[0].Fkeys,
+			stmt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, sql := range preCheckSqls {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
+		}
 	}
 
 	return &Plan{
