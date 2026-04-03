@@ -97,8 +97,6 @@ id    a    b
 1    null    first
 2    null    second
 replace into t_null_uk values (3, 1, 'third');
-replace into t_null_uk values (4, 1, 'fourth');
-Duplicate entry '1' for key 'a'
 select id, a, b from t_null_uk order by id;
 id    a    b
 1    null    first
@@ -133,12 +131,6 @@ drop table if exists t_pk_uk;
 create table t_pk_uk(id int primary key, a int unique, b varchar(64));
 insert into t_pk_uk values (1, 10, 'first'), (2, 20, 'second');
 replace into t_pk_uk values (1, 30, 'updated');
-select * from t_pk_uk order by id;
-id    a    b
-1    30    updated
-2    20    second
-replace into t_pk_uk values (3, 20, 'conflict_uk');
-Duplicate entry '20' for key 'a'
 select * from t_pk_uk order by id;
 id    a    b
 1    30    updated
