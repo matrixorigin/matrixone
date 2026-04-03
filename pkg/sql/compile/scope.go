@@ -295,28 +295,30 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// caused the sequential path to be skipped for INSERT with UNIQUE KEY
 	// (compileLock sets hasMergeOp=true via newMergeScope), leading to the
 	// bitmap corruption bug.
+	//
+	// After running each non-connector scope, we must perform the full cleanup
+	// sequence: FreeOperator (op.Free → frees expression executors) followed by
+	// release (op.Release + reuse.Free[Scope]). This mirrors the normal cleanup
+	// order in Compile.FreeOperator → Compile.clear. The entry is then nil'd so
+	// that later walks of PreScopes skip it (nil checks exist throughout).
 	if c.IsTpQuery() {
-		var connectorScopes []*Scope
+		hasConnector := false
 		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			ps := s.PreScopes[i]
-			if ps.RootOp != nil && ps.RootOp.OpType() == vm.Connector {
-				connectorScopes = append(connectorScopes, ps)
-			} else {
+			if ps != nil && ps.RootOp != nil && ps.RootOp.OpType() == vm.Connector {
+				hasConnector = true
+			} else if ps != nil {
 				if err := ps.MergeRun(c); err != nil {
 					return err
 				}
-				// Release the scope now since it will be removed from
-				// s.PreScopes below and would otherwise leak in the
-				// reuse pool (release() only walks s.PreScopes).
+				ps.FreeOperator(c)
 				ps.release()
-				s.PreScopes[i] = nil // prevent double-free if a later MergeRun errors
+				s.PreScopes[i] = nil
 			}
 		}
-		if len(connectorScopes) == 0 {
+		if !hasConnector {
 			return s.ParallelRun(c)
 		}
-		// Replace PreScopes with only connector scopes for concurrent execution
-		s.PreScopes = connectorScopes
 	}
 
 	// Merge Run normally.
@@ -324,12 +326,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
 
 	// step 1.
+	concurrentPreScopes := 0
 	for i := range s.PreScopes {
 		scope := s.PreScopes[i]
 		if scope == nil {
 			continue
 		}
 
+		concurrentPreScopes++
 		wg.Add(1)
 
 		submitPreScope := ants.Submit(
@@ -382,7 +386,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		}
 	}()
 
-	preScopeCount := len(s.PreScopes)
+	preScopeCount := concurrentPreScopes
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
 
