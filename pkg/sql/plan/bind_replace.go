@@ -82,8 +82,39 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldColName2Idx := make(map[string][2]int32)
 
+	// For fake PK tables with no unique indexes (no PK, no UK), REPLACE behaves like INSERT.
+	// Skip the LEFT JOIN to avoid a cross join (empty join condition) that would incorrectly
+	// match and delete all existing rows.
+	hasUniqueIdx := false
+	if isFakePK {
+		for _, idxDef := range tableDef.Indexes {
+			if idxDef.Unique {
+				hasUniqueIdx = true
+				break
+			}
+		}
+	}
+
 	// get old columns from existing main table
-	{
+	if isFakePK && !hasUniqueIdx {
+		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
+		for _, col := range tableDef.Cols {
+			oldColName2Idx[tableDef.Name+"."+col.Name] = [2]int32{fullProjTag, int32(len(fullProjList))}
+			fullProjList = append(fullProjList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Isnull: true},
+				},
+			})
+		}
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: fullProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{fullProjTag},
+		}, bindCtx)
+	} else {
 		oldScanTag := builder.genNewBindTag()
 
 		builder.addNameByColRef(oldScanTag, tableDef)
