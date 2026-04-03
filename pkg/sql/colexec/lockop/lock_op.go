@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
-	"time"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -43,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"strings"
+	"time"
 )
 
 var (
