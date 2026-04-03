@@ -135,7 +135,7 @@ func TryExpand(nsp *Nulls, size int) {
 
 // Contains returns true if the integer is contained in the Nulls
 func (nsp *Nulls) Contains(row uint64) bool {
-	return nsp != nil && !nsp.np.EmptyByFlag() && nsp.np.Contains(row)
+	return nsp != nil && nsp.np.Contains(row)
 }
 
 func Contains(nsp *Nulls, row uint64) bool {
@@ -226,8 +226,13 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 	}
 
 	b.np.InitWithSize(int64(end + 1 - bias))
+
+	// Take a snapshot of the source bitmap to prevent reading inconsistent
+	// state when the source is being concurrently modified by a parallel
+	// Prepare call on the same operator chain.
+	snap := nsp.Clone()
 	for ; start < end; start++ {
-		if nsp.np.Contains(start) {
+		if snap.np.Contains(start) {
 			b.np.Add(start - bias)
 		}
 	}

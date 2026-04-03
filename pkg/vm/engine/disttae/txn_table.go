@@ -2513,8 +2513,16 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
-	keys.InplaceSort()
-	bytes, _ := keys.MarshalBinary()
+	// Clone the keys vector before sorting to avoid corrupting the caller's batch.
+	// InplaceSort reorders Varlena entries but does NOT reorder the null bitmap,
+	// which would misalign nulls with data if done on the original batch vector.
+	sortedKeys, err := keys.Dup(tbl.proc.Load().Mp())
+	if err != nil {
+		return false, err
+	}
+	defer sortedKeys.Free(tbl.proc.Load().Mp())
+	sortedKeys.InplaceSort()
+	bytes, _ := sortedKeys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
 		tbl.proc.Load().Ctx,
@@ -2637,27 +2645,58 @@ func tombstonePKExistsInRange(
 	return false, nil
 }
 
+// cloneNonNullKeys creates a deep copy of keysVector, filtering out NULL rows.
+// This serves two purposes:
+// 1. Avoids concurrent modification from pipeline operators reusing the batch
+// 2. Removes NULL entries whose Varlena slots may contain garbage from buffer reuse
+func cloneNonNullKeys(keysVector *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	if !keysVector.HasNull() {
+		return keysVector.Dup(mp)
+	}
+	cloned := vector.NewVec(*keysVector.GetType())
+	nsp := keysVector.GetNulls()
+	for i := 0; i < keysVector.Length(); i++ {
+		if !nsp.Contains(uint64(i)) {
+			if err := cloned.UnionOne(keysVector, int64(i), mp); err != nil {
+				cloned.Free(mp)
+				return nil, err
+			}
+		}
+	}
+	return cloned, nil
+}
+
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	batch *batch.Batch,
+	bat *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
-	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
+	mp := tbl.proc.Load().Mp()
+	clonedKeys, err := cloneNonNullKeys(bat.GetVector(pkIndex), mp)
+	if err != nil {
+		return false, err
+	}
+	defer clonedKeys.Free(mp)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, clonedKeys, false)
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	batch *batch.Batch,
+	bat *batch.Batch,
 	pkIndex int32,
 	_ int32,
 ) (bool, error) {
-	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
+	mp := tbl.proc.Load().Mp()
+	clonedKeys, err := cloneNonNullKeys(bat.GetVector(pkIndex), mp)
+	if err != nil {
+		return false, err
+	}
+	defer clonedKeys.Free(mp)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, clonedKeys, true)
 }
 
 func (tbl *txnTable) primaryKeysMayBeChanged(
@@ -2715,11 +2754,14 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 
 	//need check pk whether exist on S3 block.
 	v2.TxnPKMayBeChangedPersistedCounter.Inc()
-	return tbl.PKPersistedBetween(
+
+	changed, err2 := tbl.PKPersistedBetween(
 		snap,
 		from,
 		to,
 		keysVector, checkTombstone)
+
+	return changed, err2
 }
 
 func (tbl *txnTable) MergeObjects(

@@ -168,6 +168,15 @@ func (n *Bitmap) Len() int64 {
 	return n.len
 }
 
+// RecalculateCount recounts the number of set bits from the data array.
+// This is used to fix count after concurrent bitmap corruption.
+func (n *Bitmap) RecalculateCount() {
+	n.count = 0
+	for _, w := range n.data {
+		n.count += int64(bits.OnesCount64(w))
+	}
+}
+
 // Size return number of bytes in n.data
 // XXX WTF Note that this size is not the same as InitWithSize.
 func (n *Bitmap) Size() int {

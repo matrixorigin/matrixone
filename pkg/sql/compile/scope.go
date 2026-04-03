@@ -272,15 +272,32 @@ func (s *Scope) MergeRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
-	// specific case.
-	if c.IsTpQuery() && !c.hasMergeOp {
+	// For TP queries: run non-connector PreScopes sequentially first
+	// (e.g. hashbuild pipelines), then run connector PreScopes concurrently
+	// with the main pipeline.  This prevents concurrent access to shared
+	// operator chains – in particular the bitmap data-race that occurs when a
+	// DEDUP-JOIN build side shares Window sub-batch vectors via SetVector.
+	// The original code also required !c.hasMergeOp, but that condition
+	// caused the sequential path to be skipped for INSERT with UNIQUE KEY
+	// (compileLock sets hasMergeOp=true via newMergeScope), leading to the
+	// bitmap corruption bug.
+	if c.IsTpQuery() {
+		var connectorScopes []*Scope
 		for i := len(s.PreScopes) - 1; i >= 0; i-- {
-			err := s.PreScopes[i].MergeRun(c)
-			if err != nil {
-				return err
+			ps := s.PreScopes[i]
+			if ps.RootOp != nil && ps.RootOp.OpType() == vm.Connector {
+				connectorScopes = append(connectorScopes, ps)
+			} else {
+				if err := ps.MergeRun(c); err != nil {
+					return err
+				}
 			}
 		}
-		return s.ParallelRun(c)
+		if len(connectorScopes) == 0 {
+			return s.ParallelRun(c)
+		}
+		// Replace PreScopes with only connector scopes for concurrent execution
+		s.PreScopes = connectorScopes
 	}
 
 	// Merge Run normally.

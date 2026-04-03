@@ -67,6 +67,13 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
 	bat := valueScan.Batchs[0]
 
+	// Skip evalRowsetData if already done (prevents concurrent bitmap corruption
+	// when the same scope is started multiple times by nested MergeRun)
+	if valueScan.runningCtx.prepared {
+		return nil
+	}
+	valueScan.runningCtx.prepared = true
+
 	for i := 0; i < valueScan.ColCount; i++ {
 		exprList = valueScan.ExprExecLists[i]
 		if len(exprList) == 0 {
@@ -75,6 +82,14 @@ func (valueScan *ValueScan) makeValueScanBatch(proc *process.Process) (err error
 		vec := bat.Vecs[i]
 		if err := evalRowsetData(proc, valueScan.RowsetData.Cols[i].Data, vec, exprList); err != nil {
 			return err
+		}
+	}
+
+	// Fix bitmap count/data inconsistency that can occur when the same
+	// operator chain is started multiple times by nested MergeRun.
+	for _, vec := range bat.Vecs {
+		if vec != nil && !vec.IsConst() && vec.Length() > 0 {
+			vec.GetNulls().GetBitmap().RecalculateCount()
 		}
 	}
 

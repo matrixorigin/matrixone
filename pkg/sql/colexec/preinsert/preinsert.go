@@ -139,9 +139,8 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				return err
 			}
 		} else {
+			preInsert.ctr.canFreeVecIdx[idx] = true
 			if bat.Vecs[idx].IsConst() {
-				preInsert.ctr.canFreeVecIdx[idx] = true
-				//expland const vector
 				typ := bat.Vecs[idx].GetType()
 				tmpVec := vector.NewOffHeapVecWithType(*typ)
 				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
@@ -150,7 +149,11 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
 			} else {
-				preInsert.ctr.buf.SetVector(int32(idx), bat.Vecs[idx])
+				dupVec, dupErr := bat.Vecs[idx].Dup(proc.Mp())
+				if dupErr != nil {
+					return dupErr
+				}
+				preInsert.ctr.buf.Vecs[idx] = dupVec
 			}
 		}
 	}

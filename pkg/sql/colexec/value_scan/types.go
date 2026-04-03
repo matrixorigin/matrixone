@@ -41,9 +41,10 @@ type ValueScan struct {
 
 type container struct {
 	// nowIdx indicates which data should send to next operator now.
-	nowIdx int
-	start  int
-	end    int
+	nowIdx   int
+	start    int
+	end      int
+	prepared bool
 }
 
 func init() {
@@ -73,6 +74,7 @@ func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 	valueScan.runningCtx.nowIdx = 0
 	valueScan.runningCtx.start = 0
 	valueScan.runningCtx.end = 0
+	valueScan.runningCtx.prepared = false
 
 	//for prepare stmt, valuescan batch vecs do not need to reset, when next execute, prepare just copy data to vecs, length is same to last execute
 	for i := 0; i < valueScan.ColCount; i++ {

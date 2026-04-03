@@ -79,9 +79,6 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		}
 		// for projection operator, all Vectors of projectBat come from executor.Eval
 		// and will not be modified within projection operator. so we can used the result of executor.Eval directly.
-		// (if operator will modify vector/agg of batch, you should make a copy)
-		// however, it should be noted that since they directly come from executor.Eval
-		// these vectors cannot be free by batch.Clean directly and must be handed over executor.Free
 		projection.ctr.buf.Vecs[i] = vec
 	}
 	projection.maxAllocSize = max(projection.maxAllocSize, projection.ctr.buf.Size())

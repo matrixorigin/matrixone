@@ -346,6 +346,9 @@ func checkPKDup(
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		for i := start; i < start+count; i++ {
+			if pk.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
@@ -355,6 +358,9 @@ func checkPKDup(
 		}
 	case types.T_array_float32:
 		for i := start; i < start+count; i++ {
+			if pk.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
@@ -364,6 +370,9 @@ func checkPKDup(
 		}
 	case types.T_array_float64:
 		for i := start; i < start+count; i++ {
+			if pk.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)

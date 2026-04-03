@@ -1329,6 +1329,9 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.GetNulls().Contains(uint64(wi)) {
 		v.GetNulls().Set(uint64(vi))
 	} else {
+		// Ensure bitmap len covers vi so that Contains() works correctly
+		// for all rows. TryExpand is needed because Unset doesn't expand.
+		nulls.TryExpand(v.GetNulls(), int(vi)+1)
 		v.GetNulls().Unset(uint64(vi))
 	}
 	return nil
@@ -1343,7 +1346,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		u64Length := uint64(moreLength)
 
 		moreNp := more.GetBitmap()
-		if moreNp == nil || moreNp.EmptyByFlag() || moreLength == 0 {
+		if moreNp == nil || moreNp.IsEmpty() || moreLength == 0 {
 			return
 		}
 
@@ -1355,6 +1358,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		if moreNp.Contains(0) {
 			dst.Set(u64offset)
 		}
+		// Ensure bitmap len covers the full range so Contains() works
+		// correctly for all rows, even trailing non-null rows.
+		nulls.TryExpand(dst, oldLength+moreLength)
 	}
 
 	switch typ.Oid {
@@ -2085,30 +2091,25 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			var err error
 			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
 
-			bm := w.nsp.GetBitmap()
-			if bm != nil && !bm.EmptyByFlag() {
-				for i := range ws {
-					if w.gsp.Contains(uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
-					}
-					if bm.Contains(uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
-					} else {
-						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
-						if err != nil {
-							return err
-						}
-					}
-					v.length++
+			// Always use null-aware path to prevent losing null information
+			// when bitmap state is inconsistent due to concurrent access.
+			for i := range ws {
+				if w.gsp.Contains(uint64(i)) {
+					nulls.Add(&v.gsp, uint64(v.length))
 				}
-			} else {
-				for i := range ws {
+				if w.nsp.Contains(uint64(i)) {
+					nulls.Add(&v.nsp, uint64(v.length))
+				} else {
 					err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
 					if err != nil {
 						return err
 					}
-					v.length++
 				}
+				v.length++
+			}
+			// Ensure bitmap len covers all rows so Contains() works correctly
+			if v.nsp.Count() > 0 {
+				nulls.TryExpand(&v.nsp, v.length)
 			}
 			return nil
 		}
@@ -2647,7 +2648,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			for i, sel := range sels {
 				if w.gsp.Contains(uint64(sel)) {
 					nulls.Add(&v.gsp, uint64(oldLen+i))
@@ -2750,7 +2751,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
 
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
 					if w.gsp.Contains(uint64(offset) + uint64(i)) {
@@ -2785,6 +2786,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					v.length++
 				}
 			}
+			// Ensure bitmap len covers all rows after union
+			nulls.TryExpand(&v.nsp, v.length)
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2815,7 +2818,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		if !w.nsp.EmptyByFlag() {
+		if !w.nsp.IsEmpty() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
 					if w.gsp.Contains(uint64(offset) + uint64(i)) {
@@ -3425,6 +3428,11 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if isNull {
 		nulls.Add(&vec.nsp, uint64(length))
 	} else {
+		// Ensure bitmap len covers the new position so Contains() works
+		// correctly even when the last appended rows are non-null.
+		if vec.nsp.Count() > 0 {
+			nulls.TryExpand(&vec.nsp, vec.length)
+		}
 		var col []T
 		ToSliceNoTypeCheck(vec, &col)
 		col[length] = val

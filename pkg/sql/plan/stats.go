@@ -1812,13 +1812,11 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 
 	case plan.Node_DEDUP:
-		if node.OnDuplicateAction != plan.Node_FAIL || node.DedupJoinCtx != nil {
-			node.IsRightJoin = false
-		} else if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
-			node.IsRightJoin = false
-		} else if rightChild.Stats.Outcnt > 100 && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
-			node.IsRightJoin = true
-		}
+		// Disable right join optimization for DEDUP joins. The right join path
+		// swaps children and reverses probe/build sides, which can cause incorrect
+		// NULL handling during unique key duplicate detection — leading to false
+		// "Duplicate entry ''" errors on concurrent INSERT with NULL unique keys.
+		node.IsRightJoin = false
 	}
 
 	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {

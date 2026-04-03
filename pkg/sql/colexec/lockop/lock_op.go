@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -155,6 +154,7 @@ func callNonBlocking(
 	}
 
 	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+
 	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 		return result, err
 	}
@@ -243,6 +243,7 @@ func performLock(
 				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
 		)
+
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
 				zap.Uint64("table", target.tableID),
