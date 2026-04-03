@@ -93,15 +93,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
 
-		// Collect partition-by column references from all window specs.
-		// Only filters that exclusively reference partition-by columns can
-		// be safely pushed below the window node, because they merely
-		// eliminate entire partitions without changing row numbering.
+		// Collect only plain PARTITION BY column keys from all window specs.
+		// Filters can be safely pushed below the window node only when they
+		// exclusively reference columns that are themselves partition keys,
+		// because those filters eliminate entire partitions without changing
+		// row numbering. Column references nested inside arbitrary partition
+		// expressions (e.g. PARTITION BY a+b) are not equivalent to
+		// partition keys and must not be treated as pushdown-eligible.
 		partCols := make(map[[2]int32]bool)
 		for _, w := range node.WinSpecList {
 			if we := w.GetW(); we != nil {
 				for _, p := range we.PartitionBy {
-					collectColRefSet(p, partCols)
+					if col := p.GetCol(); col != nil {
+						partCols[[2]int32{col.RelPos, col.ColPos}] = true
+					}
 				}
 			}
 		}
@@ -739,24 +744,10 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
 }
 
-// collectColRefSet adds all (RelPos, ColPos) pairs from expr into the set.
-func collectColRefSet(expr *plan.Expr, set map[[2]int32]bool) {
-	if expr == nil {
-		return
-	}
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		set[[2]int32{e.Col.RelPos, e.Col.ColPos}] = true
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			collectColRefSet(arg, set)
-		}
-	}
-}
-
 // exprColRefsSubsetOf returns true when every column reference in expr
 // belongs to the given set. An expression with no column references
-// (e.g. a constant) is considered a subset.
+// (e.g. a constant) is considered a subset. Unhandled expression
+// variants conservatively return false to avoid incorrect pushdown.
 func exprColRefsSubsetOf(expr *plan.Expr, set map[[2]int32]bool) bool {
 	if expr == nil {
 		return true
@@ -770,6 +761,10 @@ func exprColRefsSubsetOf(expr *plan.Expr, set map[[2]int32]bool) bool {
 				return false
 			}
 		}
+		return true
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
+		return true
+	default:
+		return false
 	}
-	return true
 }
