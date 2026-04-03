@@ -103,6 +103,7 @@ func (r *correlatedApplyRunner) Start(input *batch.Batch, row int, proc *process
 	r.cleanOutput(proc)
 
 	parentCtx := colexec.WithCorrelatedBatches(proc.Ctx, []*batch.Batch{input}, row)
+	r.compile.proc.BuildPipelineContext(parentCtx)
 	for _, scope := range r.scopes {
 		if err := scope.Reset(r.compile); err != nil {
 			return err
