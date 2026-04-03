@@ -17,7 +17,9 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,6 +128,40 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func TestDupOperatorApplyWithoutTableFunction(t *testing.T) {
+	op := apply.NewArgument()
+	op.ApplyType = apply.CROSS
+
+	dup := dupOperator(op, 0, 1).(*apply.Apply)
+	require.Nil(t, dup.TableFunction)
+	require.Nil(t, dup.Runner)
+	require.Equal(t, op.ApplyType, dup.ApplyType)
+}
+
+func TestConstructApplyWithoutTableDef(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	right := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	node := &plan.Node{
+		ProjectList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			},
+		},
+	}
+
+	arg := constructApply(node, right, apply.CROSS, proc)
+	require.Len(t, arg.Typs, 1)
+	require.Equal(t, types.T_int64, arg.Typs[0].Oid)
 }
 
 func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {

@@ -608,7 +608,12 @@ n,
 FROM numbers
 )
 SELECT * FROM sales_with_numbers;
-aggregation with non equal predicate in SCALAR subquery  will be supported in future version is not yet implemented
+➤ n[-5,64,0]  ¦  cumulative_count[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
 /*+ {
 "rewrites" : {
 "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"

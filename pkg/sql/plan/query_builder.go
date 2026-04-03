@@ -1692,10 +1692,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		internalMap := make(map[[2]int32][2]int32)
 
 		right := builder.qry.Nodes[node.Children[1]]
-		rightTag := right.BindingTags[0]
-
-		for _, expr := range right.TblFuncExprList {
-			increaseRefCnt(expr, 1, colRefCnt)
+		isTableFunctionApply := right.NodeType == plan.Node_FUNCTION_SCAN
+		if isTableFunctionApply {
+			for _, expr := range right.TblFuncExprList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
 		}
 
 		leftID := node.Children[0]
@@ -1727,31 +1728,59 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		for i, col := range right.TableDef.Cols {
-			globalRef := [2]int32{rightTag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
-				continue
+		if isTableFunctionApply {
+			rightTag := right.BindingTags[0]
+			for i, col := range right.TableDef.Cols {
+				globalRef := [2]int32{rightTag, int32(i)}
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+
+				remapping.addColRef(globalRef)
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: col.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: int32(i),
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
 			}
 
-			remapping.addColRef(globalRef)
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(i),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-		}
-
-		for idx, expr := range right.TblFuncExprList {
-			increaseRefCnt(expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+			for idx, expr := range right.TblFuncExprList {
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = idx
+				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			rightID := node.Children[1]
+			rightRemapping, err := builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
 			if err != nil {
 				return nil, err
+			}
+			rightProjList := builder.qry.Nodes[rightID].ProjectList
+
+			for i, globalRef := range rightRemapping.localToGlobal {
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+
+				remapping.addColRef(globalRef)
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: rightProjList[i].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: int32(i),
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
 			}
 		}
 

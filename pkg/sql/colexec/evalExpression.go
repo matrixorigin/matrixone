@@ -135,6 +135,17 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}
 		return ce, nil
 
+	case *plan.Expr_Corr:
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		ce := NewCorrExpressionExecutor()
+		*ce = CorrExpressionExecutor{
+			mp:       proc.Mp(),
+			relIndex: int(t.Corr.RelPos),
+			colIndex: int(t.Corr.ColPos),
+			typ:      typ,
+		}
+		return ce, nil
+
 	case *plan.Expr_P:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
@@ -261,6 +272,16 @@ func (expr *ColumnExpressionExecutor) GetRelIndex() int {
 
 func (expr *ColumnExpressionExecutor) GetColIndex() int {
 	return expr.colIndex
+}
+
+type CorrExpressionExecutor struct {
+	mp       *mpool.MPool
+	relIndex int
+	colIndex int
+	typ      types.Type
+
+	resultVector *vector.Vector
+	setConstFunc func(v, w *vector.Vector, sel int64, length int) error
 }
 
 type ParamExpressionExecutor struct {
@@ -732,6 +753,65 @@ func (expr *ColumnExpressionExecutor) Free() {
 
 func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 	return true
+}
+
+func (expr *CorrExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	corrBatches, row, ok := GetCorrelatedBatches(proc.Ctx)
+	if !ok {
+		return nil, moerr.NewInternalError(proc.Ctx, "correlated column expression eval: missing outer row context")
+	}
+
+	relIndex := expr.relIndex
+	if len(corrBatches) == 1 {
+		relIndex = 0
+	}
+	if relIndex >= len(corrBatches) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"correlated column expression eval: relIndex %d out of range, batches length %d",
+			relIndex, len(corrBatches))
+	}
+	if row < 0 || row >= corrBatches[relIndex].RowCount() {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"correlated column expression eval: row %d out of range, batch row count %d",
+			row, corrBatches[relIndex].RowCount())
+	}
+
+	if expr.resultVector == nil {
+		expr.resultVector = vector.NewVec(expr.typ)
+		expr.setConstFunc = vector.GetConstSetFunction(expr.typ, expr.mp)
+	}
+
+	rowCount := 1
+	if len(batches) > 0 && batches[0] != nil && batches[0].RowCount() > 0 {
+		rowCount = batches[0].RowCount()
+	}
+	if err := expr.setConstFunc(expr.resultVector, corrBatches[relIndex].Vecs[expr.colIndex], int64(row), rowCount); err != nil {
+		return nil, err
+	}
+	return expr.resultVector, nil
+}
+
+func (expr *CorrExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	vec, err := expr.Eval(proc, batches, nil)
+	if err != nil {
+		return nil, err
+	}
+	return vec.Dup(proc.Mp())
+}
+
+func (expr *CorrExpressionExecutor) Free() {
+	if expr == nil {
+		return
+	}
+	if expr.resultVector != nil {
+		expr.resultVector.Free(expr.mp)
+		expr.resultVector = nil
+	}
+	reuse.Free[CorrExpressionExecutor](expr, nil)
+}
+
+func (expr *CorrExpressionExecutor) IsColumnExpr() bool {
+	return false
 }
 
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

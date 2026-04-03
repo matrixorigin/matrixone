@@ -520,14 +520,17 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.TableFunction = table_function.NewArgument()
-		op.TableFunction.FuncName = t.TableFunction.FuncName
-		op.TableFunction.Args = t.TableFunction.Args
-		op.TableFunction.Rets = t.TableFunction.Rets
-		op.TableFunction.Attrs = t.TableFunction.Attrs
-		op.TableFunction.Params = t.TableFunction.Params
-		op.TableFunction.IsSingle = t.TableFunction.IsSingle
-		op.TableFunction.SetInfo(&info)
+		op.Runner = t.Runner
+		if t.TableFunction != nil {
+			op.TableFunction = table_function.NewArgument()
+			op.TableFunction.FuncName = t.TableFunction.FuncName
+			op.TableFunction.Args = t.TableFunction.Args
+			op.TableFunction.Rets = t.TableFunction.Rets
+			op.TableFunction.Attrs = t.TableFunction.Attrs
+			op.TableFunction.Params = t.TableFunction.Params
+			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.SetInfo(&info)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.MultiUpdate:
@@ -1778,15 +1781,25 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	rightTyps := make([]types.Type, len(right.TableDef.Cols))
-	for i, expr := range right.TableDef.Cols {
-		rightTyps[i] = dupType(&expr.Typ)
+	var rightTyps []types.Type
+	if right.NodeType == plan.Node_FUNCTION_SCAN {
+		rightTyps = make([]types.Type, len(right.TableDef.Cols))
+		for i, expr := range right.TableDef.Cols {
+			rightTyps[i] = dupType(&expr.Typ)
+		}
+	} else {
+		rightTyps = make([]types.Type, len(right.ProjectList))
+		for i, expr := range right.ProjectList {
+			rightTyps[i] = dupType(&expr.Typ)
+		}
 	}
 	arg := apply.NewArgument()
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right, nil)
+	if right.NodeType == plan.Node_FUNCTION_SCAN {
+		arg.TableFunction = constructTableFunction(right, nil)
+	}
 	return arg
 }
 

@@ -27,6 +27,10 @@ func (expr *ColumnExpressionExecutor) ResetForNextQuery() {
 	// do nothing.
 }
 
+func (expr *CorrExpressionExecutor) ResetForNextQuery() {
+	// do nothing.
+}
+
 func (expr *FixedVectorExpressionExecutor) ResetForNextQuery() {
 	// do nothing.
 }

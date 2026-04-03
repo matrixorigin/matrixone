@@ -124,17 +124,32 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		}
 	}
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.hasNonEqCorrelatedPred(subID) {
+		if builder.hasCorrelatedDepthOverOne(subID) {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
+		}
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_APPLY,
+			Children:  []int32{nodeID, subID},
+			ApplyType: plan.Node_CROSSAPPLY,
+			SpillMem:  builder.joinSpillMem,
+		}, ctx)
+
+		return nodeID, &plan.Expr{
+			Typ: subCtx.results[0].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: subCtx.topTag(),
+					ColPos: 0,
+				},
+			},
+		}, nil
+	}
+
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
 	if err != nil {
 		return 0, nil, err
-	}
-
-	// The current pull-up-through-agg rewrite is not semantics-preserving for
-	// scalar aggregate subqueries with non-equality correlated predicates.
-	// Pulling those predicates above AGG can force inner expressions into
-	// GROUP BY and produce multiple rows for one outer row.
-	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(), "aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
@@ -439,6 +454,79 @@ func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 		switch exprImpl := pred.Expr.(type) {
 		case *plan.Expr_F:
 			if exprImpl.F.Func.ObjName != "=" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) hasNonEqCorrelatedPred(nodeID int32) bool {
+	node := builder.qry.Nodes[nodeID]
+	for _, expr := range node.FilterList {
+		if hasCorrCol(expr) && builder.findNonEqPred([]*plan.Expr{expr}) {
+			return true
+		}
+	}
+	for _, expr := range node.OnList {
+		if hasCorrCol(expr) && builder.findNonEqPred([]*plan.Expr{expr}) {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if builder.hasNonEqCorrelatedPred(childID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) hasCorrelatedDepthOverOne(nodeID int32) bool {
+	node := builder.qry.Nodes[nodeID]
+	for _, expr := range node.FilterList {
+		if exprHasCorrelatedDepthOverOne(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.OnList {
+		if exprHasCorrelatedDepthOverOne(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.ProjectList {
+		if exprHasCorrelatedDepthOverOne(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.AggList {
+		if exprHasCorrelatedDepthOverOne(expr) {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if builder.hasCorrelatedDepthOverOne(childID) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasCorrelatedDepthOverOne(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Corr:
+		return exprImpl.Corr.Depth > 1
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if exprHasCorrelatedDepthOverOne(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if exprHasCorrelatedDepthOverOne(arg) {
 				return true
 			}
 		}

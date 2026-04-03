@@ -1354,7 +1354,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		ss = c.compileSort(node, c.compileApply(node, nodes[node.Children[1]], left))
+		ss = c.compileSort(node, c.compileApply(step, node, node.Children[1], nodes, left))
 		return ss, nil
 	case plan.Node_POSTDML:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2709,13 +2709,24 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
-
+func (c *Compile) compileApply(step int32, node *plan.Node, rightNodeID int32, nodes []*plan.Node, rs []*Scope) []*Scope {
+	right := nodes[rightNodeID]
+	isGenericApply := right.NodeType != plan.Node_FUNCTION_SCAN
 	switch node.ApplyType {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
+			var runner apply.SubqueryRunner
+			if isGenericApply {
+				var err error
+				runner, err = newCorrelatedApplyRunner(c, step, rightNodeID)
+				if err != nil {
+					panic(err)
+				}
+				rs[i].NodeInfo.Mcpu = 1
+			}
 			op := constructApply(node, right, apply.CROSS, c.proc)
-			if op.TableFunction.IsSingle {
+			op.Runner = runner
+			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
 			}
 			op.SetIdx(c.anal.curNodeIdx)
@@ -2723,7 +2734,17 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 		}
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
+			var runner apply.SubqueryRunner
+			if isGenericApply {
+				var err error
+				runner, err = newCorrelatedApplyRunner(c, step, rightNodeID)
+				if err != nil {
+					panic(err)
+				}
+				rs[i].NodeInfo.Mcpu = 1
+			}
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.Runner = runner
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
