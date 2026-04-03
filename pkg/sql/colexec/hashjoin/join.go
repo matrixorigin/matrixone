@@ -16,8 +16,10 @@ package hashjoin
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -270,20 +272,40 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			spilledBuildBuckets, _ := ctr.mp.GetSpillBuckets()
+			spilledBuildFds := ctr.mp.TakeSpillBuildFds()
 
-			// Register build files in spillQueue immediately so cleanupSpillFiles
-			// can delete them even if we return early (e.g. context cancelled).
-			// baseName strips the "join_" prefix and "_build" suffix from buildFile
-			// (e.g. "join_<uuid>_3_build" → "<uuid>_3") for use as the sub-bucket prefix.
-			ctr.spillQueue = make([]spillBucket, len(spilledBuildBuckets))
-			for i, buildFile := range spilledBuildBuckets {
-				baseName := buildFile[len("join_") : len(buildFile)-len("_build")]
-				ctr.spillQueue[i] = spillBucket{buildFile: buildFile, baseName: baseName, depth: 1}
+			// Register build fds in spillQueue immediately so cleanupSpillFiles
+			// can close them even if we return early (e.g. context cancelled).
+			// Generate unique baseNames for sub-bucket naming during re-spill.
+			uid, err := uuid.NewV7()
+			if err != nil {
+				return err
+			}
+			uidStr := uid.String()
+			ctr.spillQueue = make([]spillBucket, len(spilledBuildFds))
+			for i, fd := range spilledBuildFds {
+				ctr.spillQueue[i] = spillBucket{
+					buildFd:  fd,
+					baseName: fmt.Sprintf("%s_%d", uidStr, i),
+					depth:    1,
+				}
 			}
 
-			// Create writers for probe side (files created lazily on first write)
-			spillWriters := createRootProbeSpillBucketFiles()
+			// Create writers for probe side (files created lazily on first write).
+			// Disable writers for empty-build buckets so scatter discards those
+			// probe rows immediately, matching the re-spill validBuckets pattern.
+			spillWriters, err := createRootProbeSpillBucketFiles()
+			if err != nil {
+				return err
+			}
+			needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+			if !needsProbeForEmpty {
+				for i := range spilledBuildFds {
+					if spilledBuildFds[i] == nil {
+						spillWriters[i].name = ""
+					}
+				}
+			}
 			spillBuffers := make([]*batch.Batch, spillNumBuckets)
 
 			defer func() {

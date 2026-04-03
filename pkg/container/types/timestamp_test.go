@@ -125,6 +125,13 @@ func TestParseTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(62009366402000000), int64(a))
 
+	// 3-digit seconds with leading zero (MySQL compat) — delegates to ParseDatetime which handles it
+	a, err = ParseTimestamp(time.UTC, "1998-01-01 00:00:009", 6)
+	require.NoError(t, err)
+	b, err2 := ParseTimestamp(time.UTC, "1998-01-01 00:00:09", 6)
+	require.NoError(t, err2)
+	require.Equal(t, int64(a), int64(b))
+
 	//ts, err := ParseTimestamp(time.UTC, "9999-12-31 23:59:59.5", 0)
 	//fmt.Println(int64(ts))
 	//require.Error(t, err)

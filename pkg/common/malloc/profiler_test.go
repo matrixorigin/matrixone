@@ -84,7 +84,7 @@ func TestProfilerWrite(t *testing.T) {
 
 func testProfiler(t *testing.T, w io.Writer) {
 	// new
-	profiler := NewProfiler[testSampleValues]()
+	profiler := NewProfiler[testSampleValues]("test")
 
 	// sample
 	for i := 0; i < 65536; i++ {
@@ -115,7 +115,7 @@ func testProfiler(t *testing.T, w io.Writer) {
 }
 
 func TestParallelProfilerWrite(t *testing.T) {
-	profiler := NewProfiler[testSampleValues]()
+	profiler := NewProfiler[testSampleValues]("test")
 	wg := new(sync.WaitGroup)
 	n := 64
 	wg.Add(n)
@@ -135,7 +135,7 @@ func TestParallelProfilerWrite(t *testing.T) {
 }
 
 func BenchmarkProfilerAddSample(b *testing.B) {
-	profiler := NewProfiler[testSampleValues]()
+	profiler := NewProfiler[testSampleValues]("test")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		values := profiler.Sample(0, 1)
@@ -144,7 +144,7 @@ func BenchmarkProfilerAddSample(b *testing.B) {
 }
 
 func BenchmarkProfilerAddSampleParallel(b *testing.B) {
-	profiler := NewProfiler[testSampleValues]()
+	profiler := NewProfiler[testSampleValues]("test")
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -155,7 +155,7 @@ func BenchmarkProfilerAddSampleParallel(b *testing.B) {
 }
 
 func BenchmarkProfilerWrite(b *testing.B) {
-	profiler := NewProfiler[testSampleValues]()
+	profiler := NewProfiler[testSampleValues]("test")
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

@@ -129,6 +129,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, err
 	}
 
+	// The current pull-up-through-agg rewrite is not semantics-preserving for
+	// scalar aggregate subqueries with non-equality correlated predicates.
+	// Pulling those predicates above AGG can force inner expressions into
+	// GROUP BY and produce multiple rows for one outer row.
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(), "aggregation with non equal predicate in %s subquery  will be supported in future version", subquery.Typ.String())
 	}

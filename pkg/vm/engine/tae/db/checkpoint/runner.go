@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
 
 type timeBasedPolicy struct {
@@ -440,6 +441,11 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 
 		logutil.Debugf("Post %s", entry.String())
 	}
+
+	// Schedule a debounced arena drain.  The timer resets on each
+	// checkpoint, so during active operation the pools stay warm.
+	objectio.ScheduleArenaDrain()
+	mergesort.DrainTransferSlabPool()
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {

@@ -20,12 +20,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -60,8 +57,8 @@ type cnMergeTask struct {
 	targets []objectio.ObjectStats
 
 	// commit things
-	commitEntry  *api.MergeCommitEntry
-	transferMaps api.TransferMaps
+	commitEntry   *api.MergeCommitEntry
+	transferTable *mergesort.TransferTable
 
 	// auxiliaries
 	fs fileservice.FileService
@@ -113,10 +110,12 @@ func newCNMergeTask(
 	proc := tbl.proc.Load()
 	fs := proc.Base.FileService
 
+	var totalInputSize uint64
 	blkCnts := make([]int, len(targets))
 	blkIters := make([]*objectio.StatsBlkIter, len(targets))
 	for i, objStats := range targets {
 		blkCnts[i] = int(objStats.BlkCnt())
+		totalInputSize += uint64(objStats.OriginSize())
 
 		loc := objStats.ObjectLocation()
 		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
@@ -128,8 +127,8 @@ func newCNMergeTask(
 	}
 
 	var arena *objectio.WriteArena
-	if targetObjSize > 300*common.Const1MBytes {
-		arena = objectio.NewArena(300 * common.Const1MBytes)
+	if targetObjSize > 0 {
+		arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 
 	return &cnMergeTask{
@@ -222,20 +221,13 @@ func (t *cnMergeTask) GetCommitEntry() *api.MergeCommitEntry {
 	return t.commitEntry
 }
 
-func (t *cnMergeTask) InitTransferMaps(blkCnt int) {
-	t.transferMaps = make(api.TransferMaps, blkCnt)
-	for i := range t.transferMaps {
-		t.transferMaps[i] = make(api.TransferMap, t.GetBlockMaxRows())
-	}
-}
-
-func (t *cnMergeTask) GetTransferMaps() api.TransferMaps {
-	return t.transferMaps
+func (t *cnMergeTask) SetTransferTable(tt *mergesort.TransferTable) {
+	t.transferTable = tt
 }
 
 // impl DisposableVecPool
 func (t *cnMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
-	v := vector.NewVec(*typ)
+	v := vector.NewOffHeapVecWithType(*typ)
 	return v, func() { v.Free(t.mp) }
 }
 
@@ -244,6 +236,18 @@ func (t *cnMergeTask) GetMPool() *mpool.MPool {
 }
 
 func (t *cnMergeTask) HostHintName() string { return "CN" }
+
+func (t *cnMergeTask) Release() {
+	if t.arena != nil {
+		t.arena.Reset()
+		objectio.PutArena(t.arena)
+		t.arena = nil
+	}
+	if t.transferTable != nil {
+		t.transferTable.Release()
+		t.transferTable = nil
+	}
+}
 
 func (t *cnMergeTask) GetTotalSize() uint64 {
 	totalSize := uint64(0)
@@ -299,7 +303,7 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
 		ctx, info, t.ds, t.host.seqnums, t.host.typs,
-		t.snapshot, fileservice.Policy(0), t.mp, t.fs)
+		t.snapshot, fileservice.SkipAllCache, t.mp, t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
 		return

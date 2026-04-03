@@ -252,7 +252,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		zap.Strings("affectedCols", affectedCols),
 		zap.Any("option", opt))
 
-	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyFakePKCol)
+	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyTableDef, copyFakePKCol)
 	if err != nil {
 		return nil, err
 	}
@@ -279,6 +279,7 @@ var ID atomic.Int64
 func buildAlterInsertDataSQL(
 	ctx CompilerContext,
 	alterCtx *AlterTableContext,
+	copyTableDef *TableDef,
 	copyFakePKCol bool,
 ) (string, error) {
 
@@ -291,6 +292,10 @@ func buildAlterInsertDataSQL(
 
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
+		copyCol := FindColumn(copyTableDef.Cols, key)
+		if copyCol != nil && copyCol.GeneratedCol != nil {
+			continue
+		}
 		if isFirst {
 			insertBuffer.WriteString("`" + key + "`")
 			if value.sexprType == exprColumnName {
