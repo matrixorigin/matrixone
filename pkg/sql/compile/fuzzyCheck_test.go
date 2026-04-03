@@ -302,8 +302,8 @@ func TestVectorToStringNullHandling(t *testing.T) {
 
 	t.Run("enum_type", func(t *testing.T) {
 		vec := vector.NewVec(types.T_enum.ToType())
-		require.NoError(t, vector.AppendFixed(vec, uint16(3), false, mp))
-		require.NoError(t, vector.AppendFixed(vec, uint16(0), true, mp))
+		require.NoError(t, vector.AppendFixed(vec, types.Enum(3), false, mp))
+		require.NoError(t, vector.AppendFixed(vec, types.Enum(0), true, mp))
 		defer vec.Free(mp)
 		s, _ := vectorToString(vec, 0)
 		require.Equal(t, "3", s)
@@ -358,7 +358,7 @@ func TestFirstlyCheckSkipsNulls(t *testing.T) {
 	t.Run("real_dup_still_caught", func(t *testing.T) {
 		vec := vector.NewVec(types.T_int64.ToType())
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp))
-		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp)) // NULL
+		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
 		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp)) // dup!
 		defer vec.Free(mp)
 

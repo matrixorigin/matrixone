@@ -2678,27 +2678,11 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	// Also creates a owned copy so InplaceSort in PKPersistedBetween won't
 	// corrupt the caller's batch vector or its null bitmap.
 	mp := tbl.proc.Load().Mp()
-	if keysVector.HasNull() {
-		filtered := vector.NewVec(*keysVector.GetType())
-		nsp := keysVector.GetNulls()
-		for i := 0; i < keysVector.Length(); i++ {
-			if !nsp.Contains(uint64(i)) {
-				if err := filtered.UnionOne(keysVector, int64(i), mp); err != nil {
-					filtered.Free(mp)
-					return false, err
-				}
-			}
-		}
-		keysVector = filtered
-		defer keysVector.Free(mp)
-	} else {
-		var err error
-		keysVector, err = keysVector.Dup(mp)
-		if err != nil {
-			return false, err
-		}
-		defer keysVector.Free(mp)
+	keysVector, err := dupVectorWithoutNulls(keysVector, mp)
+	if err != nil {
+		return false, err
 	}
+	defer keysVector.Free(mp)
 	if keysVector.Length() == 0 {
 		return false, nil
 	}
@@ -3108,4 +3092,23 @@ func (tbl *txnTable) getCommittedRows(
 
 func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
 	return tbl.extraInfo
+}
+
+// dupVectorWithoutNulls returns an owned copy of v with NULL rows removed.
+// If v has no NULLs it returns Dup(v). The caller must Free the result.
+func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	if !v.HasNull() {
+		return v.Dup(mp)
+	}
+	filtered := vector.NewVec(*v.GetType())
+	nsp := v.GetNulls()
+	for i := 0; i < v.Length(); i++ {
+		if !nsp.Contains(uint64(i)) {
+			if err := filtered.UnionOne(v, int64(i), mp); err != nil {
+				filtered.Free(mp)
+				return nil, err
+			}
+		}
+	}
+	return filtered, nil
 }
