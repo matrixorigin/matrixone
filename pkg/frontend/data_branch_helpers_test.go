@@ -75,6 +75,12 @@ func TestNewEmitter(t *testing.T) {
 	require.Equal(t, wrapped, <-retCh)
 }
 
+func TestContainsDataBranchTempTableName(t *testing.T) {
+	require.True(t, containsDataBranchTempTableName("delete from test.__mo_diff_del_merge_1"))
+	require.True(t, containsDataBranchTempTableName("insert into __mo_diff_ins_merge_1 values (1)"))
+	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
+}
+
 func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
@@ -110,6 +116,165 @@ func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	})
 }
 
+func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
+	ses := newValidateSession(t)
+	spyExec := &pickStreamingExecutor{err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()}
+	_ = newPickStreamingBackExecForTest(t, ses, spyExec)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stmt := "delete from test.__mo_diff_ins_merge_1"
+	bh.EXPECT().Exec(gomock.Any(), stmt).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return(nil).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	_, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, spyExec.sql)
+}
+
+func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
+	ses := newValidateSession(t)
+
+	t.Run("empty attrs returns nil", func(t *testing.T) {
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			nil,
+			nil,
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("attrs and col types mismatch", func(t *testing.T) {
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "attrs/colTypes length mismatch")
+	})
+
+	t.Run("propagates get relation error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("get relation failed")
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, wantErr).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("returns error when range relation is missing", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot resolve range relation")
+	})
+
+	t.Run("propagates ranges error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+
+		rangeRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("ranges failed")
+		rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", rangeRel, nil).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByID(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+}
 func buildRunSQLResultSet() *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	col := &MysqlColumn{}
