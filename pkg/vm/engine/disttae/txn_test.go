@@ -1068,3 +1068,139 @@ func newInsertBatchWithRowIDForTest(
 	bat.SetRowCount(len(pks))
 	return bat
 }
+
+// TestConcurrentCheckPKDup verifies that checkPKDup works correctly when
+// called concurrently with different vectors, each containing NULLs.
+// This simulates the real production path where multiple INSERT txns
+// perform PK duplicate checking concurrently.
+func TestConcurrentCheckPKDup(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	const numGoroutines = 8
+	const rowsPerGoroutine = 50
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines)
+	results := make(chan bool, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+
+			pk := vector.NewVec(types.T_int64.ToType())
+			for i := 0; i < rowsPerGoroutine; i++ {
+				isNull := (i % 5) == 0 // 20% NULLs
+				if isNull {
+					vector.AppendFixed(pk, int64(0), true, mp)
+				} else {
+					// Unique values per goroutine
+					vector.AppendFixed(pk, int64(goroutineID*1000+i), false, mp)
+				}
+			}
+			defer pk.Free(mp)
+
+			m := make(map[any]bool)
+			dup, _ := checkPKDup(m, pk, 0, rowsPerGoroutine)
+			results <- dup
+			if dup {
+				errors <- moerr.NewInternalErrorNoCtxf("unexpected duplicate in goroutine %d", goroutineID)
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errors)
+	close(results)
+
+	for err := range errors {
+		t.Errorf("concurrent checkPKDup error: %v", err)
+	}
+
+	// All goroutines should report no duplicates
+	for dup := range results {
+		require.False(t, dup, "no duplicates expected with unique values per goroutine")
+	}
+}
+
+// TestConcurrentCheckPKDup_RealDupWithNulls ensures that concurrent
+// checkPKDup calls correctly detect real duplicates even when NULLs
+// are present, but never flag NULLs as duplicates of each other.
+func TestConcurrentCheckPKDup_RealDupWithNulls(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	const numGoroutines = 4
+	var wg sync.WaitGroup
+	dupDetected := make(chan bool, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			pk := vector.NewVec(types.T_int64.ToType())
+			// [1, NULL, 2, NULL, 1] — contains real dup (1 appears twice)
+			vector.AppendFixed(pk, int64(1), false, mp)
+			vector.AppendFixed(pk, int64(0), true, mp)
+			vector.AppendFixed(pk, int64(2), false, mp)
+			vector.AppendFixed(pk, int64(0), true, mp)
+			vector.AppendFixed(pk, int64(1), false, mp) // dup!
+			defer pk.Free(mp)
+
+			m := make(map[any]bool)
+			dup, _ := checkPKDup(m, pk, 0, 5)
+			dupDetected <- dup
+		}()
+	}
+
+	wg.Wait()
+	close(dupDetected)
+
+	for dup := range dupDetected {
+		require.True(t, dup, "real duplicate (value=1) must be detected even with NULLs present")
+	}
+}
+
+// TestDupVectorWithoutNulls_ConcurrentSafety verifies that dupVectorWithoutNulls
+// produces independent copies safe for concurrent InplaceSort.
+func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	// Original vector with NULLs
+	orig := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(orig, int64(30), false, mp))
+	require.NoError(t, vector.AppendFixed(orig, int64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(orig, int64(10), false, mp))
+	require.NoError(t, vector.AppendFixed(orig, int64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(orig, int64(20), false, mp))
+	defer orig.Free(mp)
+
+	const numGoroutines = 4
+	var wg sync.WaitGroup
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			dup, err := dupVectorWithoutNulls(orig, mp)
+			require.NoError(t, err)
+			defer dup.Free(mp)
+
+			require.Equal(t, 3, dup.Length(), "should have 3 non-NULL values")
+			require.False(t, dup.HasNull(), "filtered vector should have no NULLs")
+
+			// InplaceSort on the copy should not corrupt original
+			dup.InplaceSort()
+		}()
+	}
+
+	wg.Wait()
+
+	// Original should be unchanged
+	require.Equal(t, 5, orig.Length())
+	require.True(t, orig.HasNull())
+}

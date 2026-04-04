@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -634,4 +635,202 @@ func TestFillAllNullsSkipsBackgroundCheck(t *testing.T) {
 		require.Equal(t, 2, f.cnt, "compound mixed should count only 2 non-NULL keys")
 		require.NotEmpty(t, f.condition)
 	})
+}
+
+// TestFillOnlyInsertHidden tests the hidden unique index path (onlyInsertHidden=true).
+// This covers the backfill/CREATE UNIQUE INDEX path where the hidden table receives
+// only the unique column values.
+func TestFillOnlyInsertHidden(t *testing.T) {
+	mp, err := mpool.NewMPool("test_fill_hidden", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("hidden_with_values", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(10), false, mp))
+		require.NoError(t, vector.AppendFixed(vec, int64(20), false, mp))
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(2)
+		defer func() {
+			vec.Free(mp)
+			bat.Clean(mp)
+		}()
+
+		f := &fuzzyCheck{
+			attr:             "pk",
+			onlyInsertHidden: true,
+		}
+		err := f.fill(context.Background(), bat)
+		require.NoError(t, err)
+		require.Equal(t, 2, f.cnt)
+		require.Contains(t, f.condition, "10")
+		require.Contains(t, f.condition, "20")
+	})
+
+	t.Run("hidden_dup_caught_by_firstly_check_skipped", func(t *testing.T) {
+		// onlyInsertHidden skips firstlyCheck — duplicates in the hidden table
+		// are caught by backgroundSQLCheck, not the in-batch check.
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp))
+		require.NoError(t, vector.AppendFixed(vec, int64(5), false, mp)) // dup value
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(2)
+		defer func() {
+			vec.Free(mp)
+			bat.Clean(mp)
+		}()
+
+		f := &fuzzyCheck{
+			attr:             "pk",
+			onlyInsertHidden: true,
+		}
+		// fill should NOT error — firstlyCheck is skipped for hidden tables
+		err := f.fill(context.Background(), bat)
+		require.NoError(t, err)
+		require.Equal(t, 2, f.cnt)
+	})
+}
+
+// TestFillEndToEndConditionGeneration exercises the full fill() pipeline:
+// fill() → firstlyCheck → genCollsionKeys → condition string generation
+// and verifies the generated SQL condition is valid for backgroundSQLCheck.
+func TestFillEndToEndConditionGeneration(t *testing.T) {
+	mp, err := mpool.NewMPool("test_e2e_fill", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("non_compound_nulls_skipped_real_dup_caught", func(t *testing.T) {
+		// Multiple NULLs + a real duplicate value. firstlyCheck should catch the dup.
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
+		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))  // NULL
+		require.NoError(t, vector.AppendFixed(vec, int64(7), false, mp)) // dup!
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(4)
+		defer func() {
+			vec.Free(mp)
+			bat.Clean(mp)
+		}()
+
+		f := &fuzzyCheck{attr: "pk"}
+		err := f.fill(context.Background(), bat)
+		require.Error(t, err, "real duplicate should be caught")
+		require.Contains(t, err.Error(), "Duplicate entry")
+	})
+
+	t.Run("non_compound_nulls_only_skips_background_sql", func(t *testing.T) {
+		// All NULLs → cnt=0, condition="" → backgroundSQLCheck would be skipped
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(3)
+		defer func() {
+			vec.Free(mp)
+			bat.Clean(mp)
+		}()
+
+		f := &fuzzyCheck{attr: "name"}
+		err := f.fill(context.Background(), bat)
+		require.NoError(t, err)
+		require.Equal(t, 0, f.cnt, "all NULLs → cnt=0 → backgroundSQLCheck skipped")
+		require.Equal(t, "", f.condition)
+	})
+
+	t.Run("compound_mixed_generates_valid_condition", func(t *testing.T) {
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		vec := vector.NewVec(types.T_varchar.ToType())
+		// Row 0: packed (10, 100) — non-NULL
+		packer.Reset()
+		packer.EncodeInt64(10)
+		packer.EncodeInt64(100)
+		require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, mp))
+		// Row 1: NULL
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+		// Row 2: packed (20, 200) — non-NULL
+		packer.Reset()
+		packer.EncodeInt64(20)
+		packer.EncodeInt64(200)
+		require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, mp))
+
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(3)
+		defer func() {
+			vec.Free(mp)
+			bat.Clean(mp)
+		}()
+
+		f := &fuzzyCheck{
+			attr:       "__mo_cpkey_col",
+			isCompound: true,
+			compoundCols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			},
+		}
+		err := f.fill(context.Background(), bat)
+		require.NoError(t, err)
+		require.Equal(t, 2, f.cnt)
+		// Condition should contain both column names
+		require.Contains(t, f.condition, "a =")
+		require.Contains(t, f.condition, "b =")
+	})
+}
+
+// TestConcurrentFirstlyCheck verifies that firstlyCheck is safe to call
+// concurrently with independent fuzzyCheck instances (simulating concurrent INSERTs).
+func TestConcurrentFirstlyCheck(t *testing.T) {
+	mp, err := mpool.NewMPool("test_concurrent_fc", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	const numGoroutines = 8
+	const numRows = 100
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			// Each goroutine creates its own vector and fuzzyCheck
+			vec := vector.NewVec(types.T_int64.ToType())
+			for i := 0; i < numRows; i++ {
+				isNull := (i % 3) == 0 // every 3rd row is NULL
+				if isNull {
+					vector.AppendFixed(vec, int64(0), true, mp)
+				} else {
+					// Use goroutineID*numRows+i to ensure unique values across goroutines
+					vector.AppendFixed(vec, int64(goroutineID*numRows+i), false, mp)
+				}
+			}
+			defer vec.Free(mp)
+
+			f := &fuzzyCheck{attr: "pk"}
+			if err := f.firstlyCheck(context.Background(), vec); err != nil {
+				errors <- err
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
