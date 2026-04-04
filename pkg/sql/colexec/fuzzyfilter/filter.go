@@ -102,7 +102,7 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 
 		if useRoaring {
-			ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+			ctr.roaringFilter = newRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 		} else {
 			//@see https://hur.st/bloomfilter/
 			var probability float64

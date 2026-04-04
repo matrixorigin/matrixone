@@ -80,7 +80,7 @@ func TestRoaringAddFuncSkipsNulls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newroaringFilter(tt.typ)
+			f := newRoaringFilter(tt.typ)
 			vec := makeVec(t, mp, tt.typ.ToType(), tt.vals, tt.isNull)
 			defer vec.Free(mp)
 			f.addFunc(f, vec)
@@ -94,7 +94,7 @@ func TestRoaringTestFuncSkipsNulls(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build a filter containing value 5.
-	f := newroaringFilter(types.T_int32)
+	f := newRoaringFilter(types.T_int32)
 	{
 		buildVec := makeVec(t, mp, types.T_int32.ToType(), []int32{5}, []bool{false})
 		defer buildVec.Free(mp)
@@ -205,7 +205,7 @@ func TestRoaringTestAndAddFuncSkipsNulls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newroaringFilter(types.T_int32)
+			f := newRoaringFilter(types.T_int32)
 			vec := makeVec(t, mp, types.T_int32.ToType(), tt.vals, tt.isNull)
 			defer vec.Free(mp)
 			idx, val := f.testAndAddFunc(f, vec)
@@ -221,7 +221,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("int8", func(t *testing.T) {
-		f := newroaringFilter(types.T_int8)
+		f := newRoaringFilter(types.T_int8)
 		vec := vector.NewVec(types.T_int8.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, []int8{1, 0, 3}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
@@ -230,7 +230,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 	})
 
 	t.Run("int16", func(t *testing.T) {
-		f := newroaringFilter(types.T_int16)
+		f := newRoaringFilter(types.T_int16)
 		vec := vector.NewVec(types.T_int16.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, []int16{100, 0, 200}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
@@ -239,7 +239,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 	})
 
 	t.Run("uint8", func(t *testing.T) {
-		f := newroaringFilter(types.T_uint8)
+		f := newRoaringFilter(types.T_uint8)
 		vec := vector.NewVec(types.T_uint8.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, []uint8{10, 0, 20}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
@@ -248,7 +248,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 	})
 
 	t.Run("uint16", func(t *testing.T) {
-		f := newroaringFilter(types.T_uint16)
+		f := newRoaringFilter(types.T_uint16)
 		vec := vector.NewVec(types.T_uint16.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, []uint16{1000, 0, 2000}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
@@ -257,7 +257,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 	})
 
 	t.Run("uint32", func(t *testing.T) {
-		f := newroaringFilter(types.T_uint32)
+		f := newRoaringFilter(types.T_uint32)
 		vec := vector.NewVec(types.T_uint32.ToType())
 		require.NoError(t, vector.AppendFixedList(vec, []uint32{50000, 0, 60000}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
@@ -270,7 +270,7 @@ func TestRoaringTestAndAddMultipleBatches(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
 
-	f := newroaringFilter(types.T_int32)
+	f := newRoaringFilter(types.T_int32)
 
 	// Batch 1: values 1, NULL, 3
 	v1 := makeVec(t, mp, types.T_int32.ToType(), []int32{1, 0, 3}, []bool{false, true, false})
@@ -337,7 +337,7 @@ func TestNewRoaringFilterAllTypes(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32,
 		types.T_uint8, types.T_uint16, types.T_uint32,
 	} {
-		f := newroaringFilter(typ)
+		f := newRoaringFilter(typ)
 		require.NotNil(t, f)
 		require.NotNil(t, f.b)
 		require.NotNil(t, f.addFunc)
