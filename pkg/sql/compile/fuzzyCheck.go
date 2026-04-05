@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -180,6 +179,18 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 
+	// Update cnt to reflect actual non-NULL collision keys.
+	// When all values are NULL, cnt becomes 0 and backgroundSQLCheck
+	// is skipped by the caller (compile.go checks f.cnt > 0).
+	if len(collision) > 0 {
+		f.cnt = len(collision[0])
+	} else {
+		f.cnt = 0
+	}
+	if f.cnt == 0 {
+		return nil
+	}
+
 	// generate codition used in background SQL
 	if !f.onlyInsertHidden {
 		if !f.isCompound {
@@ -256,11 +267,18 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 		if err != nil {
 			return err
 		}
-		for _, k := range pkey {
+		for i, k := range pkey {
+			// SQL standard: NULL != NULL, skip NULLs from duplicate check
+			if toCheck.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			kcnt[k]++
 		}
 	} else {
 		for i := 0; i < toCheck.Length(); i++ {
+			if toCheck.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			b := toCheck.GetRawBytesAt(i)
 			t, err := types.Unpack(b)
 			if err != nil {
@@ -308,13 +326,21 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 			if err != nil {
 				return nil, err
 			}
-			keys[0] = pkey
+			// Skip NULL values - they cannot be duplicates per SQL standard
+			for i, k := range pkey {
+				if !toCheck.GetNulls().Contains(uint64(i)) {
+					keys[0] = append(keys[0], k)
+				}
+			}
 		} else {
 			scales := make([]int32, len(f.compoundCols))
 			for i, c := range f.compoundCols {
 				scales[i] = c.Typ.Scale
 			}
 			for i := 0; i < toCheck.Length(); i++ {
+				if toCheck.GetNulls().Contains(uint64(i)) {
+					continue
+				}
 				b := toCheck.GetRawBytesAt(i)
 				t, err := types.Unpack(b)
 				if err != nil {
@@ -461,7 +487,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 }
 
 func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
-	if nulls.Any(vec.GetNulls()) {
+	if vec.GetNulls().Contains(uint64(rowIndex)) {
 		return "", nil
 	}
 	switch vec.GetType().Oid {
@@ -526,7 +552,7 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
 	case types.T_enum:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIndex)), nil
 	default:
 		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}
