@@ -126,6 +126,9 @@ func (c *cluster) doStartLocked(from int) error {
 		go func(s *operator) {
 			defer wg.Done()
 			if err := s.Start(); err != nil {
+				// Only the first error is captured; concurrent failures
+				// from other services are discarded since knowing that
+				// any service failed is sufficient to abort startup.
 				startErr.CompareAndSwap(nil, err)
 			}
 		}(s)

@@ -19,6 +19,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -947,7 +948,7 @@ func (s *service) bootstrap() error {
 		// gracefully instead of crashing the process.  Note: we do NOT
 		// check for DeadlineExceeded because the 5-minute bootstrap
 		// timeout IS a legitimate failure that should panic.
-		if err == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 			return err
 		}
 		panic(moerr.AttachCause(ctx, err))
