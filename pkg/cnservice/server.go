@@ -943,15 +943,7 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		// External context cancellation (e.g. service shutdown) is not a
-		// bootstrap failure — return the error so the caller can handle it
-		// gracefully instead of crashing the process.  Note: we do NOT
-		// check for DeadlineExceeded because the 5-minute bootstrap
-		// timeout IS a legitimate failure that should panic.
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
-		panic(moerr.AttachCause(ctx, err))
+		return handleBootstrapErr(ctx, err)
 	}
 
 	trace.GetService(s.cfg.UUID).EnableFlush()
@@ -970,6 +962,18 @@ func (s *service) bootstrap() error {
 		})
 	}
 	return nil
+}
+
+// handleBootstrapErr decides whether a bootstrap error should be returned
+// gracefully (for context cancellation during shutdown) or trigger a panic
+// (for real bootstrap failures).  Only context.Canceled is treated as a
+// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
+// timeout is a legitimate failure that should still panic.
+func handleBootstrapErr(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	panic(moerr.AttachCause(ctx, err))
 }
 
 func (s *service) initTxnTraceService() {
