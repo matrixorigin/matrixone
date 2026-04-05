@@ -104,19 +104,20 @@ func (c *cluster) Start() error {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
 
-	c.doStartLocked(0)
+	if err := c.doStartLocked(0); err != nil {
+		return err
+	}
 	c.state = started
 	return nil
 }
 
-func (c *cluster) doStartLocked(from int) {
+func (c *cluster) doStartLocked(from int) error {
 	var wg sync.WaitGroup
-	errC := make(chan error, 1)
-	defer close(errC)
+	var startErr atomic.Value
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := s.Start(); err != nil {
-				panic(err)
+				return err
 			}
 			continue
 		}
@@ -125,12 +126,16 @@ func (c *cluster) doStartLocked(from int) {
 		go func(s *operator) {
 			defer wg.Done()
 			if err := s.Start(); err != nil {
-				panic(err)
+				startErr.CompareAndSwap(nil, err)
 			}
 		}(s)
 	}
 
 	wg.Wait()
+	if v := startErr.Load(); v != nil {
+		return v.(error)
+	}
+	return nil
 }
 
 func (c *cluster) Close() error {
@@ -227,8 +232,7 @@ func (c *cluster) StartNewCNService(n int) error {
 		return err
 	}
 
-	c.doStartLocked(serviceFrom)
-	return nil
+	return c.doStartLocked(serviceFrom)
 }
 
 func (c *cluster) adjust() {
