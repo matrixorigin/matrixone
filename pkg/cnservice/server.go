@@ -942,11 +942,12 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		// Context cancellation or timeout is not a bootstrap failure — the
-		// service is being shut down or the deadline was exceeded.  Return
-		// the error so the caller can handle it gracefully instead of
-		// crashing the process.
-		if context.Cause(ctx) != nil || err == context.Canceled || err == context.DeadlineExceeded {
+		// External context cancellation (e.g. service shutdown) is not a
+		// bootstrap failure — return the error so the caller can handle it
+		// gracefully instead of crashing the process.  Note: we do NOT
+		// check for DeadlineExceeded because the 5-minute bootstrap
+		// timeout IS a legitimate failure that should panic.
+		if err == context.Canceled {
 			return err
 		}
 		panic(moerr.AttachCause(ctx, err))
