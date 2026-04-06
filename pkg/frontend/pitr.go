@@ -1435,7 +1435,8 @@ func restoreToDatabaseOrTableWithPitr(
 			bh,
 			pitrName,
 			ts,
-			tblInfo); err != nil {
+			tblInfo,
+			false); err != nil {
 			return
 		}
 	}
@@ -1456,15 +1457,21 @@ func reCreateTableWithPitr(
 	bh BackgroundExec,
 	pitrName string,
 	ts int64,
-	tblInfo *tableInfo) (err error) {
+	tblInfo *tableInfo,
+	skipMasterCheck bool) (err error) {
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
-	var isMasterTable bool
-	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
-	if isMasterTable {
-		// skip restore the table which is master table
-		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
-		return
+	if !skipMasterCheck {
+		var isMasterTable bool
+		isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
+		if err != nil {
+			return
+		}
+		if isMasterTable {
+			// skip restore the table which is master table
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
+			return
+		}
 	}
 
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
@@ -1696,7 +1703,7 @@ func restoreTablesWithFkByPitr(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
-			if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
+			if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo, true); err != nil {
 				return
 			}
 		}
@@ -1827,7 +1834,7 @@ func restoreSystemDatabaseWithPitr(
 			return
 		}
 
-		if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo); err != nil {
+		if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo, false); err != nil {
 			return
 		}
 	}

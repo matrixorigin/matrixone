@@ -20,15 +20,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -798,5 +798,169 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "LIST PARTITIONING values must be unique across partitions")
+
+	})
+}
+
+// TestGetForeignKeyDataWithResolveError tests that getForeignKeyData
+// skips FK validation when Resolve returns an error and IgnoreForeignKey is set.
+// This is crucial for snapshot restore scenarios where the parent table
+// may not be visible due to catalog cache issues after database drop+recreate.
+func TestGetForeignKeyDataWithResolveError(t *testing.T) {
+	// Create a simple parent table columns for FK reference
+	parentColDef := &ColDef{
+		ColId: 1,
+		Name:  "id",
+		Typ: plan.Type{
+			Id:    int32(types.T_int32),
+			Width: 32,
+		},
+	}
+
+	// Create child table with FK column
+	childTableDef := &TableDef{
+		Name: "child_table",
+		Cols: []*ColDef{
+			{
+				ColId: 1,
+				Name:  "id",
+				Typ: plan.Type{
+					Id:    int32(types.T_int32),
+					Width: 32,
+				},
+			},
+			{
+				ColId: 2,
+				Name:  "parent_id",
+				Typ: plan.Type{
+					Id:    int32(types.T_int32),
+					Width: 32,
+				},
+			},
+		},
+	}
+	_ = parentColDef // silence unused variable warning, we simulate the error
+
+	// FK definition referencing parent table
+	fkDef := &tree.ForeignKey{
+		KeyParts: []*tree.KeyPart{
+			{ColName: tree.NewUnresolvedColName("parent_id")},
+		},
+		Refer: &tree.AttributeReference{
+			TableName: tree.NewTableName(
+				tree.Identifier("parent_table"),
+				tree.ObjectNamePrefix{SchemaName: tree.Identifier("test_db")},
+				nil,
+			),
+			KeyParts: []*tree.KeyPart{
+				{ColName: tree.NewUnresolvedColName("id")},
+			},
+			OnDelete: tree.REFERENCE_OPTION_RESTRICT,
+			OnUpdate: tree.REFERENCE_OPTION_RESTRICT,
+		},
+	}
+
+	t.Run("Resolve error with IgnoreForeignKey set should skip FK validation", func(t *testing.T) {
+		// Create mock context with IgnoreForeignKey set
+		ctxWithIgnoreFK := context.WithValue(context.Background(), defines.IgnoreForeignKey{}, true)
+
+		mockCtx := &MockCompilerContext{
+			ctx: ctxWithIgnoreFK,
+			ResolveWithErrorFunc: func(db, table string, s *Snapshot) (*ObjectRef, *TableDef, error) {
+				// Simulate ExpectedEOB error (catalog cache visibility issue)
+				return nil, nil, moerr.NewInternalError(ctxWithIgnoreFK, "expected EOB")
+			},
+			DefaultDatabaseFunc: func() string {
+				return "test_db"
+			},
+			ResolveVariableFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+				if varName == "foreign_key_checks" {
+					return int64(1), nil // FK checks enabled by default
+				}
+				return nil, moerr.NewInternalError(ctxWithIgnoreFK, "var not found")
+			},
+		}
+
+		fkData, err := getForeignKeyData(mockCtx, "test_db", childTableDef, fkDef)
+		require.NoError(t, err, "Should not return error when IgnoreForeignKey is set")
+		require.NotNil(t, fkData, "Should return fkData")
+		assert.True(t, fkData.ForwardRefer, "ForwardRefer should be true when FK validation is skipped")
+	})
+
+	t.Run("Resolve error without IgnoreForeignKey should return error", func(t *testing.T) {
+		// Create mock context without IgnoreForeignKey
+		mockCtx := &MockCompilerContext{
+			ctx: context.Background(),
+			ResolveWithErrorFunc: func(db, table string, s *Snapshot) (*ObjectRef, *TableDef, error) {
+				// Simulate ExpectedEOB error
+				return nil, nil, moerr.NewInternalError(context.Background(), "expected EOB")
+			},
+			DefaultDatabaseFunc: func() string {
+				return "test_db"
+			},
+			ResolveVariableFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+				if varName == "foreign_key_checks" {
+					return int64(1), nil // FK checks enabled
+				}
+				return nil, moerr.NewInternalError(context.Background(), "var not found")
+			},
+		}
+
+		fkData, err := getForeignKeyData(mockCtx, "test_db", childTableDef, fkDef)
+		require.Error(t, err, "Should return error when IgnoreForeignKey is not set")
+		assert.Nil(t, fkData, "fkData should be nil on error")
+		assert.Contains(t, err.Error(), "expected EOB")
+	})
+
+	t.Run("Resolve returns nil tableDef with IgnoreForeignKey set should skip FK validation", func(t *testing.T) {
+		// Create mock context with IgnoreForeignKey set
+		ctxWithIgnoreFK := context.WithValue(context.Background(), defines.IgnoreForeignKey{}, true)
+
+		mockCtx := &MockCompilerContext{
+			ctx: ctxWithIgnoreFK,
+			ResolveWithErrorFunc: func(db, table string, s *Snapshot) (*ObjectRef, *TableDef, error) {
+				// Resolve succeeds but returns nil table (table not found)
+				return nil, nil, nil
+			},
+			DefaultDatabaseFunc: func() string {
+				return "test_db"
+			},
+			ResolveVariableFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+				if varName == "foreign_key_checks" {
+					return int64(1), nil
+				}
+				return nil, moerr.NewInternalError(ctxWithIgnoreFK, "var not found")
+			},
+		}
+
+		fkData, err := getForeignKeyData(mockCtx, "test_db", childTableDef, fkDef)
+		require.NoError(t, err, "Should not return error when IgnoreForeignKey is set")
+		require.NotNil(t, fkData, "Should return fkData")
+		assert.True(t, fkData.ForwardRefer, "ForwardRefer should be true when FK validation is skipped")
+	})
+
+	t.Run("Resolve returns nil tableDef without IgnoreForeignKey should return NoSuchTable error", func(t *testing.T) {
+		mockCtx := &MockCompilerContext{
+			ctx: context.Background(),
+			ResolveWithErrorFunc: func(db, table string, s *Snapshot) (*ObjectRef, *TableDef, error) {
+				// Resolve succeeds but returns nil table (table not found)
+				return nil, nil, nil
+			},
+			DefaultDatabaseFunc: func() string {
+				return "test_db"
+			},
+			ResolveVariableFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+				if varName == "foreign_key_checks" {
+					return int64(1), nil
+				}
+				return nil, moerr.NewInternalError(context.Background(), "var not found")
+			},
+		}
+
+		fkData, err := getForeignKeyData(mockCtx, "test_db", childTableDef, fkDef)
+		require.Error(t, err, "Should return error when table not found")
+		assert.Nil(t, fkData, "fkData should be nil on error")
+		// The error is NoSuchTable
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "Should be NoSuchTable error")
 	})
 }

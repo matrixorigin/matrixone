@@ -17,7 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3444,4 +3445,248 @@ func Test_getPitrLengthAndUnit(t *testing.T) {
 
 	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
 	assert.Error(t, err)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tests for reCreateTableWithPitr skipMasterCheck and restoreTablesWithFkByPitr
+// ──────────────────────────────────────────────────────────────────────────────
+
+func Test_reCreateTableWithPitr_SkipMasterCheck(t *testing.T) {
+	convey.Convey("reCreateTableWithPitr with skipMasterCheck=true should always restore table", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// Register a result for checkTableIsMaster that would return true.
+		// With skipMasterCheck=true, this should be ignored.
+		masterCheckSql := fmt.Sprintf(checkTableIsMasterFormat, "testdb", "parent_tbl")
+		bh.sql2result[masterCheckSql] = newMrsForCheckMaster([][]interface{}{{"testdb", "child_tbl"}})
+
+		tblInfo := &tableInfo{
+			dbName:  "testdb",
+			tblName: "parent_tbl",
+		}
+
+		err := reCreateTableWithPitr(ctx, "", bh, "pitr01", 100, tblInfo, true)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify that the master check SQL was NOT executed
+		convey.So(bh.hasExecuted(masterCheckSql), convey.ShouldBeFalse)
+
+		// Verify that use/drop/clone SQLs WERE executed
+		convey.So(bh.hasExecuted("use `testdb`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `parent_tbl`"), convey.ShouldBeTrue)
+
+		// The clone SQL should have been executed
+		cloneExecuted := false
+		for _, sql := range bh.executedSqls {
+			if strings.Contains(sql, "clone") && strings.Contains(sql, "parent_tbl") {
+				cloneExecuted = true
+				break
+			}
+		}
+		convey.So(cloneExecuted, convey.ShouldBeTrue)
+	})
+}
+
+func Test_reCreateTableWithPitr_MasterTableSkipped(t *testing.T) {
+	convey.Convey("reCreateTableWithPitr with skipMasterCheck=false should skip master tables", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// Register a result that makes checkTableIsMaster return true
+		masterCheckSql := fmt.Sprintf(checkTableIsMasterFormat, "testdb", "parent_tbl")
+		bh.sql2result[masterCheckSql] = newMrsForCheckMaster([][]interface{}{{"testdb", "child_tbl"}})
+
+		tblInfo := &tableInfo{
+			dbName:  "testdb",
+			tblName: "parent_tbl",
+		}
+
+		err := reCreateTableWithPitr(ctx, "", bh, "pitr01", 100, tblInfo, false)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify master check WAS executed
+		convey.So(bh.hasExecuted(masterCheckSql), convey.ShouldBeTrue)
+
+		// Verify that use/drop/clone were NOT executed (table was skipped)
+		convey.So(bh.hasExecuted("use `testdb`"), convey.ShouldBeFalse)
+		convey.So(bh.hasExecuted("drop table if exists `parent_tbl`"), convey.ShouldBeFalse)
+	})
+}
+
+func Test_reCreateTableWithPitr_NonMasterProceeds(t *testing.T) {
+	convey.Convey("reCreateTableWithPitr with skipMasterCheck=false should proceed for non-master tables", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// Register an empty result → checkTableIsMaster returns false
+		masterCheckSql := fmt.Sprintf(checkTableIsMasterFormat, "testdb", "leaf_tbl")
+		bh.sql2result[masterCheckSql] = newMrsForCheckMaster([][]interface{}{})
+
+		tblInfo := &tableInfo{
+			dbName:  "testdb",
+			tblName: "leaf_tbl",
+		}
+
+		err := reCreateTableWithPitr(ctx, "", bh, "pitr01", 100, tblInfo, false)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Master check was executed
+		convey.So(bh.hasExecuted(masterCheckSql), convey.ShouldBeTrue)
+
+		// And the restore proceeded
+		convey.So(bh.hasExecuted("use `testdb`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `leaf_tbl`"), convey.ShouldBeTrue)
+	})
+}
+
+func Test_reCreateTableWithPitr_MasterCheckError(t *testing.T) {
+	convey.Convey("reCreateTableWithPitr propagates checkTableIsMaster errors", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// Do NOT register a result for the master check SQL.
+		// getResultSet will fail when it encounters nil.
+		tblInfo := &tableInfo{
+			dbName:  "testdb",
+			tblName: "some_tbl",
+		}
+
+		err := reCreateTableWithPitr(ctx, "", bh, "pitr01", 100, tblInfo, false)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the type of result set")
+
+		// The restore should NOT have proceeded
+		convey.So(bh.hasExecuted("use `testdb`"), convey.ShouldBeFalse)
+	})
+}
+
+func Test_restoreTablesWithFkByPitr_AlwaysRestoresParentTables(t *testing.T) {
+	convey.Convey("restoreTablesWithFkByPitr should always restore parent tables (skipMasterCheck=true)", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// Setup: pri01 is a parent table that checkTableIsMaster would report as master.
+		// In the old code, this would cause pri01 to be skipped, breaking child FK validation.
+		masterCheckPri := fmt.Sprintf(checkTableIsMasterFormat, "acc_test02", "pri01")
+		bh.sql2result[masterCheckPri] = newMrsForCheckMaster([][]interface{}{{"acc_test02", "aff01"}})
+
+		masterCheckAff := fmt.Sprintf(checkTableIsMasterFormat, "acc_test02", "aff01")
+		bh.sql2result[masterCheckAff] = newMrsForCheckMaster([][]interface{}{})
+
+		// Topo-sorted: parent first, then child
+		sortedFkTbls := []string{
+			genKey("acc_test02", "pri01"),
+			genKey("acc_test02", "aff01"),
+		}
+
+		fkTableMap := map[string]*tableInfo{
+			genKey("acc_test02", "pri01"): {dbName: "acc_test02", tblName: "pri01"},
+			genKey("acc_test02", "aff01"): {dbName: "acc_test02", tblName: "aff01"},
+		}
+
+		err := restoreTablesWithFkByPitr(ctx, "", bh, "pitr01", 100, sortedFkTbls, fkTableMap)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Both tables should have been restored
+		convey.So(bh.hasExecuted("use `acc_test02`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `pri01`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `aff01`"), convey.ShouldBeTrue)
+
+		// Master check should NOT have been executed (skipMasterCheck=true inside restoreTablesWithFkByPitr)
+		convey.So(bh.hasExecuted(masterCheckPri), convey.ShouldBeFalse)
+		convey.So(bh.hasExecuted(masterCheckAff), convey.ShouldBeFalse)
+	})
+}
+
+func Test_restoreTablesWithFkByPitr_SkipsNilEntries(t *testing.T) {
+	convey.Convey("restoreTablesWithFkByPitr skips tables not in fkTableMap", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// t1.pk <- t2.fk, but we only restore t2. t1 is nil in fkTableMap.
+		sortedFkTbls := []string{
+			genKey("db1", "t1"),
+			genKey("db1", "t2"),
+		}
+
+		fkTableMap := map[string]*tableInfo{
+			genKey("db1", "t2"): {dbName: "db1", tblName: "t2"},
+			// t1 not in map → should be skipped
+		}
+
+		err := restoreTablesWithFkByPitr(ctx, "", bh, "pitr01", 100, sortedFkTbls, fkTableMap)
+		convey.So(err, convey.ShouldBeNil)
+
+		// t2 should be restored, t1 should not
+		convey.So(bh.hasExecuted("drop table if exists `t2`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `t1`"), convey.ShouldBeFalse)
+	})
+}
+
+func Test_restoreTablesWithFkByPitr_EmptyList(t *testing.T) {
+	convey.Convey("restoreTablesWithFkByPitr with empty list succeeds", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		err := restoreTablesWithFkByPitr(ctx, "", bh, "pitr01", 100, nil, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(bh.executedSqls), convey.ShouldEqual, 0)
+	})
+}
+
+func Test_restoreTablesWithFkByPitr_MultipleParentChain(t *testing.T) {
+	convey.Convey("restoreTablesWithFkByPitr handles multi-level FK chain", t, func() {
+		ctx, _, cleanup := setupTestCtx(t)
+		defer cleanup()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		// grandparent -> parent -> child: all should be restored without master check
+		sortedFkTbls := []string{
+			genKey("db1", "grandparent"),
+			genKey("db1", "parent"),
+			genKey("db1", "child"),
+		}
+
+		fkTableMap := map[string]*tableInfo{
+			genKey("db1", "grandparent"): {dbName: "db1", tblName: "grandparent"},
+			genKey("db1", "parent"):      {dbName: "db1", tblName: "parent"},
+			genKey("db1", "child"):       {dbName: "db1", tblName: "child"},
+		}
+
+		err := restoreTablesWithFkByPitr(ctx, "", bh, "pitr01", 100, sortedFkTbls, fkTableMap)
+		convey.So(err, convey.ShouldBeNil)
+
+		convey.So(bh.hasExecuted("drop table if exists `grandparent`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `parent`"), convey.ShouldBeTrue)
+		convey.So(bh.hasExecuted("drop table if exists `child`"), convey.ShouldBeTrue)
+
+		// No master check queries should have been executed
+		for _, sql := range bh.executedSqls {
+			convey.So(strings.Contains(sql, "mo_foreign_keys"), convey.ShouldBeFalse)
+		}
+	})
 }
