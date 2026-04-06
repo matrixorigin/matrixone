@@ -463,7 +463,9 @@ var predefinedFunids = map[int]int{
 	CAST_INDEX_TO_SET_VALUE:       407,
 	CAST_SET_VALUE_TO_INDEX:       408,
 	CAST_SET_INDEX_VALUE_TO_INDEX: 409,
-	FUNCTION_END_NUMBER:           410,
+	VECF32_FROM_BASE64:            410,
+	VECF64_FROM_BASE64:            411,
+	FUNCTION_END_NUMBER:           412,
 }
 
 func Test_funids(t *testing.T) {
