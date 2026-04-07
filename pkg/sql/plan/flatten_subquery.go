@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -436,12 +437,33 @@ func (builder *QueryBuilder) findAggrCount(aggrs []*plan.Expr) bool {
 
 func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {
 	for _, pred := range preds {
-		switch exprImpl := pred.Expr.(type) {
-		case *plan.Expr_F:
-			if exprImpl.F.Func.ObjName != "=" {
+		if containsNonEqComparison(pred) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsNonEqComparison reports whether expr contains a comparison
+// operator other than "=".  Logical operators (and/or/not) are treated
+// as containers and recursed into; only the leaf comparison operators
+// determine the result.
+func containsNonEqComparison(expr *plan.Expr) bool {
+	f, ok := expr.Expr.(*plan.Expr_F)
+	if !ok {
+		return false
+	}
+	name := f.F.Func.ObjName
+	switch name {
+	case "and", "or", "not":
+		for _, arg := range f.F.Args {
+			if containsNonEqComparison(arg) {
 				return true
 			}
 		}
+		return false
+	case "<", "<=", ">", ">=", "<>", "!=":
+		return true
 	}
 	return false
 }
@@ -497,22 +519,40 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// Collect outer columns for GROUP BY.
 	// Reuse the outer binding tag as the AGG's group tag so that existing
 	// column references to the outer table remain valid after the AGG.
-	if len(ctx.bindings) == 0 {
+	//
+	// Restrictions (avoid known correctness traps):
+	//  1. Exactly one outer binding.  Multiple bindings would force us to
+	//     pick a single tag for the AGG, dropping access to the others.
+	//  2. The single binding must have at least one hidden column (Row_ID).
+	//     Without a unique row identifier in GROUP BY, duplicate outer rows
+	//     would be merged by the AGG, producing wrong results.  Base table
+	//     scans always carry Row_ID; derived tables (FROM (...) sub) do not.
+	if len(ctx.bindings) != 1 {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
-			"aggregation with non equal predicate in scalar subquery will be supported in future version")
+			"aggregation with non equal predicate in scalar subquery referencing multiple outer tables will be supported in future version")
 	}
-	var outerGroupBy []*plan.Expr
-	for _, binding := range ctx.bindings {
-		for i := range binding.cols {
-			outerGroupBy = append(outerGroupBy, &plan.Expr{
-				Typ:  *binding.types[i],
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: int32(i)}},
-			})
+	outerBinding := ctx.bindings[0]
+	hasHiddenCol := false
+	for _, hidden := range outerBinding.colIsHidden {
+		if hidden {
+			hasHiddenCol = true
+			break
 		}
 	}
-	// Use the first outer binding's tag as groupTag so outer column refs
-	// (RelPos == binding.tag) resolve through the AGG node directly.
-	reuseGroupTag := ctx.bindings[0].tag
+	if !hasHiddenCol {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregation with non equal predicate in scalar subquery on derived tables will be supported in future version")
+	}
+	outerGroupBy := make([]*plan.Expr, 0, len(outerBinding.cols))
+	for i := range outerBinding.cols {
+		outerGroupBy = append(outerGroupBy, &plan.Expr{
+			Typ:  *outerBinding.types[i],
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outerBinding.tag, ColPos: int32(i)}},
+		})
+	}
+	// Reuse the outer binding tag as groupTag so outer column refs
+	// (RelPos == outerBinding.tag) resolve through the AGG node directly.
+	reuseGroupTag := outerBinding.tag
 
 	// Build the aggregate expressions — deep copy so we don't mutate the
 	// original AGG node.
@@ -523,22 +563,41 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 
 	// LEFT JOIN produces a NULL row for non-matching outer rows.
 	// starcount/count(*) would count that NULL row as 1 instead of 0.
-	// Fix: replace starcount(const) with count(inner_col) so NULLs are
-	// skipped.  We pick the first column from the inner scan node.
+	//
+	// Fix: rewrite starcount → count(inner.Row_ID).  Row_ID is always
+	// non-null on real inner rows and becomes NULL when the LEFT JOIN
+	// produces a no-match row, so count() naturally returns 0 for
+	// outer rows that have no matching inner rows.
+	//
+	// We require the inner subtree to walk down through single-child
+	// nodes to a single TABLE_SCAN that exposes Row_ID; otherwise the
+	// rewrite is unsafe and we fall back to NYI.
+	hasStarCount := false
 	for _, agg := range aggExprs {
 		if f, ok := agg.Expr.(*plan.Expr_F); ok && f.F.Func.ObjName == "starcount" {
-			innerCol := builder.getFirstColRef(innerID)
-			if innerCol == nil {
+			hasStarCount = true
+			break
+		}
+	}
+	if hasStarCount {
+		markerCol := builder.findRowIDColRef(innerID)
+		if markerCol == nil {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(),
+				"count(*) with non equal predicate in scalar subquery on this inner shape will be supported in future version")
+		}
+		for _, agg := range aggExprs {
+			f, ok := agg.Expr.(*plan.Expr_F)
+			if !ok || f.F.Func.ObjName != "starcount" {
 				continue
 			}
-			argType := makeTypeByPlan2Expr(innerCol)
+			argType := makeTypeByPlan2Expr(markerCol)
 			fGet, err := function.GetFunctionByName(builder.GetContext(), "count", []types.Type{argType})
 			if err != nil {
 				return 0, nil, err
 			}
 			f.F.Func.ObjName = "count"
 			f.F.Func.Obj = fGet.GetEncodedOverloadID()
-			f.F.Args = []*plan.Expr{innerCol}
+			f.F.Args = []*plan.Expr{DeepCopyExpr(markerCol)}
 			retType := fGet.GetReturnType()
 			agg.Typ = makePlan2Type(&retType)
 		}
@@ -623,18 +682,37 @@ func (builder *QueryBuilder) findAggNodeBelow(nodeID int32) *plan.Node {
 	}
 }
 
-// getFirstColRef returns a column reference to the first column of the
-// TABLE_SCAN node found at or below nodeID.
-func (builder *QueryBuilder) getFirstColRef(nodeID int32) *plan.Expr {
+// findRowIDColRef walks down from nodeID through single-child nodes to find
+// a TABLE_SCAN, and returns a column reference to its Row_ID column.
+//
+// Row_ID is always present and NotNullable on a base TABLE_SCAN, so it
+// makes a safe "match marker": after a LEFT JOIN, Row_ID is non-null on
+// matched rows and NULL on non-matched rows, which is exactly what
+// count(marker) needs to distinguish "no inner row" from "matched zero
+// inner rows".
+//
+// Returns nil if the walk hits a multi-child node, a non-TABLE_SCAN leaf,
+// or a TABLE_SCAN whose TableDef does not expose Row_ID.
+func (builder *QueryBuilder) findRowIDColRef(nodeID int32) *plan.Expr {
 	for {
 		node := builder.qry.Nodes[nodeID]
-		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && len(node.TableDef.Cols) > 0 {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			if node.TableDef == nil || node.TableDef.Name2ColIndex == nil {
+				return nil
+			}
+			idx, ok := node.TableDef.Name2ColIndex[catalog.Row_ID]
+			if !ok || int(idx) >= len(node.TableDef.Cols) {
+				return nil
+			}
+			col := node.TableDef.Cols[idx]
+			typ := col.Typ
+			typ.NotNullable = true
 			return &plan.Expr{
-				Typ:  node.TableDef.Cols[0].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: node.BindingTags[0], ColPos: 0}},
+				Typ:  typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: node.BindingTags[0], ColPos: idx}},
 			}
 		}
-		if len(node.Children) == 0 {
+		if len(node.Children) != 1 {
 			return nil
 		}
 		nodeID = node.Children[0]
