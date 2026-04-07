@@ -60,7 +60,7 @@ type mockScannerCB2 struct {
 	errFn   func() error
 }
 
-func (m *mockScannerCB2) Next() bool                    { return m.nextFn() }
+func (m *mockScannerCB2) Next() bool                     { return m.nextFn() }
 func (m *mockScannerCB2) Scan(dest ...interface{}) error { return m.scanFn(dest...) }
 func (m *mockScannerCB2) Close() error                   { return m.closeFn() }
 func (m *mockScannerCB2) Err() error                     { return m.errFn() }
@@ -418,7 +418,7 @@ func TestCoverageBoost2_FilterObjectJob_Execute_TTLPassesButFilterFails(t *testi
 	// TTL checker passes, but FilterObject fails due to invalid stats bytes
 	job := NewFilterObjectJob(
 		context.Background(),
-		[]byte("short"),  // invalid length
+		[]byte("short"), // invalid length
 		types.TS{},
 		nil, false, nil, nil, nil, nil, "acc", "pub", nil, nil, nil,
 		func() bool { return true }, // TTL passes

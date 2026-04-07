@@ -56,10 +56,10 @@ type mockScanner struct {
 	errFn   func() error
 }
 
-func (m *mockScanner) Next() bool                        { return m.nextFn() }
-func (m *mockScanner) Scan(dest ...interface{}) error     { return m.scanFn(dest...) }
-func (m *mockScanner) Close() error                       { return m.closeFn() }
-func (m *mockScanner) Err() error                         { return m.errFn() }
+func (m *mockScanner) Next() bool                     { return m.nextFn() }
+func (m *mockScanner) Scan(dest ...interface{}) error { return m.scanFn(dest...) }
+func (m *mockScanner) Close() error                   { return m.closeFn() }
+func (m *mockScanner) Err() error                     { return m.errFn() }
 
 // newMockResult wraps a mockScanner into a *Result.
 func newMockResult(s MockResultScanner) *Result {
@@ -797,20 +797,20 @@ func TestFilterObjectJob_Execute_NilTTLChecker(t *testing.T) {
 	// on invalid objectStatsBytes, giving us coverage of the non-TTL path.
 	job := NewFilterObjectJob(
 		context.Background(),
-		nil,               // objectStatsBytes
-		types.TS{},        // snapshotTS
-		nil,               // upstreamExecutor
-		false,             // isTombstone
-		nil,               // localFS
-		nil,               // mp
-		nil,               // getChunkWorker
-		nil,               // writeObjectWorker
-		"acc1",            // subscriptionAccountName
-		"pub1",            // pubName
-		nil,               // ccprCache
-		nil,               // txnID
-		nil,               // aobjectMap
-		nil,               // ttlChecker (nil)
+		nil,        // objectStatsBytes
+		types.TS{}, // snapshotTS
+		nil,        // upstreamExecutor
+		false,      // isTombstone
+		nil,        // localFS
+		nil,        // mp
+		nil,        // getChunkWorker
+		nil,        // writeObjectWorker
+		"acc1",     // subscriptionAccountName
+		"pub1",     // pubName
+		nil,        // ccprCache
+		nil,        // txnID
+		nil,        // aobjectMap
+		nil,        // ttlChecker (nil)
 	)
 	job.Execute()
 	res := job.WaitDone().(*FilterObjectJobResult)
