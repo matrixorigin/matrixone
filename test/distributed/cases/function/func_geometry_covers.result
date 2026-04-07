@@ -1,0 +1,45 @@
+select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as covers_point_point_same;
+➤ covers_point_point_same[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as covers_point_point_diff;
+➤ covers_point_point_diff[-7,1,0]  𝄀
+0
+select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(2 0)')) as covers_line_point_endpoint;
+➤ covers_line_point_endpoint[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0.5 0,1.5 0)')) as covers_line_line_subset;
+➤ covers_line_line_subset[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as covers_line_line_longer;
+➤ covers_line_line_longer[-7,1,0]  𝄀
+0
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as covers_polygon_point_inside;
+➤ covers_polygon_point_inside[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(0 1)')) as covers_polygon_point_boundary;
+➤ covers_polygon_point_boundary[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as covers_polygon_line_boundary;
+➤ covers_polygon_line_boundary[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(-1 1,1 1)')) as covers_polygon_line_crossing;
+➤ covers_polygon_line_crossing[-7,1,0]  𝄀
+0
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as covers_polygon_polygon_contained;
+➤ covers_polygon_polygon_contained[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as covers_polygon_polygon_equal;
+➤ covers_polygon_polygon_equal[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('LINESTRING(0 0,2 0)', 4326)) as covers_polygon_line_srid;
+➤ covers_polygon_line_srid[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as covers_null;
+➤ covers_null[-7,1,0]  𝄀
+null
+select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)'));
+-- @regex("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON", true)
+invalid input: ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON
+select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)'));
+-- @regex("polygons with holes are not supported", true)
+invalid input: polygons with holes are not supported

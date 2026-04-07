@@ -7847,6 +7847,12 @@ func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryCovers(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -8276,6 +8282,86 @@ func geometryEquals(left, right []byte) (bool, error) {
 	}
 }
 
+func geometryCovers(container, target []byte) (bool, error) {
+	containerType, err := geometryTypeNameFromPayload(container)
+	if err != nil {
+		return false, err
+	}
+	targetType, err := geometryTypeNameFromPayload(target)
+	if err != nil {
+		return false, err
+	}
+
+	switch containerType {
+	case "POINT":
+		if targetType != "POINT" {
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+		}
+		containerX, containerY, err := parsePointXYFromPayload(container)
+		if err != nil {
+			return false, err
+		}
+		targetX, targetY, err := parsePointXYFromPayload(target)
+		if err != nil {
+			return false, err
+		}
+		return sameGeometryPoint(
+			geometryPoint2D{x: containerX, y: containerY},
+			geometryPoint2D{x: targetX, y: targetY},
+		), nil
+	case "LINESTRING":
+		containerLine, err := lineStringGeometryPointsFromPayload(container)
+		if err != nil {
+			return false, err
+		}
+		switch targetType {
+		case "POINT":
+			targetX, targetY, err := parsePointXYFromPayload(target)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsLineString(geometryPoint2D{x: targetX, y: targetY}, containerLine), nil
+		case "LINESTRING":
+			targetLine, err := lineStringGeometryPointsFromPayload(target)
+			if err != nil {
+				return false, err
+			}
+			return lineStringCoveredByLineString(targetLine, containerLine), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+		}
+	case "POLYGON":
+		containerPolygon, err := polygonSingleRingPointsFromPayload(container)
+		if err != nil {
+			return false, err
+		}
+		switch targetType {
+		case "POINT":
+			targetX, targetY, err := parsePointXYFromPayload(target)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsPolygon(geometryPoint2D{x: targetX, y: targetY}, containerPolygon), nil
+		case "LINESTRING":
+			targetLine, err := lineStringGeometryPointsFromPayload(target)
+			if err != nil {
+				return false, err
+			}
+			return lineStringCoveredByPolygon(targetLine, containerPolygon), nil
+		case "POLYGON":
+			targetPolygon, err := polygonSingleRingPointsFromPayload(target)
+			if err != nil {
+				return false, err
+			}
+			return polygonCoveredByPolygon(targetPolygon, containerPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+		}
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+	}
+}
+
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
 	points, err := parseSinglePolygonRingFromText(wkt)
 	if err != nil {
@@ -8564,6 +8650,24 @@ func lineStringCoveredByLineString(line, other []geometryPoint2D) bool {
 			continue
 		}
 		if !lineSegmentCoveredByLineString(line[i], line[i+1], other) {
+			return false
+		}
+	}
+	return true
+}
+
+func lineStringCoveredByPolygon(line, polygon []geometryPoint2D) bool {
+	for _, point := range line {
+		if !pointIntersectsPolygon(point, polygon) {
+			return false
+		}
+	}
+	for i := 0; i < len(line)-1; i++ {
+		if sameGeometryPoint(line[i], line[i+1]) {
+			continue
+		}
+		_, hasOutside, _ := lineSegmentPolygonLocationFlags(line[i], line[i+1], polygon)
+		if hasOutside {
 			return false
 		}
 	}
