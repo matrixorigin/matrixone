@@ -7810,6 +7810,12 @@ func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryIntersects(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -7865,33 +7871,215 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 	return polygonContainsPointFromText(wkt, px, py)
 }
 
+func geometryIntersects(left, right []byte) (bool, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+
+	switch leftType {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		leftPoint := geometryPoint2D{x: x, y: y}
+		switch rightType {
+		case "POINT":
+			rightX, rightY, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return sameGeometryPoint(leftPoint, geometryPoint2D{x: rightX, y: rightY}), nil
+		case "LINESTRING":
+			rightPoints, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsLineString(leftPoint, rightPoints), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsPolygon(leftPoint, rightPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+		}
+	case "LINESTRING":
+		leftPoints, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		switch rightType {
+		case "POINT":
+			x, y, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsLineString(geometryPoint2D{x: x, y: y}, leftPoints), nil
+		case "LINESTRING":
+			rightPoints, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsLineString(leftPoints, rightPoints), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsPolygon(leftPoints, rightPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+		}
+	case "POLYGON":
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		switch rightType {
+		case "POINT":
+			x, y, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsPolygon(geometryPoint2D{x: x, y: y}, leftPolygon), nil
+		case "LINESTRING":
+			rightPoints, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsPolygon(rightPoints, leftPolygon), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return polygonIntersectsPolygon(leftPolygon, rightPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+		}
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+	}
+}
+
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
-	openIdx := strings.IndexByte(wkt, '(')
-	closeIdx := strings.LastIndexByte(wkt, ')')
-	if openIdx < 0 || closeIdx <= openIdx {
-		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-
-	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
-	if content == "" {
-		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-
-	rings := splitTopLevelGeometryItems(content)
-	if len(rings) != 1 {
-		return false, moerr.NewInvalidInputNoCtx("polygons with holes are not supported")
-	}
-
-	ring := strings.TrimSpace(rings[0])
-	if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
-		return false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-
-	points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+	points, err := parseSinglePolygonRingFromText(wkt)
 	if err != nil {
 		return false, err
 	}
 	return pointInPolygon(points, px, py), nil
+}
+
+func polygonSingleRingPointsFromPayload(payload []byte) ([]geometryPoint2D, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	if typeName != "POLYGON" {
+		return nil, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON")
+	}
+
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return parseSinglePolygonRingFromText(wkt)
+}
+
+func parseSinglePolygonRingFromText(wkt string) ([]geometryPoint2D, error) {
+	openIdx := strings.IndexByte(wkt, '(')
+	closeIdx := strings.LastIndexByte(wkt, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
+	if content == "" {
+		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	rings := splitTopLevelGeometryItems(content)
+	if len(rings) != 1 {
+		return nil, moerr.NewInvalidInputNoCtx("polygons with holes are not supported")
+	}
+
+	ring := strings.TrimSpace(rings[0])
+	if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+
+	return parsePolygonRingPoints(ring[1 : len(ring)-1])
+}
+
+func pointIntersectsLineString(point geometryPoint2D, line []geometryPoint2D) bool {
+	for i := 0; i < len(line)-1; i++ {
+		if pointOnSegment(point.x, point.y, line[i], line[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func pointIntersectsPolygon(point geometryPoint2D, polygon []geometryPoint2D) bool {
+	return pointOnPolygonBoundary(polygon, point.x, point.y) || pointInPolygon(polygon, point.x, point.y)
+}
+
+func lineStringIntersectsLineString(left, right []geometryPoint2D) bool {
+	for i := 0; i < len(left)-1; i++ {
+		for j := 0; j < len(right)-1; j++ {
+			if lineSegmentsIntersect(left[i], left[i+1], right[j], right[j+1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func lineStringIntersectsPolygon(line []geometryPoint2D, polygon []geometryPoint2D) bool {
+	for _, point := range line {
+		if pointIntersectsPolygon(point, polygon) {
+			return true
+		}
+	}
+	for i := 0; i < len(line)-1; i++ {
+		for j := 0; j < len(polygon); j++ {
+			next := (j + 1) % len(polygon)
+			if lineSegmentsIntersect(line[i], line[i+1], polygon[j], polygon[next]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func polygonIntersectsPolygon(left, right []geometryPoint2D) bool {
+	for i := 0; i < len(left); i++ {
+		leftNext := (i + 1) % len(left)
+		for j := 0; j < len(right); j++ {
+			rightNext := (j + 1) % len(right)
+			if lineSegmentsIntersect(left[i], left[leftNext], right[j], right[rightNext]) {
+				return true
+			}
+		}
+	}
+	for _, point := range left {
+		if pointIntersectsPolygon(point, right) {
+			return true
+		}
+	}
+	for _, point := range right {
+		if pointIntersectsPolygon(point, left) {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePolygonRingPoints(content string) ([]geometryPoint2D, error) {

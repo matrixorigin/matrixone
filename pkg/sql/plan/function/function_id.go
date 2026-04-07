@@ -621,10 +621,11 @@ const (
 	ST_BOUNDARY                   = 439
 	ST_ISVALID                    = 440
 	ST_POINTONSURFACE             = 441
+	ST_INTERSECTS                 = 442
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 442
+	FUNCTION_END_NUMBER = 443
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1017,6 +1018,7 @@ var functionIdRegister = map[string]int32{
 	"st_area":                        ST_AREA,
 	"st_contains":                    ST_CONTAINS,
 	"st_within":                      ST_WITHIN,
+	"st_intersects":                  ST_INTERSECTS,
 	"st_startpoint":                  ST_STARTPOINT,
 	"st_endpoint":                    ST_ENDPOINT,
 	"st_pointn":                      ST_POINTN,

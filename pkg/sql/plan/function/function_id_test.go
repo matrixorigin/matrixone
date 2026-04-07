@@ -495,7 +495,8 @@ var predefinedFunids = map[int]int{
 	ST_BOUNDARY:                   439,
 	ST_ISVALID:                    440,
 	ST_POINTONSURFACE:             441,
-	FUNCTION_END_NUMBER:           442,
+	ST_INTERSECTS:                 442,
+	FUNCTION_END_NUMBER:           443,
 }
 
 func Test_funids(t *testing.T) {
