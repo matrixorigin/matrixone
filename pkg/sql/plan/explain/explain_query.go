@@ -76,7 +76,6 @@ const (
 	Label_Window            = "Window"
 	Label_Minus_All         = "Minus All"
 	Label_Unique            = "Unique"
-	Label_Replace           = "Replace"
 	Label_Unknown           = "Unknown"
 	Label_Material          = "Material"
 	Label_Dedup_Join        = "Dedup join"
