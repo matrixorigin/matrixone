@@ -7816,6 +7816,12 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}, selectList)
 }
 
+func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryDisjoint(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -7967,6 +7973,14 @@ func geometryIntersects(left, right []byte) (bool, error) {
 	default:
 		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
 	}
+}
+
+func geometryDisjoint(left, right []byte) (bool, error) {
+	intersects, err := geometryIntersects(left, right)
+	if err != nil {
+		return false, err
+	}
+	return !intersects, nil
 }
 
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {

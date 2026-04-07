@@ -5396,6 +5396,95 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "polygons with holes are not supported")
 }
 
+func initStDisjointTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_disjoint basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0 0,2 2)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(0 0,2 2)",
+					},
+					[]bool{false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(2 2)",
+						"POINT(1 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 2,2 0)",
+						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
+						"SRID=4326;POINT(1 1)",
+					},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, true, false},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_disjoint null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(2 2)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStDisjoint(t *testing.T) {
+	testCases := initStDisjointTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StDisjoint)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStDisjointRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StDisjoint)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
+			[]bool{false}),
+	}
+	tcc = NewFunctionTestCase(proc, holeInputs, expect, StDisjoint)
+	succeed, info = tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "polygons with holes are not supported")
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{
