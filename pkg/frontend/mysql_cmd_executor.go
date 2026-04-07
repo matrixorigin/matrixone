@@ -2302,12 +2302,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
-				if err != nil || flag {
-					return true, err
-				}
-			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
 				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
