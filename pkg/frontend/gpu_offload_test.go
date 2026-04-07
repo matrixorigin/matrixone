@@ -314,3 +314,184 @@ func TestRewriteEndToEnd(t *testing.T) {
 		})
 	}
 }
+
+func TestFixMOSyntaxForDuckDB(t *testing.T) {
+	cases := []struct {
+		name, in, out string
+	}{
+		{"count star", "count('*')", "count(*)"},
+		{"date func", "date('2024-01-01')", "DATE '2024-01-01'"},
+		{"interval func", "interval('3', 'month')", "INTERVAL '3' month"},
+		{"extract func", "extract('year', col)", "EXTRACT(year FROM col)"},
+		{"date arith", "DATE '2024-01-01' + INTERVAL '3' month",
+			"CAST(DATE '2024-01-01' + INTERVAL '3' month AS DATE)"},
+		{"no change", "SELECT 1", "SELECT 1"},
+		{"combined", "SELECT count('*'), date('2024-01-01') FROM t",
+			"SELECT count(*), DATE '2024-01-01' FROM t"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.out, fixMOSyntaxForDuckDB(tc.in))
+		})
+	}
+}
+
+func TestGpuTypeToMysql_AllTypes(t *testing.T) {
+	// Integer types
+	for _, typ := range []string{
+		"INTEGER", "INT", "INT32", "BIGINT", "INT64",
+		"SMALLINT", "INT16", "TINYINT", "INT8",
+		"UINTEGER", "UINT32", "UBIGINT", "UINT64",
+		"USMALLINT", "UINT16", "UTINYINT", "UINT8", "HUGEINT",
+	} {
+		assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql(typ), "type %s", typ)
+	}
+	// Float types
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("FLOAT"))
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("REAL"))
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("FLOAT4"))
+	// Double types
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("DOUBLE"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("FLOAT8"))
+	// Bool
+	assert.Equal(t, defines.MYSQL_TYPE_BOOL, gpuTypeToMysql("BOOLEAN"))
+	assert.Equal(t, defines.MYSQL_TYPE_BOOL, gpuTypeToMysql("BOOL"))
+	// Blob
+	assert.Equal(t, defines.MYSQL_TYPE_BLOB, gpuTypeToMysql("BLOB"))
+	assert.Equal(t, defines.MYSQL_TYPE_BLOB, gpuTypeToMysql("BYTEA"))
+	// VARCHAR-mapped types
+	for _, typ := range []string{"DATE", "TIMESTAMP", "DECIMAL(38,2)", "VARCHAR", "TEXT"} {
+		assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, gpuTypeToMysql(typ), "type %s", typ)
+	}
+	// Case insensitive
+	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql("integer"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("double"))
+}
+
+func TestBuildGPUResultSet_BigintPrecision(t *testing.T) {
+	// Verify that large integers (>2^53) are preserved via json.Number
+	result := &gpuSidecarResponse{
+		Meta: []gpuColumn{
+			{Name: "big_id", Type: "BIGINT"},
+			{Name: "price", Type: "DOUBLE"},
+			{Name: "label", Type: "VARCHAR"},
+		},
+		Data: []json.RawMessage{
+			json.RawMessage(`[9007199254740993, 123.456, "hello"]`),
+		},
+		Rows: 1,
+	}
+
+	mrs := &MysqlResultSet{}
+	err := buildGPUResultSet(context.Background(), mrs, result)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(1), mrs.GetRowCount())
+	row, _ := mrs.GetRow(nil, 0)
+	// BIGINT should be int64, not float64
+	assert.IsType(t, int64(0), row[0])
+	assert.Equal(t, int64(9007199254740993), row[0])
+	// DOUBLE should be float64
+	assert.IsType(t, float64(0), row[1])
+	assert.Equal(t, 123.456, row[1])
+	// VARCHAR stays as string
+	assert.Equal(t, "hello", row[2])
+}
+
+func TestBuildGPUResultSet_NullValues(t *testing.T) {
+	result := &gpuSidecarResponse{
+		Meta: []gpuColumn{
+			{Name: "id", Type: "INTEGER"},
+			{Name: "val", Type: "VARCHAR"},
+		},
+		Data: []json.RawMessage{
+			json.RawMessage(`[1, null]`),
+			json.RawMessage(`[null, "ok"]`),
+		},
+		Rows: 2,
+	}
+
+	mrs := &MysqlResultSet{}
+	err := buildGPUResultSet(context.Background(), mrs, result)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), mrs.GetRowCount())
+}
+
+func TestBuildGPUResultSet_EmptyResult(t *testing.T) {
+	result := &gpuSidecarResponse{
+		Meta: []gpuColumn{{Name: "x", Type: "INTEGER"}},
+		Data: []json.RawMessage{},
+		Rows: 0,
+	}
+
+	mrs := &MysqlResultSet{}
+	err := buildGPUResultSet(context.Background(), mrs, result)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), mrs.GetRowCount())
+	assert.Equal(t, uint64(1), mrs.GetColumnCount())
+}
+
+func TestBuildGPUResultSet_InvalidJSON(t *testing.T) {
+	result := &gpuSidecarResponse{
+		Meta: []gpuColumn{{Name: "x", Type: "INTEGER"}},
+		Data: []json.RawMessage{json.RawMessage(`{invalid}`)},
+		Rows: 1,
+	}
+
+	mrs := &MysqlResultSet{}
+	err := buildGPUResultSet(context.Background(), mrs, result)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse sidecar row")
+}
+
+func TestTaeScanRefFormat_EscapeQuotes(t *testing.T) {
+	ref := &taeScanRef{url: "http://mo:6060/debug/tae/manifest?table=db.it's"}
+	ctx := tree.NewFmtCtx(dialect.MYSQL)
+	ref.Format(ctx)
+	assert.Equal(t, "tae_scan('http://mo:6060/debug/tae/manifest?table=db.it''s')", ctx.String())
+}
+
+func TestSetDebugHTTPAddr(t *testing.T) {
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+
+	SetDebugHTTPAddr(":8888")
+	assert.Equal(t, ":8888", debugHTTPAddr)
+	assert.Equal(t, "http://localhost:8888", getManifestBaseURL())
+}
+
+func TestWalkExprForSubqueries_MoreTypes(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{"NOT subquery", "SELECT * FROM t1 WHERE NOT EXISTS (SELECT 1 FROM tpch.t2)"},
+		{"OR subquery", "SELECT * FROM t1 WHERE a=1 OR b IN (SELECT x FROM tpch.t3)"},
+		{"CASE subquery", "SELECT CASE WHEN (SELECT count(*) FROM tpch.t2)>0 THEN 1 ELSE 0 END FROM t1"},
+		{"binary expr", "SELECT a + (SELECT max(b) FROM tpch.t2) FROM t1"},
+		{"IS NULL", "SELECT * FROM t1 WHERE (SELECT x FROM tpch.t2 LIMIT 1) IS NULL"},
+		{"IS NOT NULL", "SELECT * FROM t1 WHERE (SELECT x FROM tpch.t2 LIMIT 1) IS NOT NULL"},
+		{"CAST", "SELECT CAST((SELECT x FROM tpch.t2 LIMIT 1) AS SIGNED) FROM t1"},
+		{"func arg", "SELECT coalesce((SELECT x FROM tpch.t2 LIMIT 1), 0) FROM t1"},
+		{"tuple", "SELECT * FROM t1 WHERE (a,b) IN (SELECT x,y FROM tpch.t2)"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			sel := stmts[0].(*tree.Select)
+			rewriteSelectStmt(sel.Select, "default_db", "http://mo:6060", nil)
+			result := tree.String(sel, dialect.MYSQL)
+			assert.Contains(t, result, "tae_scan(", "should rewrite subquery table in: %s", tc.name)
+		})
+	}
+}
+
+func TestCollectCTENames_Nil(t *testing.T) {
+	names := collectCTENames(nil)
+	assert.NotNil(t, names)
+	assert.Len(t, names, 0)
+}
