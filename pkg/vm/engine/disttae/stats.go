@@ -318,6 +318,23 @@ func (gs *GlobalStats) keyExists(key pb.StatsInfoKey) bool {
 	return ok
 }
 
+// RemoveTid removes all statsInfoMap entries for the given table ID.
+// Called from cleanMemoryTableWithTable (1+ hour after unsubscribe/drop)
+// to prevent unbounded map growth. Safe because no queries target a
+// table that has been unsubscribed for over an hour.
+func (gs *GlobalStats) RemoveTid(tableID uint64) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	for key := range gs.mu.statsInfoMap {
+		if key.TableID == tableID {
+			delete(gs.mu.statsInfoMap, key)
+		}
+	}
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+}
+
 func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey) bool {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
