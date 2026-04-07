@@ -8183,19 +8183,36 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		return false, err
 	}
 
-	if leftType != "LINESTRING" || rightType != "LINESTRING" {
-		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING")
+	switch leftType {
+	case "LINESTRING":
+		if rightType != "LINESTRING" {
+			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON")
+		}
+		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		rightLine, err := lineStringGeometryPointsFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return lineStringOverlapsLineString(leftLine, rightLine), nil
+	case "POLYGON":
+		if rightType != "POLYGON" {
+			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON")
+		}
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return polygonOverlapsPolygon(left, right, leftPolygon, rightPolygon)
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON")
 	}
-
-	leftLine, err := lineStringGeometryPointsFromPayload(left)
-	if err != nil {
-		return false, err
-	}
-	rightLine, err := lineStringGeometryPointsFromPayload(right)
-	if err != nil {
-		return false, err
-	}
-	return lineStringOverlapsLineString(leftLine, rightLine), nil
 }
 
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
@@ -8452,6 +8469,23 @@ func lineStringOverlapsLineString(left, right []geometryPoint2D) bool {
 	return true
 }
 
+func polygonOverlapsPolygon(leftPayload, rightPayload []byte, left, right []geometryPoint2D) (bool, error) {
+	if !polygonIntersectsPolygon(left, right) {
+		return false, nil
+	}
+	touches, err := polygonTouchesPolygon(leftPayload, rightPayload, left, right)
+	if err != nil {
+		return false, err
+	}
+	if touches {
+		return false, nil
+	}
+	if polygonCoveredByPolygon(left, right) || polygonCoveredByPolygon(right, left) {
+		return false, nil
+	}
+	return true, nil
+}
+
 func hasLineStringLinearOverlap(left, right []geometryPoint2D) bool {
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
@@ -8469,6 +8503,22 @@ func lineStringCoveredByLineString(line, other []geometryPoint2D) bool {
 			continue
 		}
 		if !lineSegmentCoveredByLineString(line[i], line[i+1], other) {
+			return false
+		}
+	}
+	return true
+}
+
+func polygonCoveredByPolygon(candidate, container []geometryPoint2D) bool {
+	for _, point := range candidate {
+		if !pointInPolygon(container, point.x, point.y) && !pointOnPolygonBoundary(container, point.x, point.y) {
+			return false
+		}
+	}
+	for i := 0; i < len(candidate); i++ {
+		next := (i + 1) % len(candidate)
+		_, hasOutside, _ := lineSegmentPolygonLocationFlags(candidate[i], candidate[next], container)
+		if hasOutside {
 			return false
 		}
 	}

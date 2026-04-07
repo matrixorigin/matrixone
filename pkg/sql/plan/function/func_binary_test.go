@@ -5702,8 +5702,13 @@ func initStOverlapsTestCase() []tcTemp {
 						"LINESTRING(0 0,2 0,3 1)",
 						"LINESTRING(3 0,0 0)",
 						"SRID=4326;LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"LINESTRING(1 0,4 0)",
@@ -5714,12 +5719,17 @@ func initStOverlapsTestCase() []tcTemp {
 						"LINESTRING(1 0,3 0,4 -1)",
 						"LINESTRING(1 0,4 0)",
 						"SRID=4326;LINESTRING(1 0,4 0)",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
+						"POLYGON((1 1,3 1,3 3,1 3,1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((1 0,3 0,3 2,1 2,1 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, false, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false}),
+				[]bool{true, false, false, false, false, true, true, true, true, false, false, false, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_overlaps null",
@@ -5755,16 +5765,29 @@ func TestStOverlapsRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
+			[]string{"POINT(1 1)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"LINESTRING(0 0,3 0)"},
+			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
 			[]bool{false}),
 	}
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StOverlaps)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_OVERLAPS only supports LINESTRING/LINESTRING")
+	require.Contains(t, info, "ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((1 0,3 0,3 2,1 2,1 0))"},
+			[]bool{false}),
+	}
+	tcc = NewFunctionTestCase(proc, holeInputs, expect, StOverlaps)
+	succeed, info = tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "polygons with holes are not supported")
 }
 
 // L2 Distance
