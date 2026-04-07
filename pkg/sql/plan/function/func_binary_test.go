@@ -5485,6 +5485,97 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "polygons with holes are not supported")
 }
 
+func initStTouchesTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_touches basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 0)",
+						"POINT(0 1)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POINT(0 0)",
+						"SRID=4326;POINT(0 1)",
+					},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(2 0)",
+						"LINESTRING(0 0,1 1,0 0)",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, false, true, false, true},
+				[]bool{false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_touches null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStTouches(t *testing.T) {
+	testCases := initStTouchesTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StTouches)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStTouchesRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,2 0)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(0 1)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
+			[]bool{false}),
+	}
+	tcc = NewFunctionTestCase(proc, holeInputs, expect, StTouches)
+	succeed, info = tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "polygons with holes are not supported")
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{

@@ -7822,6 +7822,12 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryTouches(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -7983,6 +7989,70 @@ func geometryDisjoint(left, right []byte) (bool, error) {
 	return !intersects, nil
 }
 
+func geometryTouches(left, right []byte) (bool, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+
+	switch leftType {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		leftPoint := geometryPoint2D{x: x, y: y}
+		switch rightType {
+		case "LINESTRING":
+			rightPoints, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointTouchesLineString(leftPoint, rightPoints), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointOnPolygonBoundary(rightPolygon, leftPoint.x, leftPoint.y), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+		}
+	case "LINESTRING":
+		if rightType != "POINT" {
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+		}
+		leftPoints, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		x, y, err := parsePointXYFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return pointTouchesLineString(geometryPoint2D{x: x, y: y}, leftPoints), nil
+	case "POLYGON":
+		if rightType != "POINT" {
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+		}
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		x, y, err := parsePointXYFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return pointOnPolygonBoundary(leftPolygon, x, y), nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+	}
+}
+
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
 	points, err := parseSinglePolygonRingFromText(wkt)
 	if err != nil {
@@ -8039,6 +8109,13 @@ func pointIntersectsLineString(point geometryPoint2D, line []geometryPoint2D) bo
 		}
 	}
 	return false
+}
+
+func pointTouchesLineString(point geometryPoint2D, line []geometryPoint2D) bool {
+	if len(line) == 0 || sameGeometryPoint(line[0], line[len(line)-1]) {
+		return false
+	}
+	return sameGeometryPoint(point, line[0]) || sameGeometryPoint(point, line[len(line)-1])
 }
 
 func pointIntersectsPolygon(point geometryPoint2D, polygon []geometryPoint2D) bool {
