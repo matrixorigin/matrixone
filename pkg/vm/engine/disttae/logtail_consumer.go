@@ -2255,12 +2255,13 @@ func updatePartitionOfPush(
 		return err
 	}
 
+	t0 = time.Now()
+	markLatestPartAppliedLogtailTS(state, tl)
 	//After consume checkpoints finished ,then update the start and end of
 	//the table's partition and catalog cache.
 	if isSub {
 		if len(tl.CkpLocation) != 0 {
 			if !ckpStart.IsEmpty() || !ckpEnd.IsEmpty() {
-				t0 = time.Now()
 				state.UpdateDuration(ckpStart, types.MaxTs())
 				if lazyLoad {
 					state.AppendCheckpoint(tl.CkpLocation, partition)
@@ -2269,8 +2270,6 @@ func updatePartitionOfPush(
 				//Notice that the checkpoint duration is same among all mo system tables,
 				//such as mo_databases, mo_tables, mo_columns.
 				//	e.GetLatestCatalogCache().UpdateDuration(ckpStart, types.MaxTs())
-
-				v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 			}
 		} else {
 			state.UpdateDuration(types.TS{}, types.MaxTs())
@@ -2280,10 +2279,21 @@ func updatePartitionOfPush(
 			// }
 		}
 	}
+	v2.LogtailUpdatePartitonUpdateTimestampsDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	doneMutate()
 
 	return nil
+}
+
+func markLatestPartAppliedLogtailTS(
+	state *logtailreplay.PartitionState,
+	lt *logtail.TableLogtail,
+) {
+	if lt == nil || lt.Ts == nil {
+		return
+	}
+	state.AdvanceAppliedLogtailTS(types.TimestampToTS(*lt.Ts))
 }
 
 func consumeLogTail(

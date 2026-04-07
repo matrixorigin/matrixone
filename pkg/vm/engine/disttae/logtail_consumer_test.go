@@ -675,6 +675,43 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	assert.Equal(t, 3, state.ApproxInMemRows())
 }
 
+func TestMarkLatestPartAppliedLogtailTS(t *testing.T) {
+	t.Run("tracks latest applied logtail ts", func(t *testing.T) {
+		state := logtailreplay.NewPartitionState("", false, 42, false)
+		logtailTS := types.BuildTS(20, 1)
+		logtailPBTS := logtailTS.ToTimestamp()
+
+		markLatestPartAppliedLogtailTS(
+			state,
+			&logtail.TableLogtail{Ts: &logtailPBTS},
+		)
+
+		require.Equal(t, logtailTS, state.GetAppliedLogtailTS())
+
+		nextTS := types.BuildTS(30, 0)
+		nextPBTS := nextTS.ToTimestamp()
+		markLatestPartAppliedLogtailTS(
+			state,
+			&logtail.TableLogtail{Ts: &nextPBTS},
+		)
+
+		require.Equal(t, nextTS, state.GetAppliedLogtailTS())
+	})
+
+	t.Run("ignores older logtail ts", func(t *testing.T) {
+		state := logtailreplay.NewPartitionState("", false, 42, false)
+		newTS := types.BuildTS(12, 0)
+		oldTS := types.BuildTS(11, 0)
+		newPBTS := newTS.ToTimestamp()
+		oldPBTS := oldTS.ToTimestamp()
+
+		markLatestPartAppliedLogtailTS(state, &logtail.TableLogtail{Ts: &newPBTS})
+		markLatestPartAppliedLogtailTS(state, &logtail.TableLogtail{Ts: &oldPBTS})
+
+		require.Equal(t, newTS, state.GetAppliedLogtailTS())
+	})
+}
+
 func TestLogTailConnect(t *testing.T) {
 	// this case is tested by TestSpeedupAbortAllTxn
 }

@@ -2309,6 +2309,7 @@ func (tbl *txnTable) getPartitionState(
 	var (
 		eng          = tbl.eng.(*Engine)
 		createdInTxn bool
+		snapshotTS   = types.TimestampToTS(tbl.db.op.SnapshotTS())
 	)
 
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
@@ -2329,6 +2330,12 @@ func (tbl *txnTable) getPartitionState(
 	}
 
 	// Subscribe a latest partition state
+	_, alreadySubscribed, _ := eng.PushClient().isSubscribed(
+		ctx,
+		uint64(tbl.accountId),
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
 	if ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
 		uint64(tbl.accountId),
@@ -2353,8 +2360,21 @@ func (tbl *txnTable) getPartitionState(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
-		return
+	} else if ps != nil {
+		if !alreadySubscribed {
+			part := eng.GetOrCreateLatestPart(
+				ctx,
+				uint64(tbl.accountId),
+				tbl.db.databaseId,
+				tbl.tableId,
+			)
+			if ps, err = waitLatestPartLogtailAppliedAt(ctx, part, snapshotTS); err != nil {
+				return nil, err
+			}
+		}
+		if ps.CanServe(snapshotTS) {
+			return
+		}
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.
@@ -2408,6 +2428,30 @@ func (tbl *txnTable) getPartitionState(
 		zap.Error(err),
 	)
 	return
+}
+
+func waitLatestPartLogtailAppliedAt(
+	ctx context.Context,
+	part *logtailreplay.Partition,
+	ts types.TS,
+) (*logtailreplay.PartitionState, error) {
+	visibleTS := ts.Prev()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		snap := part.Snapshot()
+		appliedTS := snap.GetAppliedLogtailTS()
+		if appliedTS.GE(&visibleTS) {
+			return snap, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (tbl *txnTable) PKPersistedBetween(
@@ -2711,7 +2755,6 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	if err != nil {
 		return false, err
 	}
-	snap := part.Snapshot()
 
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)
@@ -2719,6 +2762,8 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	packer.Reset()
 
 	keys := readutil.EncodePrimaryKeyVector(keysVector, packer)
+	snap := part.Snapshot()
+
 	// Measure PKExistInMemBetween duration
 	memCheckStart := time.Now()
 	exist, flushed := snap.PKExistInMemBetween(from, to, keys)

@@ -84,6 +84,7 @@ type PartitionState struct {
 	noData bool
 
 	lastFlushTimestamp types.TS
+	appliedLogtailTS   types.TS
 
 	// some data need to be shared between all states
 	// should have been in the Partition structure, but doing that requires much more codes changes
@@ -856,6 +857,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		tombstoneObjectDTSIndex:   p.tombstoneObjectDTSIndex.Copy(),
 		shared:                    p.shared,
 		lastFlushTimestamp:        p.lastFlushTimestamp,
+		appliedLogtailTS:          p.appliedLogtailTS,
 		start:                     p.start,
 		end:                       p.end,
 		prefetch:                  p.prefetch,
@@ -1174,8 +1176,12 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	return false
 }
 
+func (p *PartitionState) Covers(from types.TS, to types.TS) bool {
+	return from.GE(&p.start) && to.LE(&p.end)
+}
+
 func (p *PartitionState) CanServe(ts types.TS) bool {
-	return ts.GE(&p.start) && ts.LE(&p.end)
+	return p.Covers(ts, ts)
 }
 
 func (p *PartitionState) UpdateDuration(start types.TS, end types.TS) {
@@ -1185,6 +1191,16 @@ func (p *PartitionState) UpdateDuration(start types.TS, end types.TS) {
 
 func (p *PartitionState) GetDuration() (types.TS, types.TS) {
 	return p.start, p.end
+}
+
+func (p *PartitionState) GetAppliedLogtailTS() types.TS {
+	return p.appliedLogtailTS
+}
+
+func (p *PartitionState) AdvanceAppliedLogtailTS(ts types.TS) {
+	if ts.GT(&p.appliedLogtailTS) {
+		p.appliedLogtailTS = ts
+	}
 }
 
 func (p *PartitionState) IsValid() bool {

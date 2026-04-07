@@ -31,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTxnTableForTest() *txnTable {
@@ -156,6 +158,45 @@ func TestTxnTable_Reset(t *testing.T) {
 			primary: newTxnTableForTest(),
 		}
 		assert.NoError(t, tbl.Reset(newOp))
+	})
+}
+
+func TestWaitLatestPartLogtailAppliedAt(t *testing.T) {
+	t.Run("waits until latest part catches up", func(t *testing.T) {
+		part := logtailreplay.NewPartition("", nil, 0, 1, 1, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		targetTS := types.BuildTS(10, 0)
+		visibleTS := targetTS.Prev()
+
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			state, done := part.MutateState()
+			state.UpdateDuration(types.BuildTS(5, 0), types.MaxTs())
+			state.AdvanceAppliedLogtailTS(visibleTS)
+			done()
+		}()
+
+		snap, err := waitLatestPartLogtailAppliedAt(
+			ctx,
+			part,
+			targetTS,
+		)
+		require.NoError(t, err)
+		require.Equal(t, visibleTS, snap.GetAppliedLogtailTS())
+	})
+
+	t.Run("returns context error when latest part stays behind", func(t *testing.T) {
+		part := logtailreplay.NewPartition("", nil, 0, 1, 1, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		_, err := waitLatestPartLogtailAppliedAt(
+			ctx,
+			part,
+			types.BuildTS(10, 0),
+		)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 }
 
