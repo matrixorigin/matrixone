@@ -372,10 +372,14 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 			if erg != nil {
 				return erg
 			}
+			// InplaceSort reorders data but NOT the null bitmap.
+			// NULLs are irrelevant for IN-filter: clear bitmap before sort.
+			vec.GetNulls().Reset()
 			vec.InplaceSort()
 			data, err = vec.MarshalBinary()
 			free()
 		} else {
+			ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
 			ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
 			data, err = ctr.hashmapBuilder.UniqueJoinKeys[0].MarshalBinary()
 		}
