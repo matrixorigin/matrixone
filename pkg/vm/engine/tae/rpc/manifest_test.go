@@ -214,4 +214,22 @@ func TestManifestHTTP(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// Non-existent database (distinct from non-existent table)
+	req = httptest.NewRequest("GET", "/debug/tae/manifest?table=no_such_db.some_tbl", nil)
+	w = httptest.NewRecorder()
+	handler(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// Existing database, non-existent table
+	req = httptest.NewRequest("GET", "/debug/tae/manifest?table=http_db.no_such_tbl", nil)
+	w = httptest.NewRecorder()
+	handler(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// Invalid table parameter format (no dot separator)
+	req = httptest.NewRequest("GET", "/debug/tae/manifest?table=nodot", nil)
+	w = httptest.NewRecorder()
+	handler(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

@@ -46,7 +46,7 @@ func manifestHTTPHandler(d *db.DB) http.HandlerFunc {
 				switch me.ErrorCode() {
 				case moerr.ErrInvalidInput:
 					writeJSONError(w, err.Error(), http.StatusBadRequest)
-				case moerr.ErrBadDB, moerr.ErrNoSuchTable:
+				case moerr.ErrBadDB, moerr.ErrNoSuchTable, moerr.OkExpectedEOB:
 					writeJSONError(w, err.Error(), http.StatusNotFound)
 				default:
 					writeJSONError(w, err.Error(), http.StatusInternalServerError)
