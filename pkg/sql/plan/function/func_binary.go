@@ -8281,14 +8281,14 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		case "POINT", "LINESTRING", "POLYGON":
 			return false, nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "LINESTRING":
-		if rightType == "POINT" {
+		if rightType == "POINT" || rightType == "POLYGON" {
 			return false, nil
 		}
 		if rightType != "LINESTRING" {
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		leftLine, err := lineStringGeometryPointsFromPayload(left)
 		if err != nil {
@@ -8300,11 +8300,11 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		}
 		return lineStringOverlapsLineString(leftLine, rightLine), nil
 	case "POLYGON":
-		if rightType == "POINT" {
+		if rightType == "POINT" || rightType == "LINESTRING" {
 			return false, nil
 		}
 		if rightType != "POLYGON" {
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
 		if err != nil {
@@ -8316,7 +8316,7 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		}
 		return polygonOverlapsPolygon(left, right, leftPolygon, rightPolygon)
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
