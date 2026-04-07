@@ -5499,8 +5499,11 @@ func initStTouchesTestCase() []tcTemp {
 						"LINESTRING(0 0,2 0)",
 						"POINT(0 0)",
 						"SRID=4326;POINT(0 1)",
+						"LINESTRING(-1 0,3 0)",
+						"LINESTRING(-1 1,3 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"LINESTRING(0 0,2 0)",
@@ -5510,12 +5513,15 @@ func initStTouchesTestCase() []tcTemp {
 						"POINT(2 0)",
 						"LINESTRING(0 0,1 1,0 0)",
 						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(2 2,3 2)",
 					},
-					[]bool{false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, true, false, true},
-				[]bool{false, false, false, false, false, false, false}),
+				[]bool{true, false, true, false, true, false, true, true, false, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_touches null",
@@ -5554,13 +5560,13 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 			[]string{"LINESTRING(0 0,2 0)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
+			[]string{"LINESTRING(0 2,2 0)"},
 			[]bool{false}),
 	}
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_TOUCHES only supports POINT with LINESTRING or POLYGON")
+	require.Contains(t, info, "ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
