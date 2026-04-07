@@ -8333,7 +8333,10 @@ func geometryEquals(left, right []byte) (bool, error) {
 	switch leftType {
 	case "POINT":
 		if rightType != "POINT" {
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+			if rightType == "LINESTRING" || rightType == "POLYGON" {
+				return false, nil
+			}
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		leftX, leftY, err := parsePointXYFromPayload(left)
 		if err != nil {
@@ -8346,7 +8349,10 @@ func geometryEquals(left, right []byte) (bool, error) {
 		return sameGeometryPoint(geometryPoint2D{x: leftX, y: leftY}, geometryPoint2D{x: rightX, y: rightY}), nil
 	case "LINESTRING":
 		if rightType != "LINESTRING" {
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+			if rightType == "POINT" || rightType == "POLYGON" {
+				return false, nil
+			}
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		leftLine, err := lineStringGeometryPointsFromPayload(left)
 		if err != nil {
@@ -8359,7 +8365,10 @@ func geometryEquals(left, right []byte) (bool, error) {
 		return lineStringCoveredByLineString(leftLine, rightLine) && lineStringCoveredByLineString(rightLine, leftLine), nil
 	case "POLYGON":
 		if rightType != "POLYGON" {
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+			if rightType == "POINT" || rightType == "LINESTRING" {
+				return false, nil
+			}
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
 		if err != nil {
@@ -8371,7 +8380,7 @@ func geometryEquals(left, right []byte) (bool, error) {
 		}
 		return polygonCoveredByPolygon(leftPolygon, rightPolygon) && polygonCoveredByPolygon(rightPolygon, leftPolygon), nil
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+		return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
