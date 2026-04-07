@@ -840,12 +840,21 @@ func TestReplaceSelfRefCascade(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 	assert.Equal(t, plan.Query_INSERT, query.StmtType)
+
+	// CASCADE FK action must NOT generate a parent→child pre-check; the
+	// cascading delete handles child rows.
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"CASCADE self-ref FK should NOT generate parent-child pre-check, got: %s", sql)
+	}
 }
 
 func TestReplaceDetectSqls(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	// REPLACE on FK table should generate DetectSqls for self-referencing FK checks
+	// REPLACE on a RESTRICT self-ref FK table must generate a
+	// REPLACE_PARENT_CHK: pre-check SQL that references both the FK column
+	// and the referred PK column, embedding the user-supplied PK value.
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref VALUES (1, NULL, 'root')")
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -853,8 +862,45 @@ func TestReplaceDetectSqls(t *testing.T) {
 
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
-	// DetectSqls may or may not be generated depending on genSqlsForCheckFKSelfRefer behavior
-	// The important thing is that the plan was built successfully
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"RESTRICT self-ref FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
+	assert.Contains(t, preCheck, "self_ref", "pre-check SQL should target self_ref table")
+	assert.Contains(t, preCheck, "parent_id", "pre-check SQL should reference the FK column")
+	assert.Contains(t, preCheck, "`id`", "pre-check SQL should reference the referred PK column")
+	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+}
+
+func TestReplaceDetectSqlsExplicitColumnsCaseInsensitive(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// User-supplied column names use mixed case; lookup must be
+	// case-insensitive so the pre-check is still generated.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref (ID, PARENT_ID, NAME) VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasPreCheck := false
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			hasPreCheck = true
+			break
+		}
+	}
+	assert.True(t, hasPreCheck,
+		"pre-check should be generated even when explicit columns use mixed case")
 }
 
 func TestReplaceODKU(t *testing.T) {

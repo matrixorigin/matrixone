@@ -506,7 +506,14 @@ func (c *Compile) runOnce() (err error) {
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
-					return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+					// Only translate the "check returned false" signal into the
+					// parent-row-referenced error; pass through real execution
+					// errors (syntax, permissions, network, txn conflicts) so
+					// they are not masked.
+					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
+						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+					}
+					return err
 				}
 			}
 		}

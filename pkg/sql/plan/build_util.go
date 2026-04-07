@@ -992,6 +992,14 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 		if fkey.ForeignTbl != 0 {
 			continue
 		}
+		// Only RESTRICT / NO_ACTION need a parent→child pre-check.
+		// CASCADE / SET_NULL / SET_DEFAULT semantics allow the operation to
+		// proceed and let the cascading action handle the children, so a
+		// pre-check would incorrectly block valid REPLACEs.
+		if fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION {
+			continue
+		}
 		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
 		if err != nil {
 			return nil, err
@@ -1004,16 +1012,22 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 			continue
 		}
 
-		// Build column name → position in the Replace column list
+		// Build column name → position in the Replace column list.
+		// Names are stored lower-cased in ColDef.Name; the user-supplied
+		// AST identifiers may use any casing, so normalize both sides.
 		colNameToPos := make(map[string]int)
 		if len(stmt.Columns) > 0 {
 			for i, col := range stmt.Columns {
-				colNameToPos[string(col)] = i
+				colNameToPos[strings.ToLower(string(col))] = i
 			}
 		} else {
+			// Implicit column list: same visible-column rule as
+			// getInsertColsFromStmt — skip hidden cols (e.g. composite PK
+			// helper, fake PK, cluster-by composite, Row_ID), since the
+			// user VALUES list never supplies them.
 			pos := 0
 			for _, col := range cols {
-				if col.Name == catalog.Row_ID {
+				if col.Hidden {
 					continue
 				}
 				colNameToPos[col.Name] = pos
@@ -1026,14 +1040,26 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 			continue
 		}
 
+		// TODO: prepared statements pass values via ParamExpr, which
+		// formats as "?" and cannot be embedded into a background SQL
+		// without parameter binding. For now, skip pre-check generation
+		// when any row uses ParamExpr at refPos; the trade-off is that
+		// prepared REPLACE on RESTRICT self-ref FK tables loses the
+		// parent-row safety check until we move pre-check generation to
+		// compile time (after EXECUTE supplies actual values).
+		hasParam := false
 		var valStrs []string
 		for _, row := range valuesClause.Rows {
 			if refPos >= len(row) {
 				continue
 			}
+			if _, isParam := row[refPos].(*tree.ParamExpr); isParam {
+				hasParam = true
+				break
+			}
 			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
 		}
-		if len(valStrs) == 0 {
+		if hasParam || len(valStrs) == 0 {
 			continue
 		}
 
