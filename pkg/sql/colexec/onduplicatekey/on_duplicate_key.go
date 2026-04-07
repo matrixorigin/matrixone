@@ -112,23 +112,26 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		insertArg.ctr.rbat = batch.NewWithSize(len(insertArg.Attrs))
 		insertArg.ctr.rbat.Attrs = insertArg.Attrs
 
-		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(insertArg.Attrs))
-		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, insertArg.Attrs...)
-
 		for i, v := range originBatch.Vecs {
 			newVec := vector.NewVec(*v.GetType())
 			insertArg.ctr.rbat.SetVector(int32(i), newVec)
+		}
 
-			ckVec := vector.NewVec(*v.GetType())
-			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
+		// Initialize hash-based conflict detection
+		insertArg.ctr.uniqueKeyColIndices = make([][]int32, len(insertArg.UniqueColCheckExpr))
+		insertArg.ctr.conflictMaps = make([]map[string]int, len(insertArg.UniqueColCheckExpr))
+		for i, expr := range insertArg.UniqueColCheckExpr {
+			insertArg.ctr.uniqueKeyColIndices[i] = extractColIndicesFromExpr(expr)
+			insertArg.ctr.conflictMaps[i] = make(map[string]int)
 		}
 	} else {
 		insertArg.ctr.rbat.CleanOnlyData()
-		insertArg.ctr.checkConflictBat.CleanOnlyData()
+		for i := range insertArg.ctr.conflictMaps {
+			insertArg.ctr.conflictMaps[i] = make(map[string]int)
+		}
 	}
 
 	insertBatch := insertArg.ctr.rbat
-	checkConflictBatch := insertArg.ctr.checkConflictBat
 	attrs := make([]string, len(insertBatch.Attrs))
 	copy(attrs, insertBatch.Attrs)
 
@@ -140,12 +143,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			return err
 		}
 
-		// check if uniqueness conflict found in checkConflictBatch
-		oldConflictRowIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
-		if err != nil {
-			newBatch.Clean(proc.GetMPool())
-			return err
-		}
+		// O(1) hash map conflict check instead of O(N) linear scan
+		oldConflictRowIdx, conflictMsg := findConflictByHashMap(
+			newBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+			insertArg.ctr.conflictMaps, insertArg.UniqueCols, 0)
 		if oldConflictRowIdx > -1 {
 
 			if insertArg.IsIgnore {
@@ -177,6 +178,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				newBatch.Clean(proc.GetMPool())
 				return err
 			}
+
+			// Save old keys before in-place update (in case update changes unique columns)
+			oldKeys := make([]string, len(insertArg.ctr.uniqueKeyColIndices))
+			for k, colIndices := range insertArg.ctr.uniqueKeyColIndices {
+				oldKeys[k] = serializeUniqueKey(insertBatch.Vecs, colIndices, oldConflictRowIdx)
+			}
+
 			// update the oldConflictRowIdx of insertBatch by newBatch
 			for j := 0; j < insertColCount; j++ {
 				fromVec := tmpBatch.Vecs[j]
@@ -187,15 +195,19 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
+			}
 
-				toVec2 := checkConflictBatch.Vecs[j]
-				err = toVec2.Copy(fromVec, int64(oldConflictRowIdx), 0, proc.Mp())
-				if err != nil {
-					tmpBatch.Clean(proc.GetMPool())
-					newBatch.Clean(proc.GetMPool())
-					return err
+			// Update hash maps after in-place modification
+			for k, colIndices := range insertArg.ctr.uniqueKeyColIndices {
+				if oldKeys[k] != "" {
+					delete(insertArg.ctr.conflictMaps[k], oldKeys[k])
+				}
+				newKey := serializeUniqueKey(insertBatch.Vecs, colIndices, oldConflictRowIdx)
+				if newKey != "" {
+					insertArg.ctr.conflictMaps[k][newKey] = oldConflictRowIdx
 				}
 			}
+
 			tmpBatch.Clean(proc.GetMPool())
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
@@ -205,11 +217,8 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				_, err = checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
-				if err != nil {
-					newBatch.Clean(proc.GetMPool())
-					return err
-				}
+				addToConflictMaps(insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+					insertArg.ctr.conflictMaps, insertBatch.RowCount()-1)
 			} else {
 
 				if insertArg.IsIgnore {
@@ -222,12 +231,9 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				conflictRowIdx, conflictMsg, err := checkConflict(proc, tmpBatch, checkConflictBatch, insertArg.ctr.uniqueCheckExes, insertArg.UniqueCols, insertColCount)
-				if err != nil {
-					tmpBatch.Clean(proc.GetMPool())
-					newBatch.Clean(proc.GetMPool())
-					return err
-				}
+				conflictRowIdx, conflictMsg := findConflictByHashMap(
+					tmpBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+					insertArg.ctr.conflictMaps, insertArg.UniqueCols, 0)
 				if conflictRowIdx > -1 {
 					tmpBatch.Clean(proc.GetMPool())
 					newBatch.Clean(proc.GetMPool())
@@ -240,12 +246,8 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 						newBatch.Clean(proc.GetMPool())
 						return err
 					}
-					_, err = checkConflictBatch.Append(proc.Ctx, proc.Mp(), tmpBatch)
-					if err != nil {
-						tmpBatch.Clean(proc.GetMPool())
-						newBatch.Clean(proc.GetMPool())
-						return err
-					}
+					addToConflictMaps(insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+						insertArg.ctr.conflictMaps, insertBatch.RowCount()-1)
 				}
 				tmpBatch.Clean(proc.GetMPool())
 			}
@@ -265,6 +267,82 @@ func resetColPos(e *plan.Expr, columnCount int) {
 			for _, arg := range tmpExpr.F.Args {
 				resetColPos(arg, columnCount)
 			}
+		}
+	}
+}
+
+// extractColIndicesFromExpr extracts the left-side column indices from a unique check expression.
+// For a single-column unique key: "col_i = col_j" → [i]
+// For a composite unique key: "(col_i = col_j AND col_k = col_l)" → [i, k]
+func extractColIndicesFromExpr(expr *plan.Expr) []int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func.ObjName == "=" {
+			if col, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				return []int32{col.Col.ColPos}
+			}
+		} else if e.F.Func.ObjName == "and" {
+			left := extractColIndicesFromExpr(e.F.Args[0])
+			right := extractColIndicesFromExpr(e.F.Args[1])
+			return append(left, right...)
+		}
+	}
+	return nil
+}
+
+// serializeUniqueKey serializes unique key column values into a string for hash map lookup.
+// Returns empty string if any column is NULL (NULL never conflicts per SQL semantics).
+func serializeUniqueKey(vecs []*vector.Vector, colIndices []int32, row int) string {
+	var buf bytes.Buffer
+	for _, colIdx := range colIndices {
+		v := vecs[colIdx]
+		if v.GetNulls().Contains(uint64(row)) {
+			return ""
+		}
+		b := v.GetRawBytesAt(row)
+		// Length-prefix each field to avoid ambiguity for variable-length types
+		l := len(b)
+		buf.WriteByte(byte(l >> 24))
+		buf.WriteByte(byte(l >> 16))
+		buf.WriteByte(byte(l >> 8))
+		buf.WriteByte(byte(l))
+		buf.Write(b)
+	}
+	return buf.String()
+}
+
+// findConflictByHashMap checks if a row conflicts with any existing row using hash maps.
+// Returns the conflicting row index and message, or (-1, "") if no conflict.
+func findConflictByHashMap(
+	vecs []*vector.Vector,
+	uniqueKeyColIndices [][]int32,
+	conflictMaps []map[string]int,
+	uniqueCols []string,
+	row int,
+) (int, string) {
+	for i, colIndices := range uniqueKeyColIndices {
+		key := serializeUniqueKey(vecs, colIndices, row)
+		if key == "" {
+			continue
+		}
+		if idx, exists := conflictMaps[i][key]; exists {
+			return idx, fmt.Sprintf("Duplicate entry for key '%s'", uniqueCols[i])
+		}
+	}
+	return -1, ""
+}
+
+// addToConflictMaps adds a row's unique key values to all conflict hash maps.
+func addToConflictMaps(
+	vecs []*vector.Vector,
+	uniqueKeyColIndices [][]int32,
+	conflictMaps []map[string]int,
+	rowIdx int,
+) {
+	for i, colIndices := range uniqueKeyColIndices {
+		key := serializeUniqueKey(vecs, colIndices, rowIdx)
+		if key != "" {
+			conflictMaps[i][key] = rowIdx
 		}
 	}
 }
@@ -329,6 +407,9 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 	return newBatch, nil
 }
 
+// checkConflict uses expression evaluation to detect conflicts in checkConflictBatch.
+// This is the legacy O(N) per-call approach, kept for testing purposes.
+// The hot path now uses findConflictByHashMap for O(1) lookups instead.
 func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBatch *batch.Batch,
 	checkExpressionExecutor []colexec.ExpressionExecutor, uniqueCols []string, colCount int) (int, string, error) {
 	if checkConflictBatch.RowCount() == 0 {
