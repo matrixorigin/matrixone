@@ -490,13 +490,42 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
 	}
 
+	// This rewrite bypasses nodes above AGG by joining directly against the
+	// AGG input. Only allow the simple scalar aggregate shape:
+	//   AGG(...)
+	// or:
+	//   PROJECT(agg_col) -> AGG(...)
+	// Other shapes (extra GROUP BY keys, HAVING/FILTER, and computed PROJECT
+	// expressions) need different rewrites to preserve scalar subquery semantics.
+	if len(aggNode.BindingTags) == 0 || len(aggNode.Children) != 1 || len(aggNode.GroupBy) > 1 {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregation with non equal predicate in scalar subquery will be supported in future version")
+	}
+	subRoot := builder.qry.Nodes[subID]
+	if subRoot != aggNode {
+		if subRoot.NodeType != plan.Node_PROJECT ||
+			len(subRoot.Children) != 1 ||
+			builder.qry.Nodes[subRoot.Children[0]] != aggNode ||
+			len(subRoot.BindingTags) == 0 ||
+			len(subRoot.ProjectList) == 0 {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(),
+				"aggregation with non equal predicate in scalar subquery will be supported in future version")
+		}
+
+		col, ok := subRoot.ProjectList[0].Expr.(*plan.Expr_Col)
+		if !ok || col.Col == nil {
+			return 0, nil, moerr.NewNYIf(builder.GetContext(),
+				"aggregation with non equal predicate in scalar subquery will be supported in future version")
+		}
+	}
+
 	groupTag := aggNode.BindingTags[0]
 	innerID := aggNode.Children[0]
 
 	// pullupThroughProj may have rewritten predicates to reference the
 	// PROJECT tag.  Unwind PROJECT first, then AGG, so that predicates
 	// end up referencing columns from the scan below AGG.
-	projNode := builder.qry.Nodes[subID]
+	projNode := subRoot
 	if projNode.NodeType == plan.Node_PROJECT && len(projNode.BindingTags) > 0 {
 		projTag := projNode.BindingTags[0]
 		for i, pred := range preds {
@@ -652,7 +681,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		}
 		fGet, err = function.GetFunctionByName(builder.GetContext(), "case", argsType)
 		if err != nil {
-			return nodeID, retExpr, nil
+			return nodeID, retExpr, err
 		}
 		funcID, returnType = fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 		retExpr = &Expr{
