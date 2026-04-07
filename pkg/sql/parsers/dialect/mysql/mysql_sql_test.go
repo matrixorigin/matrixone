@@ -3438,6 +3438,18 @@ var (
 		output string
 	}{
 		{
+			input:  "select count(*) from t",
+			output: "select count(*) from t",
+		},
+		{
+			input:  "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
+			output: "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
+		},
+		{
+			input:  "select approx_count(*) from t",
+			output: "select approx_count(*) from t",
+		},
+		{
 			input:  "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
 			output: "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment = 'Category A and B', partition p2 values in ('C', 'D') comment = 'Category C and D')",
 		},

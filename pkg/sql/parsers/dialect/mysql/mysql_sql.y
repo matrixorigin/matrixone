@@ -11027,7 +11027,7 @@ function_call_aggregate:
 |   APPROX_COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -11102,7 +11102,7 @@ function_call_aggregate:
 |   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
