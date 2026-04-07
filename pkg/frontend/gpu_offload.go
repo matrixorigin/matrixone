@@ -482,6 +482,10 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSide
 				}
 			}
 		}
+		if len(row) != len(result.Meta) {
+			return moerr.NewInternalErrorf(ctx,
+				"sidecar row has %d columns, expected %d", len(row), len(result.Meta))
+		}
 		mrs.AddRow(row)
 	}
 

@@ -863,7 +863,9 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 			return nil, err
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
-		txn.Commit(context.Background())
+		if err := txn.Commit(context.Background()); err != nil {
+			return nil, err
+		}
 		committed = true
 		return tbl, nil
 	} else {
@@ -876,7 +878,9 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 			return nil, err
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
-		txn.Commit(context.Background())
+		if err := txn.Commit(context.Background()); err != nil {
+			return nil, err
+		}
 		committed = true
 		return tbl, nil
 	}
