@@ -36,6 +36,11 @@ func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Pro
 	} else {
 		nulls.Del(c.vs[vecDst].GetGrouping(), uint64(dst))
 	}
+	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
+		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
+		return nil
+	}
+	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
 	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 

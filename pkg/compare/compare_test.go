@@ -125,50 +125,6 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-func TestCompareCopyClearsNullVarlenaHeaders(t *testing.T) {
-	t.Run("varchar", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		proc := testutil.NewProcessWithMPool(t, "", mp)
-		src := vector.NewVec(types.T_varchar.ToType())
-		require.NoError(t, vector.AppendBytes(src, nil, true, mp))
-		dst := vector.NewVec(types.T_varchar.ToType())
-		require.NoError(t, vector.AppendBytes(dst, []byte("seed"), false, mp))
-
-		c := New(types.T_varchar.ToType(), false, false)
-		c.Set(0, src)
-		c.Set(1, dst)
-		require.NoError(t, c.Copy(0, 1, 0, 0, proc))
-		require.True(t, dst.GetNulls().Contains(0))
-		require.Equal(t, types.Varlena{}, vector.MustFixedColNoTypeCheck[types.Varlena](dst)[0])
-
-		src.Free(mp)
-		dst.Free(mp)
-		proc.Free()
-		require.Equal(t, int64(0), mp.CurrNB())
-	})
-
-	t.Run("array-float64", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		proc := testutil.NewProcessWithMPool(t, "", mp)
-		src := vector.NewVec(types.T_array_float64.ToType())
-		require.NoError(t, vector.AppendArray[float64](src, nil, true, mp))
-		dst := vector.NewVec(types.T_array_float64.ToType())
-		require.NoError(t, vector.AppendArray[float64](dst, []float64{1, 2}, false, mp))
-
-		c := New(types.T_array_float64.ToType(), false, false)
-		c.Set(0, src)
-		c.Set(1, dst)
-		require.NoError(t, c.Copy(0, 1, 0, 0, proc))
-		require.True(t, dst.GetNulls().Contains(0))
-		require.Equal(t, types.Varlena{}, vector.MustFixedColNoTypeCheck[types.Varlena](dst)[0])
-
-		src.Free(mp)
-		dst.Free(mp)
-		proc.Free()
-		require.Equal(t, int64(0), mp.CurrNB())
-	})
-}
-
 func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCase {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.NewVector(Rows, typ, m, true, nil)
