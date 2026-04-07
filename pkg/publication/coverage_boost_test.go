@@ -758,7 +758,7 @@ func TestParseUpstreamConn_MissingAt(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseUpstreamConn_InvalidPort(t *testing.T) {
+func TestParseUpstreamConn_InvalidPort_Boost(t *testing.T) {
 	_, err := ParseUpstreamConn("mysql://user:pass@host:notaport")
 	assert.Error(t, err)
 }

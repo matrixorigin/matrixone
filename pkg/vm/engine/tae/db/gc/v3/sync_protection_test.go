@@ -39,7 +39,7 @@ func buildTestBF(t *testing.T, objects []string) string {
 	}
 
 	// Create BloomFilter using index.NewBloomFilter (xorfilter based)
-	bf, err := index.NewBloomFilter(vec)
+	bf, err := index.NewBloomFilter(vec, nil, nil, nil)
 	require.NoError(t, err)
 
 	data, err := bf.Marshal()
