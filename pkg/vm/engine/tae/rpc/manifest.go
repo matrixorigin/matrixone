@@ -15,6 +15,7 @@
 package rpc
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 
@@ -151,11 +152,11 @@ func GenerateManifestPretty(table *catalog.TableEntry, dataDir string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, data, "", "  "); err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(m, "", "  ")
+	return buf.Bytes(), nil
 }
 
 // GenerateManifestForTxn currently behaves the same as GenerateManifest.

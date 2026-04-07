@@ -149,7 +149,7 @@ func handleGPUOffload(ses *Session, execCtx *ExecCtx, sql string) error {
 	}
 	t1 := time.Now()
 
-	logutil.Infof("GPU offload: rewritten SQL: %s", rewritten)
+	logutil.Debugf("GPU offload: rewritten SQL: %s", rewritten)
 
 	result, err := sendToSidecar(ctx, sidecarURL, rewritten)
 	if err != nil {
@@ -408,7 +408,8 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 	defer resp.Body.Close()
 	t1 := time.Now()
 
-	body, err := io.ReadAll(resp.Body)
+	const maxResponseSize = 512 << 20 // 512 MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to read sidecar response: %v", err)
 	}
