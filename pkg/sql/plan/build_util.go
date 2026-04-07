@@ -1040,26 +1040,42 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 			continue
 		}
 
-		// TODO: prepared statements pass values via ParamExpr, which
-		// formats as "?" and cannot be embedded into a background SQL
-		// without parameter binding. For now, skip pre-check generation
-		// when any row uses ParamExpr at refPos; the trade-off is that
-		// prepared REPLACE on RESTRICT self-ref FK tables loses the
-		// parent-row safety check until we move pre-check generation to
-		// compile time (after EXECUTE supplies actual values).
-		hasParam := false
+		// The pre-check SQL embeds referenced PK values directly into a
+		// background statement. That is only semantics-preserving for
+		// static literals (NumVal/StrVal, including NULL via NumVal
+		// P_null). Non-literals such as prepared-statement parameters
+		// (ParamExpr "?"), function calls (rand(), uuid(), now()),
+		// subqueries, arithmetic, etc. would be re-evaluated when the
+		// pre-check runs and may not match the value actually written
+		// by REPLACE — skip pre-check generation in those cases.
+		//
+		// Trade-off: prepared REPLACE on RESTRICT self-ref FK tables and
+		// REPLACE with non-literal PK expressions lose the parent-row
+		// safety check. The full fix needs to defer pre-check generation
+		// to compile time after parameters/expressions are evaluated,
+		// which is a larger change left for follow-up work.
+		isSimpleLiteralExpr := func(expr tree.Expr) bool {
+			switch expr.(type) {
+			case *tree.NumVal, *tree.StrVal:
+				return true
+			default:
+				return false
+			}
+		}
+
+		hasUnsafeRefExpr := false
 		var valStrs []string
 		for _, row := range valuesClause.Rows {
 			if refPos >= len(row) {
 				continue
 			}
-			if _, isParam := row[refPos].(*tree.ParamExpr); isParam {
-				hasParam = true
+			if !isSimpleLiteralExpr(row[refPos]) {
+				hasUnsafeRefExpr = true
 				break
 			}
 			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
 		}
-		if hasParam || len(valStrs) == 0 {
+		if hasUnsafeRefExpr || len(valStrs) == 0 {
 			continue
 		}
 

@@ -617,7 +617,11 @@ message InsertCtx {
 }
 
 // ReplaceCtx removed: legacy REPLACE path eliminated.
-// message ReplaceCtx { reserved 1 to 9; }
+// Keep field tag numbers reserved so they cannot be silently reused
+// by a future re-introduction with a different schema (wire-compat).
+message ReplaceCtx {
+  reserved 1 to 9;
+}
 
 message AnalyzeInfo {
   int64 input_rows = 1;

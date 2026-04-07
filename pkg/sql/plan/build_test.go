@@ -903,6 +903,58 @@ func TestReplaceDetectSqlsExplicitColumnsCaseInsensitive(t *testing.T) {
 		"pre-check should be generated even when explicit columns use mixed case")
 }
 
+func TestReplaceDetectSqlsNonLiteralSkip(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Function calls (rand(), uuid(), now(), ...) cannot be safely
+	// embedded into the pre-check SQL because they would be
+	// re-evaluated and produce a different value than what REPLACE
+	// actually writes. The generator must skip pre-check generation in
+	// that case rather than emit an unsafe SQL.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (rand(), NULL, 'r')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"pre-check must NOT be generated for non-literal PK expressions, got: %s", sql)
+	}
+}
+
+func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Multi-row REPLACE: every row's referenced PK value must be
+	// embedded into the same pre-check IN list.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'a'), (2, 1, 'b'), (3, 2, 'c')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"multi-row RESTRICT self-ref REPLACE should generate a pre-check SQL")
+	// All PK values must show up in the IN list.
+	assert.Contains(t, preCheck, "1", "pre-check IN list should contain row 1's PK")
+	assert.Contains(t, preCheck, "2", "pre-check IN list should contain row 2's PK")
+	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
+}
+
 func TestReplaceODKU(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path
