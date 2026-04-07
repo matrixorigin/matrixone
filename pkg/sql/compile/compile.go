@@ -409,8 +409,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Replace:
-		return s.replace(c)
 	case TableClone:
 		return s.TableClone(c)
 	}
@@ -501,6 +499,26 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
+	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
+	// verified before the REPLACE execution modifies any rows.
+	query := c.pn.GetQuery()
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		for _, sql := range query.DetectSqls {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
+					// Only translate the "check returned false" signal into the
+					// parent-row-referenced error; pass through real execution
+					// errors (syntax, permissions, network, txn conflicts) so
+					// they are not masked.
+					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
+						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+					}
+					return err
+				}
+			}
+		}
+	}
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -578,10 +596,17 @@ func (c *Compile) runOnce() (err error) {
 
 	//detect fk self refer
 	//update, insert
-	query := c.pn.GetQuery()
+	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		err = detectFkSelfRefer(c, query.DetectSqls)
+		// Filter out pre-check SQLs (already executed before the main operation)
+		var postCheckSqls []string
+		for _, sql := range query.DetectSqls {
+			if !strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				postCheckSqls = append(postCheckSqls, sql)
+			}
+		}
+		err = detectFkSelfRefer(c, postCheckSqls)
 	}
 	//alter table ... add/drop foreign key
 	if err == nil && c.pn.GetDdl() != nil {
@@ -607,13 +632,6 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		switch qry.Query.StmtType {
-		case plan.Query_REPLACE:
-			return []*Scope{
-				newScope(Replace).
-					withPlan(pn),
-			}, nil
-		}
 		scopes, err := c.compileQuery(qry.Query)
 		if err != nil {
 			return nil, err
@@ -1028,7 +1046,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(node, c.compileRestrict(node, ss))
+
+		// Embed all static filters directly into TableScan.
+		// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
+		// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
+		if len(node.FilterList) > 0 {
+			for i := range ss {
+				if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
+					ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
+				}
+			}
+		}
+		ss = c.compileProjection(node, ss)
+
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
 		}
@@ -2082,6 +2112,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
+	logCatalogSnapshotScan("compile.table-scan.txn", node, ctx, txnOp)
 	return txnOp, ctx, nil
 }
 
@@ -4005,6 +4036,7 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -4012,6 +4044,39 @@ func collectTombstones(
 	}
 
 	return tombstone, nil
+}
+
+func logCatalogSnapshotScan(tag string, node *plan.Node, ctx context.Context, txnOp client.TxnOperator) {
+	if node == nil || node.ObjRef == nil {
+		return
+	}
+	if !strings.EqualFold(node.ObjRef.SchemaName, catalog.MO_CATALOG) ||
+		!strings.EqualFold(node.ObjRef.ObjName, catalog.MO_DATABASE) {
+		return
+	}
+
+	fields := []zap.Field{
+		zap.String("schema", node.ObjRef.SchemaName),
+		zap.String("table", node.ObjRef.ObjName),
+	}
+	if txnOp != nil {
+		fields = append(fields,
+			zap.String("txn-snapshot-ts", types.TimestampToTS(txnOp.Txn().SnapshotTS).ToString()),
+			zap.String("txn", txnOp.Txn().DebugString()),
+		)
+	}
+	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
+		fields = append(fields, zap.String("scan-snapshot-ts", types.TimestampToTS(*node.ScanSnapshot.TS).ToString()))
+		if node.ScanSnapshot.Tenant != nil {
+			fields = append(fields, zap.Uint32("scan-tenant-id", node.ScanSnapshot.Tenant.TenantID))
+		}
+	}
+	if accountID, err := defines.GetAccountId(ctx); err == nil {
+		fields = append(fields, zap.Uint32("ctx-account-id", accountID))
+	} else {
+		fields = append(fields, zap.String("ctx-account-id", "missing"))
+	}
+	logutil.Info(tag, fields...)
 }
 
 func (c *Compile) expandRanges(

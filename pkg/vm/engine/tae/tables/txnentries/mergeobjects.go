@@ -15,9 +15,9 @@
 package txnentries
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -50,7 +51,7 @@ type mergeObjectsEntry struct {
 	relation      handle.Relation
 	droppedObjs   []*catalog.ObjectEntry
 	createdObjs   []*catalog.ObjectEntry
-	transMappings api.TransferMaps
+	transferTable *mergesort.TransferTable
 	skipTransfer  bool
 
 	rt                   *dbutils.Runtime
@@ -67,7 +68,7 @@ func NewMergeObjectsEntry(
 	taskName string,
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
-	transMappings api.TransferMaps,
+	transferTable *mergesort.TransferTable,
 	isTombstone bool,
 	rt *dbutils.Runtime,
 ) (*mergeObjectsEntry, error) {
@@ -81,8 +82,8 @@ func NewMergeObjectsEntry(
 		relation:      relation,
 		createdObjs:   createdObjs,
 		droppedObjs:   droppedObjs,
-		transMappings: transMappings,
-		skipTransfer:  transMappings == nil,
+		transferTable: transferTable,
+		skipTransfer:  transferTable == nil,
 		rt:            rt,
 		isTombstone:   isTombstone,
 		taskName:      taskName,
@@ -126,12 +127,13 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
+		var marshalBufs []*bytes.Buffer
 		var duration time.Duration
 		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
-			m := entry.transMappings[k]
+			m := entry.transferTable.GetBlockMap(k)
 			k++
-			if len(m) == 0 {
+			if m == nil {
 				continue
 			}
 			tblEntry := obj.GetTable()
@@ -139,10 +141,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
 			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.TmpFS, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
-			page.Train(m)
+			page.TrainDetached(m)
 
 			start = time.Now()
-			err := model.AddTransferPage(page, ioVector)
+			err := model.AddTransferPage(page, ioVector, &marshalBufs)
 			if err != nil {
 				return err
 			}
@@ -157,7 +159,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
+		model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
@@ -175,13 +177,17 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		}
 	}
 
-	if k != len(entry.transMappings) {
-		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings)))
+	if k != entry.transferTable.Len() {
+		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, entry.transferTable.Len()))
 	}
 	return nil
 }
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
+	if entry.transferTable != nil {
+		entry.transferTable.Release()
+		entry.transferTable = nil
+	}
 	for _, id := range entry.pageIds {
 		_ = entry.rt.TransferTable.DeletePage(id)
 	}
@@ -284,27 +290,18 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		row := rowid[i].GetRowOffset()
 		blkOffsetInObj := int(rowid[i].GetBlockOffset())
 		blkOffset := blkOffsetBase + blkOffsetInObj
-		mapping := entry.transMappings[blkOffset]
-		if len(mapping) == 0 {
+		mapping := entry.transferTable.GetBlockMap(blkOffset)
+		if mapping == nil {
 			// this block had been all deleted, skip
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
-		destpos, ok := mapping[row]
-		if !ok {
-			_min, _max := uint32(math.MaxUint32), uint32(0)
-			for k := range mapping {
-				if k < _min {
-					_min = k
-				}
-				if k > _max {
-					_max = k
-				}
-			}
-			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
-				dropped.ID().String(), blkOffsetInObj, row, _min, _max)
+		if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
+			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d (mapping len %d)",
+				dropped.ID().String(), blkOffsetInObj, row, len(mapping))
 			return
 		}
+		destpos := mapping[row]
 		if entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] == nil {
 			entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()] = make(map[uint16]struct{})
 		}
@@ -362,7 +359,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 		hasMappingInThisObj := false
 		blkCnt := dropped.BlockCnt()
 		for iblk := 0; iblk < blkCnt; iblk++ {
-			if len(entry.transMappings[blksOffsetBase+iblk]) != 0 {
+			if entry.transferTable.GetBlockMap(blksOffsetBase+iblk) != nil {
 				hasMappingInThisObj = true
 				break
 			}
@@ -410,6 +407,12 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	inst := time.Now()
 	defer func() {
+		// Release the transfer table (returns slab to pool) now that
+		// both phase-1 and phase-2 transfers are done.
+		if entry.transferTable != nil {
+			entry.transferTable.Release()
+			entry.transferTable = nil
+		}
 		if entry.isTombstone {
 			v2.TaskCommitTombstoneMergeDurationHistogram.Observe(time.Since(inst).Seconds())
 		} else {

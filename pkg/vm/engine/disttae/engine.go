@@ -407,12 +407,36 @@ func (e *Engine) Database(
 			)
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
+				logutil.Error(
+					"engine.database.load.from.storage.error",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+					zap.Error(err),
+				)
 				return nil, err
 			}
 			if item == nil {
+				logutil.Warn(
+					"engine.database.not-found.at.snapshot",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("cache-start", catalog.GetStartTS().ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
 				return nil, moerr.GetOkExpectedEOB()
 			}
 		} else {
+			logutil.Warn(
+				"engine.database.not-found.in-cache",
+				zap.String("name", name),
+				zap.Uint32("account-id", accountId),
+				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+				zap.String("cache-start", catalog.GetStartTS().ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 			return nil, moerr.GetOkExpectedEOB()
 		}
 	}
@@ -522,6 +546,15 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
+			logutil.Debug(
+				"engine.relation.resolve.by-id.cache-hit",
+				zap.Uint64("table-id", tableId),
+				zap.Uint32("account-id", accountId),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
 			logutil.Info(
@@ -533,6 +566,17 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				ctx, op, accountId, tableId,
 			); err != nil {
 				return "", "", nil, err
+			}
+			if tableName != "" {
+				logutil.Info(
+					"engine.relation.resolve.by-id.storage-hit",
+					zap.Uint64("table-id", tableId),
+					zap.Uint32("account-id", accountId),
+					zap.String("db-name", dbName),
+					zap.String("table-name", tableName),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
 			}
 		}
 	}
@@ -548,11 +592,31 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	txnDb, err := e.Database(ctx, dbName, op)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.database-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
 	txnTable, err := txnDb.Relation(ctx, tableName, nil)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.table-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
@@ -819,15 +883,16 @@ func (e *Engine) setPushClientStatus(ready bool) {
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
-	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
 
-	//  When removing the PartitionState, you need to remove the tid in globalStats,
-	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	//e.globalStats.RemoveTid(tblId)
+	// Remove the tid from globalStats AFTER releasing Engine lock to avoid
+	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
+	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 

@@ -15,7 +15,7 @@
 package common
 
 import (
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 

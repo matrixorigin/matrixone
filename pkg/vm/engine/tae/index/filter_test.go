@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,7 +34,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	typ := types.T_int32.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBloomFilter(data)
+	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -75,7 +76,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	vec := containers.MockVector2(typ, 0, 0)
 	defer vec.Close()
-	sf1, err := NewBloomFilter(vec)
+	sf1, err := NewBloomFilter(vec, nil, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
@@ -93,7 +94,7 @@ func TestNewBinaryFuseFilter(t *testing.T) {
 	typ := types.T_uint32.ToType()
 	data := containers.MockVector2(typ, 2000, 0)
 	defer data.Close()
-	_, err := NewBloomFilter(data)
+	_, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 }
 
@@ -103,7 +104,7 @@ func BenchmarkCreateFilter(b *testing.B) {
 	defer data.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		NewBloomFilter(data)
+		NewBloomFilter(data, nil, nil, nil)
 	}
 }
 
@@ -116,13 +117,13 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		return in
 	}
 
-	bf, err := NewBloomFilter(data)
+	bf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(b, err)
 	buf, err := bf.Marshal()
 	require.NoError(b, err)
 	b.Logf("buf size: %d", len(buf))
 
-	hbf, err := NewHybridBloomFilter(data, 1, prefixFn, 1, prefixFn)
+	hbf, err := NewHybridBloomFilter(data, 1, prefixFn, 1, prefixFn, nil, nil, nil)
 	require.NoError(b, err)
 	hbf_buf, err := hbf.Marshal()
 	require.NoError(b, err)
@@ -196,6 +197,9 @@ func TestHybridBloomFilter(t *testing.T) {
 		rowids,
 		objectFnId, objectFn,
 		blockFnId, blockFn,
+		nil,
+		nil,
+		nil,
 	)
 	require.NoError(t, err)
 	hbf_buf, err := hbf.Marshal()
@@ -267,7 +271,7 @@ func TestStaticFilterString(t *testing.T) {
 	typ := types.T_varchar.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
-	sf, err := NewBloomFilter(data)
+	sf, err := NewBloomFilter(data, nil, nil, nil)
 	require.NoError(t, err)
 	var positive *nulls.Bitmap
 	var res bool
@@ -301,7 +305,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 0, 0)
 	defer query.Close()
-	sf1, err := NewBloomFilter(query)
+	sf1, err := NewBloomFilter(query, nil, nil, nil)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
@@ -312,4 +316,37 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.GetCardinality())
 	require.True(t, exist)
+}
+
+func TestBloomFilterBuilderReuse(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	typ := types.T_int32.ToType()
+	const rounds = 5
+	const rows = 8192
+
+	var builder xorfilter.BinaryFuseBuilder
+	var hashBuf []uint64
+	filters := make([]StaticFilter, rounds)
+
+	// Build multiple filters reusing the same builder and hash buffer
+	for i := 0; i < rounds; i++ {
+		data := containers.MockVector2(typ, rows, i*rows)
+		sf, err := NewBloomFilter(data, &hashBuf, &builder, nil)
+		require.NoError(t, err)
+		filters[i] = sf
+		data.Close()
+	}
+
+	// Each filter must contain its own keys
+	for i := 0; i < rounds; i++ {
+		key := types.EncodeValue(int32(i*rows+1), typ.Oid)
+		ok, err := filters[i].MayContainsKey(key)
+		require.NoError(t, err)
+		require.True(t, ok, "round %d: filter should contain its own key", i)
+	}
+
+	// The hash buffer should have been reused (not reallocated to zero cap)
+	require.GreaterOrEqual(t, cap(hashBuf), rows)
 }

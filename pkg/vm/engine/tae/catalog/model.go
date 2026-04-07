@@ -218,6 +218,14 @@ func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
 		}
 	}
 
+	var generatedCol *plan.GeneratedCol
+	if len(col.GeneratedCol) > 0 {
+		generatedCol = new(plan.GeneratedCol)
+		if err := types.Decode(col.GeneratedCol, generatedCol); err != nil {
+			return nil, err
+		}
+	}
+
 	attr := &engine.Attribute{
 		Name:          col.Name,
 		Type:          col.Type,
@@ -227,6 +235,7 @@ func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
 		Comment:       col.Comment,
 		Default:       defaultVal,
 		OnUpdate:      onUpdate,
+		GeneratedCol:  generatedCol,
 		AutoIncrement: col.IsAutoIncrement(),
 		ClusterBy:     col.IsClusterBy(),
 	}

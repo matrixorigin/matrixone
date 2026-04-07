@@ -135,6 +135,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked(false).HasPK()
 	ioVector := model.InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings))
+	var marshalBufs []*bytes.Buffer
 	var duration time.Duration
 	var start time.Time
 	bts := time.Now().Add(time.Hour)
@@ -157,7 +158,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 		page.Train(m)
 
 		start = time.Now()
-		err := model.AddTransferPage(page, ioVector)
+		err := model.AddTransferPage(page, ioVector, &marshalBufs)
 		if err != nil {
 			return err
 		}
@@ -170,7 +171,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
+	model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
 	now := time.Now()
 	for _, page := range pages {
 		if page.BornTS() != bts {
@@ -238,11 +239,11 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[row]
-			if !ok {
+			if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
 				err = moerr.NewInternalErrorNoCtxf("%s find no transfer mapping for row %d", obj.ID().String(), row)
 				return
 			}
+			destpos := mapping[row]
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
 			entry.delTbls[destpos.BlkIdx] = &blkID
 			entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])

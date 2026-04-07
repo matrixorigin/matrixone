@@ -94,6 +94,10 @@ func FillColumnRow(table *catalog.TableEntry, schema *catalog.Schema, attr strin
 			colData.Append(colDef.SeqNum, false)
 		case pkgcatalog.SystemColAttr_EnumValues:
 			colData.Append([]byte(colDef.EnumValues), false)
+		case pkgcatalog.SystemColAttr_HasGenerated:
+			colData.Append(bool2i8(len(colDef.GeneratedCol) > 0), false)
+		case pkgcatalog.SystemColAttr_Generated:
+			colData.Append(colDef.GeneratedCol, false)
 		case pkgcatalog.SystemColAttr_CPKey:
 			packer := types.NewPacker()
 			packer.EncodeUint32(schema.AcInfo.TenantID)

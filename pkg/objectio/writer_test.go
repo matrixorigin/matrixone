@@ -363,3 +363,129 @@ func newBatch2(mp *mpool.MPool) *batch.Batch {
 	}
 	return NewBatch(types, false, int(40000*2), mp)
 }
+
+func TestWriteArena(t *testing.T) {
+	t.Run("alloc within capacity", func(t *testing.T) {
+		a := NewArena(1024)
+		b1 := a.Alloc(100)
+		require.Len(t, b1, 100)
+		require.Equal(t, 100, a.usedOffset)
+
+		b2 := a.Alloc(200)
+		require.Len(t, b2, 200)
+		require.Equal(t, 300, a.usedOffset)
+
+		// b1 and b2 should be from the same backing array
+		require.Equal(t, &a.data[0], &b1[0])
+		require.Equal(t, &a.data[100], &b2[0])
+	})
+
+	t.Run("alloc overflow falls back to exact make", func(t *testing.T) {
+		a := NewArena(64)
+		b1 := a.Alloc(32)
+		require.Equal(t, 32, a.usedOffset)
+
+		// exceeds remaining capacity — falls back to plain make; arena unchanged
+		b2 := a.Alloc(64)
+		require.Len(t, b2, 64)
+		require.Equal(t, 32, a.usedOffset) // not advanced — overflow took fallback path
+		require.Equal(t, 64, len(a.data))  // backing array not yet grown
+		_ = b1
+	})
+
+	t.Run("reset reuses capacity", func(t *testing.T) {
+		a := NewArena(256)
+		a.Alloc(100)
+		a.Alloc(100)
+		require.Equal(t, 200, a.usedOffset)
+
+		a.Reset()
+		require.Equal(t, 0, a.usedOffset)
+		require.Equal(t, 256, len(a.data)) // backing array retained (no overflow)
+
+		b := a.Alloc(50)
+		require.Equal(t, &a.data[0], &b[0]) // reuses from beginning
+	})
+
+	t.Run("compress buf grows and persists", func(t *testing.T) {
+		a := NewArena(64)
+
+		cb1 := a.CompressBuf(100)
+		require.Len(t, cb1, 100)
+		require.GreaterOrEqual(t, cap(a.compressBuf), 100)
+
+		// smaller request reuses same buffer
+		cb2 := a.CompressBuf(50)
+		require.Len(t, cb2, 50)
+		require.Equal(t, &cb1[0], &cb2[0])
+
+		// larger request grows
+		cb3 := a.CompressBuf(200)
+		require.Len(t, cb3, 200)
+
+		// Reset does not clear compressBuf
+		a.Reset()
+		require.GreaterOrEqual(t, len(a.compressBuf), 200)
+	})
+
+	t.Run("zero-size arena falls back to exact make", func(t *testing.T) {
+		a := NewArena(0)
+		b := a.Alloc(10)
+		require.Len(t, b, 10)
+		require.Equal(t, 0, len(a.data))  // not grown yet — happens on Reset
+		require.Equal(t, 0, a.usedOffset) // not advanced
+
+		// after Reset, the arena grows to accommodate future rounds
+		a.Reset()
+		require.GreaterOrEqual(t, len(a.data), 10)
+		require.Equal(t, 0, a.usedOffset)
+	})
+
+	t.Run("reset grows arena to eliminate overflow in future rounds", func(t *testing.T) {
+		a := NewArena(8)
+		// First round: only the first 8-byte slot fits; rest are exact-make fallbacks.
+		var round1 [][]byte
+		for i := 0; i < 8; i++ {
+			s := a.Alloc(8)
+			require.Len(t, s, 8)
+			round1 = append(round1, s)
+		}
+		// All returned slices are distinct and writable.
+		for i, s := range round1 {
+			s[0] = byte(i)
+		}
+		require.Equal(t, 8, a.usedOffset) // only first alloc landed in arena
+
+		// Reset: totalRequested=64 > len(data)=8 → grow to nextPow2(64)=64.
+		a.Reset()
+		require.GreaterOrEqual(t, len(a.data), 64)
+		require.Equal(t, 0, a.usedOffset)
+
+		// Second round: all 8 allocations fit in the arena — no fallback.
+		for i := 0; i < 8; i++ {
+			s := a.Alloc(8)
+			require.Len(t, s, 8)
+			require.Equal(t, &a.data[i*8], &s[0]) // served from arena, not fallback
+		}
+		require.Equal(t, 64, a.usedOffset)
+	})
+
+	t.Run("serial buf is reused across Reset calls", func(t *testing.T) {
+		a := NewArena(256)
+		// First use: grow serialBuf to 100 bytes.
+		a.serialBuf.Grow(100)
+		cap1 := a.serialBuf.Cap()
+		require.GreaterOrEqual(t, cap1, 100)
+
+		// Reset does not clear serialBuf capacity.
+		a.Reset()
+		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
+		require.Equal(t, 0, a.serialBuf.Len())
+
+		// Second use: no growth needed — same backing array.
+		ptr1 := &a.serialBuf
+		a.serialBuf.Grow(50)
+		require.Equal(t, ptr1, &a.serialBuf) // pointer identity — same struct
+		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
+	})
+}

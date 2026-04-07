@@ -230,7 +230,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
-		ReplaceCtx:       DeepCopyReplaceCtx(node.ReplaceCtx),
 		NotCacheable:     node.NotCacheable,
 		SourceStep:       node.SourceStep,
 		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
@@ -318,21 +317,6 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	return ret
 }
 
-func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
-	if oldCtx == nil {
-		return nil
-	}
-	ctx := &plan.ReplaceCtx{
-		Ref:                       DeepCopyObjectRef(oldCtx.Ref),
-		AddAffectedRows:           oldCtx.AddAffectedRows,
-		IsClusterTable:            oldCtx.IsClusterTable,
-		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
-		DeleteCond:                oldCtx.DeleteCond,
-		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
-	}
-	return ctx
-}
-
 func DeepCopyDefault(def *plan.Default) *plan.Default {
 	if def == nil {
 		return nil
@@ -363,21 +347,22 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:      col.ColId,
-		Name:       col.Name,
-		OriginName: col.OriginName,
-		Alg:        col.Alg,
-		Typ:        col.Typ,
-		Default:    DeepCopyDefault(col.Default),
-		Primary:    col.Primary,
-		Pkidx:      col.Pkidx,
-		Comment:    col.Comment,
-		OnUpdate:   DeepCopyOnUpdate(col.OnUpdate),
-		ClusterBy:  col.ClusterBy,
-		Hidden:     col.Hidden,
-		Seqnum:     col.Seqnum,
-		TblName:    col.TblName,
-		DbName:     col.DbName,
+		ColId:        col.ColId,
+		Name:         col.Name,
+		OriginName:   col.OriginName,
+		Alg:          col.Alg,
+		Typ:          col.Typ,
+		Default:      DeepCopyDefault(col.Default),
+		Primary:      col.Primary,
+		Pkidx:        col.Pkidx,
+		Comment:      col.Comment,
+		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol: DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:    col.ClusterBy,
+		Hidden:       col.Hidden,
+		Seqnum:       col.Seqnum,
+		TblName:      col.TblName,
+		DbName:       col.DbName,
 	}
 }
 
@@ -446,6 +431,17 @@ func DeepCopyOnUpdate(old *plan.OnUpdate) *plan.OnUpdate {
 	return &plan.OnUpdate{
 		Expr:         DeepCopyExpr(old.Expr),
 		OriginString: old.OriginString,
+	}
+}
+
+func DeepCopyGeneratedCol(old *plan.GeneratedCol) *plan.GeneratedCol {
+	if old == nil {
+		return nil
+	}
+	return &plan.GeneratedCol{
+		Expr:         DeepCopyExpr(old.Expr),
+		OriginString: old.OriginString,
+		IsStored:     old.IsStored,
 	}
 }
 

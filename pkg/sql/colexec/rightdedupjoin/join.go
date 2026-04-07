@@ -268,6 +268,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		} else {
 			nullvec := vector.NewVec(ap.RightTypes[rp.Pos])
 			if err := vector.AppendMultiFixed(nullvec, 0, true, bat.RowCount(), proc.Mp()); err != nil {
+				nullvec.Free(proc.Mp())
 				return err
 			}
 			result.Batch.Vecs[i] = nullvec

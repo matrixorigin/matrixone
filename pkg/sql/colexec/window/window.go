@@ -355,7 +355,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 // processValueFunc handles WIN_VALUE functions (lag/lead/first_value/last_value/nth_value)
 // by directly computing results via index lookup, avoiding O(n²) frame materialization.
-func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (*vector.Vector, error) {
+func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (result *vector.Vector, err error) {
 	n := ctr.bat.Vecs[0].Length()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	funcName := w.Name
@@ -363,7 +363,13 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
-	result := vector.NewVec(retType)
+	localResult := vector.NewVec(retType)
+	defer func() {
+		if err != nil && localResult != nil {
+			localResult.Free(proc.Mp())
+			result = nil
+		}
+	}()
 
 	switch funcName {
 	case "lag":
@@ -385,7 +391,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				offset, ok = getInt64FromVec(offsetVec, j)
 			}
 			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -396,11 +402,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			srcRow := j - int(offset)
 			if srcRow < start {
-				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
 			}
@@ -425,7 +431,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				offset, ok = getInt64FromVec(offsetVec, j)
 			}
 			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -436,11 +442,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			srcRow := j + int(offset)
 			if srcRow >= end {
-				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
 			}
@@ -463,11 +469,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				right = end
 			}
 			if left >= right {
-				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := result.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
 					return nil, err
 				}
 			}
@@ -490,11 +496,11 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				right = end
 			}
 			if left >= right {
-				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := result.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
 					return nil, err
 				}
 			}
@@ -516,7 +522,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 				nthVal, ok = getInt64FromVec(nthVec, j)
 			}
 			if !ok || nthVal < 1 {
-				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -537,22 +543,22 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 			targetRow := left + int(nthVal) - 1
 			if left >= right || targetRow >= right {
-				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
-				if err := result.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
+				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
 					return nil, err
 				}
 			}
 		}
 
 	default:
-		result.Free(proc.Mp())
-		return nil, moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+		err = moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+		return nil, err
 	}
 
-	return result, nil
+	return localResult, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
@@ -1164,6 +1170,8 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return left, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return left, nil
 }
@@ -1506,6 +1514,8 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return right, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return right + 1, nil
 }

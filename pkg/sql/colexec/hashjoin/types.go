@@ -16,7 +16,6 @@ package hashjoin
 
 import (
 	"bytes"
-	"context"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
@@ -46,11 +45,10 @@ const (
 )
 
 type spillBucket struct {
-	buildFile string   // named file from hashbuild (level 0 only)
-	buildFd   *os.File // fd-based build file (levels 1+); nil if level 0
-	probeFd   *os.File // fd-based probe file (all levels); nil = empty probe
-	baseName  string   // base name for deriving sub-bucket file paths on re-spill
-	depth     int
+	buildFd  *os.File // fd-based build file; nil = empty build
+	probeFd  *os.File // fd-based probe file; nil = empty probe
+	baseName string   // base name for deriving sub-bucket file paths on re-spill
+	depth    int
 }
 
 type probeState int
@@ -72,7 +70,7 @@ type container struct {
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
-	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastRow]
+	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastIdx]
 	vsIdx int
 	zvs   []int64
 	vs    []uint64
@@ -234,16 +232,7 @@ func (ctr *container) cleanupSpillFiles(proc *process.Process) {
 	if len(ctr.spillQueue) == 0 {
 		return
 	}
-	var spillfs fileservice.MutableFileService
 	for _, sb := range ctr.spillQueue {
-		if sb.buildFile != "" {
-			if spillfs == nil {
-				spillfs, _ = proc.GetSpillFileService()
-			}
-			if spillfs != nil {
-				spillfs.RemoveFile(context.Background(), sb.buildFile)
-			}
-		}
 		if sb.buildFd != nil {
 			sb.buildFd.Close()
 		}
