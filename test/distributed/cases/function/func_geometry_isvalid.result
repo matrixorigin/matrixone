@@ -1,0 +1,30 @@
+select st_isvalid(st_geomfromtext('POINT(1 2)')) as point_valid;
+➤ point_valid[-7,1,0]  𝄀
+1
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,1 1)')) as line_valid;
+➤ line_valid[-7,1,0]  𝄀
+1
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,-0.00 0,0.0 0)')) as repeated_line_invalid;
+➤ repeated_line_invalid[-7,1,0]  𝄀
+0
+select st_isvalid(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))')) as polygon_valid;
+➤ polygon_valid[-7,1,0]  𝄀
+1
+select st_isvalid(st_geomfromtext('POLYGON((0 0,4 4,4 0,0 4,0 0))')) as self_cross_polygon_invalid;
+➤ self_cross_polygon_invalid[-7,1,0]  𝄀
+0
+select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))')) as polygon_hole_valid;
+➤ polygon_hole_valid[-7,1,0]  𝄀
+1
+select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(0 1,2 1,2 2,0 2,0 1))')) as touching_hole_invalid;
+➤ touching_hole_invalid[-7,1,0]  𝄀
+0
+select st_isvalid(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_valid;
+➤ empty_collection_valid[-7,1,0]  𝄀
+1
+select st_isvalid(st_geomfromtext(null)) as null_isvalid;
+➤ null_isvalid[-7,1,0]  𝄀
+null
+select st_isvalid(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
+-- @regex("geometry type is not supported by ST_IsValid", true)
+invalid input: geometry type is not supported by ST_IsValid

@@ -2150,6 +2150,68 @@ func TestStBoundaryRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "geometry type is not supported by ST_Boundary")
 }
 
+func initStIsValidTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isvalid basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,1 1)",
+						"LINESTRING(0 0,-0.00 0,0.0 0)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,4 4,4 0,0 4,0 0))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(0 1,2 1,2 2,0 2,0 1))",
+						"GEOMETRYCOLLECTION()",
+					},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, true, false, true, false, true, false, true},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_isvalid null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsValid(t *testing.T) {
+	testCases := initStIsValidTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsValid)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIsValidRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsValid)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_IsValid")
+}
+
 func initStExteriorRingTestCase() []tcTemp {
 	return []tcTemp{
 		{

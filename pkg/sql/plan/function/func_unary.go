@@ -1281,6 +1281,12 @@ func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func StIsValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v []byte) (bool, error) {
+		return isValidFromPayload(v)
+	}, selectList)
+}
+
 func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		return lineStringTerminalPointFromPayload(v, true)
@@ -1600,6 +1606,133 @@ func boundaryFromPayload(payload []byte) ([]byte, error) {
 	default:
 		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Boundary")
 	}
+}
+
+func isValidFromPayload(payload []byte) (bool, error) {
+	raw := strings.TrimSpace(functionUtil.QuickBytesToStr(payload))
+	upper := strings.ToUpper(raw)
+	switch upper {
+	case "GEOMETRYCOLLECTION()":
+		return true, nil
+	case "MULTIPOINT()", "MULTILINESTRING()", "MULTIPOLYGON()":
+		return false, nil
+	}
+	if strings.HasSuffix(upper, " EMPTY") {
+		return false, nil
+	}
+
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+
+	switch typeName {
+	case "POINT":
+		_, _, err := parsePointXYFromPayload(payload)
+		if err != nil {
+			if isGeometryInvalidError(err, "invalid point payload") {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	case "LINESTRING":
+		return lineStringIsValidFromPayload(payload)
+	case "POLYGON":
+		return polygonIsValidFromPayload(payload)
+	default:
+		return false, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_IsValid")
+	}
+}
+
+func lineStringIsValidFromPayload(payload []byte) (bool, error) {
+	points, err := lineStringGeometryPointsFromPayload(payload)
+	if err != nil {
+		if isGeometryInvalidError(err, "invalid linestring payload") {
+			return false, nil
+		}
+		return false, err
+	}
+	for i := 0; i < len(points)-1; i++ {
+		if sameGeometryPoint(points[i], points[i+1]) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func polygonIsValidFromPayload(payload []byte) (bool, error) {
+	rings, _, _, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		if isGeometryInvalidError(err, "invalid polygon payload") {
+			return false, nil
+		}
+		return false, err
+	}
+
+	parsedRings := make([][]geometryPoint2D, 0, len(rings))
+	for _, ring := range rings {
+		points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+		if err != nil {
+			if isGeometryInvalidError(err, "invalid polygon payload") {
+				return false, nil
+			}
+			return false, err
+		}
+		if !polygonRingIsValid(points) {
+			return false, nil
+		}
+		parsedRings = append(parsedRings, points)
+	}
+
+	exterior := parsedRings[0]
+	for i := 1; i < len(parsedRings); i++ {
+		hole := parsedRings[i]
+		if !pointInPolygon(exterior, hole[0].x, hole[0].y) {
+			return false, nil
+		}
+		if ringsIntersect(exterior, hole) {
+			return false, nil
+		}
+		for j := i + 1; j < len(parsedRings); j++ {
+			otherHole := parsedRings[j]
+			if ringsIntersect(hole, otherHole) {
+				return false, nil
+			}
+			if pointInPolygon(hole, otherHole[0].x, otherHole[0].y) || pointInPolygon(otherHole, hole[0].x, hole[0].y) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func polygonRingIsValid(points []geometryPoint2D) bool {
+	closedPoints := make([]geometryPoint2D, 0, len(points)+1)
+	closedPoints = append(closedPoints, points...)
+	closedPoints = append(closedPoints, points[0])
+	if !lineStringPointsAreSimple(closedPoints) {
+		return false
+	}
+	_, _, _, err := polygonRingAreaAndCentroid(points)
+	return err == nil
+}
+
+func ringsIntersect(a, b []geometryPoint2D) bool {
+	for i := 0; i < len(a); i++ {
+		aNext := (i + 1) % len(a)
+		for j := 0; j < len(b); j++ {
+			bNext := (j + 1) % len(b)
+			if lineSegmentsIntersect(a[i], a[aNext], b[j], b[bNext]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isGeometryInvalidError(err error, fragment string) bool {
+	return err != nil && strings.Contains(err.Error(), fragment)
 }
 
 func lineStringPointsAreSimple(points []geometryPoint2D) bool {

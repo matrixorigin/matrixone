@@ -4027,6 +4027,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `st_isvalid`
+	{
+		functionId: ST_ISVALID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StIsValid
+				},
+			},
+		},
+	},
+
 	// function `soundex`
 	{
 		functionId: SOUNDEX,
