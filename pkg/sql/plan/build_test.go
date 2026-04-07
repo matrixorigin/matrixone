@@ -719,6 +719,251 @@ func TestDelete(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestReplacePKTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE on tables with real primary keys should pass
+	sqls := []string{
+		"REPLACE INTO dept VALUES (1, 'Sales', 'New York')",
+		"REPLACE INTO dept (deptno, dname, loc) VALUES (2, 'HR', 'London')",
+		"REPLACE INTO dept SET deptno = 3, dname = 'Eng', loc = 'SF'",
+		"REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (2, 'HR', 'LA')",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"REPLACE INTO nonexistent VALUES (1, 'a')",         // table not exist
+		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceFakePKTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE on table with only unique key (fake PK) should pass
+	sqls := []string{
+		"REPLACE INTO fake_pk_t VALUES (1, 'hello')",
+		"REPLACE INTO fake_pk_t (a, b) VALUES (2, 'world')",
+		"REPLACE INTO fake_pk_t SET a = 3, b = 'test'",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestReplaceFKTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE on table with foreign key should pass (modern path)
+	sqls := []string{
+		"REPLACE INTO emp VALUES (1, 'Alice', 'DEV', 0, '2020-01-01', 5000.00, 500.00, 1)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestReplaceSelfRefFKTable(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE on self-referencing FK table with RESTRICT should produce assert checks
+	sqls := []string{
+		"REPLACE INTO self_ref VALUES (1, NULL, 'root')",
+		"REPLACE INTO self_ref (id, parent_id, name) VALUES (2, 1, 'child')",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestReplaceSelfRefFKCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE on self-referencing FK table with CASCADE should NOT produce assert checks
+	sqls := []string{
+		"REPLACE INTO self_ref_cascade VALUES (1, NULL)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestReplacePlanStructure(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Test that REPLACE produces Query_INSERT statement type
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Equal(t, plan.Query_INSERT, query.StmtType)
+
+	// Verify plan contains MULTI_UPDATE node
+	hasMultiUpdate := false
+	hasDedupJoin := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+			hasDedupJoin = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
+	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestReplaceSelfRefPlanStructure(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Self-referencing FK with RESTRICT should build plan successfully
+	// FK constraints are enforced via DetectSqls (post-execution), not in-plan asserts
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Equal(t, plan.Query_INSERT, query.StmtType)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "self-ref FK REPLACE should contain MULTI_UPDATE node")
+}
+
+func TestReplaceSelfRefCascade(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Self-referencing FK with CASCADE should also build successfully
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref_cascade VALUES (1, NULL)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Equal(t, plan.Query_INSERT, query.StmtType)
+
+	// CASCADE FK action must NOT generate a parent→child pre-check; the
+	// cascading delete handles child rows.
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"CASCADE self-ref FK should NOT generate parent-child pre-check, got: %s", sql)
+	}
+}
+
+func TestReplaceDetectSqls(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// REPLACE on a RESTRICT self-ref FK table must generate a
+	// REPLACE_PARENT_CHK: pre-check SQL that references both the FK column
+	// and the referred PK column, embedding the user-supplied PK value.
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"RESTRICT self-ref FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
+	assert.Contains(t, preCheck, "self_ref", "pre-check SQL should target self_ref table")
+	assert.Contains(t, preCheck, "parent_id", "pre-check SQL should reference the FK column")
+	assert.Contains(t, preCheck, "`id`", "pre-check SQL should reference the referred PK column")
+	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+}
+
+func TestReplaceDetectSqlsExplicitColumnsCaseInsensitive(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// User-supplied column names use mixed case; lookup must be
+	// case-insensitive so the pre-check is still generated.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref (ID, PARENT_ID, NAME) VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasPreCheck := false
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			hasPreCheck = true
+			break
+		}
+	}
+	assert.True(t, hasPreCheck,
+		"pre-check should be generated even when explicit columns use mixed case")
+}
+
+func TestReplaceDetectSqlsNonLiteralSkip(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Function calls (rand(), uuid(), now(), ...) cannot be safely
+	// embedded into the pre-check SQL because they would be
+	// re-evaluated and produce a different value than what REPLACE
+	// actually writes. The generator must skip pre-check generation in
+	// that case rather than emit an unsafe SQL.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (rand(), NULL, 'r')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
+			"pre-check must NOT be generated for non-literal PK expressions, got: %s", sql)
+	}
+}
+
+func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Multi-row REPLACE: every row's referenced PK value must be
+	// embedded into the same pre-check IN list.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'a'), (2, 1, 'b'), (3, 2, 'c')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"multi-row RESTRICT self-ref REPLACE should generate a pre-check SQL")
+	// All PK values must show up in the IN list.
+	assert.Contains(t, preCheck, "1", "pre-check IN list should contain row 1's PK")
+	assert.Contains(t, preCheck, "2", "pre-check IN list should contain row 2's PK")
+	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
+}
+
+func TestReplaceODKU(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path
+	sqls := []string{
+		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = VALUES(loc)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestSubQuery(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass
