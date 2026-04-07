@@ -5453,7 +5453,8 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 		return false
 	}
 
-	if snapshot.TS == nil || snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) {
+	if snapshot.TS == nil ||
+		snapshot.TS.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) {
 		return false
 	}
 
