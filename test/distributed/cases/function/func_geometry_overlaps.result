@@ -1,3 +1,18 @@
+select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(1 1)')) as overlaps_point_point_same;
+➤ overlaps_point_point_same[-7,1,0]  𝄀
+0
+select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as overlaps_point_line;
+➤ overlaps_point_line[-7,1,0]  𝄀
+0
+select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as overlaps_point_polygon;
+➤ overlaps_point_polygon[-7,1,0]  𝄀
+0
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('POINT(1 1)')) as overlaps_line_point;
+➤ overlaps_line_point[-7,1,0]  𝄀
+0
+select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as overlaps_polygon_point;
+➤ overlaps_polygon_point[-7,1,0]  𝄀
+0
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_line_line_partial;
 ➤ overlaps_line_line_partial[-7,1,0]  𝄀
 1
@@ -37,12 +52,15 @@ select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfro
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))', 4326)) as overlaps_polygon_srid;
 ➤ overlaps_polygon_srid[-7,1,0]  𝄀
 1
+select st_overlaps(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as overlaps_point_srid;
+➤ overlaps_point_srid[-7,1,0]  𝄀
+0
 select st_overlaps(st_geomfromtext(null), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_null;
 ➤ overlaps_null[-7,1,0]  𝄀
 null
-select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
--- @regex("ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON", true)
-invalid input: ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+-- @regex("ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON", true)
+invalid input: ST_OVERLAPS only supports POINT combinations, LINESTRING/LINESTRING, or POLYGON/POLYGON
 select st_overlaps(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))'));
 -- @regex("polygons with holes are not supported", true)
 invalid input: polygons with holes are not supported
