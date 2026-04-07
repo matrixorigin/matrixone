@@ -230,7 +230,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
-		ReplaceCtx:       DeepCopyReplaceCtx(node.ReplaceCtx),
 		NotCacheable:     node.NotCacheable,
 		SourceStep:       node.SourceStep,
 		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
@@ -316,21 +315,6 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	}
 
 	return ret
-}
-
-func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
-	if oldCtx == nil {
-		return nil
-	}
-	ctx := &plan.ReplaceCtx{
-		Ref:                       DeepCopyObjectRef(oldCtx.Ref),
-		AddAffectedRows:           oldCtx.AddAffectedRows,
-		IsClusterTable:            oldCtx.IsClusterTable,
-		TableDef:                  DeepCopyTableDef(oldCtx.TableDef, true),
-		DeleteCond:                oldCtx.DeleteCond,
-		RewriteFromOnDuplicateKey: oldCtx.RewriteFromOnDuplicateKey,
-	}
-	return ctx
 }
 
 func DeepCopyDefault(def *plan.Default) *plan.Default {
