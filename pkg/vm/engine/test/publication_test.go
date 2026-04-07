@@ -3335,7 +3335,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 13: Verify that the second iteration state was updated
 	querySQL2 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
+		`SELECT iteration_state, iteration_lsn, error_message FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 		taskID,
 	)
 
@@ -3351,12 +3351,14 @@ func TestCCPRAlterTable(t *testing.T) {
 	var found2 bool
 	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		require.Equal(t, 1, rows)
-		require.Equal(t, 2, len(cols))
+		require.Equal(t, 3, len(cols))
 
 		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
 		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+		errorMsg := cols[2].GetStringAt(0)
 
-		require.Equal(t, publication.IterationStateCompleted, state)
+		t.Logf("second iteration state: iteration_state=%d, iteration_lsn=%d, error_message=%s", state, lsn, errorMsg)
+		require.Equal(t, publication.IterationStateCompleted, state, "second iteration should be completed, error_message: %s", errorMsg)
 		require.Equal(t, int64(iterationLSN2+1), lsn)
 		found2 = true
 		return true
@@ -5458,7 +5460,8 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 	})
 
 	// Verify third iteration succeeded
-	require.Equal(t, publication.IterationStateCompleted, iterationState3, "third iteration should be completed")
+	t.Logf("third iteration state: iteration_state=%d, iteration_lsn=%d, error_message=%s", iterationState3, iterationLSN3, errorMsg3)
+	require.Equal(t, publication.IterationStateCompleted, iterationState3, "third iteration should be completed, error_message: %s", errorMsg3)
 	require.Equal(t, iterationLSN2+1, iterationLSN3, "iteration_lsn should be incremented after third iteration")
 	require.Empty(t, errorMsg3, "error_message should be empty after successful third iteration")
 
