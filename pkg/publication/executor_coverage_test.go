@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 )
 
 // ---- createUpstreamExecutor error branches ----
@@ -131,4 +132,124 @@ func TestRetryPublication_ErrNonRetryable(t *testing.T) {
 		RetryDuration: time.Second,
 	})
 	assert.Error(t, err)
+}
+
+// --- fillDefaultOption tests ---
+
+func TestFillDefaultOption_NonNil_ZeroValues(t *testing.T) {
+	opt := fillDefaultOption(&PublicationExecutorOption{})
+	require.NotNil(t, opt)
+	assert.NotZero(t, opt.GCInterval)
+	assert.NotZero(t, opt.GCTTL)
+	assert.NotZero(t, opt.SyncTaskInterval)
+	assert.NotNil(t, opt.RetryOption)
+	assert.NotNil(t, opt.SQLExecutorRetryOpt)
+}
+
+func TestFillDefaultOption_PresetValues(t *testing.T) {
+	customInterval := 42 * time.Second
+	customTTL := 99 * time.Hour
+	opt := fillDefaultOption(&PublicationExecutorOption{
+		GCInterval:          customInterval,
+		GCTTL:               customTTL,
+		SyncTaskInterval:    5 * time.Minute,
+		RetryOption:         &ExecutorRetryOption{RetryTimes: 7},
+		SQLExecutorRetryOpt: &SQLExecutorRetryOption{},
+	})
+	assert.Equal(t, customInterval, opt.GCInterval)
+	assert.Equal(t, customTTL, opt.GCTTL)
+	assert.Equal(t, 5*time.Minute, opt.SyncTaskInterval)
+	assert.Equal(t, 7, opt.RetryOption.RetryTimes)
+}
+
+// --- getTask not-found case ---
+
+func TestGetTask_NotFound(t *testing.T) {
+	exec := &PublicationTaskExecutor{}
+	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+	task, ok := exec.getTask("nonexistent")
+	assert.False(t, ok)
+	assert.Equal(t, TaskEntry{}, task)
+}
+
+func TestGetTask_Found(t *testing.T) {
+	exec := &PublicationTaskExecutor{}
+	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+	exec.setTask(TaskEntry{TaskID: "found-task", LSN: 42, State: IterationStateRunning})
+	task, ok := exec.getTask("found-task")
+	assert.True(t, ok)
+	assert.Equal(t, uint64(42), task.LSN)
+	assert.Equal(t, IterationStateRunning, task.State)
+}
+
+func TestGetTaskPublic_NotFound(t *testing.T) {
+	exec := &PublicationTaskExecutor{}
+	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+	task, ok := exec.GetTask("nonexistent")
+	assert.False(t, ok)
+	assert.Equal(t, TaskEntry{}, task)
+}
+
+func TestGetTaskPublic_Found(t *testing.T) {
+	exec := &PublicationTaskExecutor{}
+	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+	exec.setTask(TaskEntry{TaskID: "pub-task", LSN: 7, SubscriptionState: SubscriptionStatePause})
+	task, ok := exec.GetTask("pub-task")
+	assert.True(t, ok)
+	assert.Equal(t, uint64(7), task.LSN)
+	assert.Equal(t, SubscriptionStatePause, task.SubscriptionState)
+}
+
+// ---- fillDefaultOption tests ----
+
+func TestFillDefaultOption_NilInput(t *testing.T) {
+	opt := fillDefaultOption(nil)
+	require.NotNil(t, opt)
+	assert.NotZero(t, opt.GCInterval)
+	assert.NotZero(t, opt.GCTTL)
+	assert.NotZero(t, opt.SyncTaskInterval)
+	assert.NotNil(t, opt.RetryOption)
+	assert.NotNil(t, opt.SQLExecutorRetryOpt)
+}
+
+func TestFillDefaultOption_PartialInput(t *testing.T) {
+	opt := fillDefaultOption(&PublicationExecutorOption{
+		GCInterval: 5 * time.Minute,
+	})
+	require.NotNil(t, opt)
+	assert.Equal(t, 5*time.Minute, opt.GCInterval)
+	assert.NotZero(t, opt.GCTTL)
+	assert.NotNil(t, opt.RetryOption)
+}
+
+func TestFillDefaultOption_FullInput(t *testing.T) {
+	retryOpt := &ExecutorRetryOption{RetryTimes: 10, RetryInterval: time.Second}
+	sqlRetryOpt := &SQLExecutorRetryOption{MaxRetries: 5, RetryInterval: time.Second}
+	opt := fillDefaultOption(&PublicationExecutorOption{
+		GCInterval:          1 * time.Minute,
+		GCTTL:               2 * time.Minute,
+		SyncTaskInterval:    3 * time.Minute,
+		RetryOption:         retryOpt,
+		SQLExecutorRetryOpt: sqlRetryOpt,
+	})
+	assert.Equal(t, 1*time.Minute, opt.GCInterval)
+	assert.Equal(t, 2*time.Minute, opt.GCTTL)
+	assert.Equal(t, 3*time.Minute, opt.SyncTaskInterval)
+	assert.Same(t, retryOpt, opt.RetryOption)
+	assert.Same(t, sqlRetryOpt, opt.SQLExecutorRetryOpt)
+}
+
+// ---- deleteTaskEntry tests ----
+
+func TestDeleteTaskEntry(t *testing.T) {
+	exec := &PublicationTaskExecutor{}
+	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
+	exec.setTask(TaskEntry{TaskID: "task-1", LSN: 1})
+	exec.setTask(TaskEntry{TaskID: "task-2", LSN: 2})
+
+	exec.deleteTaskEntry(TaskEntry{TaskID: "task-1"})
+	_, ok := exec.getTask("task-1")
+	assert.False(t, ok)
+	_, ok = exec.getTask("task-2")
+	assert.True(t, ok)
 }
