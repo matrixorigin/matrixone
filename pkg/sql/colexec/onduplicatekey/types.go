@@ -15,6 +15,8 @@
 package onduplicatekey
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -40,6 +42,7 @@ type container struct {
 	// Hash-based conflict detection (replaces O(N²) linear scan)
 	uniqueKeyColIndices [][]int32        // column indices for each unique constraint
 	conflictMaps        []map[string]int // serialized_unique_key → row_index in rbat
+	keyBuf              bytes.Buffer     // reusable buffer for serializeUniqueKey
 }
 
 type OnDuplicatekey struct {
@@ -107,7 +110,7 @@ func (onDuplicatekey *OnDuplicatekey) Reset(proc *process.Process, pipelineFaile
 		}
 	}
 	for i := range onDuplicatekey.ctr.conflictMaps {
-		onDuplicatekey.ctr.conflictMaps[i] = make(map[string]int)
+		clear(onDuplicatekey.ctr.conflictMaps[i])
 	}
 	onDuplicatekey.ctr.state = Build
 }

@@ -122,12 +122,15 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		insertArg.ctr.conflictMaps = make([]map[string]int, len(insertArg.UniqueColCheckExpr))
 		for i, expr := range insertArg.UniqueColCheckExpr {
 			insertArg.ctr.uniqueKeyColIndices[i] = extractColIndicesFromExpr(expr)
+			if len(insertArg.ctr.uniqueKeyColIndices[i]) == 0 {
+				return moerr.NewInternalErrorf(proc.Ctx, "failed to extract column indices from unique constraint expression %d", i)
+			}
 			insertArg.ctr.conflictMaps[i] = make(map[string]int)
 		}
 	} else {
 		insertArg.ctr.rbat.CleanOnlyData()
 		for i := range insertArg.ctr.conflictMaps {
-			insertArg.ctr.conflictMaps[i] = make(map[string]int)
+			clear(insertArg.ctr.conflictMaps[i])
 		}
 	}
 
@@ -145,7 +148,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 		// O(1) hash map conflict check instead of O(N) linear scan
 		oldConflictRowIdx, conflictMsg := findConflictByHashMap(
-			newBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+			&insertArg.ctr.keyBuf, newBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
 			insertArg.ctr.conflictMaps, insertArg.UniqueCols, 0)
 		if oldConflictRowIdx > -1 {
 
@@ -182,7 +185,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			// Save old keys before in-place update (in case update changes unique columns)
 			oldKeys := make([]string, len(insertArg.ctr.uniqueKeyColIndices))
 			for k, colIndices := range insertArg.ctr.uniqueKeyColIndices {
-				oldKeys[k] = serializeUniqueKey(insertBatch.Vecs, colIndices, oldConflictRowIdx)
+				oldKeys[k] = serializeUniqueKey(&insertArg.ctr.keyBuf, insertBatch.Vecs, colIndices, oldConflictRowIdx)
 			}
 
 			// update the oldConflictRowIdx of insertBatch by newBatch
@@ -202,7 +205,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				if oldKeys[k] != "" {
 					delete(insertArg.ctr.conflictMaps[k], oldKeys[k])
 				}
-				newKey := serializeUniqueKey(insertBatch.Vecs, colIndices, oldConflictRowIdx)
+				newKey := serializeUniqueKey(&insertArg.ctr.keyBuf, insertBatch.Vecs, colIndices, oldConflictRowIdx)
 				if newKey != "" {
 					insertArg.ctr.conflictMaps[k][newKey] = oldConflictRowIdx
 				}
@@ -217,7 +220,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					newBatch.Clean(proc.GetMPool())
 					return err
 				}
-				addToConflictMaps(insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+				addToConflictMaps(&insertArg.ctr.keyBuf, insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
 					insertArg.ctr.conflictMaps, insertBatch.RowCount()-1)
 			} else {
 
@@ -232,7 +235,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 				conflictRowIdx, conflictMsg := findConflictByHashMap(
-					tmpBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+					&insertArg.ctr.keyBuf, tmpBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
 					insertArg.ctr.conflictMaps, insertArg.UniqueCols, 0)
 				if conflictRowIdx > -1 {
 					tmpBatch.Clean(proc.GetMPool())
@@ -246,7 +249,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 						newBatch.Clean(proc.GetMPool())
 						return err
 					}
-					addToConflictMaps(insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
+					addToConflictMaps(&insertArg.ctr.keyBuf, insertBatch.Vecs, insertArg.ctr.uniqueKeyColIndices,
 						insertArg.ctr.conflictMaps, insertBatch.RowCount()-1)
 				}
 				tmpBatch.Clean(proc.GetMPool())
@@ -278,7 +281,7 @@ func extractColIndicesFromExpr(expr *plan.Expr) []int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if e.F.Func.ObjName == "=" {
-			if col, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok {
+			if col := extractColRefFromExpr(e.F.Args[0]); col != nil {
 				return []int32{col.Col.ColPos}
 			}
 		} else if e.F.Func.ObjName == "and" {
@@ -290,10 +293,25 @@ func extractColIndicesFromExpr(expr *plan.Expr) []int32 {
 	return nil
 }
 
+// extractColRefFromExpr recursively unwraps cast/type expressions to find the underlying column reference.
+func extractColRefFromExpr(expr *plan.Expr) *plan.Expr_Col {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e
+	case *plan.Expr_F:
+		// Handle cast-like functions: try first argument
+		if len(e.F.Args) > 0 {
+			return extractColRefFromExpr(e.F.Args[0])
+		}
+	}
+	return nil
+}
+
 // serializeUniqueKey serializes unique key column values into a string for hash map lookup.
 // Returns empty string if any column is NULL (NULL never conflicts per SQL semantics).
-func serializeUniqueKey(vecs []*vector.Vector, colIndices []int32, row int) string {
-	var buf bytes.Buffer
+// The caller-provided buf is reset and reused to avoid per-call allocations.
+func serializeUniqueKey(buf *bytes.Buffer, vecs []*vector.Vector, colIndices []int32, row int) string {
+	buf.Reset()
 	for _, colIdx := range colIndices {
 		v := vecs[colIdx]
 		if v.GetNulls().Contains(uint64(row)) {
@@ -314,6 +332,7 @@ func serializeUniqueKey(vecs []*vector.Vector, colIndices []int32, row int) stri
 // findConflictByHashMap checks if a row conflicts with any existing row using hash maps.
 // Returns the conflicting row index and message, or (-1, "") if no conflict.
 func findConflictByHashMap(
+	buf *bytes.Buffer,
 	vecs []*vector.Vector,
 	uniqueKeyColIndices [][]int32,
 	conflictMaps []map[string]int,
@@ -321,7 +340,7 @@ func findConflictByHashMap(
 	row int,
 ) (int, string) {
 	for i, colIndices := range uniqueKeyColIndices {
-		key := serializeUniqueKey(vecs, colIndices, row)
+		key := serializeUniqueKey(buf, vecs, colIndices, row)
 		if key == "" {
 			continue
 		}
@@ -334,13 +353,14 @@ func findConflictByHashMap(
 
 // addToConflictMaps adds a row's unique key values to all conflict hash maps.
 func addToConflictMaps(
+	buf *bytes.Buffer,
 	vecs []*vector.Vector,
 	uniqueKeyColIndices [][]int32,
 	conflictMaps []map[string]int,
 	rowIdx int,
 ) {
 	for i, colIndices := range uniqueKeyColIndices {
-		key := serializeUniqueKey(vecs, colIndices, rowIdx)
+		key := serializeUniqueKey(buf, vecs, colIndices, rowIdx)
 		if key != "" {
 			conflictMaps[i][key] = rowIdx
 		}
