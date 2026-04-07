@@ -145,6 +145,91 @@ func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
 	)
 }
 
+func TestIssue24048TopNullVarlenaQuery(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+			defer cancel()
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			port := cn.GetServiceConfig().CN.Frontend.Port
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", port)
+			sqlDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer sqlDB.Close()
+			sqlDB.SetMaxOpenConns(2)
+
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			tableName := "billing_records"
+
+			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf(
+				"create table `%s`.`%s` ("+
+					"organization_id varchar(32) not null,"+
+					"owed_amount int not null,"+
+					"created_at datetime not null,"+
+					"instance_id varchar(36) not null,"+
+					"bill_id varchar(64) not null,"+
+					"remarks varchar(64) null)",
+				dbName,
+				tableName,
+			))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf(
+				"create index idx_org_ins_unit on `%s`.`%s`(organization_id, owed_amount)",
+				dbName,
+				tableName,
+			))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf(
+				"insert into `%s`.`%s` values "+
+					"('A2C-79503', 1, '2025-11-22 02:40:27', '11111111-1111-1111-1111-111111111111', 'A2C-79503-seed', 'seed'),"+
+					"('A2C-79503', 2, '2025-11-22 02:40:26', '79307612-ae09-4fc0-81c3-e3f8b13a9927', 'C2025101505A2C79503000176', null),"+
+					"('A2C-79503', 3, '2025-11-22 02:40:28', 'ffffffff-ffff-ffff-ffff-ffffffffffff', 'ZZZ', 'later')",
+				dbName,
+				tableName,
+			))
+
+			query := fmt.Sprintf(
+				"select * from `%s`.`%s` force index (`idx_org_ins_unit`) "+
+					"where (organization_id = 'A2C-79503' and owed_amount > 0) "+
+					"and ((created_at > '2025-11-22 02:40:25') "+
+					"or (created_at = '2025-11-22 02:40:25' and instance_id > '79307612-ae09-4fc0-81c3-e3f8b13a9927') "+
+					"or (created_at = '2025-11-22 02:40:25' and instance_id = '79307612-ae09-4fc0-81c3-e3f8b13a9927' and bill_id > 'C2025101505A2C79503000175')) "+
+					"order by created_at, instance_id, bill_id limit 1 for update",
+				dbName,
+				tableName,
+			)
+
+			for round := 0; round < 20; round++ {
+				tx, err := sqlDB.BeginTx(ctx, nil)
+				require.NoError(t, err)
+
+				rows, err := tx.QueryContext(ctx, query)
+				require.NoErrorf(t, err, "query failed at round %d", round)
+
+				raw := make([]sql.RawBytes, 6)
+				scanArgs := make([]any, len(raw))
+				for i := range raw {
+					scanArgs[i] = &raw[i]
+				}
+
+				require.Truef(t, rows.Next(), "expected one row at round %d", round)
+				require.NoError(t, rows.Scan(scanArgs...))
+				require.Equal(t, "C2025101505A2C79503000176", string(raw[4]))
+				require.Nil(t, raw[5])
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				require.NoError(t, tx.Rollback())
+			}
+		},
+	)
+}
+
 func runConcurrentRestoreRound(
 	t *testing.T,
 	ctx context.Context,
