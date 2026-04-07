@@ -8020,7 +8020,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return pointOnPolygonBoundary(rightPolygon, leftPoint.x, leftPoint.y), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "LINESTRING":
 		leftPoints, err := lineStringGeometryPointsFromPayload(left)
@@ -8047,7 +8047,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return lineStringTouchesPolygon(leftPoints, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
 		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
@@ -8067,11 +8067,17 @@ func geometryTouches(left, right []byte) (bool, error) {
 				return false, err
 			}
 			return lineStringTouchesPolygon(rightPoints, leftPolygon), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return polygonTouchesPolygon(left, right, leftPolygon, rightPolygon)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
@@ -8203,6 +8209,87 @@ func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {
 		}
 	}
 	return touchedBoundary
+}
+
+func polygonTouchesPolygon(leftPayload, rightPayload []byte, left, right []geometryPoint2D) (bool, error) {
+	if !polygonIntersectsPolygon(left, right) {
+		return false, nil
+	}
+
+	leftInterior, err := polygonInteriorPointFromPayload(leftPayload)
+	if err != nil {
+		return false, err
+	}
+	if pointInPolygon(right, leftInterior.x, leftInterior.y) {
+		return false, nil
+	}
+
+	rightInterior, err := polygonInteriorPointFromPayload(rightPayload)
+	if err != nil {
+		return false, err
+	}
+	if pointInPolygon(left, rightInterior.x, rightInterior.y) {
+		return false, nil
+	}
+
+	leftArea, _, _, err := polygonRingAreaAndCentroid(left)
+	if err != nil {
+		return false, err
+	}
+	rightArea, _, _, err := polygonRingAreaAndCentroid(right)
+	if err != nil {
+		return false, err
+	}
+
+	touched := false
+	for i := 0; i < len(left); i++ {
+		leftNext := (i + 1) % len(left)
+		for j := 0; j < len(right); j++ {
+			rightNext := (j + 1) % len(right)
+			if !lineSegmentsIntersect(left[i], left[leftNext], right[j], right[rightNext]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(left[i], left[leftNext], right[j], right[rightNext]) {
+				if polygonEdgesInteriorSameSide(left[i], left[leftNext], leftArea, right[j], right[rightNext], rightArea) {
+					return false, nil
+				}
+				touched = true
+				continue
+			}
+			if len(segmentIntersectionPoints(left[i], left[leftNext], right[j], right[rightNext])) == 0 {
+				return false, nil
+			}
+			touched = true
+		}
+	}
+	return touched, nil
+}
+
+func polygonInteriorPointFromPayload(payload []byte) (geometryPoint2D, error) {
+	pointPayload, err := pointOnSurfaceFromPayload(payload)
+	if err != nil {
+		return geometryPoint2D{}, err
+	}
+	x, y, err := parsePointXYFromPayload(pointPayload)
+	if err != nil {
+		return geometryPoint2D{}, err
+	}
+	return geometryPoint2D{x: x, y: y}, nil
+}
+
+func polygonEdgesInteriorSameSide(leftStart, leftEnd geometryPoint2D, leftArea float64, rightStart, rightEnd geometryPoint2D, rightArea float64) bool {
+	leftNormal := polygonEdgeInteriorNormal(leftStart, leftEnd, leftArea)
+	rightNormal := polygonEdgeInteriorNormal(rightStart, rightEnd, rightArea)
+	return leftNormal.x*rightNormal.x+leftNormal.y*rightNormal.y > 1e-9
+}
+
+func polygonEdgeInteriorNormal(start, end geometryPoint2D, signedArea float64) geometryPoint2D {
+	dx := end.x - start.x
+	dy := end.y - start.y
+	if signedArea > 0 {
+		return geometryPoint2D{x: -dy, y: dx}
+	}
+	return geometryPoint2D{x: dy, y: -dx}
 }
 
 func lineStringPointIsBoundary(line []geometryPoint2D, point geometryPoint2D) bool {

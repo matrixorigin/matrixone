@@ -5504,8 +5504,10 @@ func initStTouchesTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 2)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"LINESTRING(0 0,2 0)",
@@ -5520,12 +5522,14 @@ func initStTouchesTestCase() []tcTemp {
 						"LINESTRING(2 2,3 2)",
 						"LINESTRING(2 0,2 2)",
 						"LINESTRING(0 2,2 0)",
+						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, true, false, true, true, false, true, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, true, false, true, false, true, true, false, true, true, false, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_touches null",
@@ -5570,7 +5574,7 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_TOUCHES only supports POINT or LINESTRING with LINESTRING or POLYGON")
+	require.Contains(t, info, "ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
