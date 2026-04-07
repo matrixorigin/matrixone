@@ -205,32 +205,26 @@ func TestIssue24048TopNullVarlenaQuery(t *testing.T) {
 			)
 
 			for round := 0; round < 20; round++ {
-				func(round int) {
-					tx, err := sqlDB.BeginTx(ctx, nil)
-					require.NoError(t, err)
-					defer func() {
-						require.NoError(t, tx.Rollback())
-					}()
+				tx, err := sqlDB.BeginTx(ctx, nil)
+				require.NoError(t, err)
 
-					rows, err := tx.QueryContext(ctx, query)
-					require.NoErrorf(t, err, "query failed at round %d", round)
-					defer func() {
-						require.NoError(t, rows.Close())
-					}()
+				rows, err := tx.QueryContext(ctx, query)
+				require.NoErrorf(t, err, "query failed at round %d", round)
 
-					raw := make([]sql.RawBytes, 6)
-					scanArgs := make([]any, len(raw))
-					for i := range raw {
-						scanArgs[i] = &raw[i]
-					}
+				raw := make([]sql.RawBytes, 6)
+				scanArgs := make([]any, len(raw))
+				for i := range raw {
+					scanArgs[i] = &raw[i]
+				}
 
-					require.Truef(t, rows.Next(), "expected one row at round %d", round)
-					require.NoError(t, rows.Scan(scanArgs...))
-					require.Equal(t, "C2025101505A2C79503000176", string(raw[4]))
-					require.Nil(t, raw[5])
-					require.False(t, rows.Next())
-					require.NoError(t, rows.Err())
-				}(round)
+				require.Truef(t, rows.Next(), "expected one row at round %d", round)
+				require.NoError(t, rows.Scan(scanArgs...))
+				require.Equal(t, "C2025101505A2C79503000176", string(raw[4]))
+				require.Nil(t, raw[5])
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				require.NoError(t, tx.Rollback())
 			}
 		},
 	)
