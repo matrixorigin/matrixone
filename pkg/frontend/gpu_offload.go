@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,6 +48,9 @@ var (
 	reExtractFunc  = regexp.MustCompile(`(?i)\bextract\('([^']+)',\s*`)
 	reDateArith    = regexp.MustCompile(`(?i)(DATE\s+'[^']+'\s*[+-]\s*INTERVAL\s+'[^']+'\s*\w+)`)
 )
+
+// Shared HTTP client for sidecar requests (goroutine-safe, enables keep-alive pooling).
+var sidecarClient = &http.Client{Timeout: 5 * time.Minute}
 
 // debugHTTPAddr stores the -debug-http listen address, set at startup.
 var debugHTTPAddr string
@@ -390,7 +394,6 @@ func rewriteTableExpr(te tree.TableExpr, defaultDB string, manifestBaseURL strin
 // sendToSidecar sends the rewritten SQL to the DuckDB httpserver extension.
 // httpserver expects raw SQL as the POST body at /?default_format=JSONCompact.
 func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSidecarResponse, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
 	url := strings.TrimRight(sidecarURL, "/") + "/?default_format=JSONCompact"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(sql))
 	if err != nil {
@@ -398,7 +401,7 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 	}
 
 	t0 := time.Now()
-	resp, err := client.Do(req)
+	resp, err := sidecarClient.Do(req)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "sidecar request failed: %v", err)
 	}
@@ -444,7 +447,7 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSide
 	// Use json.Number to preserve integer precision for values > 2^53.
 	for _, rawRow := range result.Data {
 		var row []interface{}
-		dec := json.NewDecoder(strings.NewReader(string(rawRow)))
+		dec := json.NewDecoder(bytes.NewReader(rawRow))
 		dec.UseNumber()
 		if err := dec.Decode(&row); err != nil {
 			return moerr.NewInternalErrorf(ctx,
