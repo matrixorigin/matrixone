@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -7828,6 +7829,12 @@ func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryCrosses(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -8081,6 +8088,80 @@ func geometryTouches(left, right []byte) (bool, error) {
 	}
 }
 
+func geometryCrosses(left, right []byte) (bool, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+
+	switch leftType {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		leftPoint := geometryPoint2D{x: x, y: y}
+		switch rightType {
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointCrossesLineString(leftPoint, rightLine), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+		}
+	case "LINESTRING":
+		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		switch rightType {
+		case "POINT":
+			x, y, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return pointCrossesLineString(geometryPoint2D{x: x, y: y}, leftLine), nil
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringCrossesLineString(leftLine, rightLine), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringCrossesPolygon(leftLine, rightPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+		}
+	case "POLYGON":
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		switch rightType {
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringCrossesPolygon(rightLine, leftPolygon), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+		}
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+	}
+}
+
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
 	points, err := parseSinglePolygonRingFromText(wkt)
 	if err != nil {
@@ -8174,6 +8255,155 @@ func lineStringTouchesLineString(left, right []geometryPoint2D) bool {
 		}
 	}
 	return touched
+}
+
+func pointCrossesLineString(point geometryPoint2D, line []geometryPoint2D) bool {
+	if !pointIntersectsLineString(point, line) {
+		return false
+	}
+	return !lineStringPointIsBoundary(line, point)
+}
+
+func lineStringCrossesLineString(left, right []geometryPoint2D) bool {
+	for i := 0; i < len(left)-1; i++ {
+		for j := 0; j < len(right)-1; j++ {
+			if !lineSegmentsIntersect(left[i], left[i+1], right[j], right[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(left[i], left[i+1], right[j], right[j+1]) {
+				return false
+			}
+			points := segmentIntersectionPoints(left[i], left[i+1], right[j], right[j+1])
+			if len(points) == 0 {
+				return true
+			}
+			for _, point := range points {
+				if lineStringPointIsBoundary(left, point) || lineStringPointIsBoundary(right, point) {
+					continue
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func lineStringCrossesPolygon(line, polygon []geometryPoint2D) bool {
+	if !lineStringIntersectsPolygon(line, polygon) {
+		return false
+	}
+
+	hasInside := false
+	hasOutside := false
+	for i := 0; i < len(line)-1; i++ {
+		segmentInside, segmentOutside, boundaryOverlap := lineSegmentPolygonLocationFlags(line[i], line[i+1], polygon)
+		if boundaryOverlap {
+			return false
+		}
+		hasInside = hasInside || segmentInside
+		hasOutside = hasOutside || segmentOutside
+	}
+	return hasInside && hasOutside
+}
+
+func lineSegmentPolygonLocationFlags(start, end geometryPoint2D, polygon []geometryPoint2D) (bool, bool, bool) {
+	params := []float64{0, 1}
+	for i := 0; i < len(polygon); i++ {
+		next := (i + 1) % len(polygon)
+		if !lineSegmentsIntersect(start, end, polygon[i], polygon[next]) {
+			continue
+		}
+		if collinearSegmentsOverlapWithLength(start, end, polygon[i], polygon[next]) {
+			return false, false, true
+		}
+		points := segmentIntersectionPoints(start, end, polygon[i], polygon[next])
+		if len(points) == 0 {
+			point, ok := segmentIntersectionPoint(start, end, polygon[i], polygon[next])
+			if !ok {
+				continue
+			}
+			params = append(params, segmentParameter(start, end, point))
+			continue
+		}
+		for _, point := range points {
+			params = append(params, segmentParameter(start, end, point))
+		}
+	}
+
+	sort.Float64s(params)
+	params = dedupeSegmentParameters(params)
+
+	hasInside := false
+	hasOutside := false
+	for i := 0; i < len(params)-1; i++ {
+		if sameGeometryCoordinate(params[i], params[i+1]) {
+			continue
+		}
+		point := interpolateSegmentPoint(start, end, (params[i]+params[i+1])/2)
+		if pointInPolygon(polygon, point.x, point.y) {
+			hasInside = true
+			continue
+		}
+		if !pointOnPolygonBoundary(polygon, point.x, point.y) {
+			hasOutside = true
+		}
+	}
+	return hasInside, hasOutside, false
+}
+
+func segmentIntersectionPoint(a, b, c, d geometryPoint2D) (geometryPoint2D, bool) {
+	denominator := (a.x-b.x)*(c.y-d.y) - (a.y-b.y)*(c.x-d.x)
+	if sameGeometryCoordinate(denominator, 0) {
+		return geometryPoint2D{}, false
+	}
+
+	leftCross := a.x*b.y - a.y*b.x
+	rightCross := c.x*d.y - c.y*d.x
+	x := (leftCross*(c.x-d.x) - (a.x-b.x)*rightCross) / denominator
+	y := (leftCross*(c.y-d.y) - (a.y-b.y)*rightCross) / denominator
+	return geometryPoint2D{x: x, y: y}, true
+}
+
+func segmentParameter(start, end, point geometryPoint2D) float64 {
+	dx := end.x - start.x
+	dy := end.y - start.y
+	if math.Abs(dx) >= math.Abs(dy) {
+		if sameGeometryCoordinate(dx, 0) {
+			return 0
+		}
+		return (point.x - start.x) / dx
+	}
+	if sameGeometryCoordinate(dy, 0) {
+		return 0
+	}
+	return (point.y - start.y) / dy
+}
+
+func dedupeSegmentParameters(params []float64) []float64 {
+	if len(params) == 0 {
+		return nil
+	}
+	deduped := make([]float64, 0, len(params))
+	for _, param := range params {
+		switch {
+		case param < 0 && sameGeometryCoordinate(param, 0):
+			param = 0
+		case param > 1 && sameGeometryCoordinate(param, 1):
+			param = 1
+		}
+		if len(deduped) > 0 && sameGeometryCoordinate(deduped[len(deduped)-1], param) {
+			continue
+		}
+		deduped = append(deduped, param)
+	}
+	return deduped
+}
+
+func interpolateSegmentPoint(start, end geometryPoint2D, param float64) geometryPoint2D {
+	return geometryPoint2D{
+		x: start.x + (end.x-start.x)*param,
+		y: start.y + (end.y-start.y)*param,
+	}
 }
 
 func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {

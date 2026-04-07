@@ -624,10 +624,11 @@ const (
 	ST_INTERSECTS                 = 442
 	ST_DISJOINT                   = 443
 	ST_TOUCHES                    = 444
+	ST_CROSSES                    = 445
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 445
+	FUNCTION_END_NUMBER = 446
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1023,6 +1024,7 @@ var functionIdRegister = map[string]int32{
 	"st_intersects":                  ST_INTERSECTS,
 	"st_disjoint":                    ST_DISJOINT,
 	"st_touches":                     ST_TOUCHES,
+	"st_crosses":                     ST_CROSSES,
 	"st_startpoint":                  ST_STARTPOINT,
 	"st_endpoint":                    ST_ENDPOINT,
 	"st_pointn":                      ST_POINTN,
