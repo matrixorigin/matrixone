@@ -5502,8 +5502,10 @@ func initStTouchesTestCase() []tcTemp {
 						"LINESTRING(-1 0,3 0)",
 						"LINESTRING(-1 1,3 1)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 2)",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"LINESTRING(0 0,2 0)",
@@ -5516,12 +5518,14 @@ func initStTouchesTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(2 2,3 2)",
+						"LINESTRING(2 0,2 2)",
+						"LINESTRING(0 2,2 0)",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, true, false, true, true, false, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, true, false, true, false, true, true, false, true, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_touches null",
@@ -5557,10 +5561,10 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"LINESTRING(0 0,2 0)"},
+			[]string{"POINT(0 0)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"LINESTRING(0 2,2 0)"},
+			[]string{"POINT(1 1)"},
 			[]bool{false}),
 	}
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)

@@ -8034,6 +8034,12 @@ func geometryTouches(left, right []byte) (bool, error) {
 				return false, err
 			}
 			return pointTouchesLineString(geometryPoint2D{x: x, y: y}, leftPoints), nil
+		case "LINESTRING":
+			rightPoints, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return false, err
+			}
+			return lineStringTouchesLineString(leftPoints, rightPoints), nil
 		case "POLYGON":
 			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
 			if err != nil {
@@ -8134,6 +8140,36 @@ func pointTouchesLineString(point geometryPoint2D, line []geometryPoint2D) bool 
 	return sameGeometryPoint(point, line[0]) || sameGeometryPoint(point, line[len(line)-1])
 }
 
+func lineStringTouchesLineString(left, right []geometryPoint2D) bool {
+	touched := false
+	for i := 0; i < len(left)-1; i++ {
+		for j := 0; j < len(right)-1; j++ {
+			if !lineSegmentsIntersect(left[i], left[i+1], right[j], right[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(left[i], left[i+1], right[j], right[j+1]) {
+				return false
+			}
+			points := segmentIntersectionPoints(left[i], left[i+1], right[j], right[j+1])
+			if len(points) == 0 {
+				return false
+			}
+			hasBoundaryTouch := false
+			for _, point := range points {
+				if lineStringPointIsBoundary(left, point) || lineStringPointIsBoundary(right, point) {
+					hasBoundaryTouch = true
+					continue
+				}
+				return false
+			}
+			if hasBoundaryTouch {
+				touched = true
+			}
+		}
+	}
+	return touched
+}
+
 func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {
 	if !lineStringIntersectsPolygon(line, polygon) {
 		return false
@@ -8167,6 +8203,51 @@ func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {
 		}
 	}
 	return touchedBoundary
+}
+
+func lineStringPointIsBoundary(line []geometryPoint2D, point geometryPoint2D) bool {
+	if len(line) == 0 || sameGeometryPoint(line[0], line[len(line)-1]) {
+		return false
+	}
+	return sameGeometryPoint(point, line[0]) || sameGeometryPoint(point, line[len(line)-1])
+}
+
+func segmentIntersectionPoints(a, b, c, d geometryPoint2D) []geometryPoint2D {
+	points := make([]geometryPoint2D, 0, 4)
+	if pointOnSegment(a.x, a.y, c, d) {
+		points = appendUniqueGeometryPoints(points, a)
+	}
+	if pointOnSegment(b.x, b.y, c, d) {
+		points = appendUniqueGeometryPoints(points, b)
+	}
+	if pointOnSegment(c.x, c.y, a, b) {
+		points = appendUniqueGeometryPoints(points, c)
+	}
+	if pointOnSegment(d.x, d.y, a, b) {
+		points = appendUniqueGeometryPoints(points, d)
+	}
+	return points
+}
+
+func appendUniqueGeometryPoints(points []geometryPoint2D, point geometryPoint2D) []geometryPoint2D {
+	for _, existing := range points {
+		if sameGeometryPoint(existing, point) {
+			return points
+		}
+	}
+	return append(points, point)
+}
+
+func collinearSegmentsOverlapWithLength(a, b, c, d geometryPoint2D) bool {
+	if geometryOrientation(a, b, c) != 0 || geometryOrientation(a, b, d) != 0 {
+		return false
+	}
+	if math.Abs(a.x-b.x) >= math.Abs(a.y-b.y) {
+		overlap := math.Min(math.Max(a.x, b.x), math.Max(c.x, d.x)) - math.Max(math.Min(a.x, b.x), math.Min(c.x, d.x))
+		return overlap > 1e-9
+	}
+	overlap := math.Min(math.Max(a.y, b.y), math.Max(c.y, d.y)) - math.Max(math.Min(a.y, b.y), math.Min(c.y, d.y))
+	return overlap > 1e-9
 }
 
 func pointIntersectsPolygon(point geometryPoint2D, polygon []geometryPoint2D) bool {
