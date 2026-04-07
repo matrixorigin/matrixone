@@ -77,7 +77,7 @@ func TestGenerateManifest_Basic(t *testing.T) {
 	// No data inserted, so no objects
 	assert.Equal(t, 0, len(m.Objects))
 	assert.NotNil(t, m.Stats)
-	assert.Equal(t, 0, m.Stats.TotalRows)
+	assert.Equal(t, int64(0), m.Stats.TotalRows)
 
 	t.Logf("Manifest JSON:\n%s", string(data))
 }

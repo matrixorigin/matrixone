@@ -430,11 +430,13 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 // buildGPUResultSet populates a MysqlResultSet from the httpserver JSONCompact response.
 func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSidecarResponse) error {
 
-	// Define columns from "meta"
-	for _, col := range result.Meta {
+	// Precompute column types once (avoid per-row gpuTypeToMysql calls).
+	colTypes := make([]defines.MysqlType, len(result.Meta))
+	for i, col := range result.Meta {
+		colTypes[i] = gpuTypeToMysql(col.Type)
 		mc := new(MysqlColumn)
 		mc.SetName(col.Name)
-		mc.SetColumnType(gpuTypeToMysql(col.Type))
+		mc.SetColumnType(colTypes[i])
 		mrs.AddColumn(mc)
 	}
 
@@ -451,21 +453,21 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSide
 		// Convert json.Number to appropriate Go types based on column type.
 		for i, val := range row {
 			if num, ok := val.(json.Number); ok {
-				if i < len(result.Meta) {
-					colType := gpuTypeToMysql(result.Meta[i].Type)
-					if colType == defines.MYSQL_TYPE_LONGLONG {
+				if i < len(colTypes) {
+					switch colTypes[i] {
+					case defines.MYSQL_TYPE_LONGLONG:
 						if v, err := strconv.ParseInt(string(num), 10, 64); err == nil {
 							row[i] = v
 						} else {
 							row[i] = string(num)
 						}
-					} else if colType == defines.MYSQL_TYPE_FLOAT || colType == defines.MYSQL_TYPE_DOUBLE {
+					case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
 						if v, err := strconv.ParseFloat(string(num), 64); err == nil {
 							row[i] = v
 						} else {
 							row[i] = string(num)
 						}
-					} else {
+					default:
 						row[i] = string(num)
 					}
 				} else {

@@ -17,8 +17,10 @@ package rpc
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
@@ -41,7 +43,14 @@ func manifestHTTPHandler(d *db.DB) http.HandlerFunc {
 
 		tbl, err := parseTableTarget(table, nil, d)
 		if err != nil {
-			writeJSONError(w, err.Error(), http.StatusNotFound)
+			// Invalid input (bad format) → 400; not found → 404
+			code := http.StatusNotFound
+			if me, ok := err.(*moerr.Error); ok && me.ErrorCode() == moerr.ErrInvalidInput {
+				code = http.StatusBadRequest
+			} else if strings.Contains(err.Error(), "invalid") {
+				code = http.StatusBadRequest
+			}
+			writeJSONError(w, err.Error(), code)
 			return
 		}
 

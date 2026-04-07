@@ -840,6 +840,7 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 	}
 
 	txn, _ := db.StartTxn(nil)
+	defer txn.Rollback(context.Background())
 	if ac != nil {
 		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
