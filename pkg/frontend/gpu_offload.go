@@ -231,8 +231,6 @@ func rewriteTablesForGPU(ctx context.Context, ses *Session, sql string, manifest
 // fixMOSyntaxForDuckDB translates MO-specific SQL serialization quirks
 // into standard SQL that DuckDB can parse.
 func fixMOSyntaxForDuckDB(sql string) string {
-	// count('*') → count(*)
-	sql = strings.ReplaceAll(sql, "count('*')", "count(*)")
 	// date('...') → DATE '...'
 	sql = reDateFunc.ReplaceAllString(sql, "DATE '$1'")
 	// interval('N', 'unit') → INTERVAL 'N' unit

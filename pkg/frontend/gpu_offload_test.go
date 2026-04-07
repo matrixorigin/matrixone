@@ -322,14 +322,13 @@ func TestFixMOSyntaxForDuckDB(t *testing.T) {
 	cases := []struct {
 		name, in, out string
 	}{
-		{"count star", "count('*')", "count(*)"},
 		{"date func", "date('2024-01-01')", "DATE '2024-01-01'"},
 		{"interval func", "interval('3', 'month')", "INTERVAL '3' month"},
 		{"extract func", "extract('year', col)", "EXTRACT(year FROM col)"},
 		{"date arith", "DATE '2024-01-01' + INTERVAL '3' month",
 			"CAST(DATE '2024-01-01' + INTERVAL '3' month AS DATE)"},
 		{"no change", "SELECT 1", "SELECT 1"},
-		{"combined", "SELECT count('*'), date('2024-01-01') FROM t",
+		{"combined", "SELECT count(*), date('2024-01-01') FROM t",
 			"SELECT count(*), DATE '2024-01-01' FROM t"},
 	}
 	for _, tc := range cases {
