@@ -1,21 +1,48 @@
-select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(5 5)')) as contains_inside;
-➤ contains_inside[-7,1,0]  𝄀
+select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as contains_point_point_same;
+➤ contains_point_point_same[-7,1,0]  𝄀
 1
-select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(15 15)')) as contains_outside;
-➤ contains_outside[-7,1,0]  𝄀
+select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as contains_point_point_diff;
+➤ contains_point_point_diff[-7,1,0]  𝄀
 0
-select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(0 5)')) as contains_boundary;
-➤ contains_boundary[-7,1,0]  𝄀
+select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(1 0)')) as contains_line_point_interior;
+➤ contains_line_point_interior[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)')) as contains_line_point_endpoint;
+➤ contains_line_point_endpoint[-7,1,0]  𝄀
 0
-select st_contains(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))', 4326), st_geomfromtext('POINT(5 5)', 4326)) as contains_srid;
+select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0.5 0,1.5 0)')) as contains_line_line_subset;
+➤ contains_line_line_subset[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as contains_line_line_longer;
+➤ contains_line_line_longer[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as contains_polygon_point_inside;
+➤ contains_polygon_point_inside[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(0 1)')) as contains_polygon_point_boundary;
+➤ contains_polygon_point_boundary[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0.5 0.5,1.5 1.5)')) as contains_polygon_line_inside;
+➤ contains_polygon_line_inside[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_polygon_line_boundary;
+➤ contains_polygon_line_boundary[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as contains_polygon_polygon_contained;
+➤ contains_polygon_polygon_contained[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as contains_polygon_polygon_equal;
+➤ contains_polygon_polygon_equal[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 4326)) as contains_srid;
 ➤ contains_srid[-7,1,0]  𝄀
 1
-select st_contains(st_geomfromtext(null), st_geomfromtext('POINT(5 5)')) as contains_null;
+select st_contains(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as contains_null;
 ➤ contains_null[-7,1,0]  𝄀
 null
-select st_contains(st_geomfromtext('POINT(5 5)'), st_geomfromtext('POINT(5 5)'));
--- @regex("ST_CONTAINS only supports POLYGON contains POINT", true)
-invalid input: ST_CONTAINS only supports POLYGON contains POINT
+select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)'));
+-- @regex("ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON", true)
+invalid input: ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)'));
 -- @regex("polygons with holes are not supported", true)
 invalid input: polygons with holes are not supported

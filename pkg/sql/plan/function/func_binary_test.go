@@ -5134,28 +5134,46 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 func initStContainsTestCase() []tcTemp {
 	return []tcTemp{
 		{
-			info: "test st_contains polygon point",
+			info: "test st_contains basic",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"SRID=4326;POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
-						"POINT(5 5)",
-						"POINT(15 15)",
-						"POINT(0 5)",
-						"SRID=4326;POINT(5 5)",
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POINT(1 0)",
+						"POINT(0 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,3 0)",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0.5 0.5,1.5 1.5)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
 					},
-					[]bool{false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, true},
-				[]bool{false, false, false, false}),
+				[]bool{true, false, true, false, true, false, true, false, true, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_contains null",
@@ -5194,13 +5212,13 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 			[]string{"POINT(5 5)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(5 5)"},
+			[]string{"LINESTRING(0 0,2 0)"},
 			[]bool{false}),
 	}
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StContains)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_CONTAINS only supports POLYGON contains POINT")
+	require.Contains(t, info, "ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5219,28 +5237,46 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 func initStWithinTestCase() []tcTemp {
 	return []tcTemp{
 		{
-			info: "test st_within point polygon",
+			info: "test st_within basic",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
-						"POINT(5 5)",
-						"POINT(15 15)",
-						"POINT(0 5)",
-						"SRID=4326;POINT(5 5)",
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POINT(1 0)",
+						"POINT(0 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,3 0)",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0.5 0.5,1.5 1.5)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
 					},
-					[]bool{false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
-						"SRID=4326;POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, true},
-				[]bool{false, false, false, false}),
+				[]bool{true, false, true, false, true, false, true, false, true, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_within null",
@@ -5285,7 +5321,7 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StWithin)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_WITHIN only supports POINT within POLYGON")
+	require.Contains(t, info, "ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),

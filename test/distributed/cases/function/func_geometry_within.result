@@ -1,21 +1,48 @@
-select st_within(st_geomfromtext('POINT(5 5)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_inside;
-➤ within_inside[-7,1,0]  𝄀
+select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as within_point_point_same;
+➤ within_point_point_same[-7,1,0]  𝄀
 1
-select st_within(st_geomfromtext('POINT(15 15)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_outside;
-➤ within_outside[-7,1,0]  𝄀
+select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(0 0)')) as within_point_point_diff;
+➤ within_point_point_diff[-7,1,0]  𝄀
 0
-select st_within(st_geomfromtext('POINT(0 5)'), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_boundary;
-➤ within_boundary[-7,1,0]  𝄀
+select st_within(st_geomfromtext('POINT(1 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_point_line_interior;
+➤ within_point_line_interior[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_point_line_endpoint;
+➤ within_point_line_endpoint[-7,1,0]  𝄀
 0
-select st_within(st_geomfromtext('POINT(5 5)', 4326), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))', 4326)) as within_srid;
+select st_within(st_geomfromtext('LINESTRING(0.5 0,1.5 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_line_line_subset;
+➤ within_line_line_subset[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_line_line_longer;
+➤ within_line_line_longer[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_point_polygon_inside;
+➤ within_point_polygon_inside[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_point_polygon_boundary;
+➤ within_point_polygon_boundary[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('LINESTRING(0.5 0.5,1.5 1.5)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_line_polygon_inside;
+➤ within_line_polygon_inside[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_line_polygon_boundary;
+➤ within_line_polygon_boundary[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_polygon_polygon_contained;
+➤ within_polygon_polygon_contained[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_polygon_polygon_equal;
+➤ within_polygon_polygon_equal[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as within_srid;
 ➤ within_srid[-7,1,0]  𝄀
 1
-select st_within(st_geomfromtext(null), st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as within_null;
+select st_within(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as within_null;
 ➤ within_null[-7,1,0]  𝄀
 null
-select st_within(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'), st_geomfromtext('POINT(5 5)'));
--- @regex("ST_WITHIN only supports POINT within POLYGON", true)
-invalid input: ST_WITHIN only supports POINT within POLYGON
+select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)'));
+-- @regex("ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON", true)
+invalid input: ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON
 select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
 -- @regex("polygons with holes are not supported", true)
 invalid input: polygons with holes are not supported
