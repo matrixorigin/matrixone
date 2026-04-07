@@ -5637,6 +5637,11 @@ func initStCrossesTestCase() []tcTemp {
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
 						"POINT(1 0)",
 						"POINT(0 0)",
 						"LINESTRING(0 0,2 2)",
@@ -5648,9 +5653,14 @@ func initStCrossesTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;LINESTRING(-1 1,3 1)",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
+						"POINT(0 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(1 1)",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 2,2 0)",
@@ -5662,11 +5672,11 @@ func initStCrossesTestCase() []tcTemp {
 						"LINESTRING(-1 1,3 1)",
 						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, false, true, false, false, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_crosses null",
@@ -5702,7 +5712,7 @@ func TestStCrossesRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(1 1)"},
+			[]string{"MULTIPOINT((0 0),(1 1))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},

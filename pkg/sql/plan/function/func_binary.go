@@ -8205,6 +8205,8 @@ func geometryCrosses(left, right []byte) (bool, error) {
 		}
 		leftPoint := geometryPoint2D{x: x, y: y}
 		switch rightType {
+		case "POINT", "POLYGON":
+			return false, nil
 		case "LINESTRING":
 			rightLine, err := lineStringGeometryPointsFromPayload(right)
 			if err != nil {
@@ -8247,6 +8249,8 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			return false, err
 		}
 		switch rightType {
+		case "POINT", "POLYGON":
+			return false, nil
 		case "LINESTRING":
 			rightLine, err := lineStringGeometryPointsFromPayload(right)
 			if err != nil {
