@@ -1,0 +1,16 @@
+select st_coveredby(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as coveredby_point_point_same;
+select st_coveredby(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(0 0)')) as coveredby_point_point_diff;
+select st_coveredby(st_geomfromtext('POINT(2 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as coveredby_point_line_endpoint;
+select st_coveredby(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_point_polygon_boundary;
+select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_point_polygon_outside;
+select st_coveredby(st_geomfromtext('LINESTRING(0.5 0,1.5 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as coveredby_line_line_subset;
+select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_line_polygon_boundary;
+select st_coveredby(st_geomfromtext('LINESTRING(-1 1,1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_line_polygon_crossing;
+select st_coveredby(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_polygon_polygon_contained;
+select st_coveredby(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_polygon_polygon_equal;
+select st_coveredby(st_geomfromtext('POINT(0 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as coveredby_point_polygon_srid;
+select st_coveredby(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as coveredby_null;
+-- @regex("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON",true)
+select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)'));
+-- @regex("polygons with holes are not supported",true)
+select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));

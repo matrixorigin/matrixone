@@ -628,10 +628,11 @@ const (
 	ST_OVERLAPS                   = 446
 	ST_EQUALS                     = 447
 	ST_COVERS                     = 448
+	ST_COVEREDBY                  = 449
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 449
+	FUNCTION_END_NUMBER = 450
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1031,6 +1032,7 @@ var functionIdRegister = map[string]int32{
 	"st_overlaps":                    ST_OVERLAPS,
 	"st_equals":                      ST_EQUALS,
 	"st_covers":                      ST_COVERS,
+	"st_coveredby":                   ST_COVEREDBY,
 	"st_startpoint":                  ST_STARTPOINT,
 	"st_endpoint":                    ST_ENDPOINT,
 	"st_pointn":                      ST_POINTN,

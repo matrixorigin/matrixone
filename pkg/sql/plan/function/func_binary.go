@@ -7853,6 +7853,12 @@ func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
+func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryCoveredBy(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -8359,6 +8365,41 @@ func geometryCovers(container, target []byte) (bool, error) {
 		}
 	default:
 		return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+	}
+}
+
+func geometryCoveredBy(candidate, container []byte) (bool, error) {
+	candidateType, err := geometryTypeNameFromPayload(candidate)
+	if err != nil {
+		return false, err
+	}
+	containerType, err := geometryTypeNameFromPayload(container)
+	if err != nil {
+		return false, err
+	}
+
+	switch candidateType {
+	case "POINT":
+		switch containerType {
+		case "POINT", "LINESTRING", "POLYGON":
+			return geometryCovers(container, candidate)
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+		}
+	case "LINESTRING":
+		switch containerType {
+		case "LINESTRING", "POLYGON":
+			return geometryCovers(container, candidate)
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+		}
+	case "POLYGON":
+		if containerType != "POLYGON" {
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+		}
+		return geometryCovers(container, candidate)
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
 	}
 }
 
