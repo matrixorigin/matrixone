@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -167,10 +168,6 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			}
 		}
 
-		for j := 0; j < len(row); j++ {
-			curBatchSize += uint64(len(row[j].Val))
-		}
-
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
 			row, err = r.transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData)
@@ -197,7 +194,9 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				// rollback partially appended columns
 				for j := 0; j < bat.VectorCount(); j++ {
 					vec := bat.GetVector(int32(j))
-					if vec.Length() > rowIdx {
+					vecLen := vec.Length()
+					if vecLen > rowIdx {
+						nulls.RemoveRange(vec.GetNulls(), uint64(rowIdx), uint64(vecLen))
 						vec.SetLength(rowIdx)
 					}
 				}
@@ -205,6 +204,9 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				continue
 			}
 			return false, err
+		}
+		for j := 0; j < len(row); j++ {
+			curBatchSize += uint64(len(row[j].Val))
 		}
 
 		if curBatchSize >= param.maxBatchSize {
