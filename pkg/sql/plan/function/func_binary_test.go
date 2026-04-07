@@ -5687,6 +5687,86 @@ func TestStCrossesRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "polygons with holes are not supported")
 }
 
+func initStOverlapsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_overlaps basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(0 0,4 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 2)",
+						"LINESTRING(0 0,2 0,3 1)",
+						"LINESTRING(3 0,0 0)",
+						"SRID=4326;LINESTRING(0 0,3 0)",
+					},
+					[]bool{false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(1 0,4 0)",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(1 0,3 0)",
+						"LINESTRING(2 0,4 0)",
+						"LINESTRING(0 2,2 0)",
+						"LINESTRING(1 0,3 0,4 -1)",
+						"LINESTRING(1 0,4 0)",
+						"SRID=4326;LINESTRING(1 0,4 0)",
+					},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_overlaps null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(1 0,4 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStOverlaps(t *testing.T) {
+	testCases := initStOverlapsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StOverlaps)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStOverlapsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,3 0)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StOverlaps)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_OVERLAPS only supports LINESTRING/LINESTRING")
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{

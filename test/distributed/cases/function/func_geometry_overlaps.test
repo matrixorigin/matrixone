@@ -1,0 +1,11 @@
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_line_line_partial;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as overlaps_line_line_equal;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,4 0)'), st_geomfromtext('LINESTRING(1 0,3 0)')) as overlaps_line_line_contained;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,4 0)')) as overlaps_line_line_touch;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as overlaps_line_line_cross;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 0,3 1)'), st_geomfromtext('LINESTRING(1 0,3 0,4 -1)')) as overlaps_line_line_multisegment;
+select st_overlaps(st_geomfromtext('LINESTRING(3 0,0 0)'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_line_line_reverse;
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)', 4326), st_geomfromtext('LINESTRING(1 0,4 0)', 4326)) as overlaps_srid;
+select st_overlaps(st_geomfromtext(null), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_null;
+-- @regex("ST_OVERLAPS only supports LINESTRING/LINESTRING",true)
+select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,3 0)'));

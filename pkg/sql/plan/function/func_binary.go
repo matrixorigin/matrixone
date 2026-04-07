@@ -7835,9 +7835,20 @@ func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryOverlaps(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
+}
+
+type geometryParamInterval struct {
+	start float64
+	end   float64
 }
 
 func geometryContains(container, target []byte) (bool, error) {
@@ -8162,6 +8173,31 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	}
 }
 
+func geometryOverlaps(left, right []byte) (bool, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+
+	if leftType != "LINESTRING" || rightType != "LINESTRING" {
+		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING")
+	}
+
+	leftLine, err := lineStringGeometryPointsFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightLine, err := lineStringGeometryPointsFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+	return lineStringOverlapsLineString(leftLine, rightLine), nil
+}
+
 func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
 	points, err := parseSinglePolygonRingFromText(wkt)
 	if err != nil {
@@ -8404,6 +8440,105 @@ func interpolateSegmentPoint(start, end geometryPoint2D, param float64) geometry
 		x: start.x + (end.x-start.x)*param,
 		y: start.y + (end.y-start.y)*param,
 	}
+}
+
+func lineStringOverlapsLineString(left, right []geometryPoint2D) bool {
+	if !hasLineStringLinearOverlap(left, right) {
+		return false
+	}
+	if lineStringCoveredByLineString(left, right) || lineStringCoveredByLineString(right, left) {
+		return false
+	}
+	return true
+}
+
+func hasLineStringLinearOverlap(left, right []geometryPoint2D) bool {
+	for i := 0; i < len(left)-1; i++ {
+		for j := 0; j < len(right)-1; j++ {
+			if collinearSegmentsOverlapWithLength(left[i], left[i+1], right[j], right[j+1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func lineStringCoveredByLineString(line, other []geometryPoint2D) bool {
+	for i := 0; i < len(line)-1; i++ {
+		if sameGeometryPoint(line[i], line[i+1]) {
+			continue
+		}
+		if !lineSegmentCoveredByLineString(line[i], line[i+1], other) {
+			return false
+		}
+	}
+	return true
+}
+
+func lineSegmentCoveredByLineString(start, end geometryPoint2D, line []geometryPoint2D) bool {
+	intervals := make([]geometryParamInterval, 0, len(line))
+	for i := 0; i < len(line)-1; i++ {
+		interval, ok := segmentOverlapParameterInterval(start, end, line[i], line[i+1])
+		if !ok {
+			continue
+		}
+		intervals = append(intervals, interval)
+	}
+	return parameterIntervalsCoverSegment(intervals)
+}
+
+func segmentOverlapParameterInterval(start, end, otherStart, otherEnd geometryPoint2D) (geometryParamInterval, bool) {
+	if geometryOrientation(start, end, otherStart) != 0 || geometryOrientation(start, end, otherEnd) != 0 {
+		return geometryParamInterval{}, false
+	}
+	if !lineSegmentsIntersect(start, end, otherStart, otherEnd) {
+		return geometryParamInterval{}, false
+	}
+
+	startParam := segmentParameter(start, end, otherStart)
+	endParam := segmentParameter(start, end, otherEnd)
+	interval := geometryParamInterval{
+		start: math.Max(0, math.Min(startParam, endParam)),
+		end:   math.Min(1, math.Max(startParam, endParam)),
+	}
+	if interval.end-interval.start <= 1e-9 {
+		return geometryParamInterval{}, false
+	}
+	return interval, true
+}
+
+func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
+	if len(intervals) == 0 {
+		return false
+	}
+
+	sort.Slice(intervals, func(i, j int) bool {
+		if sameGeometryCoordinate(intervals[i].start, intervals[j].start) {
+			return intervals[i].end < intervals[j].end
+		}
+		return intervals[i].start < intervals[j].start
+	})
+
+	coveredEnd := intervals[0].end
+	if intervals[0].start > 1e-9 {
+		return false
+	}
+	if coveredEnd >= 1-1e-9 {
+		return true
+	}
+
+	for _, interval := range intervals[1:] {
+		if interval.start-coveredEnd > 1e-9 {
+			return false
+		}
+		if interval.end > coveredEnd {
+			coveredEnd = interval.end
+			if coveredEnd >= 1-1e-9 {
+				return true
+			}
+		}
+	}
+	return coveredEnd >= 1-1e-9
 }
 
 func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {
