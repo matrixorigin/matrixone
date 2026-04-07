@@ -500,7 +500,8 @@ var predefinedFunids = map[int]int{
 	ST_TOUCHES:                    444,
 	ST_CROSSES:                    445,
 	ST_OVERLAPS:                   446,
-	FUNCTION_END_NUMBER:           447,
+	ST_EQUALS:                     447,
+	FUNCTION_END_NUMBER:           448,
 }
 
 func Test_funids(t *testing.T) {

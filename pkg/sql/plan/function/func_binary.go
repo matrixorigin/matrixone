@@ -7841,6 +7841,12 @@ func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return geometryEquals(v1, v2)
+	}, selectList)
+}
+
 type geometryPoint2D struct {
 	x float64
 	y float64
@@ -8212,6 +8218,61 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		return polygonOverlapsPolygon(left, right, leftPolygon, rightPolygon)
 	default:
 		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports LINESTRING/LINESTRING or POLYGON/POLYGON")
+	}
+}
+
+func geometryEquals(left, right []byte) (bool, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+
+	switch leftType {
+	case "POINT":
+		if rightType != "POINT" {
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+		}
+		leftX, leftY, err := parsePointXYFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		rightX, rightY, err := parsePointXYFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return sameGeometryPoint(geometryPoint2D{x: leftX, y: leftY}, geometryPoint2D{x: rightX, y: rightY}), nil
+	case "LINESTRING":
+		if rightType != "LINESTRING" {
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+		}
+		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		rightLine, err := lineStringGeometryPointsFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return lineStringCoveredByLineString(leftLine, rightLine) && lineStringCoveredByLineString(rightLine, leftLine), nil
+	case "POLYGON":
+		if rightType != "POLYGON" {
+			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
+		}
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return false, err
+		}
+		rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+		if err != nil {
+			return false, err
+		}
+		return polygonCoveredByPolygon(leftPolygon, rightPolygon) && polygonCoveredByPolygon(rightPolygon, leftPolygon), nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations")
 	}
 }
 

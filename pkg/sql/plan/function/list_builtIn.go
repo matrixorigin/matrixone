@@ -3817,6 +3817,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `st_equals`
+	{
+		functionId: ST_EQUALS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StEquals
+				},
+			},
+		},
+	},
+
 	// function `st_startpoint`
 	{
 		functionId: ST_STARTPOINT,

@@ -1,0 +1,13 @@
+select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as equals_point_point_same;
+select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as equals_point_point_diff;
+select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as equals_line_line_same;
+select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,0 0)')) as equals_line_line_reverse;
+select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as equals_line_line_segmented;
+select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((2 0,2 2,0 2,0 0,2 0))')) as equals_polygon_polygon_same;
+select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as equals_polygon_polygon_diff;
+select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((2 0,2 2,0 2,0 0,2 0))', 4326)) as equals_polygon_srid;
+select st_equals(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as equals_null;
+-- @regex("ST_EQUALS only supports POINT/POINT, LINESTRING/LINESTRING, or POLYGON/POLYGON combinations",true)
+select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)'));
+-- @regex("polygons with holes are not supported",true)
+select st_equals(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'));
