@@ -1035,6 +1035,14 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		}
 	}
 
+	// DoPrecommitDedupByPK checks for data committed by other transactions
+	// between the txn start and prepare timestamp. When SkipTargetAllCommitted
+	// is set (e.g. CCPR SkipAllDedup), skip this check to be consistent with
+	// the write-time dedup() which also skips all committed data checks.
+	if dedupType.SkipTargetAllCommitted() {
+		return
+	}
+
 	if baseTable.tableSpace.node == nil {
 		return
 	}

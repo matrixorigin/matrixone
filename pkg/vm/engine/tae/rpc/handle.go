@@ -218,12 +218,23 @@ func (h *Handle) handleRequests(
 		return
 	}
 
-	// Extract sync protection job ID from the first payload for CCPR validation
+	// Extract sync protection job ID and dedup policy from the first payload for CCPR validation
 	if len(commitRequests.Payload) > 0 && commitRequests.Payload[0].CNRequest != nil {
 		var precommitCmd api.PrecommitWriteCmd
 		if unmarshalErr := precommitCmd.UnmarshalBinary(commitRequests.Payload[0].CNRequest.Payload); unmarshalErr == nil {
 			if precommitCmd.SyncProtectionJobId != "" {
 				txn.SetSyncProtectionJobID(precommitCmd.SyncProtectionJobId)
+			}
+			// Pre-set DedupType based on entry PkCheck so that DDL catalog
+			// operations (HandleCreateRelation/HandleDropRelation) also respect
+			// the dedup policy. Without this, catalog table appends use the
+			// default CheckAll policy because SetDedupType is only called later
+			// in HandleWrite, after DDL entries have already been processed.
+			for _, e := range precommitCmd.EntryList {
+				if cmd_util.PKCheckType(e.GetPkCheckByTn()) == cmd_util.SkipAllDedup {
+					txn.SetDedupType(txnif.DedupPolicy_SkipAll | txnif.DedupPolicy_SkipSourcePersisted)
+					break
+				}
 			}
 		}
 	}
