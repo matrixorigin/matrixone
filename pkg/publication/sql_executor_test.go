@@ -27,8 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetGetParameterUnitWrapper(t *testing.T) {
-	// Reset to nil after test
+func TestSetGetParameterUnitWrapper_SQLExecutor(t *testing.T) {
 	defer func() {
 		SetGetParameterUnitWrapper(nil)
 	}()
