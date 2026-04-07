@@ -242,6 +242,84 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 	}
 }
 
+func TestPartitionState_GetChangedObjectNamesBetweenIncludesTransientObjects(t *testing.T) {
+	pState := NewPartitionState("", false, 0x3fff, false)
+
+	ts := types.TimestampToTS(timestamp.Timestamp{
+		PhysicalTime: 10,
+		LogicalTime:  0,
+	})
+
+	var (
+		stats                    objectio.ObjectStats
+		t1                       = ts
+		t2                       = t1.Next()
+		t3                       = t2.Next()
+		t4                       = t3.Next()
+		obj1, obj2, obj3         objectio.ObjectEntry
+		obj1Name, obj2Name       objectio.ObjectNameShort
+		obj3Name                 objectio.ObjectNameShort
+	)
+
+	objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj1"))
+	obj1 = objectio.ObjectEntry{ObjectStats: stats, CreateTime: t1}
+	obj1Name = *obj1.ObjectShortName()
+	pState.dataObjectsNameIndex.Set(obj1)
+	pState.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+		Time:         obj1.CreateTime,
+		ShortObjName: obj1Name,
+		IsDelete:     false,
+	})
+
+	objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj2"))
+	obj2 = objectio.ObjectEntry{ObjectStats: stats, CreateTime: t2}
+	obj2Name = *obj2.ObjectShortName()
+	pState.dataObjectsNameIndex.Set(obj2)
+	pState.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+		Time:         obj2.CreateTime,
+		ShortObjName: obj2Name,
+		IsDelete:     false,
+	})
+
+	objectio.SetObjectStatsObjectName(&stats, objectio.ObjectName("obj3"))
+	obj3 = objectio.ObjectEntry{ObjectStats: stats, CreateTime: t3}
+	obj3Name = *obj3.ObjectShortName()
+	pState.dataObjectsNameIndex.Set(obj3)
+	pState.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+		Time:         obj3.CreateTime,
+		ShortObjName: obj3Name,
+		IsDelete:     false,
+	})
+
+	obj2.DeleteTime = t3
+	pState.dataObjectsNameIndex.Set(obj2)
+	pState.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+		Time:         obj2.DeleteTime,
+		ShortObjName: obj2Name,
+		IsDelete:     true,
+	})
+
+	obj1.DeleteTime = t4
+	pState.dataObjectsNameIndex.Set(obj1)
+	pState.dataObjectTSIndex.Set(ObjectIndexByTSEntry{
+		Time:         obj1.DeleteTime,
+		ShortObjName: obj1Name,
+		IsDelete:     true,
+	})
+
+	changed := pState.GetChangedObjectNamesBetween(t2, t4)
+	require.Len(t, changed, 3)
+	require.Contains(t, changed, obj1Name)
+	require.Contains(t, changed, obj2Name)
+	require.Contains(t, changed, obj3Name)
+
+	deleted, inserted := pState.GetChangedObjsBetween(t2, t4)
+	require.Contains(t, inserted, obj3Name)
+	require.Contains(t, deleted, obj1Name)
+	require.NotContains(t, inserted, obj2Name)
+	require.NotContains(t, deleted, obj2Name)
+}
+
 func TestPartitionState_NewBlocksIter(t *testing.T) {
 	pState := NewPartitionState("", false, 0x3fff, false)
 	pState.start = types.BuildTS(100, 0)

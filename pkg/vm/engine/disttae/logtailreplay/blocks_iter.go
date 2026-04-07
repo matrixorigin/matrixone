@@ -246,6 +246,32 @@ func (p *PartitionState) GetChangedObjsBetween(
 	return
 }
 
+// GetChangedObjectNamesBetween returns every object name that has any create or delete
+// event during [begin, end]. Unlike GetChangedObjsBetween, it preserves transient
+// objects that are created and deleted within the same window. That makes it suitable
+// for conservative change detection paths such as RC lock retry checks.
+func (p *PartitionState) GetChangedObjectNamesBetween(
+	begin types.TS,
+	end types.TS,
+) map[objectio.ObjectNameShort]struct{} {
+	changed := make(map[objectio.ObjectNameShort]struct{})
+
+	iter := p.dataObjectTSIndex.Iter()
+	defer iter.Release()
+
+	for ok := iter.Seek(ObjectIndexByTSEntry{
+		Time: begin,
+	}); ok; ok = iter.Next() {
+		entry := iter.Item()
+		if entry.Time.GT(&end) {
+			break
+		}
+		changed[entry.ShortObjName] = struct{}{}
+	}
+
+	return changed
+}
+
 func (p *PartitionState) BlockPersisted(blockID *types.Blockid) bool {
 	iter := p.dataObjectsNameIndex.Iter()
 	defer iter.Release()
