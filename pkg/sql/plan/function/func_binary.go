@@ -7882,7 +7882,10 @@ func geometryContains(container, target []byte) (bool, error) {
 	switch containerType {
 	case "POINT":
 		if targetType != "POINT" {
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON")
+			if targetType == "LINESTRING" || targetType == "POLYGON" {
+				return false, nil
+			}
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		containerX, containerY, err := parsePointXYFromPayload(container)
 		if err != nil {
@@ -7914,8 +7917,10 @@ func geometryContains(container, target []byte) (bool, error) {
 				return false, err
 			}
 			return lineStringCoveredByLineString(targetLine, containerLine), nil
+		case "POLYGON":
+			return false, nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
 		containerPolygon, err := polygonSingleRingPointsFromPayload(container)
@@ -7942,10 +7947,10 @@ func geometryContains(container, target []byte) (bool, error) {
 			}
 			return polygonCoveredByPolygon(targetPolygon, containerPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT/POINT, LINESTRING contains POINT/LINESTRING, or POLYGON contains POINT/LINESTRING/POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
@@ -7965,22 +7970,28 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 		case "POINT", "LINESTRING", "POLYGON":
 			return geometryContains(container, candidate)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "LINESTRING":
 		switch containerType {
+		case "POINT":
+			return false, nil
 		case "LINESTRING", "POLYGON":
 			return geometryContains(container, candidate)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
-		if containerType != "POLYGON" {
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON")
+		switch containerType {
+		case "POINT", "LINESTRING":
+			return false, nil
+		case "POLYGON":
+			return geometryContains(container, candidate)
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
-		return geometryContains(container, candidate)
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT within POINT/LINESTRING/POLYGON, LINESTRING within LINESTRING/POLYGON, or POLYGON within POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
