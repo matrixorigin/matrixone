@@ -34,6 +34,7 @@ import (
 	"math"
 	"net"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1287,6 +1288,12 @@ func StIsValid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+func StPointOnSurface(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return pointOnSurfaceFromPayload(v)
+	}, selectList)
+}
+
 func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		return lineStringTerminalPointFromPayload(v, true)
@@ -1606,6 +1613,260 @@ func boundaryFromPayload(payload []byte) ([]byte, error) {
 	default:
 		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Boundary")
 	}
+}
+
+type geometryInterval struct {
+	start float64
+	end   float64
+}
+
+func pointOnSurfaceFromPayload(payload []byte) ([]byte, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	switch typeName {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		_, srid, sridDefined, err := decodeGeometryPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	case "LINESTRING":
+		points, err := lineStringGeometryPointsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		x, y, err := lineStringPointOnSurface(points)
+		if err != nil {
+			return nil, err
+		}
+		_, srid, sridDefined, err := decodeGeometryPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	case "POLYGON":
+		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		x, y, err := polygonPointOnSurface(rings)
+		if err != nil {
+			return nil, err
+		}
+		return pointGeometryPayload(x, y, srid, sridDefined), nil
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_PointOnSurface")
+	}
+}
+
+func lineStringPointOnSurface(points []geometryPoint2D) (float64, float64, error) {
+	if len(points) == 0 {
+		return 0, 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
+
+	totalLength := 0.0
+	for i := 0; i < len(points)-1; i++ {
+		totalLength += math.Hypot(points[i+1].x-points[i].x, points[i+1].y-points[i].y)
+	}
+	if sameGeometryCoordinate(totalLength, 0) {
+		return points[0].x, points[0].y, nil
+	}
+
+	target := totalLength / 2
+	traversed := 0.0
+	for i := 0; i < len(points)-1; i++ {
+		dx := points[i+1].x - points[i].x
+		dy := points[i+1].y - points[i].y
+		segmentLength := math.Hypot(dx, dy)
+		if sameGeometryCoordinate(segmentLength, 0) {
+			continue
+		}
+		if target < traversed+segmentLength || sameGeometryCoordinate(target, traversed+segmentLength) {
+			ratio := (target - traversed) / segmentLength
+			return points[i].x + dx*ratio, points[i].y + dy*ratio, nil
+		}
+		traversed += segmentLength
+	}
+	return points[len(points)-1].x, points[len(points)-1].y, nil
+}
+
+func polygonPointOnSurface(rings []string) (float64, float64, error) {
+	parsedRings := make([][]geometryPoint2D, 0, len(rings))
+	for _, ring := range rings {
+		points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+		if err != nil {
+			return 0, 0, err
+		}
+		parsedRings = append(parsedRings, points)
+	}
+
+	centroidX, centroidY, err := polygonCentroid(rings)
+	if err == nil && pointInsidePolygonRings(parsedRings, centroidX, centroidY) {
+		return centroidX, centroidY, nil
+	}
+
+	bestWidth := 0.0
+	bestX := 0.0
+	bestY := 0.0
+	found := false
+	for _, candidateY := range polygonPointOnSurfaceCandidateYs(parsedRings, centroidY) {
+		intervals := polygonInteriorIntervalsAtY(parsedRings, candidateY)
+		for _, interval := range intervals {
+			width := interval.end - interval.start
+			if width <= bestWidth || sameGeometryCoordinate(width, bestWidth) {
+				continue
+			}
+			candidateX := (interval.start + interval.end) / 2
+			if !pointInsidePolygonRings(parsedRings, candidateX, candidateY) {
+				continue
+			}
+			bestWidth = width
+			bestX = candidateX
+			bestY = candidateY
+			found = true
+		}
+	}
+	if found {
+		return bestX, bestY, nil
+	}
+	return 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+}
+
+func pointInsidePolygonRings(rings [][]geometryPoint2D, x, y float64) bool {
+	if len(rings) == 0 || !pointInPolygon(rings[0], x, y) {
+		return false
+	}
+	for _, hole := range rings[1:] {
+		if pointOnPolygonBoundary(hole, x, y) || pointInPolygon(hole, x, y) {
+			return false
+		}
+	}
+	return true
+}
+
+func polygonPointOnSurfaceCandidateYs(rings [][]geometryPoint2D, centroidY float64) []float64 {
+	candidates := make([]float64, 0, len(rings)+1)
+	candidates = appendUniqueGeometryCoordinate(candidates, centroidY)
+
+	allY := make([]float64, 0)
+	for _, ring := range rings {
+		for _, point := range ring {
+			allY = append(allY, point.y)
+		}
+	}
+	sort.Float64s(allY)
+
+	uniqueY := make([]float64, 0, len(allY))
+	for _, y := range allY {
+		uniqueY = appendUniqueGeometryCoordinate(uniqueY, y)
+	}
+	for i := 0; i < len(uniqueY)-1; i++ {
+		if sameGeometryCoordinate(uniqueY[i], uniqueY[i+1]) {
+			continue
+		}
+		candidates = appendUniqueGeometryCoordinate(candidates, (uniqueY[i]+uniqueY[i+1])/2)
+	}
+	return candidates
+}
+
+func appendUniqueGeometryCoordinate(values []float64, value float64) []float64 {
+	for _, existing := range values {
+		if sameGeometryCoordinate(existing, value) {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func polygonInteriorIntervalsAtY(rings [][]geometryPoint2D, y float64) []geometryInterval {
+	if len(rings) == 0 {
+		return nil
+	}
+
+	intervals := polygonScanlineInteriorIntervals(rings[0], y)
+	for _, hole := range rings[1:] {
+		intervals = subtractGeometryIntervals(intervals, polygonScanlineInteriorIntervals(hole, y))
+		if len(intervals) == 0 {
+			return nil
+		}
+	}
+	filtered := make([]geometryInterval, 0, len(intervals))
+	for _, interval := range intervals {
+		if interval.end-interval.start <= 1e-9 {
+			continue
+		}
+		filtered = append(filtered, interval)
+	}
+	return filtered
+}
+
+func polygonScanlineInteriorIntervals(ring []geometryPoint2D, y float64) []geometryInterval {
+	intersections := make([]float64, 0, len(ring))
+	j := len(ring) - 1
+	for i := 0; i < len(ring); i++ {
+		yi := ring[i].y
+		yj := ring[j].y
+		if sameGeometryCoordinate(yi, yj) {
+			j = i
+			continue
+		}
+		lowerY := math.Min(yi, yj)
+		upperY := math.Max(yi, yj)
+		if y < lowerY || y >= upperY {
+			j = i
+			continue
+		}
+		x := ring[j].x + (y-yj)*(ring[i].x-ring[j].x)/(yi-yj)
+		intersections = append(intersections, x)
+		j = i
+	}
+	sort.Float64s(intersections)
+
+	intervals := make([]geometryInterval, 0, len(intersections)/2)
+	for i := 0; i+1 < len(intersections); i += 2 {
+		start := intersections[i]
+		end := intersections[i+1]
+		if end-start <= 1e-9 {
+			continue
+		}
+		intervals = append(intervals, geometryInterval{start: start, end: end})
+	}
+	return intervals
+}
+
+func subtractGeometryIntervals(base, cuts []geometryInterval) []geometryInterval {
+	result := base
+	for _, cut := range cuts {
+		result = subtractSingleGeometryInterval(result, cut)
+		if len(result) == 0 {
+			return nil
+		}
+	}
+	return result
+}
+
+func subtractSingleGeometryInterval(base []geometryInterval, cut geometryInterval) []geometryInterval {
+	result := make([]geometryInterval, 0, len(base)+1)
+	for _, interval := range base {
+		if cut.end <= interval.start+1e-9 || cut.start >= interval.end-1e-9 {
+			result = append(result, interval)
+			continue
+		}
+		if cut.start > interval.start+1e-9 {
+			result = append(result, geometryInterval{start: interval.start, end: cut.start})
+		}
+		if cut.end < interval.end-1e-9 {
+			result = append(result, geometryInterval{start: cut.end, end: interval.end})
+		}
+	}
+	return result
 }
 
 func isValidFromPayload(payload []byte) (bool, error) {

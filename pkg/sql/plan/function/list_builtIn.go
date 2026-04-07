@@ -4048,6 +4048,27 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `st_pointonsurface`
+	{
+		functionId: ST_POINTONSURFACE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StPointOnSurface
+				},
+			},
+		},
+	},
+
 	// function `soundex`
 	{
 		functionId: SOUNDEX,

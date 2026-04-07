@@ -2212,6 +2212,71 @@ func TestStIsValidRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "geometry type is not supported by ST_IsValid")
 }
 
+func initStPointOnSurfaceTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_pointonsurface basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,4 0,4 2)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(1 2)",
+					"POINT(3 0)",
+					"POINT(2 2)",
+					"POINT(3 1)",
+					"SRID=4326;POINT(1 1)",
+				},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test st_pointonsurface null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStPointOnSurface(t *testing.T) {
+	testCases := initStPointOnSurfaceTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StPointOnSurface)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStPointOnSurfaceRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StPointOnSurface)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_PointOnSurface")
+}
+
 func initStExteriorRingTestCase() []tcTemp {
 	return []tcTemp{
 		{
