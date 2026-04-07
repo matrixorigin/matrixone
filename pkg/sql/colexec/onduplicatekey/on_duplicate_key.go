@@ -17,6 +17,7 @@ package onduplicatekey
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -310,6 +311,7 @@ func extractColRefFromExpr(expr *plan.Expr) *plan.Expr_Col {
 // serializeUniqueKey serializes unique key column values into a string for hash map lookup.
 // Returns empty string if any column is NULL (NULL never conflicts per SQL semantics).
 // The caller-provided buf is reset and reused to avoid per-call allocations.
+// Float types are canonicalized to match SQL '=' semantics (scale-based rounding, -0/+0 normalization).
 func serializeUniqueKey(buf *bytes.Buffer, vecs []*vector.Vector, colIndices []int32, row int) string {
 	buf.Reset()
 	for _, colIdx := range colIndices {
@@ -317,14 +319,37 @@ func serializeUniqueKey(buf *bytes.Buffer, vecs []*vector.Vector, colIndices []i
 		if v.GetNulls().Contains(uint64(row)) {
 			return ""
 		}
-		b := v.GetRawBytesAt(row)
-		// Length-prefix each field to avoid ambiguity for variable-length types
-		l := len(b)
-		buf.WriteByte(byte(l >> 24))
-		buf.WriteByte(byte(l >> 16))
-		buf.WriteByte(byte(l >> 8))
-		buf.WriteByte(byte(l))
-		buf.Write(b)
+		typ := v.GetType()
+		switch typ.Oid {
+		case types.T_float32:
+			val := vector.MustFixedColWithTypeCheck[float32](v)[row]
+			if typ.Scale > 0 {
+				pow := math.Pow10(int(typ.Scale))
+				val = float32(math.Round(float64(val)*pow) / pow)
+			}
+			if val == 0 {
+				val = 0
+			}
+			bits := math.Float32bits(val)
+			buf.Write([]byte{0, 0, 0, 4, byte(bits >> 24), byte(bits >> 16), byte(bits >> 8), byte(bits)})
+		case types.T_float64:
+			val := vector.MustFixedColWithTypeCheck[float64](v)[row]
+			if val == 0 {
+				val = 0
+			}
+			bits := math.Float64bits(val)
+			buf.Write([]byte{0, 0, 0, 8,
+				byte(bits >> 56), byte(bits >> 48), byte(bits >> 40), byte(bits >> 32),
+				byte(bits >> 24), byte(bits >> 16), byte(bits >> 8), byte(bits)})
+		default:
+			b := v.GetRawBytesAt(row)
+			l := len(b)
+			buf.WriteByte(byte(l >> 24))
+			buf.WriteByte(byte(l >> 16))
+			buf.WriteByte(byte(l >> 8))
+			buf.WriteByte(byte(l))
+			buf.Write(b)
+		}
 	}
 	return buf.String()
 }
