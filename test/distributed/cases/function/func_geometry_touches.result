@@ -1,3 +1,9 @@
+select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as touches_point_point_same;
+➤ touches_point_point_same[-7,1,0]  𝄀
+0
+select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as touches_point_point_diff;
+➤ touches_point_point_diff[-7,1,0]  𝄀
+0
 select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_point_line_endpoint;
 ➤ touches_point_line_endpoint[-7,1,0]  𝄀
 1
@@ -43,7 +49,10 @@ select st_touches(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfrom
 select st_touches(st_geomfromtext(null), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_null;
 ➤ touches_null[-7,1,0]  𝄀
 null
-select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)'));
+select st_touches(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 0)', 4326)) as touches_point_point_srid;
+➤ touches_point_point_srid[-7,1,0]  𝄀
+0
+select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
 -- @regex("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs", true)
 invalid input: ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));

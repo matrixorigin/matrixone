@@ -5529,6 +5529,8 @@ func initStTouchesTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
 						"POINT(1 0)",
 						"POINT(0 1)",
 						"POINT(1 1)",
@@ -5543,9 +5545,11 @@ func initStTouchesTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 0)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
@@ -5561,11 +5565,11 @@ func initStTouchesTestCase() []tcTemp {
 						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
 						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, true, false, true, true, false, true, true, false, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{false, false, true, false, true, false, true, false, true, true, false, true, true, false, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_touches null",
@@ -5601,7 +5605,7 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(0 0)"},
+			[]string{"MULTIPOINT((0 0),(1 1))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(1 1)"},

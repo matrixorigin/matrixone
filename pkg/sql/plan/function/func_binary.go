@@ -8108,6 +8108,11 @@ func geometryTouches(left, right []byte) (bool, error) {
 		}
 		leftPoint := geometryPoint2D{x: x, y: y}
 		switch rightType {
+		case "POINT":
+			if _, _, err := parsePointXYFromPayload(right); err != nil {
+				return false, err
+			}
+			return false, nil
 		case "LINESTRING":
 			rightPoints, err := lineStringGeometryPointsFromPayload(right)
 			if err != nil {
