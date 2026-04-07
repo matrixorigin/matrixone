@@ -1275,6 +1275,12 @@ func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}, selectList)
 }
 
+func StBoundary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
+		return boundaryFromPayload(v)
+	}, selectList)
+}
+
 func StStartPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		return lineStringTerminalPointFromPayload(v, true)
@@ -1566,6 +1572,33 @@ func centroidFromPayload(payload []byte) ([]byte, error) {
 		return pointGeometryPayload(x, y, srid, sridDefined), nil
 	default:
 		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Centroid")
+	}
+}
+
+func boundaryFromPayload(payload []byte) ([]byte, error) {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	switch typeName {
+	case "LINESTRING":
+		points, srid, sridDefined, err := lineStringPointsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		if points[0] == points[len(points)-1] {
+			return encodeGeometryPayload("MULTIPOINT()", srid, sridDefined), nil
+		}
+		return encodeGeometryPayload("MULTIPOINT(("+points[0]+"),("+points[len(points)-1]+"))", srid, sridDefined), nil
+	case "POLYGON":
+		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		return encodeGeometryPayload("MULTILINESTRING("+strings.Join(rings, ",")+")", srid, sridDefined), nil
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Boundary")
 	}
 }
 

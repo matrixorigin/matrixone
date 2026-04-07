@@ -618,10 +618,11 @@ const (
 	ST_ISRING                     = 436
 	ST_ENVELOPE                   = 437
 	ST_CENTROID                   = 438
+	ST_BOUNDARY                   = 439
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 439
+	FUNCTION_END_NUMBER = 440
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1028,6 +1029,7 @@ var functionIdRegister = map[string]int32{
 	"st_isring":                      ST_ISRING,
 	"st_envelope":                    ST_ENVELOPE,
 	"st_centroid":                    ST_CENTROID,
+	"st_boundary":                    ST_BOUNDARY,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,

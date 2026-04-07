@@ -2087,6 +2087,69 @@ func TestStCentroidRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "geometry type is not supported by ST_Centroid")
 }
 
+func initStBoundaryTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_boundary basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,2 2,4 2)",
+						"LINESTRING(0 0,2 0,1 1,0 0)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"MULTIPOINT((0 0),(4 2))",
+					"MULTIPOINT()",
+					"MULTILINESTRING((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
+					"SRID=4326;MULTILINESTRING((0 0,2 0,2 2,0 2,0 0))",
+				},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_boundary null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 2,4 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStBoundary(t *testing.T) {
+	testCases := initStBoundaryTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StBoundary)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStBoundaryRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 2)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StBoundary)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_Boundary")
+}
+
 func initStExteriorRingTestCase() []tcTemp {
 	return []tcTemp{
 		{
