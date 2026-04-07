@@ -177,6 +177,7 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
+				GeneratedCol:  col.GetGeneratedCol(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
 				ClusterBy:     col.ClusterBy,
@@ -220,6 +221,8 @@ type Attribute struct {
 	Seqnum uint16
 	// EnumValues is for enum type
 	EnumVlaues string
+	// GeneratedCol is for generated (computed) columns
+	GeneratedCol *plan.GeneratedCol
 }
 
 type PropertiesDef struct {

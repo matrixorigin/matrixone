@@ -122,8 +122,8 @@ type mockSQLExec struct {
 	fn func(query string) (*Result, context.CancelFunc, error)
 }
 
-func (m *mockSQLExec) Close() error                        { return nil }
-func (m *mockSQLExec) Connect() error                      { return nil }
+func (m *mockSQLExec) Close() error                           { return nil }
+func (m *mockSQLExec) Connect() error                         { return nil }
 func (m *mockSQLExec) EndTxn(_ context.Context, _ bool) error { return nil }
 func (m *mockSQLExec) ExecSQL(_ context.Context, _ *ActiveRoutine, _ uint32, query string, _ bool, _ bool, _ time.Duration) (*Result, context.CancelFunc, error) {
 	return m.fn(query)

@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -108,6 +107,23 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
 			}
 
+			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
+			isGenCol := false
+			for _, colDef := range tableDef.Cols {
+				if colDef.Name == colName && colDef.GeneratedCol != nil {
+					isGenCol = true
+					break
+				}
+			}
+			if isGenCol {
+				if _, ok := updateExpr.(*tree.DefaultVal); ok {
+					// SET gen_col = DEFAULT is allowed — silently remove from update set
+					delete(dmlCtx.updateCol2Expr[i], colName)
+					continue
+				}
+				return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
+			}
+
 			if !dmlCtx.updatePartCol[i] {
 				if _, ok := useColInPartExpr[colName]; ok {
 					dmlCtx.updatePartCol[i] = true
@@ -116,34 +132,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
-					if colDef.Typ.Id == int32(types.T_enum) {
+					if isEnumOrSetPlanType(&colDef.Typ) {
 						if colDef.Typ.AutoIncr {
 							return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 						}
 
-						binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
-						updateKeyExpr, err := binder.BindExpr(updateExpr, 0, false)
+						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
-						}
-
-						exprs := []tree.Expr{
-							tree.NewNumVal(colDef.Typ.Enumvalues, colDef.Typ.Enumvalues, false, tree.P_char),
-							updateExpr,
-						}
-
-						if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
-							updateExpr = &tree.FuncExpr{
-								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
-								Type:  tree.FUNC_TYPE_DEFAULT,
-								Exprs: exprs,
-							}
-						} else {
-							updateExpr = &tree.FuncExpr{
-								Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
-								Type:  tree.FUNC_TYPE_DEFAULT,
-								Exprs: exprs,
-							}
 						}
 					}
 
@@ -208,8 +204,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if err != nil {
 					return 0, err
 				}
-				if col != nil && col.Typ.Id == int32(types.T_enum) {
+				if col != nil && isEnumPlanType(&col.Typ) {
 					selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				} else if col != nil && isSetPlanType(&col.Typ) {
+					selectNode.ProjectList[colPos], err = funcCastForSetType(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -231,13 +232,32 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					selectNode.ProjectList[oldPos] = newDefExpr
 				}
 
-				if col.Typ.Id == int32(types.T_enum) {
+				if isEnumPlanType(&col.Typ) {
 					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				} else if isSetPlanType(&col.Typ) {
+					selectNode.ProjectList[originPos], err = funcCastForSetType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
 					if err != nil {
 						return 0, err
 					}
 				}
 			}
+		}
+
+		// Recompute generated columns (both STORED and VIRTUAL are computed on write)
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol == nil {
+				continue
+			}
+			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, selectNode.ProjectList, colOffsets[i])
+
+			oldPos := oldColName2Idx[alias+"."+col.Name]
+			newColName2Idx[alias+"."+col.Name] = oldPos
+			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
+			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+			selectNode.ProjectList[oldPos] = genExpr
 		}
 	}
 

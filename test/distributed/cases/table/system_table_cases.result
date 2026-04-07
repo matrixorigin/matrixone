@@ -157,7 +157,7 @@ SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
 ➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM table_constraints;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 134
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
@@ -187,6 +187,8 @@ mo_columns  ¦  CREATE TABLE `mo_columns` (
   `attr_is_clusterby` tinyint DEFAULT NULL,
   `attr_seqnum` smallint unsigned DEFAULT NULL,
   `attr_enum` varchar(65535) DEFAULT NULL,
+  `attr_has_generated` tinyint DEFAULT NULL,
+  `attr_generated` varchar(2048) DEFAULT NULL,
   PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)
 )
 SHOW CREATE TABLE mo_database;

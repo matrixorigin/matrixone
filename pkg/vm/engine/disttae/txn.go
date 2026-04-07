@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -209,6 +210,22 @@ func (txn *Transaction) WriteBatch(
 		bat.Vecs[1].SetSorted(true)
 	}
 
+	pkCheckPos := -1
+	pkCheckReady := false
+	if typ == INSERT || typ == DELETE {
+		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
+			typ,
+			accountId,
+			databaseName,
+			tableName,
+			tableId,
+			bat,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	e := Entry{
 		typ:          typ,
 		accountId:    accountId,
@@ -219,6 +236,8 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		tnStore:      tnStore,
 		note:         note,
+		pkCheckPos:   pkCheckPos,
+		pkCheckReady: pkCheckReady,
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
@@ -237,9 +256,15 @@ func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 func checkPKDupGeneric[T comparable](
 	mp map[any]bool,
 	t *types.Type,
+	pk *vector.Vector,
 	vals []T,
 	start, count int) (bool, string) {
-	for _, v := range vals[start : start+count] {
+	nsp := pk.GetNulls()
+	for i, v := range vals[start : start+count] {
+		// SQL standard: NULL != NULL, skip NULLs from duplicate check
+		if nsp.Contains(uint64(start + i)) {
+			continue
+		}
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
 			return true, entry
@@ -257,76 +282,80 @@ func checkPKDup(
 	switch colType.Oid {
 	case types.T_bool:
 		vs := vector.MustFixedColNoTypeCheck[bool](pk)
-		return checkPKDupGeneric[bool](mp, colType, vs, start, count)
+		return checkPKDupGeneric[bool](mp, colType, pk, vs, start, count)
 	case types.T_bit:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedColNoTypeCheck[int8](pk)
-		return checkPKDupGeneric[int8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int8](mp, colType, pk, vs, start, count)
 	case types.T_int16:
 		vs := vector.MustFixedColNoTypeCheck[int16](pk)
-		return checkPKDupGeneric[int16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int16](mp, colType, pk, vs, start, count)
 	case types.T_int32:
 		vs := vector.MustFixedColNoTypeCheck[int32](pk)
-		return checkPKDupGeneric[int32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int32](mp, colType, pk, vs, start, count)
 	case types.T_int64:
 		vs := vector.MustFixedColNoTypeCheck[int64](pk)
-		return checkPKDupGeneric[int64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int64](mp, colType, pk, vs, start, count)
 	case types.T_uint8:
 		vs := vector.MustFixedColNoTypeCheck[uint8](pk)
-		return checkPKDupGeneric[uint8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint8](mp, colType, pk, vs, start, count)
 	case types.T_uint16:
 		vs := vector.MustFixedColNoTypeCheck[uint16](pk)
-		return checkPKDupGeneric[uint16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint16](mp, colType, pk, vs, start, count)
 	case types.T_uint32:
 		vs := vector.MustFixedColNoTypeCheck[uint32](pk)
-		return checkPKDupGeneric[uint32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint32](mp, colType, pk, vs, start, count)
 	case types.T_uint64:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_decimal64:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](pk)
-		return checkPKDupGeneric[types.Decimal64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal64](mp, colType, pk, vs, start, count)
 	case types.T_decimal128:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
-		return checkPKDupGeneric[types.Decimal128](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal128](mp, colType, pk, vs, start, count)
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
-		return checkPKDupGeneric[types.Uuid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Uuid](mp, colType, pk, vs, start, count)
 	case types.T_float32:
 		vs := vector.MustFixedColNoTypeCheck[float32](pk)
-		return checkPKDupGeneric[float32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float32](mp, colType, pk, vs, start, count)
 	case types.T_float64:
 		vs := vector.MustFixedColNoTypeCheck[float64](pk)
-		return checkPKDupGeneric[float64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float64](mp, colType, pk, vs, start, count)
 	case types.T_date:
 		vs := vector.MustFixedColNoTypeCheck[types.Date](pk)
-		return checkPKDupGeneric[types.Date](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Date](mp, colType, pk, vs, start, count)
 	case types.T_timestamp:
 		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](pk)
-		return checkPKDupGeneric[types.Timestamp](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Timestamp](mp, colType, pk, vs, start, count)
 	case types.T_time:
 		vs := vector.MustFixedColNoTypeCheck[types.Time](pk)
-		return checkPKDupGeneric[types.Time](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Time](mp, colType, pk, vs, start, count)
 	case types.T_datetime:
 		vs := vector.MustFixedColNoTypeCheck[types.Datetime](pk)
-		return checkPKDupGeneric[types.Datetime](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Datetime](mp, colType, pk, vs, start, count)
 	case types.T_enum:
 		vs := vector.MustFixedColNoTypeCheck[types.Enum](pk)
-		return checkPKDupGeneric[types.Enum](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Enum](mp, colType, pk, vs, start, count)
 	case types.T_TS:
 		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
-		return checkPKDupGeneric[types.TS](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.TS](mp, colType, pk, vs, start, count)
 	case types.T_Rowid:
 		vs := vector.MustFixedColNoTypeCheck[types.Rowid](pk)
-		return checkPKDupGeneric[types.Rowid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Rowid](mp, colType, pk, vs, start, count)
 	case types.T_Blockid:
 		vs := vector.MustFixedColNoTypeCheck[types.Blockid](pk)
-		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Blockid](mp, colType, pk, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
@@ -335,7 +364,11 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float32:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
@@ -344,7 +377,11 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float64:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
@@ -364,11 +401,40 @@ func (txn *Transaction) checkDup() error {
 	defer func() {
 		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	//table id is global unique
+
+	// Legacy fallback metadata path for entries that do not carry write-time PK info.
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
+
 	insertPks := make(map[uint64]map[any]bool)
 	delPks := make(map[uint64]map[any]bool)
+
+	legacyPKIndex := func(e Entry) (int, error) {
+		if idx, ok := pkIndex[e.tableId]; ok {
+			return idx, nil
+		}
+		if _, ok := tablesDef[e.tableId]; !ok {
+			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			if err != nil {
+				return -1, err
+			}
+			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		}
+		tableDef := tablesDef[e.tableId]
+		pkIndex[e.tableId] = -1
+		if tableDef != nil && tableDef.Pkey != nil {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.Pkey.PkeyColName {
+					if colDef.Name != catalog.FakePrimaryKeyColName &&
+						colDef.Name != catalog.CPrimaryKeyColName {
+						pkIndex[e.tableId] = idx
+					}
+					break
+				}
+			}
+		}
+		return pkIndex[e.tableId], nil
+	}
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -390,32 +456,48 @@ func (txn *Transaction) checkDup() error {
 		if txn.tableOps.existAndDeleted(tableKey) {
 			continue
 		}
-		//build pk index for tables.
-		if _, ok := tablesDef[e.tableId]; !ok {
-			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+
+		if e.typ == INSERT {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := insertPks[e.tableId]; !ok {
+							insertPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							insertPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
+			bat := e.bat
+			index, err := legacyPKIndex(e)
 			if err != nil {
 				return err
 			}
-			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
-		}
-		tableDef := tablesDef[e.tableId]
-		if _, ok := pkIndex[e.tableId]; !ok {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.Pkey.PkeyColName {
-					if colDef.Name == catalog.FakePrimaryKeyColName ||
-						colDef.Name == catalog.CPrimaryKeyColName {
-						pkIndex[e.tableId] = -1
-					} else {
-						pkIndex[e.tableId] = idx
-					}
-					break
-				}
-			}
-		}
-
-		if e.typ == INSERT {
-			bat := e.bat
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			if index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					bat2 := batch.NewWithSize(len(bat.Vecs) - 1)
 					bat2.SetAttributes(bat.Attrs[1:])
@@ -431,13 +513,14 @@ func (txn *Transaction) checkDup() error {
 					bat.Vecs[index],
 					0,
 					bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
@@ -445,12 +528,50 @@ func (txn *Transaction) checkDup() error {
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := delPks[e.tableId]; !ok {
+							delPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							delPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			index, err := legacyPKIndex(e)
+			if err != nil {
+				return err
+			}
+			if index != -1 {
 				if _, ok := delPks[e.tableId]; !ok {
 					delPks[e.tableId] = make(map[any]bool)
 				}
@@ -459,13 +580,14 @@ func (txn *Transaction) checkDup() error {
 					e.bat.Vecs[1],
 					0,
 					e.bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 				}
 			}
@@ -896,13 +1018,27 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
+	if txn.engine == nil {
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn engine is nil")
+	}
+
+	var txnOp client.TxnOperator
+	if txn.op != nil {
+		txnOp = txn.op
+	} else if txn.proc != nil {
+		txnOp = txn.proc.GetTxnOperator()
+	}
+	if txnOp == nil {
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn operator is nil")
+	}
+
 	ctx := context.WithValue(
 		context.Background(),
 		defines.TenantIDKey{},
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.GetTxnOperator())
+	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -911,6 +1047,74 @@ func (txn *Transaction) getTable(
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func (txn *Transaction) resolvePKCheckPosForWrite(
+	typ int,
+	accountId uint32,
+	databaseName, tableName string,
+	tableId uint64,
+	bat *batch.Batch,
+) (int, bool, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return -1, true, nil
+	}
+
+	if typ != INSERT && typ != DELETE {
+		return -1, true, nil
+	}
+
+	if tableId == catalog.MO_TABLES_ID ||
+		tableId == catalog.MO_COLUMNS_ID ||
+		tableId == catalog.MO_DATABASE_ID {
+		return -1, true, nil
+	}
+	if txn.engine == nil {
+		return -1, false, nil
+	}
+
+	tbl, err := txn.getTable(accountId, databaseName, tableName)
+	if err != nil {
+		return -1, false, err
+	}
+	tableDefCtx := context.Background()
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		tableDefCtx = txn.proc.Ctx
+	}
+	tableDef := tbl.GetTableDef(tableDefCtx)
+	if tableDef == nil || tableDef.Pkey == nil {
+		return -1, true, nil
+	}
+
+	pkName := tableDef.Pkey.PkeyColName
+	if pkName == "" ||
+		pkName == catalog.FakePrimaryKeyColName ||
+		pkName == catalog.CPrimaryKeyColName {
+		return -1, true, nil
+	}
+
+	if typ == DELETE {
+		if len(bat.Vecs) < 2 {
+			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
+			return -1, false, nil
+		}
+		return 1, true, nil
+	}
+
+	for i, attr := range bat.Attrs {
+		if attr == pkName {
+			return i, true, nil
+		}
+	}
+	for i, attr := range bat.Attrs {
+		if strings.EqualFold(attr, pkName) {
+			return i, true, nil
+		}
+	}
+
+	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
+		pkName, databaseName, tableName, bat.Attrs)
+	return -1, false, nil
 }
 
 // vec contains block infos.
@@ -984,6 +1188,8 @@ func (txn *Transaction) WriteFileLocked(
 		fileName:     fileName,
 		bat:          copied,
 		tnStore:      tnStore,
+		pkCheckPos:   -1,
+		pkCheckReady: true,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1423,10 +1629,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 		txn.writes = txn.writes[:i]
 
+		var sortBuf []int64
+		var shuffleBuf []byte
 		for i = range txn.writes {
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
-				if err := mergeutil.SortColumnsByIndex(
-					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+				if err := mergeutil.SortColumnsByIndexWithBuf(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
 					return err
 				}
 			}

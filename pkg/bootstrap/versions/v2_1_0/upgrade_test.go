@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -222,6 +223,24 @@ func Test_UpgEntry(t *testing.T) {
 			upg_mo_pitr_add_status_changed_time.Upgrade(executor, uint32(0))
 		},
 	)
+}
+
+func Test_upgrade_view(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, "", moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.Error(t, err)
+}
+
+func Test_upgrade_view2(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+		return true, upg_information_schema_columns.UpgSql, nil
+	})
+	defer stubs.Reset()
+	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
 }
 
 func Test_UpgradeBM25(t *testing.T) {

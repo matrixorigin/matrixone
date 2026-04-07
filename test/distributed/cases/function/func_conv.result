@@ -1,0 +1,189 @@
+drop database if exists conv_func;
+create database conv_func;
+use conv_func;
+select conv('a', 16, 10) as result1;
+➤ result1[12,65,0]  𝄀
+10
+select conv('1010', 2, 10) as result3;
+➤ result3[12,65,0]  𝄀
+10
+select conv('10', 10, 2) as result4;
+➤ result4[12,65,0]  𝄀
+1010
+select conv('12', 8, 10) as result5;
+➤ result5[12,65,0]  𝄀
+10
+select conv(null, 10, 16) as result7;
+➤ result7[12,65,0]  𝄀
+null
+select conv('a', 16, 10) as hex_to_dec;
+➤ hex_to_dec[12,65,0]  𝄀
+10
+select conv('ff', 16, 10) as hex_to_dec;
+➤ hex_to_dec[12,65,0]  𝄀
+255
+select conv('1a', 16, 10) as hex_to_dec;
+➤ hex_to_dec[12,65,0]  𝄀
+26
+select conv('1010', 2, 10) as bin_to_dec;
+➤ bin_to_dec[12,65,0]  𝄀
+10
+select conv('11111111', 2, 10) as bin_to_dec;
+➤ bin_to_dec[12,65,0]  𝄀
+255
+select conv('10', 10, 2) as dec_to_bin;
+➤ dec_to_bin[12,65,0]  𝄀
+1010
+select conv('255', 10, 2) as dec_to_bin;
+➤ dec_to_bin[12,65,0]  𝄀
+11111111
+select conv('12', 8, 10) as oct_to_dec;
+➤ oct_to_dec[12,65,0]  𝄀
+10
+select conv('377', 8, 10) as oct_to_dec;
+➤ oct_to_dec[12,65,0]  𝄀
+255
+select conv('10', 10, 8) as dec_to_oct;
+➤ dec_to_oct[12,65,0]  𝄀
+12
+select conv('255', 10, 8) as dec_to_oct;
+➤ dec_to_oct[12,65,0]  𝄀
+377
+select conv('ff', 16, 2) as hex_to_bin;
+➤ hex_to_bin[12,65,0]  𝄀
+11111111
+select conv('ff', 16, 8) as hex_to_oct;
+➤ hex_to_oct[12,65,0]  𝄀
+377
+select conv('0', 10, 2) as zero_dec_to_bin;
+➤ zero_dec_to_bin[12,65,0]  𝄀
+0
+select conv('0', 16, 10) as zero_hex_to_dec;
+➤ zero_hex_to_dec[12,65,0]  𝄀
+0
+select conv('-1', 10, 2) as negative_dec_to_bin;
+➤ negative_dec_to_bin[12,65,0]  𝄀
+1111111111111111111111111111111111111111111111111111111111111111
+select conv('ffffffffffffffff', 16, 10) as large_hex_to_dec;
+➤ large_hex_to_dec[12,65,0]  𝄀
+18446744073709551615
+select conv('abc', 16, 10) as lowercase_hex;
+➤ lowercase_hex[12,65,0]  𝄀
+2748
+select conv('abc', 16, 10) as uppercase_hex;
+➤ uppercase_hex[12,65,0]  𝄀
+2748
+select conv('abc', 16, 10) as mixed_case_hex;
+➤ mixed_case_hex[12,65,0]  𝄀
+2748
+select conv('z', 36, 10) as base36_to_dec;
+➤ base36_to_dec[12,65,0]  𝄀
+35
+select conv('10', 36, 10) as base36_to_dec;
+➤ base36_to_dec[12,65,0]  𝄀
+36
+select conv('12', 3, 10) as base3_to_dec;
+➤ base3_to_dec[12,65,0]  𝄀
+5
+select conv('5', 10, 3) as dec_to_base3;
+➤ dec_to_base3[12,65,0]  𝄀
+12
+select conv('24', 5, 10) as base5_to_dec;
+➤ base5_to_dec[12,65,0]  𝄀
+14
+select conv('14', 10, 5) as dec_to_base5;
+➤ dec_to_base5[12,65,0]  𝄀
+24
+select conv(null, 10, 16) as null_number;
+➤ null_number[12,65,0]  𝄀
+null
+select conv(255, 10, 2) as numeric_input_bin;
+➤ numeric_input_bin[12,65,0]  𝄀
+11111111
+select conv('', 10, 16) as empty_string;
+➤ empty_string[12,65,0]  𝄀
+null
+select conv('ff', 16, 10) as red,
+conv('00', 16, 10) as green,
+conv('00', 16, 10) as blue;
+➤ red[12,65,0]  ¦  green[12,65,0]  ¦  blue[12,65,0]  𝄀
+255  ¦  0  ¦  0
+select conv('755', 8, 2) as file_permissions;
+➤ file_permissions[12,65,0]  𝄀
+111101101
+select upper(conv('255', 10, 16)) as upper_hex;
+➤ upper_hex[12,65,0]  𝄀
+FF
+select lower(conv('255', 10, 16)) as lower_hex;
+➤ lower_hex[12,65,0]  𝄀
+ff
+create table if not exists test_conv (
+id int,
+hex_value varchar(20)
+);
+insert into test_conv values (1, 'a'), (2, 'ff'), (3, '1a');
+select id, hex_value, conv(hex_value, 16, 10) as decimal_value
+from test_conv
+where conv(hex_value, 16, 10) > 15;
+➤ id[4,11,0]  ¦  hex_value[12,20,0]  ¦  decimal_value[12,65,0]  𝄀
+2  ¦  ff  ¦  255  𝄀
+3  ¦  1a  ¦  26
+drop table if exists test_conv;
+select conv('255', 10, 16) as result2;
+[unknown result because it is related to issue#23845]
+select conv('-1', 10, 16) as result6;
+[unknown result because it is related to issue#23845]
+select conv('10', 10, 16) as dec_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('255', 10, 16) as dec_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('26', 10, 16) as dec_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('11111111', 2, 16) as bin_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('377', 8, 16) as oct_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('-10', 10, 16) as negative_dec_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('18446744073709551615', 10, 16) as large_dec_to_hex;
+[unknown result because it is related to issue#23845]
+select conv('35', 10, 36) as dec_to_base36;
+[unknown result because it is related to issue#23845]
+select conv(' 10 ', 10, 16) as whitespace_input;
+[unknown result because it is related to issue#23845]
+select conv('+10', 10, 16) as plus_sign;
+[unknown result because it is related to issue#23845]
+select conv('192', 10, 16) as ip_part1,
+conv('168', 10, 16) as ip_part2,
+conv('1', 10, 16) as ip_part3,
+conv('1', 10, 16) as ip_part4;
+[unknown result because it is related to issue#23845]
+select concat('0x', conv('255', 10, 16)) as hex_with_prefix;
+[unknown result because it is related to issue#23845]
+select conv('g', 16, 10) as result8;
+[unknown result because it is related to issue#23845]
+select conv('10', 1, 10) as result9;
+[unknown result because it is related to issue#23845]
+select conv('abc', 16, 10) as result10;
+[unknown result because it is related to issue#23845]
+select conv('10', null, 16) as null_from_base;
+[unknown result because it is related to issue#23845]
+select conv('10', 10, null) as null_to_base;
+[unknown result because it is related to issue#23845]
+select conv('g', 16, 10) as invalid_hex_char;
+[unknown result because it is related to issue#23845]
+select conv('2', 2, 10) as invalid_binary_char;
+[unknown result because it is related to issue#23845]
+select conv('8', 8, 10) as invalid_octal_char;
+[unknown result because it is related to issue#23845]
+select conv('10', 1, 10) as invalid_from_base;
+[unknown result because it is related to issue#23845]
+select conv('10', 10, 1) as invalid_to_base;
+[unknown result because it is related to issue#23845]
+select conv('10', 37, 10) as invalid_from_base_high;
+[unknown result because it is related to issue#23845]
+select conv('10', 10, 37) as invalid_to_base_high;
+[unknown result because it is related to issue#23845]
+select conv(10, 10, 16) as numeric_input;
+[unknown result because it is related to issue#23845]
+drop database conv_func;

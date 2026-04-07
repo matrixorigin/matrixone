@@ -111,6 +111,18 @@ create table t5 (a int, b int);
 select a, b, percent_rank() over (order by a) from t5;
 drop table t5;
 
+-- window function with ORDER BY on varchar
+drop table if exists window_order_by_name_case;
+create table window_order_by_name_case (id int, name varchar(20), score int);
+insert into window_order_by_name_case values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, percent_rank() over (order by name) from window_order_by_name_case;
+select id, name, rank() over (order by name) from window_order_by_name_case;
+select id, name, dense_rank() over (order by name) from window_order_by_name_case;
+select id, name, row_number() over (order by name) from window_order_by_name_case;
+select id, name, percent_rank() over (partition by score order by name) from window_order_by_name_case;
+select id, name, score, percent_rank() over (order by name, score) from window_order_by_name_case;
+drop table window_order_by_name_case;
+
 -- test cume_dist
 drop table if exists t1;
 create table t1 (a int, b int);
@@ -1621,5 +1633,35 @@ select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk,
 select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
 
 drop table t_ntile;
+
+-- percent_rank with blob column
+drop table if exists test_pr_blob;
+create table test_pr_blob (id int, val blob);
+insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
+select id, rank() over (order by val) as rnk from test_pr_blob order by val;
+drop table test_pr_blob;
+
+-- percent_rank with binary/varbinary column
+drop table if exists test_pr_binary;
+create table test_pr_binary (id int, val varbinary(20));
+insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
+drop table test_pr_binary;
+
+-- WIN_ORDER functions with varchar ORDER BY should succeed
+drop table if exists t_win_varchar;
+create table t_win_varchar (id int, name varchar(20), score int);
+insert into t_win_varchar values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_win_varchar;
+select id, name, rank() over (order by name) from t_win_varchar;
+select id, name, dense_rank() over (order by name) from t_win_varchar;
+select id, name, rank() over (partition by score order by name) from t_win_varchar;
+
+-- aggregate window function + varchar ORDER BY should error (RANGE frame)
+select sum(score) over (order by name) from t_win_varchar;
+select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+
+drop table t_win_varchar;
 
 drop database test;

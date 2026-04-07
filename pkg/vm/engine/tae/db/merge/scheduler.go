@@ -1222,6 +1222,13 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 			continue
 		}
 		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
+		logutil.Info("MergeExecutorEvent-LnGather",
+			zap.String("table", p.table.GetNameDesc()),
+			zap.Int("level", i),
+			zap.Int("objCount", len(p.leveledObjects[i])),
+			zap.Int("tasks", len(overlapTasks)),
+			zap.Error(err),
+		)
 		if err == nil {
 			p.revisedResults = append(p.revisedResults,
 				controlTaskMemInPlace(overlapTasks, rc, 2)...)
@@ -1234,12 +1241,13 @@ func (p *launchPad) gatherL0Tasks(ctx context.Context,
 	rc rscthrottler.RSCThrottler,
 ) {
 	l0Tasks := GatherLayerZeroMergeTasks(ctx, p.leveledObjects[0], p.lastMergeTime, l0Opts)
-	// logutil.Info("MergeExecutorEvent",
-	// 	zap.String("event", "gatherL0Tasks"),
-	// 	zap.Int("l0count", len(p.leveledObjects[0])),
-	// 	zap.Duration("ago", p.lastMergeTime),
-	// 	zap.Int("tolerance", l0Opts.CalcTolerance(p.lastMergeTime)),
-	// )
+	logutil.Info("MergeExecutorEvent-L0Gather",
+		zap.String("table", p.table.GetNameDesc()),
+		zap.Int("l0count", len(p.leveledObjects[0])),
+		zap.Duration("ago", p.lastMergeTime),
+		zap.Int("tolerance", l0Opts.CalcTolerance(p.lastMergeTime)),
+		zap.Int("tasks", len(l0Tasks)),
+	)
 	p.revisedResults = append(p.revisedResults,
 		controlTaskMemInPlace(l0Tasks, rc, 2)...)
 }
@@ -1251,6 +1259,21 @@ func (p *launchPad) gatherByTrigger(ctx context.Context,
 ) []mergeTask {
 	p.Reset()
 	p.InitWithTrigger(trigger, lastMergeTime)
+	{
+		fields := []zap.Field{
+			zap.String("table", trigger.table.GetNameDesc()),
+			zap.Duration("lastMerge", p.lastMergeTime),
+			zap.Int("tombstone", len(p.tombstoneStats)),
+		}
+		for lv := range p.leveledObjects {
+			if len(p.leveledObjects[lv]) > 0 {
+				fields = append(fields,
+					zap.Int(fmt.Sprintf("lv%d", lv), len(p.leveledObjects[lv])),
+				)
+			}
+		}
+		logutil.Info("MergeExecutorEvent-GatherStats", fields...)
+	}
 	if trigger.l0 != nil {
 		p.gatherL0Tasks(ctx, trigger.l0, rc)
 	}

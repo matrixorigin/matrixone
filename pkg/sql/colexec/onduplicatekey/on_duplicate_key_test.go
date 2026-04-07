@@ -84,6 +84,24 @@ func TestOnDuplicateKey(t *testing.T) {
 	}
 }
 
+func TestOnDuplicateKeyIgnoreCleansConflictBatch(t *testing.T) {
+	tc := newTestCase(t)
+	tc.arg.IsIgnore = true
+	tc.rowCount = 1
+
+	resetChildren(tc.arg, tc.proc.Mp())
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	ret, execErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, execErr)
+	require.Equal(t, tc.rowCount, ret.Batch.RowCount())
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
 	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)
@@ -148,5 +166,101 @@ func newTestCase(t *testing.T) onDupTestCase {
 			},
 		},
 		rowCount: 1,
+	}
+}
+
+func TestCheckConflictReturnsBatchRowIndex(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	executors := newUniqueCheckExecutors(t, proc)
+
+	newBatch := batch.New([]string{"b", "c"})
+	newBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{10}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{21}, nil, proc.Mp()),
+	}
+	newBatch.SetRowCount(1)
+	defer newBatch.Clean(proc.Mp())
+
+	checkConflictBatch := batch.New([]string{"b", "c", "b", "c"})
+	checkConflictBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{99}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{21}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp()),
+	}
+	checkConflictBatch.SetRowCount(1)
+	defer checkConflictBatch.Clean(proc.Mp())
+
+	conflictRowIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, executors, []string{"b", "c"}, 2)
+	require.NoError(t, err)
+	require.Equal(t, 0, conflictRowIdx)
+	require.Equal(t, "Duplicate entry for key 'c'", conflictMsg)
+}
+
+func TestCheckConflictReturnsLaterBatchRowIndex(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	executors := newUniqueCheckExecutors(t, proc)
+
+	newBatch := batch.New([]string{"b", "c"})
+	newBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{99}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{22}, nil, proc.Mp()),
+	}
+	newBatch.SetRowCount(1)
+	defer newBatch.Clean(proc.Mp())
+
+	checkConflictBatch := batch.New([]string{"b", "c", "b", "c"})
+	checkConflictBatch.Vecs = []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{10, 11, 12}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{20, 21, 22}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0, 0, 0}, nil, proc.Mp()),
+		testutil.MakeInt64Vector([]int64{0, 0, 0}, nil, proc.Mp()),
+	}
+	checkConflictBatch.SetRowCount(3)
+	defer checkConflictBatch.Clean(proc.Mp())
+
+	conflictRowIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, executors, []string{"b", "c"}, 2)
+	require.NoError(t, err)
+	require.Equal(t, 2, conflictRowIdx)
+	require.Equal(t, "Duplicate entry for key 'c'", conflictMsg)
+}
+
+func newUniqueCheckExecutors(t *testing.T, proc *process.Process) []colexec.ExpressionExecutor {
+	t.Helper()
+
+	intType := types.T_int64.ToType()
+	oldBExpr := newPlanColExpr(&intType, 0, 0)
+	newBExpr := newPlanColExpr(&intType, 1, 2)
+	oldCExpr := newPlanColExpr(&intType, 0, 1)
+	newCExpr := newPlanColExpr(&intType, 1, 3)
+
+	bExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{oldBExpr, newBExpr})
+	require.NoError(t, err)
+	cExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{oldCExpr, newCExpr})
+	require.NoError(t, err)
+
+	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{bExpr, cExpr})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	return executors
+}
+
+func newPlanColExpr(typ *types.Type, relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan2.MakePlan2Type(typ),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
 	}
 }

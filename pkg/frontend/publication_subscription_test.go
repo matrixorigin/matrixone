@@ -2031,3 +2031,57 @@ func Test_insertCCPRDbAndTableRecords_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
+
+func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	mockTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	mockBh := mock_frontend.NewMockBackgroundExec(ctrl)
+
+	ses := newSes(nil, ctrl)
+
+	// Override StorageEngine after newSes (which sets its own pu with nil engine)
+	pu := getPu(ses.GetService())
+	pu.StorageEngine = mockEngine
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	t.Run("returns NoDB when Database fails with ErrBadDB", func(t *testing.T) {
+		badDBErr := moerr.NewBadDB(ctx, "test_db")
+		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, badDBErr)
+
+		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB),
+			"non-ExpectedEOB errors should still return NoDB for backward compatibility, got: %v", err)
+	})
+
+	t.Run("returns nil when Database fails with ExpectedEOB", func(t *testing.T) {
+		mockEngine.EXPECT().Database(gomock.Any(), "invisible_db", mockTxn).Return(nil, moerr.GetOkExpectedEOB())
+
+		sub, err := getSubscriptionMeta(ctx, "invisible_db", ses, mockTxn, mockBh)
+		require.NoError(t, err, "ExpectedEOB should return nil — database not visible means not a subscription")
+		require.Nil(t, sub)
+	})
+
+	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {
+		internalErr := moerr.NewInternalErrorNoCtx("engine failure")
+		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, internalErr)
+
+		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB),
+			"non-ExpectedEOB errors should still return NoDB, got: %v", err)
+	})
+
+	t.Run("returns nil for non-subscription database", func(t *testing.T) {
+		mockDB := mock_frontend.NewMockDatabase(ctrl)
+		mockDB.EXPECT().IsSubscription(gomock.Any()).Return(false)
+		mockEngine.EXPECT().Database(gomock.Any(), "normal_db", mockTxn).Return(mockDB, nil)
+
+		sub, err := getSubscriptionMeta(ctx, "normal_db", ses, mockTxn, mockBh)
+		require.NoError(t, err)
+		require.Nil(t, sub)
+	})
+}

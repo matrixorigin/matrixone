@@ -222,35 +222,35 @@ t5    CREATE TABLE `t5` (\n  `col1` int NOT NULL AUTO_INCREMENT,\n  `col2` int D
 drop table t5;
 drop stage stage05;
 drop table if exists t6;
-
 create table t6 (col1 varchar(20), col2 varchar(20));
-
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
-
 select * from t6;
-
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+"Hello""  ¦  "Hi"  𝄀
+"database"  ¦  ""db"
 drop stage if exists stage06;
-
 create stage stage06 url = 'file:///$resources/into_outfile/stage';
-
 select * from mo_catalog.mo_stages;
-
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+6  ¦  stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-03-20 10:24:08  ¦  
 show stages;
-
-select * from t6 into outfile 'stage://stage06/local_stage_table06.csv';
-
+➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
+stage06  ¦  file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
+select * from t6 into outfile 'stage://stage06/local_stage_table06.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 truncate t6;
-
-load data infile 'stage://stage06/local_stage_table06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
-
+load data infile 'stage://stage06/local_stage_table06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
 select * from t6;
-
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+"Hello""  ¦  "Hi"  𝄀
+"database"  ¦  ""db"
 show create table t6;
-
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t6  ¦  CREATE TABLE `t6` (
+  `col1` varchar(20) DEFAULT NULL,
+  `col2` varchar(20) DEFAULT NULL
+)
 drop table t6;
-
 drop stage stage06;
-
 drop table if exists t7;
 create table t7(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table t7 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';

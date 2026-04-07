@@ -96,31 +96,6 @@ func (exec *percentRankExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *percentRankExec) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *percentRankExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(cnt, flags, buf, &exec.ret.optSplitResult, exec.groups, nil)
 }
@@ -151,18 +126,6 @@ func (exec *percentRankExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 		}
 	}
 	return nil
-}
-
-func (exec *percentRankExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
-		exec.groups = make([]i64Slice, len(groups))
-		for i := range exec.groups {
-			if len(groups[i]) > 0 {
-				exec.groups[i] = types.DecodeSlice[int64](groups[i])
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *percentRankExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -259,31 +222,6 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *singleWindowExec) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -318,19 +256,6 @@ func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MP
 		}
 	}
 	return nil
-}
-
-func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
-		exec.groups = make([]i64Slice, len(groups))
-		for i := range exec.groups {
-			if len(groups[i]) > 0 {
-				exec.groups[i] = types.DecodeSlice[int64](groups[i])
-			}
-		}
-	}
-	// group used by above,
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -539,32 +464,6 @@ func (exec *ntileWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *ntileWindowExec) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			exec.groups[i] = append(exec.groups[i], exec.bucketCounts[i])
-			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -604,23 +503,6 @@ func (exec *ntileWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 		}
 	}
 	return nil
-}
-
-func (exec *ntileWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
-		exec.groups = make([]i64Slice, len(groups))
-		exec.bucketCounts = make([]int64, len(groups))
-		for i := range exec.groups {
-			if len(groups[i]) > 0 {
-				data := types.DecodeSlice[int64](groups[i])
-				if len(data) > 0 {
-					exec.bucketCounts[i] = data[len(data)-1]
-					exec.groups[i] = data[:len(data)-1]
-				}
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *ntileWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -748,31 +630,6 @@ func (exec *cumeDistWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *cumeDistWindowExec) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, em, dist, err := exec.ret.marshalToBytes()
-	if err != nil {
-		return nil, err
-	}
-	if dist != nil {
-		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
-	}
-
-	encoded := EncodedAgg{
-		Info:    d,
-		Result:  r,
-		Empties: em,
-		Groups:  nil,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
-		}
-	}
-	return encoded.Marshal()
-}
-
 func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return marshalRetAndGroupsToBuffer(
 		cnt, flags, buf,
@@ -807,18 +664,6 @@ func (exec *cumeDistWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.
 		}
 	}
 	return nil
-}
-
-func (exec *cumeDistWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
-		exec.groups = make([]i64Slice, len(groups))
-		for i := range exec.groups {
-			if len(groups[i]) > 0 {
-				exec.groups[i] = types.DecodeSlice[int64](groups[i])
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *cumeDistWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -989,14 +834,6 @@ func (exec *valueWindowExec) GetOptResult() SplitResult {
 	return nil
 }
 
-func (exec *valueWindowExec) marshal() ([]byte, error) {
-	return nil, moerr.NewInternalErrorNoCtx("value window function does not support marshal")
-}
-
-func (exec *valueWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	return moerr.NewInternalErrorNoCtx("value window function does not support unmarshal")
-}
-
 func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResult")
 }
@@ -1049,25 +886,42 @@ func (exec *valueWindowExec) Free() {
 	if exec.resultVec != nil {
 		exec.resultVec.Free(exec.mp)
 	}
+	exec.frameValues = nil
+	exec.currentRowPosition = nil
 }
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
+	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
+	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	const sliceHeaderSize = 24
+	const ptrSize = 8
+	const entrySize = 32
+	const intSize = 8
+
+	size += int64(cap(exec.frameValues)) * sliceHeaderSize
 	for _, frame := range exec.frameValues {
+		size += int64(cap(frame)) * ptrSize
 		for _, entry := range frame {
 			if entry != nil {
-				size += int64(len(entry.data)) + 8 // data + isNull flag overhead
+				size += entrySize + int64(len(entry.data))
 			}
 		}
 	}
+	size += int64(cap(exec.currentRowPosition)) * intSize
 	return size
 }
 
-func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 	// LAG returns the value from the previous row in the partition
 	// For LAG with default offset=1, we want the value at position (currentRowPosition - 1)
 
-	result := vector.NewVec(exec.retType)
+	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -1111,11 +965,16 @@ func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 	// LEAD returns the value from the next row in the partition
 	// For LEAD with default offset=1, we want the value at position (currentRowPosition + 1)
 
-	result := vector.NewVec(exec.retType)
+	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -1159,10 +1018,15 @@ func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error) {
 	// FIRST_VALUE returns the first value in the window frame
 
-	result := vector.NewVec(exec.retType)
+	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for _, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -1188,10 +1052,15 @@ func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error) {
 	// LAST_VALUE returns the last value in the window frame
 
-	result := vector.NewVec(exec.retType)
+	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for _, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL

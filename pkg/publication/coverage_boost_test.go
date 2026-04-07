@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -928,4 +929,83 @@ func TestGetChunkJob_Execute_RetryableThenSuccess(t *testing.T) {
 	res := job.WaitDone().(*GetChunkJobResult)
 	require.NoError(t, res.Err)
 	assert.Equal(t, 2, attempts)
+}
+
+// ---------------------------------------------------------------------------
+// AObjectMap coverage
+// ---------------------------------------------------------------------------
+
+func TestAObjectMap_NewAndOperations(t *testing.T) {
+	m := NewAObjectMap()
+	require.NotNil(t, m)
+
+	// Get on empty map
+	_, exists := m.Get("nonexistent")
+	assert.False(t, exists)
+
+	// Set and Get
+	mapping := &AObjectMapping{
+		DownstreamStats: objectio.ObjectStats{},
+		IsTombstone:     false,
+		DBName:          "db1",
+		TableName:       "tbl1",
+		RowOffsetMap:    map[uint32]uint32{0: 1, 1: 0},
+	}
+	m.Set("upstream-obj-1", mapping)
+
+	got, exists := m.Get("upstream-obj-1")
+	require.True(t, exists)
+	assert.Equal(t, "db1", got.DBName)
+	assert.Equal(t, "tbl1", got.TableName)
+	assert.False(t, got.IsTombstone)
+	assert.Equal(t, uint32(1), got.RowOffsetMap[0])
+
+	// Overwrite existing
+	mapping2 := &AObjectMapping{
+		IsTombstone: true,
+		DBName:      "db2",
+		TableName:   "tbl2",
+	}
+	m.Set("upstream-obj-1", mapping2)
+	got2, exists := m.Get("upstream-obj-1")
+	require.True(t, exists)
+	assert.True(t, got2.IsTombstone)
+	assert.Equal(t, "db2", got2.DBName)
+
+	// Delete
+	m.Delete("upstream-obj-1")
+	_, exists = m.Get("upstream-obj-1")
+	assert.False(t, exists)
+
+	// Delete non-existent (no panic)
+	m.Delete("nonexistent")
+}
+
+func TestAObjectMap_MultipleEntries(t *testing.T) {
+	m := NewAObjectMap()
+	for i := 0; i < 10; i++ {
+		m.Set(fmt.Sprintf("obj-%d", i), &AObjectMapping{
+			DBName:    fmt.Sprintf("db-%d", i),
+			TableName: fmt.Sprintf("tbl-%d", i),
+		})
+	}
+	for i := 0; i < 10; i++ {
+		got, exists := m.Get(fmt.Sprintf("obj-%d", i))
+		require.True(t, exists)
+		assert.Equal(t, fmt.Sprintf("db-%d", i), got.DBName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional util.go coverage
+// ---------------------------------------------------------------------------
+
+func TestParseUpstreamConn_PasswordWithSpecialChars(t *testing.T) {
+	// Password containing colon - should be preserved via Join
+	cfg, err := ParseUpstreamConn("mysql://acc#user:p4ss:w0rd@host:3306")
+	require.NoError(t, err)
+	assert.Equal(t, "p4ss:w0rd", cfg.Password)
+	assert.Equal(t, "host", cfg.Host)
+	assert.Equal(t, 3306, cfg.Port)
+	assert.Equal(t, "acc", cfg.Account)
 }

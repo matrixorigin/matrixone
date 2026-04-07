@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"os"
 	"strconv"
 	"sync/atomic"
 
@@ -28,39 +29,103 @@ import (
 
 var _ Message = new(JoinMapMsg)
 
-const selsDivideLength = 256
-const selsPreAlloc = 4
+type GroupSels struct {
+	// vals holds all row IDs in group order after Finalize.
+	// offsets[k] .. offsets[k+1] is the range in vals for group k.
+	vals    []int32
+	offsets []int32
 
-type JoinSels struct {
-	sels [][][]int32
+	// tmp holds (groupID, rowID) pairs during the build phase, before Finalize.
+	tmp []int32
 }
 
-func (js *JoinSels) InitSel(len int) {
-	js.sels = make([][][]int32, 0, len/selsDivideLength+1)
+func freeSlice[T any](mp *mpool.MPool, s []T) {
+	mpool.FreeSlice(mp, s[:cap(s)])
 }
 
-func (js *JoinSels) Free() {
-	js.sels = nil
-}
-
-func (js *JoinSels) InsertSel(k, v int32) {
-	i := k / selsDivideLength
-	j := k % selsDivideLength
-	if len(js.sels) <= int(i) {
-		s := make([][]int32, selsDivideLength)
-		js.sels = append(js.sels, s)
-		var internalArray [selsDivideLength * selsPreAlloc]int32
-		for p := 0; p < selsDivideLength; p++ {
-			js.sels[i][p] = internalArray[p*selsPreAlloc : p*selsPreAlloc : (p+1)*selsPreAlloc]
-		}
+func (sels *GroupSels) Init(n int, mp *mpool.MPool) error {
+	var err error
+	sels.tmp, err = mpool.MakeSlice[int32](n*2, mp, false)
+	if err != nil {
+		return err
 	}
-	js.sels[i][j] = append(js.sels[i][j], v)
+	sels.tmp = sels.tmp[:0]
+	return nil
 }
 
-func (js *JoinSels) GetSels(k int32) []int32 {
-	i := k / selsDivideLength
-	j := k % selsDivideLength
-	return js.sels[i][j]
+func (sels *GroupSels) Free(mp *mpool.MPool) {
+	if mp != nil {
+		freeSlice(mp, sels.vals)
+		freeSlice(mp, sels.offsets)
+		freeSlice(mp, sels.tmp)
+	}
+	sels.vals = nil
+	sels.offsets = nil
+	sels.tmp = nil
+}
+
+func (sels *GroupSels) Size() int64 {
+	const int32Size = int64(4)
+	return (int64(cap(sels.vals)) + int64(cap(sels.offsets)) + int64(cap(sels.tmp))) * int32Size
+}
+
+func (sels *GroupSels) Insert(k, v int32) {
+	sels.tmp = append(sels.tmp, k, v)
+}
+
+func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPool) error {
+	if sels.tmp == nil {
+		return nil
+	}
+	n := len(sels.tmp) / 2
+	// if every input row got its own group (no nulls, no duplicates), no sels needed
+	if n == 0 || groupCount == inputRowCount {
+		sels.vals = nil
+		sels.offsets = nil
+		freeSlice(mp, sels.tmp)
+		sels.tmp = nil
+		return nil
+	}
+	// groupCount+2: +1 for sentinel, +1 for 1-based callers (dedup UPDATE uses keys 1..groupCount)
+	var err error
+	sels.offsets, err = mpool.MakeSlice[int32](groupCount+2, mp, false)
+	if err != nil {
+		return err
+	}
+
+	// count occurrences per group
+	for i := 0; i < len(sels.tmp); i += 2 {
+		k := sels.tmp[i]
+		sels.offsets[k+1]++
+	}
+	// prefix sum
+	for i := int32(1); i < int32(len(sels.offsets)); i++ {
+		sels.offsets[i] += sels.offsets[i-1]
+	}
+	// scatter vals using offsets as write cursors, then recover
+	sels.vals, err = mpool.MakeSlice[int32](n, mp, false)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(sels.tmp); i += 2 {
+		k := sels.tmp[i]
+		v := sels.tmp[i+1]
+		sels.vals[sels.offsets[k]] = v
+		sels.offsets[k]++
+	}
+	// recover offsets: shift right by one
+	copy(sels.offsets[1:], sels.offsets[:len(sels.offsets)-1])
+	sels.offsets[0] = 0
+	freeSlice(mp, sels.tmp)
+	sels.tmp = nil
+	return nil
+}
+
+func (sels *GroupSels) Get(k int32) []int32 {
+	if sels.offsets == nil || int(k+1) >= len(sels.offsets) {
+		return nil
+	}
+	return sels.vals[sels.offsets[k]:sels.offsets[k+1]]
 }
 
 // JoinMap is used for join
@@ -72,28 +137,26 @@ type JoinMap struct {
 	mpool            *mpool.MPool
 	shm              *hashmap.StrHashMap
 	ihm              *hashmap.IntHashMap
-	multiSels        JoinSels
+	sels             GroupSels
 	delRows          *bitmap.Bitmap
 	batches          []*batch.Batch
 
 	// spill support
-	Spilled      bool
-	SpillBuckets []string // bucket file names
-	SpillRowCnts []int64  // rows per bucket
+	Spilled       bool
+	SpillBuildFds []*os.File // anonymous build-side file descriptors
 }
 
-func NewJoinMap(sels JoinSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
+func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
-		valid:        true,
-		mpool:        m,
-		shm:          shm,
-		ihm:          ihm,
-		multiSels:    sels,
-		delRows:      delRows,
-		batches:      batches,
-		Spilled:      false,
-		SpillBuckets: nil,
-		SpillRowCnts: nil,
+		valid:         true,
+		mpool:         m,
+		shm:           shm,
+		ihm:           ihm,
+		sels:          sels,
+		delRows:       delRows,
+		batches:       batches,
+		Spilled:       false,
+		SpillBuildFds: nil,
 	}
 }
 
@@ -138,11 +201,11 @@ func (jm *JoinMap) PushedRuntimeFilterIn() bool {
 }
 
 func (jm *JoinMap) HashOnUnique() bool {
-	return jm.multiSels.sels == nil
+	return jm.sels.offsets == nil
 }
 
 func (jm *JoinMap) GetSels(k uint64) []int32 {
-	return jm.multiSels.GetSels(int32(k))
+	return jm.sels.Get(int32(k))
 }
 
 //func (jm *JoinMap) GetIgnoreRows() *bitmap.Bitmap {
@@ -173,17 +236,13 @@ func (jm *JoinMap) IsSpilled() bool {
 	return jm.Spilled
 }
 
-func (jm *JoinMap) GetSpillBuckets() ([]string, []int64) {
-	return jm.SpillBuckets, jm.SpillRowCnts
-}
-
-func (jm *JoinMap) AllGroupHash() []uint64 {
-	if jm.ihm != nil {
-		return jm.ihm.AllGroupHash()
-	} else if jm.shm != nil {
-		return jm.shm.AllGroupHash()
-	}
-	return nil
+// TakeSpillBuildFds transfers ownership of anonymous build-side file
+// descriptors from the JoinMap to the caller. After this call the JoinMap
+// no longer owns the fds; FreeMemory will not close them.
+func (jm *JoinMap) TakeSpillBuildFds() []*os.File {
+	fds := jm.SpillBuildFds
+	jm.SpillBuildFds = nil
+	return fds
 }
 
 func (jm *JoinMap) IsDeleted(row uint64) bool {
@@ -191,7 +250,14 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 }
 
 func (jm *JoinMap) FreeMemory() {
-	jm.multiSels.Free()
+	for i, fd := range jm.SpillBuildFds {
+		if fd != nil {
+			fd.Close()
+			jm.SpillBuildFds[i] = nil
+		}
+	}
+	jm.SpillBuildFds = nil
+	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()
 		jm.ihm = nil
@@ -203,8 +269,6 @@ func (jm *JoinMap) FreeMemory() {
 		jm.batches[i].Clean(jm.mpool)
 	}
 	jm.batches = nil
-	jm.SpillBuckets = nil
-	jm.SpillRowCnts = nil
 	jm.valid = false
 }
 

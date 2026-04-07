@@ -15,10 +15,12 @@
 package ioutil
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -35,17 +37,26 @@ func ConstructTombstoneWriter(
 	hiddenSelection objectio.HiddenColumnSelection,
 	fs fileservice.FileService,
 ) *BlockWriter {
+	return ConstructTombstoneWriterWithArena(hiddenSelection, fs, nil)
+}
+
+func ConstructTombstoneWriterWithArena(
+	hiddenSelection objectio.HiddenColumnSelection,
+	fs fileservice.FileService,
+	arena *objectio.WriteArena,
+) *BlockWriter {
 	seqnums := objectio.GetTombstoneSeqnums(hiddenSelection)
 	sortkeyPos := objectio.TombstonePrimaryKeyIdx
 	sortkeyIsPK := true
 	isTombstone := true
-	return ConstructWriter(
+	return ConstructWriterWithArena(
 		0,
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,
 		isTombstone,
 		fs,
+		arena,
 	)
 }
 
@@ -73,10 +84,24 @@ func ConstructWriter(
 	isTombstone bool,
 	fs fileservice.FileService,
 ) *BlockWriter {
+	return ConstructWriterWithArena(
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, nil,
+	)
+}
+
+func ConstructWriterWithArena(
+	ver uint32,
+	seqnums []uint16,
+	sortkeyPos int,
+	sortkeyIsPK bool,
+	isTombstone bool,
+	fs fileservice.FileService,
+	arena *objectio.WriteArena,
+) *BlockWriter {
 	noid := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&noid)
 	return constructWriterWithName(name,
-		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, nil)
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, arena)
 }
 
 func constructWriterWithName(
@@ -89,12 +114,13 @@ func constructWriterWithName(
 	fs fileservice.FileService,
 	arena *objectio.WriteArena,
 ) *BlockWriter {
-	writer, err := NewBlockWriterNew(
+	writer, err := NewBlockWriterWithArena(
 		fs,
 		name,
 		ver,
 		seqnums,
 		isTombstone,
+		arena,
 	)
 	if err != nil {
 		panic(err) // it is impossible
@@ -126,9 +152,13 @@ type BlockWriter struct {
 	pk             uint16
 	pkType         uint8
 	sortKeyIdx     uint16
+	fakePK         uint16 // fake PK column index, math.MaxUint16 if not set
 	nameStr        string
 	name           objectio.ObjectName
 	prefix         []index.PrefixFn
+	hashBuf        []uint64                    // scratch buffer reused across WriteBatch calls for filter construction
+	fuseBuilder    xorfilter.BinaryFuseBuilder // reusable builder for BinaryFuse8 filters
+	bfMarshalBuf   bytes.Buffer                // reused across WriteBatch calls for bloom filter serialization
 
 	isTombstone bool
 }
@@ -141,6 +171,7 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	return &BlockWriter{
 		writer:     writer,
 		isSetPK:    false,
+		fakePK:     math.MaxUint16,
 		sortKeyIdx: math.MaxUint16,
 		nameStr:    name,
 	}, nil
@@ -172,6 +203,7 @@ func NewBlockWriterWithArena(
 	return &BlockWriter{
 		writer:      writer,
 		isSetPK:     false,
+		fakePK:      math.MaxUint16,
 		sortKeyIdx:  math.MaxUint16,
 		nameStr:     name.String(),
 		name:        name,
@@ -200,6 +232,11 @@ func (w *BlockWriter) SetPrimaryKeyWithType(idx uint16, pkType uint8, prefix ...
 
 func (w *BlockWriter) SetSortKey(idx uint16) {
 	w.sortKeyIdx = idx
+}
+
+// SetFakePK marks a fake PK column so its NDV is set to totalRows in Sync.
+func (w *BlockWriter) SetFakePK(idx uint16) {
+	w.fakePK = idx
 }
 
 func (w *BlockWriter) SetAppendable() {
@@ -233,20 +270,20 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
 
-		// PXU TODO: change this logic
-		if !w.isTombstone {
-			// only skip SchemaData type
-			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-				continue
-			}
-		}
+		zmOnlyHiddenColumn := !w.isTombstone &&
+			(vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS)
 
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
+		if w.fakePK != math.MaxUint16 && w.fakePK == uint16(i) {
+			isPK = true
+		}
 		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
-		// update null count and distinct value
-		w.objMetaBuilder.InspectVector(i, columnData, isPK)
+		if !zmOnlyHiddenColumn {
+			// update null count and distinct value
+			w.objMetaBuilder.InspectVector(i, columnData, isPK)
+		}
 
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
@@ -261,37 +298,42 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)
+		if zmOnlyHiddenColumn {
+			continue
+		}
 
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
 		w.objMetaBuilder.AddPKData(columnData)
 		var bf index.StaticFilter
+		arenaAlloc := w.writer.AllocFromArena
 		if w.pkType == index.BF {
-			bf, err = index.NewBloomFilter(columnData)
+			bf, err = index.NewBloomFilter(columnData, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		} else if w.pkType == index.PBF {
 			if len(w.prefix) < 1 {
 				return nil, index.ErrPrefix
 			}
 			prefix := w.prefix[0]
-			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn)
+			bf, err = index.NewPrefixBloomFilter(columnData, prefix.Id, prefix.Fn, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		} else if w.pkType == index.HBF {
 			if len(w.prefix) < 2 {
 				return nil, index.ErrPrefix
 			}
 			prefixL1 := w.prefix[0]
 			prefixL2 := w.prefix[1]
-			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn)
+			bf, err = index.NewHybridBloomFilter(columnData, prefixL1.Id, prefixL1.Fn, prefixL2.Id, prefixL2.Fn, &w.hashBuf, &w.fuseBuilder, arenaAlloc)
 		}
 		if err != nil {
 			return nil, err
 		}
-		buf, err := bf.Marshal()
-		if err != nil {
+		w.bfMarshalBuf.Reset()
+		if err = bf.MarshalWithBuffer(&w.bfMarshalBuf); err != nil {
 			return nil, err
 		}
-
-		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf, w.pkType); err != nil {
+		bfBytes := w.writer.AllocFromArena(w.bfMarshalBuf.Len())
+		copy(bfBytes, w.bfMarshalBuf.Bytes())
+		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], bfBytes, w.pkType); err != nil {
 			return nil, err
 		}
 	}
@@ -307,6 +349,9 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	if w.objMetaBuilder != nil {
 		if w.isSetPK {
 			w.objMetaBuilder.SetPKNdv(w.pk, w.objMetaBuilder.GetTotalRow())
+		}
+		if w.fakePK != math.MaxUint16 {
+			w.objMetaBuilder.SetPKNdv(w.fakePK, w.objMetaBuilder.GetTotalRow())
 		}
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)

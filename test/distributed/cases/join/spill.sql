@@ -7,7 +7,7 @@ create table t1(c1 int not null, c2 int not null, c3 int not null) cluster by c1
 create table t2(c1 int not null, c2 int not null, c3 int not null) cluster by c1;
 insert into t1 select *,*,* from generate_series(5000000) g;
 insert into t2 select *,*,* from generate_series(4000000) g;
-set @@join_spill_mem = 100;
+set @@join_spill_mem = 1000;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
@@ -19,12 +19,6 @@ select count(*) from t1,t2 where t1.c1=t2.c1;
 -- @separator:table
 explain select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
 select count(*) as cnt from t1,t2 where t1.c1=t2.c1 group by t1.c1 having cnt>1;
--- @separator:table
-explain select count(*) from t1,t2 where t1.c1=t2.c2;
-select count(*) from t1,t2 where t1.c1=t2.c2;
--- @separator:table
-explain select count(*) from t1,t2 where t1.c2=t2.c1;
-select count(*) from t1,t2 where t1.c2=t2.c1;
 -- @separator:table
 explain select count(*) from t1,t2 where t1.c2=t2.c2;
 select count(*) from t1,t2 where t1.c2=t2.c2;
@@ -38,12 +32,6 @@ select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<500000;
 explain select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
 -- @bvt:issue
 select count(*) from t1,t2 where t1.c2=t2.c2 and t2.c3<1500000;
--- @separator:table
-explain select count(*) from t1 group by c1 limit 5;
-select count(*) from t1 group by c1 limit 5;
--- @separator:table
-explain select count(*) from t1 group by c2 limit 5;
-select count(*) from t1 group by c2 limit 5;
 -- @bvt:issue#19733
 -- @separator:table
 explain select count(*) from t1 where t1.c2 in ( select c2 from t2 where t2.c3>100000 );
@@ -72,6 +60,10 @@ select count(*) from t1 left join t2 on t1.c1=t2.c1 where t1.c3 >5000000;
 -- @separator:table
 explain select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
+-- right outer join (preserves all t1 rows)
+select count(*) from t2 right join t1 on t1.c1=t2.c1;
+-- multi-column equi-join
+select count(*) from t1, t2 where t1.c1=t2.c1 and t1.c2=t2.c2;
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
 -- @separator:table

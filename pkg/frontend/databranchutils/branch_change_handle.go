@@ -73,18 +73,15 @@ var CollectChanges = func(
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 
-	var (
-		err error
-	)
-
 	if end.GE(&from) {
 		handle := new(BranchChangeHandle)
+		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		var err error
 		if handle.handle, err = rel.CollectChanges(
 			ctx, from, end, false, mp,
 		); err != nil {
 			return nil, err
 		}
-
 		return handle, nil
 	}
 

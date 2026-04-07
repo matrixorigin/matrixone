@@ -19,6 +19,7 @@ package types
 import (
 	"bytes"
 	"encoding"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strings"
@@ -38,6 +39,7 @@ const (
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
 	Decimal128Size int = 16
+	Decimal256Size int = 32
 	UuidSize       int = 16
 )
 
@@ -262,6 +264,14 @@ func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeDecimal256(v *Decimal256) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeDecimal256(v []byte) Decimal256 {
+	return *(*Decimal256)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeUuid(v *Uuid) []byte {
 	return util.UnsafeToBytes(v)
 }
@@ -362,6 +372,8 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
 		return DecodeFixed[Decimal128](val)
+	case T_decimal256:
+		return DecodeFixed[Decimal256](val)
 	case T_uuid:
 		return DecodeFixed[Uuid](val)
 	case T_TS:
@@ -522,6 +534,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
 		return EncodeFixed(val.(Decimal128))
+	case T_decimal256:
+		return EncodeFixed(val.(Decimal256))
 	case T_date:
 		return EncodeFixed(val.(Date))
 	case T_time:
@@ -696,121 +710,133 @@ func WriteSizeBytes(bs []byte, w io.Writer) error {
 }
 
 func ReadInt64(r io.Reader) (int64, error) {
-	buf := make([]byte, 8)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [8]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeInt64(buf), nil
+	return int64(binary.LittleEndian.Uint64(buf[:])), nil
 }
 
 func ReadUint64(r io.Reader) (uint64, error) {
-	buf := make([]byte, 8)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [8]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeUint64(buf), nil
+	return binary.LittleEndian.Uint64(buf[:]), nil
 }
 
 func WriteInt64(w io.Writer, v int64) error {
-	w.Write(EncodeInt64(&v))
-	return nil
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(v))
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func WriteUint64(w io.Writer, v uint64) error {
-	w.Write(EncodeUint64(&v))
-	return nil
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func ReadBool(r io.Reader) (bool, error) {
-	buf := make([]byte, 1)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return false, err
 	}
-	return DecodeBool(buf), nil
+	return buf[0] != 0, nil
 }
 
 func ReadInt16(r io.Reader) (int16, error) {
-	buf := make([]byte, 2)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [2]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeInt16(buf), nil
+	return int16(binary.LittleEndian.Uint16(buf[:])), nil
 }
 
 func WriteInt16(w io.Writer, v int16) error {
-	w.Write(EncodeInt16(&v))
-	return nil
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], uint16(v))
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func ReadUint16(r io.Reader) (uint16, error) {
-	buf := make([]byte, 2)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [2]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeUint16(buf), nil
+	return binary.LittleEndian.Uint16(buf[:]), nil
 }
 
 func WriteUint16(w io.Writer, v uint16) error {
-	w.Write(EncodeUint16(&v))
-	return nil
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func ReadInt32(r io.Reader) (int32, error) {
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeInt32(buf), nil
+	return int32(binary.LittleEndian.Uint32(buf[:])), nil
 }
 
 func WriteInt32(w io.Writer, v int32) error {
-	w.Write(EncodeInt32(&v))
-	return nil
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], uint32(v))
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func ReadUint32(r io.Reader) (uint32, error) {
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return DecodeUint32(buf), nil
+	return binary.LittleEndian.Uint32(buf[:]), nil
 }
 
 func WriteUint32(w io.Writer, v uint32) error {
-	w.Write(EncodeUint32(&v))
-	return nil
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
 }
 
 func ReadInt32AsInt(r io.Reader) (int, error) {
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
-	return int(DecodeInt32(buf)), nil
+	return int(int32(binary.LittleEndian.Uint32(buf[:]))), nil
 }
 
 func ReadByte(r io.Reader) (byte, error) {
-	buf := make([]byte, 1)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
 	return buf[0], nil
 }
 
 func ReadByteAsInt(r io.Reader) (int, error) {
-	buf := make([]byte, 1)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return 0, err
 	}
 	return int(buf[0]), nil
 }
 
 func ReadType(r io.Reader) (Type, error) {
-	buf := make([]byte, TSize)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	var buf [TSize]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
 		return Type{}, err
 	}
-	return DecodeType(buf), nil
+	return DecodeType(buf[:]), nil
 }
 
 func ReadSizeBytes(r io.Reader) (int32, []byte, error) {

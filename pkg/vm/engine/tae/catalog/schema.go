@@ -79,6 +79,7 @@ type ColDef struct {
 	FakePK        bool // TODO: use column.flag instead of column.fakepk
 	Default       []byte
 	OnUpdate      []byte
+	GeneratedCol  []byte
 	EnumValues    string
 }
 
@@ -332,6 +333,10 @@ func (s *Schema) HasPKOrFakePK() bool {
 	if s.HasPK() {
 		return true
 	}
+	return s.HasFakePK()
+}
+
+func (s *Schema) HasFakePK() bool {
 	_, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	return ok
 }
@@ -782,6 +787,9 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	if col.OnUpdate != nil {
 		newcol.OnUpdate, _ = types.Encode(col.OnUpdate)
 	}
+	if col.GeneratedCol != nil {
+		newcol.GeneratedCol, _ = types.Encode(col.GeneratedCol)
+	}
 	return newcol
 }
 
@@ -798,6 +806,7 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
+		GeneratedCol:  []byte(""),
 		SeqNum:        attr.Seqnum,
 		EnumValues:    attr.EnumVlaues,
 	}
@@ -809,6 +818,11 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 	}
 	if attr.OnUpdate != nil {
 		if def.OnUpdate, err = types.Encode(attr.OnUpdate); err != nil {
+			return nil, err
+		}
+	}
+	if attr.GeneratedCol != nil {
+		if def.GeneratedCol, err = types.Encode(attr.GeneratedCol); err != nil {
 			return nil, err
 		}
 	}

@@ -586,9 +586,16 @@ const (
 	PREFIX_IN_RANGE = 405
 	NULL_SAFE_EQUAL = 406
 
+	CAST_INDEX_TO_SET_VALUE       = 407
+	CAST_SET_VALUE_TO_INDEX       = 408
+	CAST_SET_INDEX_VALUE_TO_INDEX = 409
+
+	VECF32_FROM_BASE64 = 410
+	VECF64_FROM_BASE64 = 411
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 407
+	FUNCTION_END_NUMBER = 412
 )
 
 // functionIdRegister is what function we have registered already.
@@ -880,6 +887,8 @@ var functionIdRegister = map[string]int32{
 	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
+	"vecf32_from_base64":             VECF32_FROM_BASE64,
+	"vecf64_from_base64":             VECF64_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
@@ -963,6 +972,9 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"cast_index_to_set_value":        CAST_INDEX_TO_SET_VALUE,
+	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
+	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,

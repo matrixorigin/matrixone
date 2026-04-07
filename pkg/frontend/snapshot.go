@@ -79,7 +79,7 @@ const (
 
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
-	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s'"
+	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and db_name != '%s'"
 )
 
 var (
@@ -2641,7 +2641,7 @@ func checkDatabaseIsMaster(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string) (bool, error) {
-	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, dbName)
+	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check database is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()

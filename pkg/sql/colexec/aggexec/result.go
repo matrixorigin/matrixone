@@ -83,18 +83,6 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 	return res
 }
 
-func initAggResultWithBytesTypeResult(
-	mp *mpool.MPool,
-	resultType types.Type,
-	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
-
-	res := aggResultWithBytesType{}
-	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
-	res.InitialValue = []byte(initialValue)
-
-	return res
-}
-
 type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	optSplitResult
 
@@ -115,17 +103,6 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 	return size
 }
 
-func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData, emptyData, distData [][]byte) error {
-	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData, distData); err != nil {
-		return err
-	}
-	r.values = make([][]T, len(resultData))
-	for i := range r.values {
-		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
-	}
-	return nil
-}
-
 func (r *aggResultWithFixedType[T]) setupT() {
 	if len(r.optSplitResult.resultList) > 0 {
 		r.values = make([][]T, len(r.optSplitResult.resultList))
@@ -136,7 +113,7 @@ func (r *aggResultWithFixedType[T]) setupT() {
 }
 
 func (r *aggResultWithFixedType[T]) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -147,14 +124,6 @@ func (r *aggResultWithFixedType[T]) grows(more int) error {
 	}
 	setValueFromX1Y1ToX2Y2(r.values, x1, y1, x2, y2, r.InitialValue)
 	return nil
-}
-
-func (r *aggResultWithFixedType[T]) get() T {
-	return r.values[r.accessIdx1][r.accessIdx2]
-}
-
-func (r *aggResultWithFixedType[T]) set(value T) {
-	r.values[r.accessIdx1][r.accessIdx2] = value
 }
 
 func (r *aggResultWithFixedType[T]) free() {
@@ -174,7 +143,7 @@ func (r *aggResultWithBytesType) Size() int64 {
 }
 
 func (r *aggResultWithBytesType) grows(more int) error {
-	x1, y1, x2, y2, err := r.resExtend(more)
+	x1, y1, x2, y2, err := r.extendResult(more)
 	if err != nil {
 		return err
 	}
@@ -208,19 +177,6 @@ func (r *aggResultWithBytesType) grows(more int) error {
 		}
 	}
 	return nil
-}
-
-func (r *aggResultWithBytesType) get() []byte {
-	// never return the source pointer directly.
-	//
-	// if not so, the append action outside like `r = append(r, "more")` will cause memory contamination to other data row.
-	newr := r.resultList[r.accessIdx1].GetBytesAt(r.accessIdx2)
-	newr = newr[:len(newr):len(newr)]
-	return newr
-}
-
-func (r *aggResultWithBytesType) set(value []byte) error {
-	return vector.SetBytesAt(r.resultList[r.accessIdx1], r.accessIdx2, value, r.mp)
 }
 
 func (r *aggResultWithBytesType) free() {
@@ -270,76 +226,8 @@ type optSplitResult struct {
 	distinct []distinctHash
 }
 
-// this API is broken.  It should not need to return those [][]byte
-func (r *optSplitResult) marshalToBytes() ([][]byte, [][]byte, [][]byte, error) {
-	var err error
-
-	// WTF?   min(r.nowIdx1+1, len...)
-	resultData := make([][]byte, min(r.nowIdx1+1, len(r.resultList)))
-	emptyData := make([][]byte, min(r.nowIdx1+1, len(r.emptyList)))
-
-	for i := range resultData {
-		if resultData[i], err = r.resultList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	for i := range emptyData {
-		if emptyData[i], err = r.emptyList[i].MarshalBinary(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	if len(r.distinct) > 0 {
-		distinctData := make([][]byte, min(r.nowIdx1+1, len(r.distinct)))
-		for i := range r.distinct {
-			if distinctData[i], err = r.distinct[i].marshal(); err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		return resultData, emptyData, distinctData, nil
-	}
-	return resultData, emptyData, nil, nil
-}
-
-func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData [][]byte) (err error) {
-	r.free()
-	defer func() {
-		if err != nil {
-			r.free()
-		}
-	}()
-
-	r.resultList = make([]*vector.Vector, len(resultData))
-	r.emptyList = make([]*vector.Vector, len(emptyData))
-	r.bsFromEmptyList = make([][]bool, len(emptyData))
-	r.nowIdx1 = max(0, len(resultData)-1)
-	for i := range r.resultList {
-		r.resultList[i] = vector.NewOffHeapVecWithType(r.resultType)
-		if err = vectorUnmarshal(r.resultList[i], resultData[i], r.mp); err != nil {
-			return err
-		}
-	}
-	for i := range r.emptyList {
-		r.emptyList[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		if err = vectorUnmarshal(r.emptyList[i], emptyData[i], r.mp); err != nil {
-			return err
-		}
-		r.bsFromEmptyList[i] = vector.MustFixedColNoTypeCheck[bool](r.emptyList[i])
-	}
-
-	if len(distinctData) != 0 {
-		r.distinct = make([]distinctHash, len(distinctData))
-		for i := range distinctData {
-			if err = r.distinct[i].unmarshal(distinctData[i], r.mp); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
-	rvec := vector.NewVec(r.resultType)
+	rvec := vector.NewOffHeapVecWithType(r.resultType)
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
@@ -353,7 +241,7 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	cnt = int64(len(r.emptyList))
 	buf.Write(types.EncodeInt64(&cnt))
 	if cnt > 0 {
-		mvec := vector.NewVec(types.T_bool.ToType())
+		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
 			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
@@ -514,28 +402,8 @@ func (r *optSplitResult) updateNextAccessIdx(idx int) (x, y int) {
 	return r.accessIdx1, r.accessIdx2
 }
 
-func (r *optSplitResult) setNextAccessDirectly(x, y int) {
-	r.accessIdx1, r.accessIdx2 = x, y
-}
-
-func (r *optSplitResult) totalGroupCount() int {
-	return r.resultList[r.nowIdx1].Length() + (len(r.resultList)-1)*r.optInformation.chunkSize
-}
-
-func (r *optSplitResult) isGroupEmpty(x, y int) bool {
-	return r.bsFromEmptyList[x][y]
-}
-
-func (r *optSplitResult) setGroupNotEmpty(x, y int) {
-	r.bsFromEmptyList[x][y] = false
-}
-
 func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 	r.bsFromEmptyList[x][y] = r.bsFromEmptyList[x][y] && anotherIsEmpty
-}
-
-func (r *optSplitResult) getEachBlockLimitation() int {
-	return r.optInformation.chunkSize
 }
 
 // flushAll return all the result.
@@ -555,7 +423,7 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 // try to expand the length forward from the current position.
 // if there is not enough free space, do memory allocation first.
 //
-// do not call this method directly, plz use the preExtend and resExtend.
+// do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
 
 	// try tp full the using part first.
@@ -688,9 +556,9 @@ func (r *optSplitResult) preExtend(more int) (err error) {
 	return nil
 }
 
-// resExtend obtains memory of length more from the current position for use,
+// extendResult obtains memory of length more from the current position for use,
 // while also altering the memory usage indicators and other structure related.
-func (r *optSplitResult) resExtend(more int) (startX, startY, endX, endY int, err error) {
+func (r *optSplitResult) extendResult(more int) (startX, startY, endX, endY int, err error) {
 	startX = r.nowIdx1
 	startY = r.resultList[startX].Length()
 
@@ -788,24 +656,4 @@ func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
 	for i := 0; i < y2; i++ {
 		src[x2][i] = value
 	}
-}
-
-// fill in distict.   return true if need to update agg state, false if not distinct.
-func (r *optSplitResult) distinctFill(x, y int, vecs []*vector.Vector, row int) (bool, error) {
-	if !r.optInformation.hasDistinct {
-		// if has no distinct, always need to update agg
-		return true, nil
-	}
-
-	need, err := r.distinct[x].fill(y, vecs, row)
-	return need, err
-}
-
-func (r *optSplitResult) distinctMerge(x1 int, other *optSplitResult, x2 int) error {
-	if !r.optInformation.hasDistinct {
-		// this is fine.
-		return nil
-	}
-	// thank god, the following will bomb out if they collide.
-	return r.distinct[x1].merge(&other.distinct[x2])
 }

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -786,6 +787,161 @@ func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	require.Equal(t, plan.OrderBySpec_ASC, boundOrderBys[1].Flag)
 }
 
+func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	enumType := types.T_enum.ToType()
+	plan2Type := makePlan2Type(&enumType)
+	plan2Type.Enumvalues = "low,medium,high,critical"
+
+	intType := types.T_int64.ToType()
+	plan2IntType := makePlan2Type(&intType)
+
+	bind := &Binding{
+		tag:            1,
+		nodeId:         0,
+		db:             "select_test",
+		table:          "bind_select",
+		tableID:        0,
+		cols:           []string{"id", "val"},
+		colIsHidden:    []bool{false, false},
+		types:          []*plan.Type{&plan2IntType, &plan2Type},
+		refCnts:        []uint{0, 0},
+		colIdByName:    map[string]int32{"id": 0, "val": 1},
+		isClusterTable: false,
+		defaults:       []string{"", ""},
+	}
+	bindCtx.bindings = append(bindCtx.bindings, bind)
+	bindCtx.bindingByTable[bind.table] = bind
+	for _, col := range bind.cols {
+		bindCtx.bindingByCol[col] = bind
+	}
+	bindCtx.bindingByTag[bind.tag] = bind
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select id, val from select_test.bind_select order by val", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	orderList := stmts[0].(*tree.Select).OrderBy
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err := builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, orderList, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	// The ORDER BY expression should use the original ENUM type (uint16), not varchar
+	require.Equal(t, int32(types.T_enum), boundOrderBys[0].Expr.Typ.Id)
+}
+
+func TestQueryBuilder_bindOrderByEnumDistinct(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.isDistinct = true
+
+	enumType := types.T_enum.ToType()
+	plan2Type := makePlan2Type(&enumType)
+	plan2Type.Enumvalues = "low,medium,high,critical"
+
+	intType := types.T_int64.ToType()
+	plan2IntType := makePlan2Type(&intType)
+
+	bind := &Binding{
+		tag:            1,
+		nodeId:         0,
+		db:             "select_test",
+		table:          "bind_select",
+		tableID:        0,
+		cols:           []string{"id", "val"},
+		colIsHidden:    []bool{false, false},
+		types:          []*plan.Type{&plan2IntType, &plan2Type},
+		refCnts:        []uint{0, 0},
+		colIdByName:    map[string]int32{"id": 0, "val": 1},
+		isClusterTable: false,
+		defaults:       []string{"", ""},
+	}
+	bindCtx.bindings = append(bindCtx.bindings, bind)
+	bindCtx.bindingByTable[bind.table] = bind
+	for _, col := range bind.cols {
+		bindCtx.bindingByCol[col] = bind
+	}
+	bindCtx.bindingByTag[bind.tag] = bind
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct val from select_test.bind_select order by val", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	orderList := stmts[0].(*tree.Select).OrderBy
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err := builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(bindCtx.projects))
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, orderList, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	require.Equal(t, 2, len(bindCtx.projects))
+	// DISTINCT should still sort by the original ENUM index, not the visible varchar.
+	require.Equal(t, int32(types.T_enum), boundOrderBys[0].Expr.Typ.Id)
+	require.Equal(t, int32(types.T_enum), bindCtx.projects[1].Typ.Id)
+	col := boundOrderBys[0].Expr.GetCol()
+	require.NotNil(t, col)
+	require.Equal(t, bindCtx.projectTag, col.RelPos)
+	require.Equal(t, int32(1), col.ColPos)
+}
+
+func TestQueryBuilder_bindOrderByDistinctLargeExpr(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	bindCtx.isDistinct = true
+
+	longLiteral := strings.Repeat("x", 300)
+	sql := "select distinct concat('" + longLiteral + "', a) from select_test.bind_select order by concat('" + longLiteral + "', a)"
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	orderList := stmts[0].(*tree.Select).OrderBy
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err := builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(bindCtx.projects))
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, orderList, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	require.Equal(t, 1, len(bindCtx.projects))
+	col := boundOrderBys[0].Expr.GetCol()
+	require.NotNil(t, col)
+	require.Equal(t, bindCtx.projectTag, col.RelPos)
+	require.Equal(t, int32(0), col.ColPos)
+}
+
+func TestAppendOrderByProjectExprLargeExprDedup(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	stringType := types.T_varchar.ToType()
+	expr := &plan.Expr{
+		Typ: makePlan2Type(&stringType),
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: strings.Repeat("x", 300)},
+			},
+		},
+	}
+
+	firstPos, err := appendOrderByProjectExpr(bindCtx, expr)
+	require.NoError(t, err)
+	secondPos, err := appendOrderByProjectExpr(bindCtx, DeepCopyExpr(expr))
+	require.NoError(t, err)
+
+	require.Equal(t, firstPos, secondPos)
+	require.Equal(t, int32(0), firstPos)
+	require.Equal(t, 1, len(bindCtx.projects))
+	require.Equal(t, 1, len(bindCtx.projectByExpr))
+}
+
 func TestQueryBuilder_bindLimit(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -892,8 +1048,81 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 // TODO
 func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
-// TODO
-func TestQueryBuilder_appendWindowNode(t *testing.T) {}
+func TestQueryBuilder_appendWindowNode(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundHavingList))
+	require.Len(t, bindCtx.windows, 1)
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.windows, 1)
+
+	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
+
+	nodeID, err = builder.appendWindowNode(bindCtx, nodeID, boundHavingList)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_FILTER, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].FilterList, 1)
+	require.Equal(t, ">", builder.qry.Nodes[nodeID].FilterList[0].Expr.(*plan.Expr_F).F.Func.ObjName)
+	require.True(t, containsTag(builder.qry.Nodes[nodeID].FilterList[0], bindCtx.windowTag))
+
+	windowNodeFound := false
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			windowNodeFound = true
+			break
+		}
+	}
+	require.True(t, windowNodeFound)
+}
+
+func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		"select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a in (select 1)",
+		1,
+	)
+	require.NoError(t, err)
+
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, boundHavingList, 1)
+	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
+	require.True(t, containsTag(boundHavingList[0], bindCtx.windowTag))
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+}
 
 func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)

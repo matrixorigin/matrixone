@@ -16,10 +16,13 @@ package hashbuild
 
 import (
 	"bytes"
+	"io"
 	"os"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -69,14 +72,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(hashBuild, proc, analyzer); err != nil {
+			if err := hashBuild.build(proc, analyzer); err != nil {
 				return result, err
 			}
 
 			ctr.state = HandleRuntimeFilter
 
 		case HandleRuntimeFilter:
-			if err := ctr.handleRuntimeFilter(hashBuild, proc); err != nil {
+			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
 
@@ -88,17 +91,18 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			var jm *message.JoinMap
-			spillMode := len(ctr.spilledBuckets) > 0
+			spillMode := len(ctr.spilledFds) > 0
 
 			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				if spillMode {
-					// In spill mode: send empty JoinMap with spill info, no batches
-					jm = message.NewJoinMap(message.JoinSels{}, nil, nil, nil, nil, proc.Mp())
+					// In spill mode: send empty JoinMap with spill fds, no batches
+					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
-					jm.SpillBuckets = ctr.spilledBuckets
+					jm.SpillBuildFds = ctr.spilledFds
+					ctr.spilledFds = nil // ownership transferred
 				} else {
 					// Normal mode: send hashmap and batches
-					jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
+					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
@@ -123,9 +127,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyzer process.Analyzer) error {
+func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyzer) error {
+	ctr := &hashBuild.ctr
 	spillMode := false
-	var spilledBuckets []string
 	var spillFiles []*os.File
 	var spillBuffers []*batch.Batch
 
@@ -140,6 +144,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 				buf.Clean(proc.Mp())
 			}
 		}
+		ctr.freeSpillExprExecs()
 	}()
 
 	for {
@@ -159,7 +164,7 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 
 		// If in spill mode, spill this batch directly to open files
 		if spillMode {
-			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 			if err != nil {
 				return err
 			}
@@ -173,18 +178,28 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 
 		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.NeedHashMap && hashBuild.shouldSpillBatches() {
+		if hashBuild.shouldSpillBatches() {
 			spillMode = true
-			// Create spill files once
-			spilledBuckets, spillFiles, err = createSpillFiles(proc)
+			// Initialize spill executors once for reuse across all batches
+			if ctr.spillExprExecs == nil {
+				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
+					return err
+				}
+			}
+			// Generate unique prefix for anonymous file paths
+			uid, err := uuid.NewV7()
 			if err != nil {
 				return err
 			}
-			spillBuffers = make([]*batch.Batch, spillNumBuckets)
+			ctr.spillUUID = uid.String()
+			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
+
+			spillFiles = make([]*os.File, spillNumBuckets)
+			spillBuffers = ctr.acquireSpillBuffers(proc)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, hashBuild.HashOnPK, hashBuild.Conditions, analyzer)
+				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
 				if err != nil {
 					return err
 				}
@@ -194,15 +209,30 @@ func (ctr *container) build(hashBuild *HashBuild, proc *process.Process, analyze
 		}
 	}
 
-	// Flush remaining buffered data and close spill files
+	// Flush remaining buffered data
 	if spillMode {
 		for i, buf := range spillBuffers {
-			if _, err := ctr.flushBucketBuffer(proc, buf, spillFiles[i], analyzer); err != nil {
-				return err
+			if buf != nil && buf.RowCount() > 0 {
+				file, err := ctr.ensureSpillFile(proc, spillFiles, i)
+				if err != nil {
+					return err
+				}
+				if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
+					return err
+				}
 			}
 		}
-
-		ctr.spilledBuckets = spilledBuckets
+		// Seek all files to beginning for reading by hashjoin
+		for _, f := range spillFiles {
+			if f != nil {
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return err
+				}
+			}
+		}
+		// Transfer ownership to container; nil local slice so defer won't close
+		ctr.spilledFds = spillFiles
+		spillFiles = nil
 	}
 
 	// If we never entered spill mode, build the hashmap
@@ -246,7 +276,8 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 	}
 }
 
-func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Process) error {
+func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
+	ctr := &hashBuild.ctr
 	if hashBuild.IsShuffle {
 		//only support runtime filter pass for now in shuffle join
 		var runtimeFilter message.RuntimeFilterMessage
@@ -341,10 +372,14 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 			if erg != nil {
 				return erg
 			}
+			// InplaceSort reorders data but NOT the null bitmap.
+			// NULLs are irrelevant for IN-filter: clear bitmap before sort.
+			vec.GetNulls().Reset()
 			vec.InplaceSort()
 			data, err = vec.MarshalBinary()
 			free()
 		} else {
+			ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
 			ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
 			data, err = ctr.hashmapBuilder.UniqueJoinKeys[0].MarshalBinary()
 		}

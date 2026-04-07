@@ -132,6 +132,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
@@ -439,6 +440,8 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return GetFixedAtNoTypeCheck[types.Decimal64](vec, i)
 	case types.T_decimal128:
 		return GetFixedAtNoTypeCheck[types.Decimal128](vec, i)
+	case types.T_decimal256:
+		return GetFixedAtNoTypeCheck[types.Decimal256](vec, i)
 	case types.T_uuid:
 		return GetFixedAtNoTypeCheck[types.Uuid](vec, i)
 	case types.T_TS:
@@ -1068,6 +1071,8 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Decimal64](v, sels, negate)
 	case types.T_decimal128:
 		shrinkFixed[types.Decimal128](v, sels, negate)
+	case types.T_decimal256:
+		shrinkFixed[types.Decimal256](v, sels, negate)
 	case types.T_uuid:
 		shrinkFixed[types.Uuid](v, sels, negate)
 	case types.T_TS:
@@ -1138,6 +1143,8 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
 	case types.T_decimal128:
 		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
+	case types.T_decimal256:
+		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset)
 	case types.T_uuid:
 		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
 	case types.T_TS:
@@ -1201,6 +1208,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
 		err = shuffleFixedNoTypeCheck[types.Decimal128](v, sels, mp)
+	case types.T_decimal256:
+		err = shuffleFixedNoTypeCheck[types.Decimal256](v, sels, mp)
 	case types.T_uuid:
 		err = shuffleFixedNoTypeCheck[types.Uuid](v, sels, mp)
 	case types.T_TS:
@@ -1216,7 +1225,80 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	return err
 }
 
-// XXX Old Copy is FUBAR.
+// ShuffleWithBuf is like Shuffle but reuses a scratch buffer to avoid
+// alloc/free churn when the permutation preserves the element count.
+// buf is grown as needed and retained across calls.
+func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
+	if v.IsConst() {
+		return nil
+	}
+	// Fall back to allocating Shuffle if the vector doesn't own its data
+	// or the selection changes the element count.
+	if v.cantFreeData || len(sels) != v.length {
+		return v.Shuffle(sels, mp)
+	}
+
+	switch v.typ.Oid {
+	case types.T_bool:
+		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
+	case types.T_bit:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_int8:
+		err = shuffleFixedNoTypeCheckWithBuf[int8](v, sels, buf)
+	case types.T_int16:
+		err = shuffleFixedNoTypeCheckWithBuf[int16](v, sels, buf)
+	case types.T_int32:
+		err = shuffleFixedNoTypeCheckWithBuf[int32](v, sels, buf)
+	case types.T_int64:
+		err = shuffleFixedNoTypeCheckWithBuf[int64](v, sels, buf)
+	case types.T_uint8:
+		err = shuffleFixedNoTypeCheckWithBuf[uint8](v, sels, buf)
+	case types.T_uint16:
+		err = shuffleFixedNoTypeCheckWithBuf[uint16](v, sels, buf)
+	case types.T_uint32:
+		err = shuffleFixedNoTypeCheckWithBuf[uint32](v, sels, buf)
+	case types.T_uint64:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_float32:
+		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
+	case types.T_float64:
+		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
+	case types.T_date:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
+	case types.T_datetime:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Datetime](v, sels, buf)
+	case types.T_time:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Time](v, sels, buf)
+	case types.T_timestamp:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Timestamp](v, sels, buf)
+	case types.T_year:
+		err = shuffleFixedNoTypeCheckWithBuf[types.MoYear](v, sels, buf)
+	case types.T_enum:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Enum](v, sels, buf)
+	case types.T_decimal64:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal64](v, sels, buf)
+	case types.T_decimal128:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal128](v, sels, buf)
+	case types.T_decimal256:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal256](v, sels, buf)
+	case types.T_uuid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Uuid](v, sels, buf)
+	case types.T_TS:
+		err = shuffleFixedNoTypeCheckWithBuf[types.TS](v, sels, buf)
+	case types.T_Rowid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Rowid](v, sels, buf)
+	case types.T_Blockid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	return err
+}
+
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
@@ -1856,6 +1938,35 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.length += w.length
 			return nil
 		}
+	case types.T_decimal256:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, types.Decimal256{}, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Decimal256](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
 	case types.T_uuid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -2130,7 +2241,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
-				return appendOneFixed(v, uint32(0), true, mp)
+				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[uint32](w)
 			if w.IsConst() {
@@ -2254,6 +2365,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[types.Decimal128](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_decimal256:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedColNoTypeCheck[types.Decimal256](w)
 			if w.IsConst() {
 				return SetConstFixed(v, ws[0], length, mp)
 			}
@@ -2798,6 +2920,8 @@ func (v *Vector) String() string {
 		return vecToString[types.Decimal64](v)
 	case types.T_decimal128:
 		return vecToString[types.Decimal128](v)
+	case types.T_decimal256:
+		return vecToString[types.Decimal256](v)
 	case types.T_uuid:
 		return vecToString[types.Uuid](v)
 	case types.T_TS:
@@ -2999,6 +3123,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implDecimalRowToString[types.Decimal64](v, idx)
 	case types.T_decimal128:
 		return implDecimalRowToString[types.Decimal128](v, idx)
+	case types.T_decimal256:
+		return implDecimalRowToString[types.Decimal256](v, idx)
 	case types.T_uuid:
 		return implFixedRowToString[types.Uuid](v, idx)
 	case types.T_TS:
@@ -3151,6 +3277,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Decimal64), false, mp)
 	case types.T_decimal128:
 		return appendOneFixed(vec, val.(types.Decimal128), false, mp)
+	case types.T_decimal256:
+		return appendOneFixed(vec, val.(types.Decimal256), false, mp)
 	case types.T_uuid:
 		return appendOneFixed(vec, val.(types.Uuid), false, mp)
 	case types.T_TS:
@@ -3573,6 +3701,32 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	return nil
 }
 
+// shuffleFixedNoTypeCheckWithBuf permutes elements using a reusable scratch
+// buffer instead of allocating a new data buffer. Only valid when
+// len(sels) == v.length and !v.cantFreeData (caller checks).
+func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64, buf *[]byte) error {
+	sz := v.typ.TypeSize()
+	ns := len(sels)
+	needed := ns * sz
+
+	if cap(*buf) < needed {
+		*buf = make([]byte, needed)
+	} else {
+		*buf = (*buf)[:needed]
+	}
+
+	var vs []T
+	ToFixedColNoTypeCheck(v, &vs)
+	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
+
+	shuffle.FixedLengthShuffle(vs, ws, sels)
+	copy(v.data[:needed], *buf)
+	nulls.Filter(&v.gsp, sels, false)
+	nulls.Filter(&v.nsp, sels, false)
+	v.length = ns
+	return nil
+}
+
 func vecToString[T types.FixedSizeT](v *Vector) string {
 	col := MustFixedColWithTypeCheck[T](v)
 	if len(col) == 1 {
@@ -3625,7 +3779,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
-		return NewVec(v.typ), nil
+		return NewOffHeapVecWithType(v.typ), nil
 	}
 	if end > v.Length() {
 		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
@@ -3636,7 +3790,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		if v.typ.IsVarlen() {
 			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
 		} else {
-			vec := NewVec(v.typ)
+			vec := NewOffHeapVecWithType(v.typ)
 			vec.class = v.class
 			vec.data = make([]byte, len(v.data))
 			copy(vec.data, v.data)
@@ -3647,7 +3801,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			return vec, nil
 		}
 	}
-	w := NewVec(v.typ)
+	w := NewOffHeapVecWithType(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
 		return nil, err
 	}
@@ -3965,6 +4119,42 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 		minv = types.EncodeDecimal128(&minVal)
 		maxv = types.EncodeDecimal128(&maxVal)
+
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
+		var minVal, maxVal types.Decimal256
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeDecimal256(&minVal)
+		maxv = types.EncodeDecimal256(&maxVal)
 
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
@@ -4353,6 +4543,20 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Decimal256) bool {
+			return a.Compare(b) == 0
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
@@ -4566,6 +4770,12 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_decimal128:
 		col := MustFixedColNoTypeCheck[types.Decimal128](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
 		sort.Slice(col, func(i, j int) bool {
 			return col[i].Less(col[j])
 		})

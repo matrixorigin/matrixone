@@ -428,12 +428,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	if s.Proc.Ctx.Err() != nil {
-		runErr = nil
-	}
+	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
+	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
@@ -554,6 +552,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
+		readers[i].SetOrderBy(s.DataSource.OrderBy)
 		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
@@ -707,16 +706,18 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 
 	// reset filter
 	if len(nonPkFilters) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
+		// Phase 2: if the leaf op is TableScan (inline filter path), set RuntimeFilterExprs directly.
+		// Otherwise fall back to the legacy Filter operator path.
+		leafOp := vm.GetLeafOp(s.RootOp)
+		if ts, ok := leafOp.(*table_scan.TableScan); ok {
+			ts.RuntimeFilterExprs = nonPkFilters
+		} else {
+			arg, ok := leafOp.(*filter.Filter)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			arg.RuntimeFilterExprs = nonPkFilters
 		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
@@ -818,14 +819,9 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
+		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
 		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
-
-		select {
-		case <-s.Proc.Ctx.Done():
-			resultChan <- notifyMessageResult{err: nil, sender: sender}
-		default:
-			resultChan <- notifyMessageResult{err: err, sender: sender}
-		}
+		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
 
@@ -881,6 +877,16 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
+func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil && moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return nil
+	}
+	return err
+}
+
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
 	for {
 		bat, end, err := sender.receiveBatch()
@@ -888,7 +894,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
+		if err = forwardRemoteBatchWithContext(sender, forwardCh, bat, sender.mp); err != nil {
+			return err
+		}
 	}
 }
 
@@ -1147,6 +1155,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 				}
 			}
 		}
+		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -1217,6 +1234,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if len(s.DataSource.BloomFilter) > 0 {
 				hint.BloomFilter = s.DataSource.BloomFilter
 			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
 				}

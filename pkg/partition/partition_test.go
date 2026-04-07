@@ -132,4 +132,22 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
 	require.Equal(t, []int64{0, 1}, partitions)
 
+	v13 := vector.NewVec(types.T_blob.ToType())
+	_ = vector.AppendStringList(v13, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
+	require.Equal(t, []int64{0, 1}, partitions)
+	nulls.Add(v13.GetNulls(), 1)
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
+	require.Equal(t, []int64{0, 1}, partitions)
+
+	v14 := vector.NewVec(types.T_binary.ToType())
+	_ = vector.AppendStringList(v14, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v14)
+	require.Equal(t, []int64{0, 1}, partitions)
+
+	v15 := vector.NewVec(types.T_varbinary.ToType())
+	_ = vector.AppendStringList(v15, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
+	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v15)
+	require.Equal(t, []int64{0, 1}, partitions)
+
 }

@@ -350,25 +350,26 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 func (builder *QueryBuilder) remapWindowClause(
 	expr *plan.Expr,
 	windowTag int32,
+	windowIdx int32,
 	projectionSize int32,
 	colMap map[[2]int32][2]int32,
 	remapInfo *RemapInfo,
 ) error {
-	// For window functions,
-	// a specific weight is required mapping
+	// Each Window node appends only its own window result after the child
+	// projection list. Earlier window results share the same windowTag but
+	// already belong to the child projection, so they must be remapped via
+	// the child column map instead of being treated as the current node's
+	// appended output.
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		// In the window function node,
-		// the filtering conditions also need to be remapped
-		if exprImpl.Col.RelPos == windowTag {
-			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
+		if exprImpl.Col.RelPos == windowTag && exprImpl.Col.ColPos == windowIdx {
+			// Each Window node appends exactly one local output column, so the
+			// current window result always lands at projectionSize regardless of
+			// its global windowIdx under the shared windowTag.
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, windowIdx}]
 			exprImpl.Col.RelPos = -1
-			exprImpl.Col.ColPos += projectionSize
+			exprImpl.Col.ColPos = projectionSize
 		} else {
-			// normal remap for other columns
-			// for example,
-			// where abs(sum(a) - avg(sum(a) over(partition by b))
-			// sum(a) need remap
 			err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
 			if err != nil {
 				return err
@@ -376,15 +377,13 @@ func (builder *QueryBuilder) remapWindowClause(
 		}
 
 	case *plan.Expr_F:
-		// loop function parameters
 		for _, arg := range exprImpl.F.Args {
-			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
+			err := builder.remapWindowClause(arg, windowTag, windowIdx, projectionSize, colMap, remapInfo)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	// return nil
 	return nil
 }
 

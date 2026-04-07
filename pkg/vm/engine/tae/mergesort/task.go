@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/go-units"
@@ -37,7 +39,224 @@ import (
 	"go.uber.org/zap"
 )
 
+// Transfer slab pool: two size-bucketed tiers of off-heap slabs, similar
+// to the arena pool's Small/Large tiers.  Each tier uses a lock-free stack
+// so get/put never block concurrent merge workers.
+
+const (
+	transferSlabSmall = 0 // ≤ 4 MB slabs
+	transferSlabLarge = 1 // 4 MB – 16 MB slabs
+)
+
+const (
+	// transferSlabSmallMax is the upper bound (in entries) for the small tier.
+	// 4 MB / 8 bytes = 524,288 entries (~64 blocks × 8192 rows).
+	transferSlabSmallMax = 4 * 1024 * 1024 / 8
+
+	// transferSlabLargeMax is the upper bound (in entries) for the large tier.
+	// 16 MB / 8 bytes = 2,097,152 entries (~256 blocks × 8192 rows).
+	// Slabs exceeding this are freed immediately.
+	transferSlabLargeMax = 16 * 1024 * 1024 / 8
+)
+
+type transferSlabNode struct {
+	slab []api.TransferDestPos
+	next *transferSlabNode
+}
+
+type transferSlabBucket struct {
+	head    atomic.Pointer[transferSlabNode]
+	count   atomic.Int32
+	maxIdle int32
+	size    int // quantised slab capacity for this tier
+}
+
+var (
+	transferSlabBuckets [2]transferSlabBucket
+	transferSlabMPool   = mpool.MustNew("transfer-slab")
+)
+
+func init() {
+	procs := int32(runtime.GOMAXPROCS(0))
+	idle := procs * 2
+	if idle < 4 {
+		idle = 4
+	}
+	transferSlabBuckets[transferSlabSmall] = transferSlabBucket{
+		size: transferSlabSmallMax, maxIdle: idle,
+	}
+	transferSlabBuckets[transferSlabLarge] = transferSlabBucket{
+		size: transferSlabLargeMax, maxIdle: idle,
+	}
+}
+
+// getTransferSlab returns a slab of at least size entries, with all ObjIdx
+// fields set to NoTransfer.  It pops from the appropriate tier's lock-free
+// stack, or allocates a fresh off-heap slab via mpool (C.calloc).
+func getTransferSlab(size int) []api.TransferDestPos {
+	tier := transferSlabTierFor(size)
+	if tier >= 0 {
+		bkt := &transferSlabBuckets[tier]
+		for {
+			head := bkt.head.Load()
+			if head == nil {
+				break
+			}
+			if bkt.head.CompareAndSwap(head, head.next) {
+				bkt.count.Add(-1)
+				slab := head.slab[:size]
+				for i := range slab {
+					slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
+				}
+				return slab
+			}
+		}
+		// stack empty – allocate at the tier's quantised size
+		size = bkt.size
+	}
+	slab, err := mpool.MakeSlice[api.TransferDestPos](size, transferSlabMPool, true)
+	if err != nil {
+		panic(err)
+	}
+	for i := range slab {
+		slab[i].ObjIdx = api.NoTransfer
+	}
+	return slab
+}
+
+// putTransferSlab returns a slab to the appropriate tier's stack if it
+// fits.  Oversized or excess slabs are freed via mpool (C.free).
+func putTransferSlab(slab []api.TransferDestPos) {
+	if slab == nil {
+		return
+	}
+	tier := transferSlabTierFor(cap(slab))
+	if tier < 0 {
+		mpool.FreeSlice(transferSlabMPool, slab)
+		return
+	}
+	bkt := &transferSlabBuckets[tier]
+	// Optimistically claim a slot before pushing to avoid the TOCTOU
+	// race where N goroutines all read count < maxIdle and all push.
+	if bkt.count.Add(1) > bkt.maxIdle {
+		bkt.count.Add(-1)
+		mpool.FreeSlice(transferSlabMPool, slab)
+		return
+	}
+	node := &transferSlabNode{slab: slab}
+	for {
+		oldHead := bkt.head.Load()
+		node.next = oldHead
+		if bkt.head.CompareAndSwap(oldHead, node) {
+			return
+		}
+	}
+}
+
+// DrainTransferSlabPool frees all idle slabs in every tier.
+func DrainTransferSlabPool() {
+	for i := range transferSlabBuckets {
+		bkt := &transferSlabBuckets[i]
+		for {
+			head := bkt.head.Load()
+			if head == nil {
+				break
+			}
+			if bkt.head.CompareAndSwap(head, nil) {
+				// Use Add(-n) rather than Store(0) so concurrent
+				// putTransferSlab calls that raced with the CAS are
+				// not silently erased.
+				var n int32
+				for node := head; node != nil; node = node.next {
+					mpool.FreeSlice(transferSlabMPool, node.slab)
+					n++
+				}
+				bkt.count.Add(-n)
+				break
+			}
+		}
+	}
+}
+
+// transferSlabTierFor returns the tier index for a given entry count,
+// or -1 if the slab is too large to cache.
+func transferSlabTierFor(entries int) int {
+	if entries <= transferSlabSmallMax {
+		return transferSlabSmall
+	}
+	if entries <= transferSlabLargeMax {
+		return transferSlabLarge
+	}
+	return -1
+}
+
+// GetTransferMap allocates a []TransferDestPos of the given size
+// with all entries initialized to the NoTransfer sentinel.
+func GetTransferMap(rowCnt int) []api.TransferDestPos {
+	if rowCnt == 0 {
+		return nil
+	}
+	s := make([]api.TransferDestPos, rowCnt)
+	for i := range s {
+		s[i].ObjIdx = api.NoTransfer
+	}
+	return s
+}
+
 var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
+
+// TransferTable holds the block-to-block row mapping produced by a merge or flush.
+// It supports two formats:
+//   - Slab-based (from merger): a single contiguous allocation indexed by
+//     blockIdx*Stride + rowIdx, with BlockActive tracking which blocks
+//     have any transferred rows.
+//   - Legacy (from flush / debug RPC): a plain api.TransferMaps.
+//
+// Use GetBlockMap to access a block's transfer map regardless of format.
+type TransferTable struct {
+	Slab        []api.TransferDestPos
+	Stride      int
+	BlockActive []bool
+
+	Maps api.TransferMaps
+}
+
+// GetBlockMap returns the transfer map for block idx, or nil if the block
+// was fully deleted (no rows transferred).
+func (t *TransferTable) GetBlockMap(idx int) api.TransferMap {
+	if t.Slab != nil {
+		if !t.BlockActive[idx] {
+			return nil
+		}
+		start := idx * t.Stride
+		return t.Slab[start : start+t.Stride]
+	}
+	return t.Maps[idx]
+}
+
+// Len returns the total number of block slots.
+func (t *TransferTable) Len() int {
+	if t.Slab != nil {
+		return len(t.BlockActive)
+	}
+	return len(t.Maps)
+}
+
+// Release nils all references and returns the slab to the pool.
+func (t *TransferTable) Release() {
+	putTransferSlab(t.Slab)
+	t.Slab = nil
+	t.BlockActive = nil
+	for i := range t.Maps {
+		t.Maps[i] = nil
+	}
+	t.Maps = nil
+}
+
+// NewTransferTableFromMaps wraps a legacy api.TransferMaps into a TransferTable.
+func NewTransferTableFromMaps(maps api.TransferMaps) *TransferTable {
+	return &TransferTable{Maps: maps}
+}
 
 // DisposableVecPool bridge the gap between the vector pools in cn and tn
 type DisposableVecPool interface {
@@ -52,8 +271,7 @@ type MergeTaskHost interface {
 	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
 	HasBigDelEvent() bool
-	InitTransferMaps(blkCnt int)
-	GetTransferMaps() api.TransferMaps
+	SetTransferTable(t *TransferTable)
 	PrepareNewWriter() *ioutil.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
@@ -132,37 +350,32 @@ func DoMergeAndWrite(
 
 // not defined in api.go to avoid import cycle
 
-func CleanTransMapping(b api.TransferMaps) {
-	for i := 0; i < len(b); i++ {
-		b[i] = make(api.TransferMap)
+// ReleaseTransferMaps nils all transfer map entries (used by flush path).
+func ReleaseTransferMaps(b api.TransferMaps) {
+	for i := range b {
+		b[i] = nil
 	}
 }
 
-func AddSortPhaseMapping(m api.TransferMap, rowCnt int, mapping []int64) {
-	if mapping == nil {
-		for i := range rowCnt {
-			m[uint32(i)] = api.TransferDestPos{RowIdx: uint32(i)}
-		}
+// AddSortPhaseMapping creates and populates the transfer slice for source block mapIdx.
+// rowCnt is the number of rows in the source block.
+// mapping[sortedPos] = originalPos; nil mapping means the data is already in order.
+func AddSortPhaseMapping(b api.TransferMaps, mapIdx int, rowCnt int, mapping []int64) {
+	if rowCnt == 0 {
 		return
 	}
-
-	if len(mapping) != rowCnt {
-		panic(fmt.Sprintf("mapping length %d != originRowCnt %d", len(mapping), rowCnt))
+	m := GetTransferMap(rowCnt)
+	if mapping == nil {
+		for i := range rowCnt {
+			m[i] = api.TransferDestPos{RowIdx: uint32(i)}
+		}
+	} else {
+		// mapping[sortedPos] = originalPos  →  m[originalPos] = {RowIdx: sortedPos}
+		for sortedPos, originalPos := range mapping {
+			m[uint32(originalPos)] = api.TransferDestPos{RowIdx: uint32(sortedPos)}
+		}
 	}
-
-	// mapping sortedVec[i] = originalVec[sortMapping[i]]
-	// transpose it, sortedVec[sortMapping[i]] = originalVec[i]
-	// [9 4 8 5 2 6 0 7 3 1](originalVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
-	// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
-	// TODO: use a more efficient way to transpose, in place
-	transposedMapping := make([]uint32, len(mapping))
-	for sortedPos, originalPos := range mapping {
-		transposedMapping[originalPos] = uint32(sortedPos)
-	}
-
-	for i := range rowCnt {
-		m[uint32(i)] = api.TransferDestPos{RowIdx: transposedMapping[i]}
-	}
+	b[mapIdx] = m
 }
 
 func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint32) {
@@ -193,19 +406,32 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	var totalHandledRows uint32
 
 	for _, m := range b {
-		size := len(m)
-		var curTotal uint32 // index in the flatten src array
-		for srcRow := range m {
-			curTotal = totalHandledRows + m[srcRow].RowIdx
+		if len(m) == 0 {
+			continue
+		}
+		// Count rows that entered the merge from this block (non-sentinel entries).
+		// This must be computed before the update loop because totalHandledRows is
+		// the cumulative offset into the merge output for the current block.
+		var size uint32
+		for _, pos := range m {
+			if pos.ObjIdx != api.NoTransfer {
+				size++
+			}
+		}
+		for srcRow, destPos := range m {
+			if destPos.ObjIdx == api.NoTransfer {
+				continue // pre-deleted row, not in merge output
+			}
+			curTotal := totalHandledRows + destPos.RowIdx
 			destTotal := mapping[curTotal]
 			if destTotal == -1 {
-				delete(m, srcRow)
+				m[srcRow] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 			} else {
 				destBlkIdx, destRowIdx := bisectPinpoint(uint32(destTotal))
 				m[srcRow] = api.TransferDestPos{BlkIdx: uint16(destBlkIdx), RowIdx: destRowIdx}
 			}
 		}
-		totalHandledRows += uint32(size)
+		totalHandledRows += size
 	}
 }
 

@@ -15,9 +15,10 @@
 package aggexec
 
 import (
+	"io"
 	"slices"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,6 +33,11 @@ func (b *bmp) MarshalBinary() ([]byte, error) {
 }
 func (b *bmp) UnmarshalBinary(data []byte) error {
 	return b.Bitmap.UnmarshalBinary(data)
+}
+
+func (b *bmp) UnmarshalFromReader(r io.Reader) error {
+	_, err := b.Bitmap.ReadFrom(r)
+	return err
 }
 
 func makeBmp(mp *mpool.MPool) (*bmp, error) {
@@ -68,21 +74,36 @@ func (e *bmpExecCommon) batchMerge(other *bmpExecCommon, offset int, groups []ui
 	return nil
 }
 
-func (e *bmpExecCommon) flush(typ types.Type) ([]*vector.Vector, error) {
+func (e *bmpExecCommon) flush(typ types.Type) (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(e.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(e.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range e.state {
 		vecs[i] = vector.NewOffHeapVecWithType(typ)
-		vecs[i].PreExtend(int(st.length), e.mp)
+		if err := vecs[i].PreExtend(int(st.length), e.mp); err != nil {
+			return nil, err
+		}
 		for j := 0; j < int(st.length); j++ {
 			if st.mobs[j] == nil {
-				vector.AppendNull(vecs[i], e.mp)
+				if err := vector.AppendNull(vecs[i], e.mp); err != nil {
+					return nil, err
+				}
 			} else {
 				mob := st.mobs[j].(*bmp)
 				bs, err := mob.MarshalBinary()
 				if err != nil {
 					return nil, err
 				}
-				vector.AppendBytes(vecs[i], bs, false, e.mp)
+				if err := vector.AppendBytes(vecs[i], bs, false, e.mp); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

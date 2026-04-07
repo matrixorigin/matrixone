@@ -588,26 +588,18 @@ func TestStrIteratorLargeStringTriggersPrune(t *testing.T) {
 
 // TestResetWithNilPointers tests that Reset() handles nil pointers gracefully
 // This is a regression test for the panic fix where Reset() would crash when
-// vecs or UniqueJoinKeys contained nil pointers.
+// curVecs or UniqueJoinKeys contained nil pointers.
 func TestResetWithNilPointers(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	var hb HashmapBuilder
 
-	// Test case 1: vecs with nil pointers and needDupVec = true
+	// Test case 1: curVecs with nil pointers and needDupVec = true
 	hb.needDupVec = true
-	hb.vecs = make([][]*vector.Vector, 2)
-	hb.vecs[0] = make([]*vector.Vector, 2)
-	hb.vecs[1] = make([]*vector.Vector, 2)
-	// Set some vectors to nil to simulate partial initialization
-	hb.vecs[0][0] = nil
-	hb.vecs[0][1] = nil
-	hb.vecs[1][0] = nil
-	hb.vecs[1][1] = nil
+	hb.curVecs = make([]*vector.Vector, 2)
+	hb.curVecs[0] = nil
+	hb.curVecs[1] = nil
 
-	// Test case 2: vecs with nil slice
-	hb.vecs = append(hb.vecs, nil)
-
-	// Test case 3: UniqueJoinKeys with nil pointers
+	// Test case 2: UniqueJoinKeys with nil pointers
 	hb.UniqueJoinKeys = make([]*vector.Vector, 3)
 	hb.UniqueJoinKeys[0] = nil
 	hb.UniqueJoinKeys[1] = nil
@@ -615,7 +607,7 @@ func TestResetWithNilPointers(t *testing.T) {
 
 	// Reset should not panic
 	hb.Reset(proc, true)
-	require.Nil(t, hb.vecs)
+	require.Nil(t, hb.curVecs)
 	require.Nil(t, hb.UniqueJoinKeys)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -629,18 +621,16 @@ func TestResetWithMixedNilAndValidPointers(t *testing.T) {
 	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
 
-	// Test case: vecs with mix of nil and valid vectors
+	// Test case: curVecs with mix of nil and valid vectors
 	hb.needDupVec = true
-	hb.vecs = make([][]*vector.Vector, 2)
-	hb.vecs[0] = []*vector.Vector{vec1, nil}
-	hb.vecs[1] = []*vector.Vector{nil, vec2}
+	hb.curVecs = []*vector.Vector{vec1, nil, vec2}
 
 	// Test case: UniqueJoinKeys with mix of nil and valid vectors
-	hb.UniqueJoinKeys = []*vector.Vector{vec1, nil, vec2}
+	hb.UniqueJoinKeys = []*vector.Vector{nil}
 
 	// Reset should free valid vectors and not panic on nil
 	hb.Reset(proc, true)
-	require.Nil(t, hb.vecs)
+	require.Nil(t, hb.curVecs)
 	require.Nil(t, hb.UniqueJoinKeys)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

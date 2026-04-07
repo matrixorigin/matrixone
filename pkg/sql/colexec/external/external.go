@@ -167,7 +167,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			attrs[i] = attr.ColName
 		}
-		external.ctr.buf = batch.New(attrs)
+		external.ctr.buf = batch.NewOffHeap(attrs)
 		flag := param.ParallelLoad
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -175,7 +175,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		//alloc space for vector
 		for i := range param.Attrs {
 			typ := makeType(&param.Cols[i].Typ, flag)
-			external.ctr.buf.Vecs[i] = vector.NewVec(typ)
+			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
 	return nil
@@ -372,6 +372,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	if err != nil {
 		return nil, nil, err
 	}
+	defer bat.Clean(proc.Mp())
 	filter := colexec.RewriteFilterExprList(filterList)
 
 	executor, err := colexec.NewExpressionExecutor(proc, filter)
@@ -437,6 +438,7 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
@@ -648,14 +650,22 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_uint64:
-			_, err := strconv.ParseUint(field.Val, 10, 64)
-			if err != nil {
-				if errors.Is(err, strconv.ErrRange) {
+			if len(col.Typ.Enumvalues) > 0 {
+				// SET column: validate as set member name or numeric bitmap
+				_, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
+				if err != nil {
 					return false
 				}
-				f, err := strconv.ParseFloat(field.Val, 64)
-				if err != nil || f < 0 || f > math.MaxUint64 {
-					return false
+			} else {
+				_, err := strconv.ParseUint(field.Val, 10, 64)
+				if err != nil {
+					if errors.Is(err, strconv.ErrRange) {
+						return false
+					}
+					f, err := strconv.ParseFloat(field.Val, 64)
+					if err != nil || f < 0 || f > math.MaxUint64 {
+						return false
+					}
 				}
 			}
 		case types.T_float32:
@@ -1087,23 +1097,35 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint64:
-		d, err := strconv.ParseUint(field.Val, 10, 64)
-		if err == nil {
+		if len(col.Typ.Enumvalues) > 0 {
+			// SET column: parse member names or numeric bitmap
+			d, err := types.ParseSet(col.Typ.Enumvalues, field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return err
+			}
 			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 				return err
 			}
 		} else {
-			if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-			}
-			f, err := strconv.ParseFloat(field.Val, 64)
-			if err != nil || f < 0 || f > math.MaxUint64 {
-				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
-			}
-			if err := vector.AppendFixed(vec, uint64(f), false, mp); err != nil {
-				return err
+			d, err := strconv.ParseUint(field.Val, 10, 64)
+			if err == nil {
+				if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+					return err
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+				}
+				f, err := strconv.ParseFloat(field.Val, 64)
+				if err != nil || f < 0 || f > math.MaxUint64 {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
+				}
+				if err := vector.AppendFixed(vec, uint64(f), false, mp); err != nil {
+					return err
+				}
 			}
 		}
 	case types.T_float32:
@@ -1154,19 +1176,25 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_array_float32:
-		arrBytes, err := types.StringToArrayToBytes[float32](field.Val)
+		arr, err := types.StringToArray[float32](field.Val)
 		if err != nil {
 			return err
 		}
-		if err = vector.AppendBytes(vec, arrBytes, false, mp); err != nil {
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[float32](arr), false, mp); err != nil {
 			return err
 		}
 	case types.T_array_float64:
-		arrBytes, err := types.StringToArrayToBytes[float64](field.Val)
+		arr, err := types.StringToArray[float64](field.Val)
 		if err != nil {
 			return err
 		}
-		if err = vector.AppendBytes(vec, arrBytes, false, mp); err != nil {
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
 			return err
 		}
 	case types.T_json:

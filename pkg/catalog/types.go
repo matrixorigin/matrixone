@@ -283,6 +283,8 @@ const (
 	SystemColAttr_Seqnum          = "attr_seqnum"
 	SystemColAttr_EnumValues      = "attr_enum"
 	SystemColAttr_CPKey           = CPrimaryKeyColName
+	SystemColAttr_HasGenerated    = "attr_has_generated"
+	SystemColAttr_Generated       = "attr_generated"
 
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
@@ -384,7 +386,10 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
-	/************ 3. FULLTEXT Index **************/ /************ 3. FULLTEXT Index **************/
+	/************ 3. FULLTEXT Index **************/
+
+	// FULLTEXT Table Type
+	FullTextIndex_TblType = "fulltext"
 
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
@@ -498,7 +503,9 @@ const (
 	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 	MO_COLUMNS_ATT_ENUM_IDX              = 23
 	MO_COLUMNS_ATT_CPKEY_IDX             = 24
-	MO_COLUMNS_MAXIDX                    = MO_COLUMNS_ATT_CPKEY_IDX
+	MO_COLUMNS_ATT_HAS_GENERATED_IDX     = 25
+	MO_COLUMNS_ATT_GENERATED_IDX         = 26
+	MO_COLUMNS_MAXIDX                    = MO_COLUMNS_ATT_GENERATED_IDX
 
 	BLOCKMETA_ID_IDX            = 0
 	BLOCKMETA_ENTRYSTATE_IDX    = 1
@@ -699,6 +706,8 @@ var (
 		SystemColAttr_Seqnum,
 		SystemColAttr_EnumValues,
 		SystemColAttr_CPKey,
+		SystemColAttr_HasGenerated,
+		SystemColAttr_Generated,
 	}
 	MoColumnsAllColsString  = strings.Join(append([]string{Row_ID}, MoColumnsSchema...), ",")
 	MoColumnsAllQueryFormat = fmt.Sprintf(
@@ -788,6 +797,8 @@ var (
 		types.New(types.T_uint16, 0, 0),                    // att_seqnum
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
 		types.New(types.T_varchar, 65535, 0),               // cpkey
+		types.New(types.T_int8, 0, 0),                      // attr_has_generated
+		types.New(types.T_varchar, 2048, 0),                // attr_generated
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id
@@ -942,4 +953,9 @@ func IsUniqueIndexTable(name string) bool {
 
 func IsSecondaryIndexTable(name string) bool {
 	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func IsFullTextIndexTableType(tableType string, tableName string) bool {
+	return tableType == FullTextIndex_TblType ||
+		(tableType == SystemIndexRel && strings.HasPrefix(tableName, FullTextIndexTableNamePrefix))
 }

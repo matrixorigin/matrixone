@@ -1028,7 +1028,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileProjection(node, c.compileRestrict(node, ss))
+
+		// Embed all static filters directly into TableScan.
+		// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
+		// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
+		if len(node.FilterList) > 0 {
+			for i := range ss {
+				if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
+					ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
+				}
+			}
+		}
+		ss = c.compileProjection(node, ss)
+
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
 		}
@@ -2094,6 +2106,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
+	logCatalogSnapshotScan("compile.table-scan.txn", node, ctx, txnOp)
 	return txnOp, ctx, nil
 }
 
@@ -4017,6 +4030,7 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -4024,6 +4038,39 @@ func collectTombstones(
 	}
 
 	return tombstone, nil
+}
+
+func logCatalogSnapshotScan(tag string, node *plan.Node, ctx context.Context, txnOp client.TxnOperator) {
+	if node == nil || node.ObjRef == nil {
+		return
+	}
+	if !strings.EqualFold(node.ObjRef.SchemaName, catalog.MO_CATALOG) ||
+		!strings.EqualFold(node.ObjRef.ObjName, catalog.MO_DATABASE) {
+		return
+	}
+
+	fields := []zap.Field{
+		zap.String("schema", node.ObjRef.SchemaName),
+		zap.String("table", node.ObjRef.ObjName),
+	}
+	if txnOp != nil {
+		fields = append(fields,
+			zap.String("txn-snapshot-ts", types.TimestampToTS(txnOp.Txn().SnapshotTS).ToString()),
+			zap.String("txn", txnOp.Txn().DebugString()),
+		)
+	}
+	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
+		fields = append(fields, zap.String("scan-snapshot-ts", types.TimestampToTS(*node.ScanSnapshot.TS).ToString()))
+		if node.ScanSnapshot.Tenant != nil {
+			fields = append(fields, zap.Uint32("scan-tenant-id", node.ScanSnapshot.Tenant.TenantID))
+		}
+	}
+	if accountID, err := defines.GetAccountId(ctx); err == nil {
+		fields = append(fields, zap.Uint32("ctx-account-id", accountID))
+	} else {
+		fields = append(fields, zap.String("ctx-account-id", "missing"))
+	}
+	logutil.Info(tag, fields...)
 }
 
 func (c *Compile) expandRanges(

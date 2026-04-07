@@ -47,7 +47,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_year,
@@ -71,7 +71,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -83,7 +83,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -95,7 +95,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -107,7 +107,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -119,7 +119,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -131,7 +131,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -143,7 +143,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -155,7 +155,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -167,7 +167,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
@@ -179,7 +179,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -190,7 +190,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -207,7 +207,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -216,7 +216,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_timestamp, types.T_year,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -237,7 +237,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
@@ -249,10 +249,20 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_year,
+	},
+
+	types.T_decimal256: {
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
 	},
 
 	types.T_char: {
@@ -260,7 +270,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_json,
 		types.T_uuid,
@@ -276,7 +286,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_json,
 		types.T_uuid,
@@ -294,7 +304,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
@@ -309,7 +319,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
@@ -324,7 +334,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_json,
 		types.T_uuid,
@@ -341,7 +351,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_bool,
 		types.T_json,
 		types.T_uuid,
@@ -366,7 +376,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	},
 
 	types.T_uuid: {
@@ -427,6 +437,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
 	from := parameters[0]
+	if toType.Oid == types.T_decimal256 {
+		return castToDecimal256(proc, from, *toType, result, length, selectList)
+	}
 	switch fromType.Oid {
 	case types.T_any: // scalar null
 		err = scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
@@ -472,6 +485,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
 		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length, selectList)
+	case types.T_decimal256:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		err = decimal256ToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
 		err = dateToOthers(proc, s, *toType, result, length, selectList)
@@ -519,6 +535,69 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = formatCastError(proc.Ctx, from, *toType, "")
 	}
 	return err
+}
+
+func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Decimal256](result)
+	switch from.GetType().Oid {
+	case types.T_any:
+		return appendNulls[types.Decimal256](result, length, selectList)
+	case types.T_bit:
+		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
+		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_int8:
+		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
+		return signedToDecimal256(s, rs, length, selectList)
+	case types.T_int16:
+		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
+		return signedToDecimal256(s, rs, length, selectList)
+	case types.T_int32:
+		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
+		return signedToDecimal256(s, rs, length, selectList)
+	case types.T_int64:
+		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
+		return signedToDecimal256(s, rs, length, selectList)
+	case types.T_uint8:
+		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
+		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_uint16:
+		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
+		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_uint32:
+		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
+		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_uint64:
+		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
+		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_float32:
+		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
+		return floatToDecimal256(s, rs, length, selectList)
+	case types.T_float64:
+		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
+		return floatToDecimal256(s, rs, length, selectList)
+	case types.T_decimal64:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		return decimal64ToDecimal256Array(s, rs, length, selectList)
+	case types.T_decimal128:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		return decimal128ToDecimal256(s, rs, length, selectList)
+	case types.T_decimal256:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		if s.GetType().Scale == toType.Scale && s.GetType().Width >= toType.Width {
+			if err := rs.DupFromParameter(s, length); err != nil {
+				return err
+			}
+			v := rs.GetResultVector()
+			v.SetType(toType)
+			return nil
+		}
+		return decimal256ToDecimal256(s, rs, length, selectList)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		s := vector.GenerateFunctionStrParameter(from)
+		return strToDecimal256(s, rs, length, selectList)
+	default:
+		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
+	}
 }
 
 func scalarNullToOthers(ctx context.Context,
@@ -1643,6 +1722,68 @@ func decimal128ToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
 
+func decimal256ToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Decimal256],
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal256ToBit(ctx, source, rs, int(toType.Width), length, selectList)
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return decimal256ToSigned(ctx, source, rs, 8, length, selectList)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return decimal256ToSigned(ctx, source, rs, 16, length, selectList)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return decimal256ToSigned(ctx, source, rs, 32, length, selectList)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return decimal256ToSigned(ctx, source, rs, 64, length, selectList)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return decimal256ToDecimal64(source, rs, length, selectList)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return decimal256ToDecimal128(source, rs, length, selectList)
+	case types.T_decimal256:
+		rs := vector.MustFunctionResult[types.Decimal256](result)
+		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+			if err := rs.DupFromParameter(source, length); err != nil {
+				return err
+			}
+			v := rs.GetResultVector()
+			v.SetType(toType)
+			return nil
+		}
+		return decimal256ToDecimal256(source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return decimal256ToFloat(source, rs, length)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return decimal256ToFloat(source, rs, length)
+	case types.T_char, types.T_varchar, types.T_blob,
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return decimal256ToStr(ctx, source, rs, length, toType)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal256 to %s", toType))
+}
+
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
@@ -2018,6 +2159,12 @@ func jsonAppendValue(ctx context.Context, result vector.FunctionResultWrapper, t
 			return err
 		}
 		return vector.MustFunctionResult[types.Decimal128](result).Append(d, false)
+	case types.T_decimal256:
+		d, err := types.Decimal256FromFloat64(f, int32(toType.Width), int32(toType.Scale))
+		if err != nil {
+			return err
+		}
+		return vector.MustFunctionResult[types.Decimal256](result).Append(d, false)
 	default:
 		panic("jsonAppendValue: unsupported type")
 	}
@@ -2477,6 +2624,54 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 	return nil
 }
 
+func signedToDecimal256[T1 constraints.Signed](
+	from vector.FunctionParameterWrapper[T1],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal256
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result := types.Decimal256FromInt64(int64(v))
+			result, _ = result.Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func unsignedToDecimal256[T1 constraints.Unsigned](
+	from vector.FunctionParameterWrapper[T1],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal256
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result := types.Decimal256{B0_63: uint64(v)}
+			result, _ = result.Scale(totype.Scale)
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func floatToDecimal64[T constraints.Float](
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
@@ -2524,6 +2719,33 @@ func floatToDecimal128[T constraints.Float](
 				return err
 			}
 			if err = to.Append(result128, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func floatToDecimal256[T constraints.Float](
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal256
+	toType := to.GetType()
+
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result256, err := types.Decimal256FromFloat64(float64(v), toType.Width, toType.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result256, false); err != nil {
 				return err
 			}
 		}
@@ -3589,7 +3811,10 @@ func decimal64ToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
@@ -3620,7 +3845,10 @@ func decimal128ToSigned[T constraints.Signed](
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
 			if err != nil {
@@ -3652,7 +3880,10 @@ func decimal64ToYear(
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
@@ -3685,7 +3916,10 @@ func decimal128ToYear(
 				return err
 			}
 		} else {
-			x, _ := v.Scale(-fromTyp.Scale)
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
@@ -3760,6 +3994,70 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToSigned[T constraints.Signed](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, err := v.Scale(-fromTyp.Scale)
+			if err != nil {
+				return err
+			}
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, bitSize)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx,
+					fmt.Sprintf("int%d", bitSize),
+					"value '%v'", xStr)
+			}
+			if err = to.Append(T(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToUnsigned[T constraints.Unsigned](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromType := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			xStr := v.Format(fromType.Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			result, err := strconv.ParseUint(xStr, 10, bitSize)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx,
+					fmt.Sprintf("uint%d", bitSize),
+					"value '%v'", xStr)
+			}
+			if err = to.Append(T(result), false); err != nil {
 				return err
 			}
 		}
@@ -4073,6 +4371,49 @@ func decimal64ToDecimal128Array(
 	return nil
 }
 
+func decimal64ToDecimal256Array(
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromtype := from.GetType()
+	totype := to.GetType()
+	var dft types.Decimal256
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		fromdec := types.Decimal128{B0_63: uint64(v)}
+		if v.Sign() {
+			fromdec.B64_127 = ^fromdec.B64_127
+		}
+		result := types.Decimal256FromDecimal128(fromdec)
+		if totype.Width < fromtype.Width {
+			dec := result.Format(fromtype.Scale)
+			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(parsed, false); err != nil {
+				return err
+			}
+		} else {
+			scaled, err := result.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(scaled, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // the scale of decimal128 is guaranteed to be less than 18
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
@@ -4136,6 +4477,139 @@ func decimal128ToDecimal128(
 				if err = to.Append(result, false); err != nil {
 					return err
 				}
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128ToDecimal256(
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal256
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		result := types.Decimal256FromDecimal128(v)
+		if totype.Width < fromtype.Width {
+			dec := result.Format(fromtype.Scale)
+			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(parsed, false); err != nil {
+				return err
+			}
+		} else {
+			scaled, err := result.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(scaled, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToDecimal64(
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal64
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		dec := v.Format(fromtype.Scale)
+		result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+		if err != nil {
+			return err
+		}
+		if err := to.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256ToDecimal128(
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal128
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		dec := v.Format(fromtype.Scale)
+		result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+		if err != nil {
+			return err
+		}
+		if err := to.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256ToDecimal256(
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal256
+	fromtype := from.GetType()
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if totype.Width < fromtype.Width {
+			dec := v.Format(fromtype.Scale)
+			result, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		} else {
+			result, err := v.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := to.Append(result, false); err != nil {
+				return err
 			}
 		}
 	}
@@ -4240,6 +4714,74 @@ func decimal128ToStr(
 	return nil
 }
 
+func decimal256ToFloat[T constraints.Float](
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], length int) error {
+	var i uint64
+	l := uint64(length)
+	var dft T
+	fromType := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else if err := to.Append(T(types.Decimal256ToFloat64(v, fromType.Scale)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decimal256ToStr(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	var i uint64
+	l := uint64(length)
+	fromType := from.GetType()
+	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			v1 := []byte(v.Format(fromType.Scale))
+			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			result := []byte(v.Format(fromType.Scale))
+			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Decimal256", "truncated for binary/varbinary")
+				}
+			}
+			if toType.Oid == types.T_binary && len(result) < int(toType.Width) {
+				add0 := int(toType.Width) - len(result)
+				for ; add0 != 0; add0-- {
+					result = append(result, 0)
+				}
+			}
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
+			}
+			if err := to.AppendBytes(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func decimal64ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
@@ -4282,6 +4824,31 @@ func decimal128ToBit(
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
 			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
+				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToBit(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.Append(uint64(0), true); err != nil {
+				return err
+			}
+		} else {
+			xStr := v.Format(from.GetType().Scale)
+			xStr = strings.Split(xStr, ".")[0]
+			result, err := strconv.ParseUint(xStr, 10, bitSize)
+			if err != nil {
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
 			}
 			if err = to.Append(result, false); err != nil {
@@ -4531,6 +5098,45 @@ func strToDecimal128(
 				}
 			} else {
 				result, err := types.ParseDecimal128FromByte(s, totype.Width, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func strToDecimal256(
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
+) error {
+	var i uint64
+	var l = uint64(length)
+	var dft types.Decimal256
+	totype := to.GetType()
+	isb := from.GetSourceVector().GetIsBin()
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			s := convertByteSliceToString(v)
+			if !isb {
+				result, err := types.ParseDecimal256(s, totype.Width, totype.Scale)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(result, false); err != nil {
+					return err
+				}
+			} else {
+				result, err := types.ParseDecimal256FromByte(s, totype.Width, totype.Scale)
 				if err != nil {
 					return err
 				}

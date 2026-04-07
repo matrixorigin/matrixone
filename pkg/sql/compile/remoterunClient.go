@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -173,31 +174,10 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 }
 
 func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
-	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = true
-
-	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
-	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		withoutOutput = false
-
-		originRoot := s.RootOp
-		if originRoot.GetOperatorBase().NumChildren() == 0 {
-			s.RootOp = nil
-		} else {
-			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
-		}
-
-		// todo: the following code to set children to nil must be a bug.
-		// 		but I kept it here because there will be an operator release twice bug once I remove this code.
-		//		I cannot find it why, maybe two scopes hold the same operator list pointer.
-		originRoot.GetOperatorBase().SetChildren(nil)
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
-	}
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(s); err != nil {
+	if scopeData, err = encodeScope(encodedScope); err != nil {
 		return nil, false, nil, err
 	}
 
@@ -269,7 +249,9 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		nextChannel <- process.NewPipelineSignalToDirectly(bat, nil, mp)
+		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+			return err
+		}
 	}
 }
 
@@ -283,20 +265,19 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
-
-	oldChildren := arg.Children
-	arg.Children = nil
-	arg.AppendChild(fakeValueScanOperator)
+	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
 	defer func() {
-		arg.Children = oldChildren
+		arg.AdoptCleanupState(dispatchRunner)
+		dispatchRunner.Release()
+		fakeValueScanOperator.Free(s.Proc, err != nil, err)
 		fakeValueScanOperator.Batchs = nil
 		fakeValueScanOperator.Release()
 	}()
 
-	if err = s.RootOp.Prepare(s.Proc); err != nil {
+	if err = dispatchRunner.Prepare(s.Proc); err != nil {
 		return err
 	}
-	dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
+	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
 
 	mp := s.Proc.Mp()
 	for {
@@ -308,7 +289,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		dispatchAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := vm.Exec(s.RootOp, s.Proc)
+		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
@@ -316,13 +297,49 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	}
 }
 
+func getScopeForRemoteRunEncoding(s *Scope) (*Scope, bool) {
+	withoutOutput := true
+	if s.RootOp == nil {
+		return s, withoutOutput
+	}
+
+	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
+		withoutOutput = false
+		copied := *s
+		if s.RootOp.GetOperatorBase().NumChildren() == 0 {
+			copied.RootOp = nil
+		} else {
+			copied.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+		}
+		return &copied, withoutOutput
+	}
+	return s, withoutOutput
+}
+
+func buildRemoteDispatchReceiverRoot(arg *dispatch.Dispatch, child vm.Operator) *dispatch.Dispatch {
+	copied := dispatch.NewArgument()
+	copied.IsSink = arg.IsSink
+	copied.RecSink = arg.RecSink
+	copied.RecCTE = arg.RecCTE
+	copied.ShuffleType = arg.ShuffleType
+	copied.FuncId = arg.FuncId
+	copied.LocalRegs = arg.LocalRegs
+	copied.RemoteRegs = arg.RemoteRegs
+	copied.ShuffleRegIdxLocal = arg.ShuffleRegIdxLocal
+	copied.ShuffleRegIdxRemote = arg.ShuffleRegIdxRemote
+	copied.OperatorBase.OperatorInfo = arg.OperatorBase.OperatorInfo
+	copied.AppendChild(child)
+	return copied
+}
+
 // messageSenderOnClient support a series of methods
 // to do sending message and receiving its returns.
 type messageSenderOnClient struct {
 	// sender's context
 	// and cancel function (it exists if this context was recreated by us).
-	ctx       context.Context
-	ctxCancel context.CancelFunc
+	ctx                context.Context
+	ctxCancel          context.CancelFunc
+	useInternalTimeout bool
 
 	mp *mpool.MPool
 
@@ -370,6 +387,7 @@ func newMessageSenderOnClient(
 
 	if _, ok := ctx.Deadline(); !ok {
 		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
+		sender.useInternalTimeout = true
 	} else {
 		sender.ctx = ctx
 	}
@@ -453,6 +471,9 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, err
 		}
 		if val == nil {
+			if ctxErr := sender.contextDoneError(); ctxErr != nil {
+				return nil, false, ctxErr
+			}
 			return nil, true, nil
 		}
 
@@ -494,6 +515,41 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   			return bat, false, err
 		   		} */
 		return bat, false, err
+	}
+}
+
+func (sender *messageSenderOnClient) contextDoneError() error {
+	if sender.ctx == nil {
+		return nil
+	}
+	err := sender.ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
+		return moerr.NewRPCTimeout(sender.ctx)
+	}
+	return moerr.NewQueryInterrupted(sender.ctx)
+}
+
+func forwardRemoteBatchWithContext(
+	sender *messageSenderOnClient,
+	nextChannel chan process.PipelineSignal,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
+	if sender == nil || sender.ctx == nil {
+		nextChannel <- signal
+		return nil
+	}
+
+	select {
+	case nextChannel <- signal:
+		return nil
+	case <-sender.ctx.Done():
+		bat.Clean(mp)
+		return sender.contextDoneError()
 	}
 }
 

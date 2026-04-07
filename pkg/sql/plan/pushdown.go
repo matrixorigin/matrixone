@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	// Record before pushdownFilters
@@ -91,11 +93,31 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_WINDOW:
 		windowTag := node.BindingTags[0]
 
+		// Collect only plain PARTITION BY column keys from all window specs.
+		// Filters can be safely pushed below the window node only when they
+		// exclusively reference columns that are themselves partition keys,
+		// because those filters eliminate entire partitions without changing
+		// row numbering. Column references nested inside arbitrary partition
+		// expressions (e.g. PARTITION BY a+b) are not equivalent to
+		// partition keys and must not be treated as pushdown-eligible.
+		partCols := make(map[[2]int32]bool)
+		for _, w := range node.WinSpecList {
+			if we := w.GetW(); we != nil {
+				for _, p := range we.PartitionBy {
+					if col := p.GetCol(); col != nil {
+						partCols[[2]int32{col.RelPos, col.ColPos}] = true
+					}
+				}
+			}
+		}
+
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
-				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
-			} else {
+			if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
+			} else if exprColRefsSubsetOf(filter, partCols) {
+				canPushdown = append(canPushdown, filter)
+			} else {
+				cantPushdown = append(cantPushdown, filter)
 			}
 		}
 
@@ -679,6 +701,9 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	if limitVal == 0 {
 		return
 	}
+	if limitVal > maxVectorIndexTopPushdownLimit {
+		return
+	}
 	if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {
 		return
 	}
@@ -717,4 +742,29 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
+}
+
+// exprColRefsSubsetOf returns true when every column reference in expr
+// belongs to the given set. An expression with no column references
+// (e.g. a constant) is considered a subset. Unhandled expression
+// variants conservatively return false to avoid incorrect pushdown.
+func exprColRefsSubsetOf(expr *plan.Expr, set map[[2]int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return set[[2]int32{e.Col.RelPos, e.Col.ColPos}]
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if !exprColRefsSubsetOf(arg, set) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
+		return true
+	default:
+		return false
+	}
 }

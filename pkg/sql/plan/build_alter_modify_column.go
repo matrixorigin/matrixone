@@ -90,6 +90,11 @@ func ModifyColumn(
 		)
 	}
 
+	// If the column is referenced by a generated column, block the modification
+	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
+		return false, err
+	}
+
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
@@ -112,10 +117,22 @@ func modifyColPosition(
 	pos *tree.ColumnPosition,
 ) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		// detete old column
+		// Find old column position before removing
+		oldPos := int32(-1)
+		for i, col := range tableDef.Cols {
+			if strings.EqualFold(col.Name, oCol.Name) {
+				oldPos = int32(i)
+				break
+			}
+		}
+
+		// delete old column
 		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
 			return strings.EqualFold(col.Name, oCol.Name)
 		})
+		if oldPos >= 0 {
+			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
+		}
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
 		if err != nil {
@@ -125,6 +142,7 @@ func modifyColPosition(
 			tableDef.Cols[:targetPos],
 			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
 		)
+		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oCol.Name) {
@@ -147,7 +165,7 @@ func checkChangeTypeCompatible(
 		return nil
 	}
 	// The enumeration type has an independent cast function to handle it
-	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
+	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) || isSetPlanType(origin) || isSetPlanType(to) {
 		return nil
 	}
 

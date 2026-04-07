@@ -151,10 +151,10 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(
 		typs = append(typs, types.T_binary.ToType())
 	}
 
-	bat := batch.NewWithSize(len(attrs))
+	bat := batch.NewOffHeapWithSize(len(attrs))
 	bat.Attrs = attrs
 	for idx := 0; idx < len(attrs); idx++ {
-		bat.Vecs[idx] = vector.NewVec(typs[idx])
+		bat.Vecs[idx] = vector.NewOffHeapVecWithType(typs[idx])
 	}
 	mergeBlock.container.mp[0] = bat
 

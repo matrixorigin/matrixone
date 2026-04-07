@@ -344,36 +344,256 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	}
 
-	// JOIN INNER with children (nodeId, FullTextIndexScanId)
+	// Determine join structure based on whether scanNode still has non-fulltext filters.
+	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
+	// to reduce the number of doc_ids that fulltext_index_scan must process.
+	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled {
+		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
+			if v, ok := val.(int8); ok && v == 0 {
+				pushdownEnabled = false
+			}
+		}
+	}
 
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
+	var joinnodeID int32
+
+	if pushdownEnabled {
+		// Pre-filter pushdown mode:
+		//   outerJoin( scanNode, innerJoin( ft_func_chain, secondScanProject ) )
+		//
+		// 1) Copy scanNode as secondScanNode with only PK output
+		// 2) Inner join ft_func_chain with secondScanProject + BloomFilter runtime filter
+		// 3) Outer join original scanNode with inner join result + IN-list runtime filter
+
+		// secondScanNode: copy original scanNode for pre-filter
+		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
+		secondScanNode := builder.qry.Nodes[secondScanNodeID]
+		baseSecondScan := secondScanNode
+
+		oldTag := secondScanNode.BindingTags[0]
+		builder.rebindScanNode(secondScanNode)
+		newTag := secondScanNode.BindingTags[0]
+
+		if oldTag != newTag {
+			for key, value := range colRefCnt {
+				if key[0] == oldTag {
+					colRefCnt[[2]int32{newTag, key[1]}] = value
+				}
+			}
+			for key, value := range idxColMap {
+				if key[0] == oldTag {
+					idxColMap[[2]int32{newTag, key[1]}] = DeepCopyExpr(value)
+				}
+			}
+		}
+
+		if builder.canApplyRegularIndex(secondScanNode) {
+			secondScanNodeID = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			secondScanNode = builder.qry.Nodes[secondScanNodeID]
+		}
+
+		secondScanNode.Limit = nil
+		secondScanNode.Offset = nil
+
+		// PROJECT node above secondScanNode: output only PK column
+		secondProjectTag := builder.genNewBindTag()
+		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, pkType, scanNode.TableDef.Pkey.PkeyColName)
+		if secondPkExpr == nil {
+			secondPkExpr = &plan.Expr{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: baseSecondScan.BindingTags[0],
+						ColPos: pkPos,
+						Name:   scanNode.TableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+		}
+		secondProjectNodeID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{secondScanNodeID},
+			ProjectList: []*plan.Expr{secondPkExpr},
+			BindingTags: []int32{secondProjectTag},
+		}, ctx)
+
+		// Inner join: (ft_func_chain JOIN secondScanProject)
+		innerJoinOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: last_ftnode_pkcol.GetCol().RelPos,
+						ColPos: 0,
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: secondProjectTag,
+						ColPos: 0,
+					},
+				},
+			},
+		})
+
+		innerJoinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{last_node_id, secondProjectNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{innerJoinOn},
+		}, ctx)
+
+		// BloomFilter runtime filter: secondScan(build) -> all ft_func(probe)
+		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
+
+		// Collect all unique ft_func node IDs for BF probe
+		allFtNodeIDs := make([]int32, 0, len(ret_filter_node_ids)+len(ret_proj_node_ids))
+		seen := make(map[int32]bool)
+		for _, id := range ret_filter_node_ids {
+			if !seen[id] {
+				seen[id] = true
+				allFtNodeIDs = append(allFtNodeIDs, id)
+			}
+		}
+		for _, id := range ret_proj_node_ids {
+			if !seen[id] {
+				seen[id] = true
+				allFtNodeIDs = append(allFtNodeIDs, id)
+			}
+		}
+
+		// For each ft_func node, create an independent BF build/probe pair
+		for _, ftNodeID := range allFtNodeIDs {
+			tag := builder.genNewMsgTag()
+			ftNode := builder.qry.Nodes[ftNodeID]
+
+			bExpr := &plan.Expr{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: secondProjectTag,
+						ColPos: 0,
+					},
+				},
+			}
+			bSpec := MakeRuntimeFilter(tag, false, 0, bExpr, false)
+			bSpec.UseBloomFilter = true
+			innerJoinNode.RuntimeFilterBuildList = append(innerJoinNode.RuntimeFilterBuildList, bSpec)
+
+			pExpr := &plan.Expr{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ftNode.BindingTags[0],
+						ColPos: 0,
+					},
+				},
+			}
+			pSpec := MakeRuntimeFilter(tag, false, 0, pExpr, false)
+			pSpec.UseBloomFilter = true
+			ftNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{pSpec}
+		}
+
+		// Outer join: (scanNode JOIN innerJoin)
+		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: pkPos,
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: last_ftnode_pkcol.GetCol().RelPos,
+						ColPos: 0,
+					},
+				},
+			},
+		})
+
+		outerJoinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, innerJoinNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{outerOn},
+		}, ctx)
+
+		// IN-list runtime filter: innerJoin(build) -> scanNode(probe)
+		rfTag2 := builder.genNewMsgTag()
+
+		probeExpr2 := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+					ColPos: pkPos,
 				},
 			},
-		},
-		{
+		}
+		probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(probeExpr2), false)
+		scanNode.RuntimeFilterProbeList = append(scanNode.RuntimeFilterProbeList, probeSpec2)
+
+		buildExpr2 := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: last_ftnode_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                                 // idxTbl.pk
+					RelPos: -1,
+					ColPos: 0,
 				},
 			},
-		},
-	})
+		}
+		const unlimitedInFilterCard = int32(1<<31 - 1)
+		buildSpec2 := MakeRuntimeFilter(rfTag2, false, unlimitedInFilterCard, buildExpr2, false)
 
-	joinnodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, last_node_id},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-	}, ctx)
+		outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
+		outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+
+		joinnodeID = outerJoinNodeID
+	} else {
+		// No extra filters: simple JOIN (scanNode, ft_func_chain)
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: pkPos, // tbl.pk
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: last_ftnode_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
+						ColPos: 0,                                 // idxTbl.pk
+					},
+				},
+			},
+		})
+
+		joinnodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, last_node_id},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+		}, ctx)
+	}
+
+	// Clear Limit/Offset from scanNode when pushdown is enabled
+	// (they should be applied after SORT)
+	// Note: caller (applyIndicesForProjectionUsingFullTextIndex) may still need
+	// scanNode.Limit to set up the SORT node, so we don't clear it here.
+	// The caller is responsible for clearing scanNode.Limit/Offset after using it.
 
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }

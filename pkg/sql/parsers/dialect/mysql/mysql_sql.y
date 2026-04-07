@@ -469,6 +469,9 @@ import (
 
 %token <str> UNUSED BINDINGS
 
+// Generated Columns
+%token <str> GENERATED ALWAYS STORED VIRTUAL
+
 // Do
 %token <str> DO
 
@@ -721,7 +724,7 @@ import (
 %type <updateExprs> update_list on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt
+%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -10113,6 +10116,27 @@ column_attribute_elem:
 	{
 		$$ = tree.NewAttributeHeaders()
 	}
+|   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
+    {
+        $$ = tree.NewAttributeGeneratedAlways($5, $7)
+    }
+|   AS '(' expression ')' generated_column_type_opt
+    {
+        $$ = tree.NewAttributeGeneratedAlways($3, $5)
+    }
+
+generated_column_type_opt:
+    {
+        $$ = false
+    }
+|   VIRTUAL
+    {
+        $$ = false
+    }
+|   STORED
+    {
+        $$ = true
+    }
 
 enforce:
     ENFORCED
@@ -12561,8 +12585,8 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12576,12 +12600,24 @@ decimal_type:
             Scale: $2.Scale,
             },
         }
-        } else {
+        } else if $2.DisplayWith <= 38 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
             Family: tree.FloatFamily,
             FamilyString: $1,
             Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  256,
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
@@ -12597,8 +12633,8 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12612,12 +12648,24 @@ decimal_type:
             Scale: $2.Scale,
             },
         }
-        } else {
+        } else if $2.DisplayWith <= 38 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
             Family: tree.FloatFamily,
             FamilyString: $1,
             Width:  128,
+            Locale: &locale,
+            Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+            DisplayWith: $2.DisplayWith,
+            Scale: $2.Scale,
+            },
+                }
+        } else {
+            $$ = &tree.T{
+            InternalType: tree.InternalType{
+            Family: tree.FloatFamily,
+            FamilyString: $1,
+            Width:  256,
             Locale: &locale,
             Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
             DisplayWith: $2.DisplayWith,
@@ -13340,6 +13388,7 @@ non_reserved_keyword:
     ACCOUNT
 |   ACCOUNTS
 |   AGAINST
+|   ALWAYS
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ATTRIBUTE
@@ -13409,6 +13458,7 @@ non_reserved_keyword:
 |   FULL
 |   FIXED
 |   FIELDS
+|   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
@@ -13506,6 +13556,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|   STORED
 |   STORES
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
@@ -13533,6 +13584,7 @@ non_reserved_keyword:
 |   VARCHAR
 |   VARIABLES
 |   VIEW
+|   VIRTUAL
 |   WRITE
 |   WARNINGS
 |   WORK

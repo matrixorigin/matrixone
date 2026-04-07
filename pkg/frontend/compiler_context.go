@@ -354,6 +354,11 @@ func (tcc *TxnCompilerContext) getRelation(
 	if db, err = tcc.GetTxnHandler().GetStorage().Database(
 		tempCtx, dbName, txn,
 	); err != nil {
+		// ExpectedEOB means the database is not visible at this snapshot.
+		// Treat as "database not found" so callers handle it like a missing entity.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, nil, nil
+		}
 		ses.Error(
 			tempCtx,
 			"fe-get-database-failed",
@@ -869,6 +874,13 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *plan2.Snapshot, tableID uint64) (*pb.StatsInfo, error) {
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
+
+	// Resolve temporary table alias: the ObjectRef may carry the original
+	// user-visible name while the real engine name is the session-scoped
+	// temp name.  Without this lookup Stats() would fail with "no such table".
+	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
+		tableName = realName
+	}
 
 	// 1. Check database and subscription
 	checkSub := obj.PubInfo == nil

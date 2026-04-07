@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ import (
 // mockClientSession is a simple mock implementation of morpc.ClientSession for testing
 type mockClientSession struct {
 	remoteAddr string
+	ctx        context.Context
 }
 
 func (m *mockClientSession) RemoteAddress() string {
@@ -35,6 +37,9 @@ func (m *mockClientSession) RemoteAddress() string {
 }
 
 func (m *mockClientSession) SessionCtx() context.Context {
+	if m.ctx != nil {
+		return m.ctx
+	}
 	return context.Background()
 }
 
@@ -287,6 +292,7 @@ func TestRecordBuiltPipeline(t *testing.T) {
 
 	require.True(t, exists2, "Record should still exist")
 	require.True(t, record2.alreadyDone, "Record should still be marked as done")
+	require.NotNil(t, proc2.GetQueryContextError(), "Process should be canceled when a tombstone already exists")
 }
 
 // TestCancelPipelineSending tests CancelPipelineSending function
@@ -330,6 +336,20 @@ func TestCancelPipelineSending(t *testing.T) {
 	srv.CancelPipelineSending(session, streamID2)
 
 	require.False(t, dispatchReceiver.ReceiverDone, "Dispatch receiver should not be canceled")
+
+	// Test 3: Cancel before record exists should create a tombstone for later registration.
+	streamID3 := uint64(10)
+	srv.CancelPipelineSending(session, streamID3)
+
+	key3 := generateRecordKey(session, streamID3)
+	srv.receivedRunningPipeline.Lock()
+	record3, exists3 := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key3]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists3, "Cancel before registration should leave a tombstone")
+	require.True(t, record3.alreadyDone, "Tombstone should mark the pipeline already done")
+	require.Nil(t, record3.receiver, "Tombstone should not carry a dispatch receiver")
+	require.Nil(t, record3.queryCancel, "Tombstone should not carry a cancel func yet")
 }
 
 // TestRemoveRelatedPipeline tests RemoveRelatedPipeline function
@@ -370,4 +390,100 @@ func TestRemoveRelatedPipeline(t *testing.T) {
 
 	// Test removing non-existent pipeline (should not panic)
 	srv.RemoveRelatedPipeline(session, streamID+1)
+}
+
+func TestCancelPipelineSending_TombstoneAllowsDispatchRegistration(t *testing.T) {
+	srv := NewServer(nil)
+	require.NotNil(t, srv)
+
+	session := &mockClientSession{remoteAddr: "test-addr"}
+	streamID := uint64(11)
+
+	srv.CancelPipelineSending(session, streamID)
+
+	receiverUid := uuid.Must(uuid.NewV7())
+	dispatchReceiver := &process.WrapCs{
+		ReceiverDone: false,
+		MsgId:        streamID,
+		Uid:          receiverUid,
+		Cs:           session,
+		Err:          make(chan error, 1),
+	}
+
+	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	record, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists, "Dispatch registration should replace the stale tombstone")
+	require.False(t, record.alreadyDone, "Dispatch registration should clear the tombstone state")
+	require.True(t, record.isDispatch, "Dispatch receiver should register normally after stale tombstone cleanup")
+	require.Equal(t, receiverUid, record.receiver.Uid, "Dispatch receiver should be recorded")
+	require.False(t, dispatchReceiver.ReceiverDone, "Dispatch receiver should not be spuriously canceled")
+}
+
+func TestCancelPipelineSending_TombstoneCleansOnSessionClose(t *testing.T) {
+	srv := NewServer(nil)
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(12)
+	streamID2 := uint64(13)
+
+	srv.CancelPipelineSending(session, streamID)
+	srv.CancelPipelineSending(session, streamID2)
+
+	key := generateRecordKey(session, streamID)
+	key2 := generateRecordKey(session, streamID2)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	_, exists2 := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key2]
+	waiterCount := len(srv.receivedRunningPipeline.sessionCleanupWaiters)
+	srv.receivedRunningPipeline.Unlock()
+	require.True(t, exists, "Cancel before registration should create a tombstone")
+	require.True(t, exists2, "Second stop on the same session should also create a tombstone")
+	require.Equal(t, 1, waiterCount, "A session should register only one cleanup waiter")
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		srv.receivedRunningPipeline.Lock()
+		defer srv.receivedRunningPipeline.Unlock()
+		_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+		_, exists2 := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key2]
+		return !exists && !exists2 && len(srv.receivedRunningPipeline.sessionCleanupWaiters) == 0
+	}, time.Second, 10*time.Millisecond, "Session close should clean all tombstones for the session")
+}
+
+func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
+	srv := NewServer(nil)
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(14)
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	queryCtx, queryCancel := context.WithCancel(context.Background())
+	defer queryCancel()
+	proc.Base.GetContextBase().BuildQueryCtx(queryCtx)
+
+	srv.RecordBuiltPipeline(session, streamID, proc)
+	srv.cleanupPipelinesForSession(session)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	waiterCount := len(srv.receivedRunningPipeline.sessionCleanupWaiters)
+	srv.receivedRunningPipeline.Unlock()
+
+	require.False(t, exists, "Session cleanup should remove registered pipeline records")
+	require.Equal(t, 0, waiterCount, "Session cleanup should remove the waiter registration")
+	require.NotNil(t, proc.GetQueryContextError(), "Session cleanup should cancel registered non-dispatch pipelines")
 }

@@ -54,3 +54,25 @@ func Test_MakePlan2Vecf64ConstExprWithType(t *testing.T) {
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
 	require.Equal(t, "[1,2,3]", actual)
 }
+
+func Test_isSameColumnType(t *testing.T) {
+	require.True(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_varchar), Width: 32},
+		plan.Type{Id: int32(types.T_varchar), Width: 32},
+	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_varchar), Width: 32},
+		plan.Type{Id: int32(types.T_varchar), Width: 64},
+	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 4},
+	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"},
+		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,c"},
+	))
+}

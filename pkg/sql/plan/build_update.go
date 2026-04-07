@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -130,8 +129,13 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				if err != nil {
 					return err
 				}
-				if col != nil && col.Typ.Id == int32(types.T_enum) {
+				if col != nil && isEnumPlanType(&col.Typ) {
 					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, col.Typ)
+					if err != nil {
+						return err
+					}
+				} else if col != nil && isSetPlanType(&col.Typ) {
+					lastNode.ProjectList[pos], err = funcCastForSetType(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -153,8 +157,13 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = newDefExpr
 				}
 
-				if col != nil && col.Typ.Id == int32(types.T_enum) {
+				if col != nil && isEnumPlanType(&col.Typ) {
 					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					if err != nil {
+						return err
+					}
+				} else if col != nil && isSetPlanType(&col.Typ) {
+					lastNode.ProjectList[pos], err = funcCastForSetType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
@@ -175,6 +184,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	fromTables := &tree.From{
 		Tables: stmt.Tables,
 	}
+	var err error
 	var selectList []tree.SelectExpr
 
 	var aliasList = make([]string, len(tableInfo.alias))
@@ -213,28 +223,10 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 
 		for colName, updateKey := range updateKeys {
 			for _, coldef := range tableDef.Cols {
-				if coldef.Name == colName && coldef.Typ.Id == int32(types.T_enum) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, coldef.Typ, nil)
-					updateKeyExpr, err := binder.BindExpr(updateKey, 0, false)
+				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
+					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
 					if err != nil {
 						return 0, nil, err
-					}
-					exprs := []tree.Expr{
-						tree.NewNumVal(coldef.Typ.Enumvalues, coldef.Typ.Enumvalues, false, tree.P_char),
-						updateKey,
-					}
-					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {
-						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastIndexValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
-						}
-					} else {
-						updateKey = &tree.FuncExpr{
-							Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(moEnumCastValueToIndexFun)),
-							Type:  tree.FUNC_TYPE_DEFAULT,
-							Exprs: exprs,
-						}
 					}
 				}
 			}

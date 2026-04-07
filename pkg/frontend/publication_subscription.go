@@ -2357,6 +2357,13 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 	dbMeta, err := getPu(ses.GetService()).StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
+		// ExpectedEOB means the database is not visible at the current snapshot
+		// (e.g., cross-CN visibility race). A non-visible database cannot be a
+		// subscription — return (nil, nil) so callers proceed normally and the
+		// actual database access in getRelation() handles the error with proper context.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, nil
+		}
 		return nil, moerr.NewNoDB(ctx)
 	}
 

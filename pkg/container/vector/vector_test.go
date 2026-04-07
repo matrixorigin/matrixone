@@ -3297,3 +3297,46 @@ func TestVectorPoolTypeChangeBug_Issue23295(t *testing.T) {
 
 	vec.Free(mp)
 }
+
+func TestResetWithSameTypeResetsClass(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	err := appendOneBytes(vec, []byte("hello"), false, mp)
+	require.NoError(t, err)
+	vec.ToConst()
+	require.True(t, vec.IsConst())
+
+	vec.ResetWithSameType()
+	require.False(t, vec.IsConst())
+	require.Equal(t, FLAT, vec.class)
+	require.Equal(t, 0, vec.Length())
+
+	// after reset, should be able to append normally
+	err = appendOneBytes(vec, []byte("world"), false, mp)
+	require.NoError(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.False(t, vec.IsConst())
+}
+
+func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	defer wrapper.Free()
+
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	// first round: append null, then fold to const
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull())
+
+	// second round: simulate doFold reuse — PreExtendAndReset should reset class to FLAT
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.False(t, result.vec.IsConst()) // class should be FLAT now
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
+}

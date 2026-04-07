@@ -568,6 +568,52 @@ create table t5 (a int, b int);
 select a, b, percent_rank() over (order by a) from t5;
 a    b    percent_rank() over (order by a)
 drop table t5;
+drop table if exists window_order_by_name_case;
+create table window_order_by_name_case (id int, name varchar(20), score int);
+insert into window_order_by_name_case values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, percent_rank() over (order by name) from window_order_by_name_case;
+id    name    percent_rank() over (order by name)
+1    Alice    0.0
+2    Bob    0.25
+3    Charlie    0.5
+4    David    0.75
+5    Eve    1.0
+select id, name, rank() over (order by name) from window_order_by_name_case;
+id    name    rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, dense_rank() over (order by name) from window_order_by_name_case;
+id    name    dense_rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, row_number() over (order by name) from window_order_by_name_case;
+id    name    row_number() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, percent_rank() over (partition by score order by name) from window_order_by_name_case;
+id    name    percent_rank() over (partition by score order by name)
+4    David    0.0
+2    Bob    0.0
+5    Eve    1.0
+1    Alice    0.0
+3    Charlie    1.0
+select id, name, score, percent_rank() over (order by name, score) from window_order_by_name_case;
+id    name    score    percent_rank() over (order by name, score)
+1    Alice    90    0.0
+2    Bob    85    0.25
+3    Charlie    90    0.5
+4    David    75    0.75
+5    Eve    85    1.0
+drop table window_order_by_name_case;
 drop table if exists t1;
 create table t1 (a int, b int);
 insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
@@ -645,7 +691,12 @@ drop table if exists t4;
 create table t4 (name varchar(20), score int);
 insert into t4 values('Alice', 90), ('Bob', 85), ('Charlie', 90), ('David', 75), ('Eve', 85);
 select name, score, cume_dist() over (order by name) from t4;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+name    score    cume_dist() over (order by name)
+Alice    90    0.2
+Bob    85    0.4
+Charlie    90    0.6
+David    75    0.8
+Eve    85    1.0
 select name, score, cume_dist() over (order by score) from t4;
 name    score    cume_dist() over (order by score)
 David    75    0.2
@@ -654,7 +705,12 @@ Eve    85    0.6
 Alice    90    1.0
 Charlie    90    1.0
 select name, score, cume_dist() over (partition by score order by name) from t4;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+name    score    cume_dist() over (partition by score order by name)
+David    75    1.0
+Bob    85    0.5
+Eve    85    1.0
+Alice    90    0.5
+Charlie    90    1.0
 drop table t4;
 drop table if exists t5;
 create table t5 (id int, dt date);
@@ -2004,7 +2060,14 @@ col1    col2    col3    col4
 2002-06-09    null    01:01:01    null
 2015-08-01    1990-01-01 01:02:03    null    null
 select dense_rank() over (partition by col1 order by date_format(col1,'%m-%d-%Y')) from date02;
-SQL parser error: Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type
+dense_rank() over (partition by col1 order by date_format(col1, %m-%d-%Y))
+1
+1
+1
+1
+1
+1
+1
 select max(col2) over (partition by col3 order by date(col2) desc) from date02;
 max(col2) over (partition by col3 order by date(col2) desc)
 1990-01-01 01:02:03
@@ -4599,4 +4662,63 @@ grp    a    bucket
 2    5    1
 2    8    2
 drop table t_ntile;
+drop table if exists test_pr_blob;
+create table test_pr_blob (id int, val blob);
+insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
+id    pct_rank
+1    0.0
+2    0.5
+3    1.0
+select id, rank() over (order by val) as rnk from test_pr_blob order by val;
+id    rnk
+1    1
+2    2
+3    3
+drop table test_pr_blob;
+drop table if exists test_pr_binary;
+create table test_pr_binary (id int, val varbinary(20));
+insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
+id    pct_rank
+1    0.0
+2    0.5
+3    1.0
+drop table test_pr_binary;
+drop table if exists t_win_varchar;
+create table t_win_varchar (id int, name varchar(20), score int);
+insert into t_win_varchar values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_win_varchar;
+id    name    row_number() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, rank() over (order by name) from t_win_varchar;
+id    name    rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, dense_rank() over (order by name) from t_win_varchar;
+id    name    dense_rank() over (order by name)
+1    Alice    1
+2    Bob    2
+3    Charlie    3
+4    David    4
+5    Eve    5
+select id, name, rank() over (partition by score order by name) from t_win_varchar;
+id    name    rank() over (partition by score order by name)
+4    David    1
+2    Bob    1
+5    Eve    2
+1    Alice    1
+3    Charlie    2
+select sum(score) over (order by name) from t_win_varchar;
+SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type
+select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type
+drop table t_win_varchar;
 drop database test;
