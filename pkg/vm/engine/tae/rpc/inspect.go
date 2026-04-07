@@ -840,7 +840,12 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 	}
 
 	txn, _ := db.StartTxn(nil)
-	defer txn.Rollback(context.Background())
+	committed := false
+	defer func() {
+		if !committed {
+			txn.Rollback(context.Background())
+		}
+	}()
 	if ac != nil {
 		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
@@ -859,6 +864,7 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
+		committed = true
 		return tbl, nil
 	} else {
 		dbHdl, err := txn.GetDatabase(parts[0])
@@ -871,6 +877,7 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
+		committed = true
 		return tbl, nil
 	}
 }

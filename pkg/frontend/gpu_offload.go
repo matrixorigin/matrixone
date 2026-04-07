@@ -409,9 +409,12 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 	t1 := time.Now()
 
 	const maxResponseSize = 512 << 20 // 512 MB
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to read sidecar response: %v", err)
+	}
+	if int64(len(body)) > maxResponseSize {
+		return nil, moerr.NewInternalErrorf(ctx, "sidecar response too large (>512 MB)")
 	}
 	t2 := time.Now()
 
