@@ -52,6 +52,15 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+		return nil, nil
+	}
+
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
 	// Check if vector pre-filter pushdown should be enabled by default
 	// This session variable changes the default vector search behavior
 	var enableVectorPrefilterByDefault bool

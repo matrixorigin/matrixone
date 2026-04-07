@@ -55,6 +55,11 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
 	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
 	if metaDef == nil || idxDef == nil {
