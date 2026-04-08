@@ -992,15 +992,21 @@ func TestSubQuery(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 		"select * from nation where n_regionkey in (select r_regionkey from region) and n_nationkey not in (1,2) and n_nationkey = some (select n_nationkey from nation2)",
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",                     // non-eq agg scalar subquery
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY)", // mixed eq + non-eq predicates -> two pullup-added GroupBy entries
+		"SELECT * FROM NATION where (select count(*) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",                   // count(*) with mixed eq + non-eq predicates
+		"SELECT * FROM NATION where (select avg(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",           // avg with mixed eq + non-eq predicates
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION) for update",                         // not support
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                                          // table not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)",                          // column not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION) for update",                                                  // not support
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)",             // non-eq agg scalar subquery with GROUP BY
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY having max(R_REGIONKEY) > 0)", // non-eq agg scalar subquery with HAVING
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) + 1 from REGION where R_REGIONKEY < N_REGIONKEY)",                         // non-eq agg scalar subquery with computed projection
 	}
 	runTestShouldError(mock, t, sqls)
 }
