@@ -8191,6 +8191,13 @@ func geometryIntersects(left, right []byte) (bool, error) {
 		return false, err
 	}
 
+	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
+		return multiGeometryIntersects(left, right)
+	}
+	if rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+		return multiGeometryIntersects(right, left)
+	}
+
 	switch leftType {
 	case "POINT":
 		x, y, err := parsePointXYFromPayload(left)
@@ -8218,7 +8225,7 @@ func geometryIntersects(left, right []byte) (bool, error) {
 			}
 			return pointIntersectsPolygon(leftPoint, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "LINESTRING":
 		leftPoints, err := lineStringGeometryPointsFromPayload(left)
@@ -8245,7 +8252,7 @@ func geometryIntersects(left, right []byte) (bool, error) {
 			}
 			return lineStringIntersectsPolygon(leftPoints, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "POLYGON":
 		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
@@ -8272,10 +8279,10 @@ func geometryIntersects(left, right []byte) (bool, error) {
 			}
 			return polygonIntersectsPolygon(leftPolygon, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 }
 
@@ -9315,6 +9322,27 @@ func polygonIntersectsPolygon(left, right []geometryPoint2D) bool {
 		}
 	}
 	return false
+}
+
+func multiGeometryIntersects(collection, other []byte) (bool, error) {
+	count, err := geometryCountFromPayload(collection)
+	if err != nil {
+		return false, err
+	}
+	for i := int64(1); i <= count; i++ {
+		item, err := geometryNFromPayload(collection, i)
+		if err != nil {
+			return false, err
+		}
+		intersects, err := geometryIntersects([]byte(item), other)
+		if err != nil {
+			return false, err
+		}
+		if intersects {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func parsePolygonRingPoints(content string) ([]geometryPoint2D, error) {

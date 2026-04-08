@@ -22,12 +22,24 @@ select st_intersects(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomf
 select st_intersects(st_geomfromtext('LINESTRING(0 0,2 2)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as intersects_srid;
 ➤ intersects_srid[-7,1,0]  𝄀
 1
+select st_intersects(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 1,5 1))'), st_geomfromtext('LINESTRING(1 -1,1 1)')) as intersects_multiline_line;
+➤ intersects_multiline_line[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))'), st_geomfromtext('POINT(4 1)')) as intersects_multipolygon_point;
+➤ intersects_multipolygon_point[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('LINESTRING(4 1,6 1)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))')) as intersects_line_multipolygon;
+➤ intersects_line_multipolygon[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))')) as intersects_multi_false;
+➤ intersects_multi_false[-7,1,0]  𝄀
+0
 select st_intersects(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as intersects_null;
 ➤ intersects_null[-7,1,0]  𝄀
 null
 select st_intersects(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
--- @regex("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs
+-- @regex("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_intersects(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
 -- @regex("polygons with holes are not supported", true)
 invalid input: polygons with holes are not supported
