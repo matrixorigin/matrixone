@@ -76,6 +76,22 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			},
 		},
 		{
+			name:  "like filter with quote",
+			s:     "show accounts like 'ab''cd';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like 'ab''cd'",
+			},
+		},
+		{
+			name:  "like filter with backslash",
+			s:     "show accounts like 'ab\\_cd';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like 'ab\\\\_cd'",
+			},
+		},
+		{
 			name:  "exact account filter",
 			s:     "show accounts;",
 			accID: 100,
@@ -86,12 +102,34 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			},
 		},
 		{
+			name:  "like and exact account filter",
+			s:     "show accounts like '%abc';",
+			accID: 100,
+			wantContains: []string{
+				"where ma.account_name like '%abc' and ma.account_id = 100",
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+			},
+		},
+		{
 			name:            "object count",
 			s:               "show accounts;",
 			accID:           -1,
 			needObjectCount: true,
 			wantContains: []string{
 				"CAST(0 AS BIGINT) AS object_count",
+			},
+		},
+		{
+			name:            "object count with exact account filter",
+			s:               "show accounts;",
+			accID:           100,
+			needObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+				"where ma.account_id = 100",
 			},
 		},
 	}
@@ -108,6 +146,8 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			for _, fragment := range a.wantNotContains {
 				assert.NotContains(t, got, normalizeSQL(fragment))
 			}
+			_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, got, 1)
+			require.NoError(t, err)
 		})
 	}
 }

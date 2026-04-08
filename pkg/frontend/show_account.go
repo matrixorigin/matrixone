@@ -141,7 +141,8 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 func buildAccountInfoClause(like *tree.ComparisonExpr, accId int64) string {
 	predicates := make([]string, 0, 2)
 	if like != nil {
-		predicates = append(predicates, fmt.Sprintf("ma.account_name like '%s'", strings.TrimSpace(like.Right.String())))
+		pattern := strings.TrimSpace(like.Right.String())
+		predicates = append(predicates, "ma.account_name like "+quoteSQLStringLiteral(pattern))
 	}
 
 	if accId != -1 {
@@ -162,6 +163,14 @@ func buildAccountInfoCountFilters(accId int64) (dbCountFilter, tblCountFilter st
 		tblCountFilter = fmt.Sprintf("AND mt.account_id = %s", accountFilter)
 	}
 	return
+}
+
+func quoteSQLStringLiteral(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `''`,
+	)
+	return "'" + replacer.Replace(s) + "'"
 }
 
 func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (resp any, tried bool, err error) {
