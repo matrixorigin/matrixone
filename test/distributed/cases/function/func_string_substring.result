@@ -326,3 +326,322 @@ c  𝄀
 d  𝄀
 e
 drop table t1;
+SELECT MID('Quadratically',5);
+➤ MID(Quadratically, 5)[12,-1,0]  𝄀
+ratically
+SELECT MID('foobarbar' FROM 4);
+➤ MID(foobarbar, 4)[12,-1,0]  𝄀
+barbar
+SELECT MID('Quadratically',5,6);
+➤ MID(Quadratically, 5, 6)[12,-1,0]  𝄀
+ratica
+SELECT MID('Sakila', -3);
+➤ MID(Sakila, -3)[12,-1,0]  𝄀
+ila
+SELECT MID('Sakila', -5, 3);
+➤ MID(Sakila, -5, 3)[12,-1,0]  𝄀
+aki
+SELECT MID('Sakila' FROM -4 FOR 2);
+➤ MID(Sakila, -4, 2)[12,-1,0]  𝄀
+ki
+SELECT MID('monty',5,1);
+➤ MID(monty, 5, 1)[12,-1,0]  𝄀
+y
+SELECT MID('a',1,2);
+➤ MID(a, 1, 2)[12,-1,0]  𝄀
+a
+select MID('abcdefg',3,2);
+➤ MID(abcdefg, 3, 2)[12,-1,0]  𝄀
+cd
+select MID('abcdefg',3,2);
+➤ MID(abcdefg, 3, 2)[12,-1,0]  𝄀
+cd
+select MID('abcdefg',-3,2);
+➤ MID(abcdefg, -3, 2)[12,-1,0]  𝄀
+ef
+select MID('abcdefg',-1,5);
+➤ MID(abcdefg, -1, 5)[12,-1,0]  𝄀
+g
+select MID('abcdefg',0,0);
+➤ MID(abcdefg, 0, 0)[12,-1,0]  𝄀
+
+select MID('abcdefg',-1,-1);
+➤ MID(abcdefg, -1, -1)[12,-1,0]  𝄀
+
+select MID('abcdefg',1,-1);
+➤ MID(abcdefg, 1, -1)[12,-1,0]  𝄀
+
+select mid('hello', 2, -1);
+➤ mid(hello, 2, -1)[12,-1,0]  𝄀
+
+select mid('hello', -1, 1);
+➤ mid(hello, -1, 1)[12,-1,0]  𝄀
+o
+select mid('hello', -2, 1);
+➤ mid(hello, -2, 1)[12,-1,0]  𝄀
+l
+select mid('hello', -4294967295, 1);
+➤ mid(hello, -4294967295, 1)[12,-1,0]  𝄀
+
+select mid('hello', 4294967295, 1);
+➤ mid(hello, 4294967295, 1)[12,-1,0]  𝄀
+
+select mid('hello', -4294967296, 1);
+➤ mid(hello, -4294967296, 1)[12,-1,0]  𝄀
+
+select mid('hello', 4294967296, 1);
+➤ mid(hello, 4294967296, 1)[12,-1,0]  𝄀
+
+select mid('hello', -4294967297, 1);
+➤ mid(hello, -4294967297, 1)[12,-1,0]  𝄀
+
+select mid('hello', 4294967297, 1);
+➤ mid(hello, 4294967297, 1)[12,-1,0]  𝄀
+
+select mid('hello', -18446744073709551615, 1);
+Data truncation: data out of range: data type int64, value '-18446744073709551615'
+select mid('hello', 18446744073709551615, 1);
+Data truncation: data out of range: data type int64, value '18446744073709551615'
+select mid('hello', -18446744073709551616, 1);
+Data truncation: data out of range: data type int64, value '-18446744073709551616'
+select mid('hello', 18446744073709551616, 1);
+Data truncation: data out of range: data type int64, value '18446744073709551616'
+select mid('hello', -18446744073709551617, 1);
+Data truncation: data out of range: data type int64, value '-18446744073709551617'
+select mid('hello', 18446744073709551617, 1);
+Data truncation: data out of range: data type int64, value '18446744073709551617'
+select mid('hello', 1, -1);
+➤ mid(hello, 1, -1)[12,-1,0]  𝄀
+
+select mid('hello', 1, -4294967295);
+➤ mid(hello, 1, -4294967295)[12,-1,0]  𝄀
+
+select mid('hello', 1, 4294967295);
+➤ mid(hello, 1, 4294967295)[12,-1,0]  𝄀
+hello
+select mid('hello', 1, -4294967296);
+➤ mid(hello, 1, -4294967296)[12,-1,0]  𝄀
+
+select mid('hello', 1, 4294967296);
+➤ mid(hello, 1, 4294967296)[12,-1,0]  𝄀
+hello
+select mid('hello', 1, -4294967297);
+➤ mid(hello, 1, -4294967297)[12,-1,0]  𝄀
+
+select mid('hello', 1, 4294967297);
+➤ mid(hello, 1, 4294967297)[12,-1,0]  𝄀
+hello
+select mid('hello', 1, -18446744073709551615);
+Data truncation: data out of range: data type int64, value '-18446744073709551615'
+select mid('hello', 1, 18446744073709551615);
+Data truncation: data out of range: data type int64, value '18446744073709551615'
+select mid('hello', 1, -18446744073709551616);
+Data truncation: data out of range: data type int64, value '-18446744073709551616'
+select mid('hello', 1, 18446744073709551616);
+Data truncation: data out of range: data type int64, value '18446744073709551616'
+select mid('hello', 1, -18446744073709551617);
+Data truncation: data out of range: data type int64, value '-18446744073709551617'
+select mid('hello', 1, 18446744073709551617);
+Data truncation: data out of range: data type int64, value '18446744073709551617'
+select mid('hello', -1, -1);
+➤ mid(hello, -1, -1)[12,-1,0]  𝄀
+
+select mid('hello', -4294967295, -4294967295);
+➤ mid(hello, -4294967295, -4294967295)[12,-1,0]  𝄀
+
+select mid('hello', 4294967295, 4294967295);
+➤ mid(hello, 4294967295, 4294967295)[12,-1,0]  𝄀
+
+select mid('hello', -4294967296, -4294967296);
+➤ mid(hello, -4294967296, -4294967296)[12,-1,0]  𝄀
+
+select mid('hello', 4294967296, 4294967296);
+➤ mid(hello, 4294967296, 4294967296)[12,-1,0]  𝄀
+
+select mid('hello', -4294967297, -4294967297);
+➤ mid(hello, -4294967297, -4294967297)[12,-1,0]  𝄀
+
+select mid('hello', 4294967297, 4294967297);
+➤ mid(hello, 4294967297, 4294967297)[12,-1,0]  𝄀
+
+select mid('hello', -18446744073709551615, -18446744073709551615);
+Data truncation: data out of range: data type int64, value '-18446744073709551615'
+select mid('hello', 18446744073709551615, 18446744073709551615);
+Data truncation: data out of range: data type int64, value '18446744073709551615'
+select mid('hello', -18446744073709551616, -18446744073709551616);
+Data truncation: data out of range: data type int64, value '-18446744073709551616'
+select mid('hello', 18446744073709551616, 18446744073709551616);
+Data truncation: data out of range: data type int64, value '18446744073709551616'
+select mid('hello', -18446744073709551617, -18446744073709551617);
+Data truncation: data out of range: data type int64, value '-18446744073709551617'
+select mid('hello', 18446744073709551617, 18446744073709551617);
+Data truncation: data out of range: data type int64, value '18446744073709551617'
+SELECT MID('Sakila' FROM -4 FOR 2);
+➤ MID(Sakila, -4, 2)[12,-1,0]  𝄀
+ki
+SELECT MID('foobarbar' FROM 4);
+➤ MID(foobarbar, 4)[12,-1,0]  𝄀
+barbar
+SELECT MID('w3resource',4,3);
+➤ MID(w3resource, 4, 3)[12,-1,0]  𝄀
+eso
+select mid('abc', cast(2 as unsigned int));
+➤ mid(abc, cast(2 as int unsigned))[12,-1,0]  𝄀
+bc
+create table t1(f1 varchar(255));
+insert into t1 values ("123"),("456");
+select mid(f1,1,1) from t1 group by mid(f1,1,1);
+➤ mid(f1, 1, 1)[12,-1,0]  𝄀
+1  𝄀
+4
+select mid(f1,1,1) from t1 group by 1;
+➤ mid(f1, 1, 1)[12,-1,0]  𝄀
+1  𝄀
+4
+drop table t1;
+SELECT '1' IN ('1', MID(-9223372036854775809, 1));
+➤ 1 in (1, MID(-9223372036854775809, 1))[-7,1,0]  𝄀
+1
+SELECT MID('1', year(FROM_UNIXTIME(-1)));
+➤ MID(1, year(FROM_UNIXTIME(-1)))[12,-1,0]  𝄀
+null
+select reverse(mid(1,1,1));
+➤ reverse(mid(1, 1, 1))[12,-1,0]  𝄀
+1
+CREATE TABLE t1(c1 CHAR(30));
+INSERT INTO t1 VALUES('111'),('222');
+SELECT DISTINCT mid(c1, 1, 2147483647) FROM t1;
+➤ mid(c1, 1, 2147483647)[1,255,0]  𝄀
+111  𝄀
+222
+SELECT DISTINCT mid(c1, 1, 2147483648) FROM t1;
+➤ mid(c1, 1, 2147483648)[1,255,0]  𝄀
+111  𝄀
+222
+SELECT DISTINCT mid(c1, -1, 2147483648) FROM t1;
+➤ mid(c1, -1, 2147483648)[1,255,0]  𝄀
+1  𝄀
+2
+SELECT DISTINCT mid(c1, -2147483647, 2147483648) FROM t1;
+➤ mid(c1, -2147483647, 2147483648)[1,255,0]  𝄀
+
+SELECT DISTINCT mid(c1, 9223372036854775807, 23) FROM t1;
+➤ mid(c1, 9223372036854775807, 23)[1,255,0]  𝄀
+
+DROP TABLE t1;
+create table t1 (b varchar(5));
+insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
+select *,mid(b,1),mid(b,-1),mid(b,-2),mid(b,-3),mid(b,-4),mid(b,-5) from t1;
+➤ b[12,-1,0]  ¦  mid(b, 1)[12,-1,0]  ¦  mid(b, -1)[12,-1,0]  ¦  mid(b, -2)[12,-1,0]  ¦  mid(b, -3)[12,-1,0]  ¦  mid(b, -4)[12,-1,0]  ¦  mid(b, -5)[12,-1,0]  𝄀
+ab  ¦  ab  ¦  b  ¦  ab  ¦    ¦    ¦    𝄀
+abc  ¦  abc  ¦  c  ¦  bc  ¦  abc  ¦    ¦    𝄀
+abcd  ¦  abcd  ¦  d  ¦  cd  ¦  bcd  ¦  abcd  ¦    𝄀
+abcde  ¦  abcde  ¦  e  ¦  de  ¦  cde  ¦  bcde  ¦  abcde
+select * from (select *,mid(b,1),mid(b,-1),mid(b,-2),mid(b,-3),mid(b,-4),mid(b,-5) from t1) t;
+➤ b[12,-1,0]  ¦  mid(b, 1)[12,-1,0]  ¦  mid(b, -1)[12,-1,0]  ¦  mid(b, -2)[12,-1,0]  ¦  mid(b, -3)[12,-1,0]  ¦  mid(b, -4)[12,-1,0]  ¦  mid(b, -5)[12,-1,0]  𝄀
+ab  ¦  ab  ¦  b  ¦  ab  ¦    ¦    ¦    𝄀
+abc  ¦  abc  ¦  c  ¦  bc  ¦  abc  ¦    ¦    𝄀
+abcd  ¦  abcd  ¦  d  ¦  cd  ¦  bcd  ¦  abcd  ¦    𝄀
+abcde  ¦  abcde  ¦  e  ¦  de  ¦  cde  ¦  bcde  ¦  abcde
+drop table t1;
+CREATE TABLE t1 (a varchar(2000), b varchar(10));
+INSERT INTO t1 select space(1300),'one';
+INSERT INTO t1 select space(1300),'two';
+SELECT MID(a,1,10), LENGTH(a) FROM t1 GROUP BY a;
+➤ MID(a, 1, 10)[12,-1,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
+            ¦  1300
+drop table t1;
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (0),(0);
+SELECT 1 FROM t1 GROUP BY MID('',1,'');
+invalid argument cast to int, bad value 
+drop table t1;
+create table t1 (email varchar(50));
+insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');
+create table t2(id int not null, t2 varchar(50));
+insert into t2 select 1, mid(email, 2,1) from t1;
+select id from t2;
+➤ id[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
+1
+select t2 from t2;
+➤ t2[12,-1,0]  𝄀
+a  𝄀
+o  𝄀
+o  𝄀
+o  𝄀
+a
+drop table t1;
+drop table t2;
+create table t1 (a varchar(50));
+insert into t1 values("你好"), ("再见"), ("今天");
+select * from t1;
+➤ a[12,-1,0]  𝄀
+你好  𝄀
+再见  𝄀
+今天
+select mid(a, 1, 1) from t1;
+➤ mid(a, 1, 1)[12,-1,0]  𝄀
+你  𝄀
+再  𝄀
+今
+drop table t1;
+select mid(null, 1, 1);
+➤ mid(null, 1, 1)[12,-1,0]  𝄀
+null
+create table t1 (b varchar(5));
+insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
+select * from t1 where mid(b,1,1) = 'a';
+➤ b[12,-1,0]  𝄀
+ab  𝄀
+abc  𝄀
+abcd  𝄀
+abcde
+drop table t1;
+drop table if exists t1;
+create table t1(b varchar(5));
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+select b from t1 group by b having mid(b,1,1)+'a'='aa';
+➤ b[12,-1,0]  𝄀
+ab  𝄀
+abc  𝄀
+abcd  𝄀
+abcde
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a varchar(5));
+create table t2(a varchar(20));
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+insert into t2 values("2013-04-30"),("1994-10-04"),("2018-06-04"),("2012-10-12"), ("abc"),("abcd");
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (mid(t1.a, 1,1) = mid(t2.a, 1,1 ));
+➤ a[12,-1,0]  ¦  a[12,-1,0]  𝄀
+ab  ¦  abc  𝄀
+ab  ¦  abcd  𝄀
+abc  ¦  abc  𝄀
+abc  ¦  abcd  𝄀
+abcd  ¦  abc  𝄀
+abcd  ¦  abcd  𝄀
+abcde  ¦  abc  𝄀
+abcde  ¦  abcd
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(a blob);
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+SELECT MID(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
+➤ MID(a, 1, 4)[12,0,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
+ab  ¦  2  𝄀
+abc  ¦  3  𝄀
+abcd  ¦  4  𝄀
+abcd  ¦  5
+SELECT MID(a,-1) FROM t1;
+➤ MID(a, -1)[12,0,0]  𝄀
+b  𝄀
+c  𝄀
+d  𝄀
+e
+drop table t1;
