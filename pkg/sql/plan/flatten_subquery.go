@@ -495,9 +495,16 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	//   AGG(...)
 	// or:
 	//   PROJECT(agg_col) -> AGG(...)
-	// Other shapes (extra GROUP BY keys, HAVING/FILTER, and computed PROJECT
+	// Other shapes (user GROUP BY keys, HAVING/FILTER, and computed PROJECT
 	// expressions) need different rewrites to preserve scalar subquery semantics.
-	if len(aggNode.BindingTags) == 0 || len(aggNode.Children) != 1 || len(aggNode.GroupBy) > 1 {
+	//
+	// Note: pullupThroughAgg may have appended inner expressions of the
+	// correlated predicates to aggNode.GroupBy.  Those entries do not affect
+	// our rewrite because we bypass the inner AGG entirely, so we must not
+	// inspect aggNode.GroupBy here.  Instead, use subCtx.groups, which holds
+	// only the GROUP BY explicitly written by the user and is not mutated by
+	// the pullup.
+	if len(aggNode.BindingTags) == 0 || len(aggNode.Children) != 1 || len(subCtx.groups) > 0 {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
 	}
