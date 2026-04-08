@@ -1318,7 +1318,6 @@ func constructChangeHandle(
 	}
 
 	for i := range tarRange.rel {
-		collectStart := time.Now()
 		if handle, err = collectFn(
 			ctx,
 			tarRange.rel[i],
@@ -1335,7 +1334,6 @@ func constructChangeHandle(
 	}
 
 	for i := range baseRange.rel {
-		collectStart := time.Now()
 		if handle, err = collectFn(
 			ctx,
 			baseRange.rel[i],

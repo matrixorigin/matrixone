@@ -38,8 +38,12 @@ func attachInternalExecutorSession(ctx context.Context, ses internalExecutorSess
 // AttachInternalExecutorSession attaches the original frontend session to
 // internal SQL so temp-table aliases and other session-scoped metadata resolve
 // the same way they do for the user's statement.
-func AttachInternalExecutorSession(ctx context.Context, ses internalExecutorSession) context.Context {
-	return attachInternalExecutorSession(ctx, ses)
+func AttachInternalExecutorSession(ctx context.Context, ses any) context.Context {
+	internalSes, ok := ses.(internalExecutorSession)
+	if !ok {
+		return ctx
+	}
+	return attachInternalExecutorSession(ctx, internalSes)
 }
 
 func getInternalExecutorSession(ctx context.Context) internalExecutorSession {

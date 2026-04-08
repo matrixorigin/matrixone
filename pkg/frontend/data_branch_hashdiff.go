@@ -296,7 +296,7 @@ func lcaProbeJoinCastType(typ types.Type) (string, bool) {
 		return "VARBINARY", true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return typ.DescString(), true
-	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp:
 		return typ.String(), true
 	default:
 		return "", false
