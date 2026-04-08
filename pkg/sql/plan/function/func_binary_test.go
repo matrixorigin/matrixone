@@ -5149,6 +5149,20 @@ func initStDistanceTestCase() []tcTemp {
 				[]bool{false, false}),
 		},
 		{
+			info: "test st_distance linestring to linestring",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
 			info: "test st_distance null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5183,7 +5197,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 			[]string{"LINESTRING(0 0,1 1)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"LINESTRING(1 0,2 1)"},
+			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
 			[]bool{false}),
 	}
 	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
@@ -5191,7 +5205,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
+	require.Contains(t, info, "ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, and LINESTRING/LINESTRING combinations in either argument order")
 }
 
 func initStContainsTestCase() []tcTemp {

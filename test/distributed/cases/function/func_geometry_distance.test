@@ -6,5 +6,7 @@ select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POIN
 select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d5;
 select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(3 1)')) as d6;
 select st_distance(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d7;
--- @regex("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON",true)
-select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('LINESTRING(1 0,2 1)'));
+select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(1 -1,1 1)')) as d8;
+select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 1,2 1)')) as d9;
+-- @regex("ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, and LINESTRING/LINESTRING combinations in either argument order",true)
+select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
