@@ -75,3 +75,6 @@ etc/docker-multi-cn-local-disk/*.toml
 # python
 **/__pycache__/
 *.pyc
+
+# built CLI tools
+mo-testplan
