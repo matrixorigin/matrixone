@@ -7861,7 +7861,7 @@ type geometryParamInterval struct {
 	end   float64
 }
 
-const stDistanceSupportedPairsError = "ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations in either argument order"
+const stDistanceSupportedPairsError = "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs"
 
 func geometryDistance(left, right []byte) (float64, error) {
 	leftType, err := geometryTypeNameFromPayload(left)
@@ -7947,6 +7947,12 @@ func geometryDistance(left, right []byte) (float64, error) {
 				return 0, err
 			}
 			return lineStringDistanceToPolygon(rightLine, leftPolygon), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return polygonDistanceToPolygon(leftPolygon, rightPolygon), nil
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -7983,6 +7989,22 @@ func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) float64 {
 		for j := 0; j < len(polygon); j++ {
 			next := (j + 1) % len(polygon)
 			minDistance = math.Min(minDistance, lineSegmentDistance(line[i], line[i+1], polygon[j], polygon[next]))
+		}
+	}
+	return minDistance
+}
+
+func polygonDistanceToPolygon(left, right []geometryPoint2D) float64 {
+	if polygonIntersectsPolygon(left, right) {
+		return 0
+	}
+
+	minDistance := lineSegmentDistance(left[0], left[1], right[0], right[1])
+	for i := 0; i < len(left); i++ {
+		leftNext := (i + 1) % len(left)
+		for j := 0; j < len(right); j++ {
+			rightNext := (j + 1) % len(right)
+			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[leftNext], right[j], right[rightNext]))
 		}
 	}
 	return minDistance

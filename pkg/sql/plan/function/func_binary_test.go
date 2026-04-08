@@ -5197,6 +5197,26 @@ func initStDistanceTestCase() []tcTemp {
 				[]bool{false, false}),
 		},
 		{
+			info: "test st_distance polygon to polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"POLYGON((3 0,5 0,5 2,3 2,3 0))",
+					},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
 			info: "test st_distance null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5228,10 +5248,10 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
+			[]string{"MULTIPOINT((0 0),(1 1))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((3 0,5 0,5 2,3 2,3 0))"},
+			[]string{"POINT(0 0)"},
 			[]bool{false}),
 	}
 	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
@@ -5239,7 +5259,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations in either argument order")
+	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs")
 }
 
 func initStContainsTestCase() []tcTemp {
