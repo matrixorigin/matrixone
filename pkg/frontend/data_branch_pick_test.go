@@ -1244,6 +1244,77 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 	require.Contains(t, exec.sql, "ORDER BY 1, 2")
 }
 
+func TestMaterializeSubqueryUnified_CancelsAndWaitsForStreamingGoroutineOnEarlyReturn(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(select k from source_keys)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	exec := &pickBlockingStreamingExecutor{
+		done: make(chan struct{}),
+		result: executor.Result{
+			Batches: []*batch.Batch{buildPickStreamingBatch(
+				t,
+				ses.proc.Mp(),
+				[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+				[][]any{{int64(7), int64(8)}},
+			)},
+			Mp: ses.proc.Mp(),
+		},
+	}
+	bh := newPickStreamingBackExecForTest(t, ses, exec)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		false,
+		hm,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "single-column primary key")
+	require.Nil(t, pkFilter)
+
+	select {
+	case <-exec.done:
+	default:
+		t.Fatal("streaming goroutine did not exit before materializeSubqueryUnified returned")
+	}
+}
+
 func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(
@@ -1556,6 +1627,27 @@ func (e *pickStreamingExecutor) Exec(ctx context.Context, sql string, opts execu
 }
 
 func (e *pickStreamingExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+	return nil
+}
+
+type pickBlockingStreamingExecutor struct {
+	result executor.Result
+	sql    string
+	done   chan struct{}
+}
+
+func (e *pickBlockingStreamingExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	e.sql = sql
+	if streamCh, _, ok := opts.Streaming(); ok {
+		streamCh <- e.result
+		<-ctx.Done()
+		close(e.done)
+		return executor.Result{}, ctx.Err()
+	}
+	return e.result, nil
+}
+
+func (e *pickBlockingStreamingExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
 	return nil
 }
 

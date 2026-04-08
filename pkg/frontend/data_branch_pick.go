@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -841,9 +842,17 @@ func materializeSubqueryUnified(
 	errChan := make(chan error, 1)
 	subqueryCtx := compile.AttachInternalExecutorSession(ctx, ses)
 	subqueryCtx = compile.AttachInternalExecutorPrivilegeCheck(subqueryCtx)
+	subqueryCtx, cancelSubquery := context.WithCancel(subqueryCtx)
+	var subqueryWg sync.WaitGroup
 
 	// Launch the streaming SQL in a goroutine.
+	subqueryWg.Add(1)
+	defer func() {
+		cancelSubquery()
+		subqueryWg.Wait()
+	}()
 	go func() {
+		defer subqueryWg.Done()
 		defer close(streamChan)
 		defer close(errChan)
 		if _, err2 := runSql(subqueryCtx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
