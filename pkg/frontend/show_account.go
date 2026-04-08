@@ -54,18 +54,25 @@ const (
 		"	md.account_id = %d;"
 
 	getAccountInfoFormatV2 = "" +
-		"WITH db_tbl_counts AS (" +
+		"WITH db_counts AS (" +
+		"	SELECT" +
+		"		CAST(md.account_id AS BIGINT) AS account_id," +
+		"		COUNT(DISTINCT md.dat_id) AS db_count" +
+		"	FROM" +
+		"		mo_catalog.mo_database AS md" +
+		"		%s" + // optional exact account filter for database counts
+		"	GROUP BY" +
+		"		md.account_id" +
+		")," +
+		"tbl_counts AS (" +
 		"	SELECT" +
 		"		CAST(mt.account_id AS BIGINT) AS account_id," +
-		"		COUNT(DISTINCT md.dat_id) AS db_count," +
 		"		COUNT(DISTINCT mt.rel_id) AS tbl_count" +
 		"	FROM" +
 		"		mo_catalog.mo_tables AS mt" +
-		"	JOIN" +
-		"		mo_catalog.mo_database AS md" +
-		"	ON " +
-		"		mt.account_id = md.account_id AND" +
+		"	WHERE" +
 		"		mt.relkind IN ('v','e','r','cluster') " +
+		"		%s" + // optional exact account filter for table counts
 		"	GROUP BY" +
 		"		mt.account_id" +
 		")," +
@@ -77,18 +84,22 @@ const (
 		"		ma.created_time," +
 		"		ma.status," +
 		"		ma.suspended_time," +
-		"		db_tbl_counts.db_count," +
-		"		db_tbl_counts.tbl_count," +
+		"		db_counts.db_count," +
+		"		tbl_counts.tbl_count," +
 		"		CAST(0 AS DOUBLE) AS size," +
 		"		CAST(0 AS DOUBLE) AS snapshot_size," +
 		"		ma.comments" +
 		"		%s" + // possible placeholder for object count
 		"	FROM" +
-		"		db_tbl_counts" +
-		"	JOIN" +
 		"		mo_catalog.mo_account AS ma " +
+		"	JOIN" +
+		"		db_counts " +
 		"	ON " +
-		"		db_tbl_counts.account_id = ma.account_id " +
+		"		ma.account_id = db_counts.account_id " +
+		"	JOIN" +
+		"		tbl_counts " +
+		"	ON " +
+		"		ma.account_id = tbl_counts.account_id " +
 		"		%s" + // where clause
 		")" +
 		"SELECT * FROM final_result;"
@@ -116,34 +127,41 @@ var cnUsageCache = logtail.NewStorageUsageCache(
 	logtail.WithLazyThreshold(5))
 
 func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCount bool) string {
-	var likePattern = ""
-	var where = ""
-	var and = ""
-	var account = ""
-	if like != nil {
-		likePattern = fmt.Sprintf("ma.account_name like '%s'", strings.TrimSpace(like.Right.String()))
-	}
-
-	if accId != -1 {
-		account = fmt.Sprintf("ma.account_id = %s", strconv.FormatInt(accId, 10))
-	}
-
-	if len(likePattern) != 0 && len(account) != 0 {
-		and = "and"
-	}
-
-	if len(likePattern) != 0 || len(account) != 0 {
-		where = "where"
-	}
-
-	clause := fmt.Sprintf("%s %s %s %s", where, likePattern, and, account)
+	clause := buildAccountInfoClause(like, accId)
+	dbCountFilter, tblCountFilter := buildAccountInfoCountFilters(accId)
 
 	var objectCountExpr = ""
 	if needObjectCount {
 		objectCountExpr = ", CAST(0 AS BIGINT) AS object_count"
 	}
 
-	return fmt.Sprintf(getAccountInfoFormatV2, objectCountExpr, clause)
+	return fmt.Sprintf(getAccountInfoFormatV2, dbCountFilter, tblCountFilter, objectCountExpr, clause)
+}
+
+func buildAccountInfoClause(like *tree.ComparisonExpr, accId int64) string {
+	predicates := make([]string, 0, 2)
+	if like != nil {
+		predicates = append(predicates, fmt.Sprintf("ma.account_name like '%s'", strings.TrimSpace(like.Right.String())))
+	}
+
+	if accId != -1 {
+		predicates = append(predicates, fmt.Sprintf("ma.account_id = %s", strconv.FormatInt(accId, 10)))
+	}
+
+	if len(predicates) > 0 {
+		return "where " + strings.Join(predicates, " and ")
+	}
+
+	return ""
+}
+
+func buildAccountInfoCountFilters(accId int64) (dbCountFilter, tblCountFilter string) {
+	if accId != -1 {
+		accountFilter := strconv.FormatInt(accId, 10)
+		dbCountFilter = fmt.Sprintf("WHERE md.account_id = %s", accountFilter)
+		tblCountFilter = fmt.Sprintf("AND mt.account_id = %s", accountFilter)
+	}
+	return
 }
 
 func requestStorageUsage(ctx context.Context, ses *Session, accIds [][]int64) (resp any, tried bool, err error) {

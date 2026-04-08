@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,28 +35,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func normalizeSQL(sql string) string {
+	return strings.Join(strings.Fields(sql), " ")
+}
+
 func Test_getSqlForAccountInfo(t *testing.T) {
 	type arg struct {
-		s    string
-		want string
+		name            string
+		s               string
+		accID           int64
+		needObjectCount bool
+		wantContains    []string
+		wantNotContains []string
 	}
 	args := []arg{
 		{
-			s:    "show accounts;",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
+			name:  "all accounts",
+			s:     "show accounts;",
+			accID: -1,
+			wantContains: []string{
+				"WITH db_counts AS (",
+				"COUNT(DISTINCT md.dat_id) AS db_count",
+				"tbl_counts AS (",
+				"COUNT(DISTINCT mt.rel_id) AS tbl_count",
+				"JOIN db_counts ON ma.account_id = db_counts.account_id",
+				"JOIN tbl_counts ON ma.account_id = tbl_counts.account_id",
+			},
+			wantNotContains: []string{
+				"mo_catalog.mo_tables AS mt JOIN mo_catalog.mo_database AS md",
+				"db_tbl_counts",
+				"LEFT JOIN",
+			},
 		},
 		{
-			s:    "show accounts like '%abc';",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
+			name:  "like filter",
+			s:     "show accounts like '%abc';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like '%abc'",
+			},
+		},
+		{
+			name:  "exact account filter",
+			s:     "show accounts;",
+			accID: 100,
+			wantContains: []string{
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+				"where ma.account_id = 100",
+			},
+		},
+		{
+			name:            "object count",
+			s:               "show accounts;",
+			accID:           -1,
+			needObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+			},
 		},
 	}
 
 	for _, a := range args {
-		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
-		assert.NoError(t, err)
-		sa1 := one.(*tree.ShowAccounts)
-		r1 := getSqlForAccountInfo(sa1.Like, -1, false)
-		assert.Equal(t, a.want, r1)
+		t.Run(a.name, func(t *testing.T) {
+			one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
+			require.NoError(t, err)
+			sa1 := one.(*tree.ShowAccounts)
+			got := normalizeSQL(getSqlForAccountInfo(sa1.Like, a.accID, a.needObjectCount))
+			for _, fragment := range a.wantContains {
+				assert.Contains(t, got, normalizeSQL(fragment))
+			}
+			for _, fragment := range a.wantNotContains {
+				assert.NotContains(t, got, normalizeSQL(fragment))
+			}
+		})
 	}
 }
 
