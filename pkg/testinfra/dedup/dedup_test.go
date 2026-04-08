@@ -103,12 +103,19 @@ func TestDedup(t *testing.T) {
 	result := f.Dedup(sqls)
 
 	assert.Len(t, result.Unique, 1) // only DELETE is unique
+	assert.Contains(t, result.Unique[0], "DELETE")
 	assert.Len(t, result.Duplicates, 2) // SELECT group and INSERT group
 
-	// Check that duplicate groups have 2 items each
+	// Check that duplicate groups have 2 items each and contain the right statements
 	for _, group := range result.Duplicates {
 		assert.Len(t, group, 2)
 	}
+	// Verify specific groupings via fingerprint
+	selectFP := f.Fingerprint(sqls[0])
+	insertFP := f.Fingerprint(sqls[2])
+	assert.Equal(t, selectFP, f.Fingerprint(sqls[1]), "sqls[0] and sqls[1] should share fingerprint")
+	assert.Equal(t, insertFP, f.Fingerprint(sqls[3]), "sqls[2] and sqls[3] should share fingerprint")
+	assert.NotEqual(t, selectFP, insertFP, "SELECT and INSERT fingerprints should differ")
 }
 
 func TestDedupAllUnique(t *testing.T) {

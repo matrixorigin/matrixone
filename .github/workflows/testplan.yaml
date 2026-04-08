@@ -102,7 +102,7 @@ jobs:
             <details>
             <summary>📦 Affected Packages</summary>
 
-            ${testplan.diff_summary.files.filter(f => f.package).map(f => '- `' + f.package + '`').filter((v, i, a) => a.indexOf(v) === i).join('\n')}
+            ${[...new Set(testplan.diff_summary.files.filter(f => f.package).map(f => f.package))].map(p => '- `' + p + '`').join('\n')}
 
             </details>
 
