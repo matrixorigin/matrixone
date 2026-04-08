@@ -12,10 +12,10 @@ create snapshot sp_to for account sys;
 insert into t1 values (4,4);
 data branch pick t1 into t0 between snapshot 'sp_from' and 'sp_to';
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3
+a	b
+1	1
+2	2
+3	3
 drop snapshot sp_from;
 drop snapshot sp_to;
 drop table t0;
@@ -33,10 +33,10 @@ insert into t1 values (3,3);
 create snapshot sp2 for account sys;
 data branch pick t1 into t2 between snapshot sp1 and sp2 when conflict accept;
 select * from t2 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  200  𝄀
-3  ¦  3
+a	b
+1	1
+2	200
+3	3
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -55,9 +55,9 @@ create snapshot sp2 for account sys;
 data branch pick t1 into t2 between snapshot sp1 and sp2 when conflict fail;
 internal error: conflict: t1 INSERT and t2 INSERT on pk(2) with different values
 select * from t2 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  20
+a	b
+1	1
+2	20
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -74,11 +74,11 @@ create snapshot sp2 for account sys;
 insert into t1 values (7,7);
 data branch pick t1 into t0 between snapshot 'sp1' and 'sp2' keys(5);
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-5  ¦  5
+a	b
+1	1
+2	2
+3	3
+5	5
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -97,15 +97,15 @@ create snapshot sp3 for account sys;
 insert into t1 values (4,4);
 data branch pick t1 into t0 between snapshot sp1 and sp2;
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2
+a	b
+1	1
+2	2
 data branch pick t1 into t0 between snapshot sp2 and sp3;
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3
+a	b
+1	1
+2	2
+3	3
 drop snapshot sp1;
 drop snapshot sp2;
 drop snapshot sp3;

@@ -12,16 +12,16 @@ create snapshot sp2 for account sys;
 insert into t1 values (6,6),(7,7);
 data branch pick t1 into t0 between snapshot sp1 and sp2;
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-4  ¦  4  𝄀
-5  ¦  5
+a	b
+1	1
+2	2
+3	3
+4	4
+5	5
 data branch diff t1 against t0;
-➤ diff t1 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t1  ¦  INSERT  ¦  6  ¦  6  𝄀
-t1  ¦  INSERT  ¦  7  ¦  7
+diff t1 against t0	flag	a	b
+t1	INSERT	6	6
+t1	INSERT	7	7
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -37,11 +37,11 @@ create snapshot sp2 for account sys;
 insert into t1 values (6,6),(7,7);
 data branch pick t1 into t0 between snapshot sp1 and sp2 keys(4);
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-4  ¦  4
+a	b
+1	1
+2	2
+3	3
+4	4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -56,10 +56,10 @@ create snapshot sp2 for account sys;
 insert into t1 values (4,4);
 data branch pick t1 into t0 between snapshot sp1 and sp2;
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3
+a	b
+1	1
+2	2
+3	3
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -75,12 +75,12 @@ insert into t1 values (6,6);
 create snapshot sp2 for account sys;
 data branch pick t1 into t0 between snapshot sp1 and sp2;
 select * from t0 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-4  ¦  4  𝄀
-5  ¦  5  𝄀
-6  ¦  6
+a	b
+1	1
+2	2
+4	4
+5	5
+6	6
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -98,10 +98,10 @@ insert into t1 values (3,3);
 create snapshot sp2 for account sys;
 data branch pick t1 into t2 between snapshot sp1 and sp2 when conflict skip;
 select * from t2 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  20  𝄀
-3  ¦  3
+a	b
+1	1
+2	20
+3	3
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
@@ -118,9 +118,9 @@ insert into t1 values (5,5);
 create table t2 (a int, b int, primary key(a));
 data branch pick t1 into t2 between snapshot sp1 and sp2;
 select * from t2 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-3  ¦  3  𝄀
-4  ¦  4
+a	b
+3	3
+4	4
 drop snapshot sp1;
 drop snapshot sp2;
 drop table t1;

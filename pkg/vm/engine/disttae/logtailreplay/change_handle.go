@@ -396,6 +396,13 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 	return handle
 }
 
+func (h *AObjectHandle) changeHandler() *ChangeHandler {
+	if h == nil || h.p == nil {
+		return nil
+	}
+	return h.p.changesHandle
+}
+
 // nextPrefetchTarget returns the next object/block pair that should be loaded.
 // In checkpoint-range mode, TN-created non-appendable objects can be pruned by
 // commit-ts zonemap at block granularity before loading block data.
@@ -437,14 +444,17 @@ func (h *AObjectHandle) shouldReadBlock(
 	if obj == nil {
 		return false, nil
 	}
-	changes := h.p.changesHandle
-	if !changes.enableCommitTSBlockPrune {
+	changes := h.changeHandler()
+	if changes == nil || !changes.enableCommitTSBlockPrune {
 		return true, nil
 	}
 	// Row-commit-ts pruning is only meaningful for TN-created non-appendable
 	// objects. Appendable objects are kept on the existing path.
 	if obj.GetAppendable() || obj.GetCNCreated() {
 		return true, nil
+	}
+	if h.blockPlans == nil {
+		h.blockPlans = make(map[string]*aobjBlockPlan)
 	}
 	key := obj.ObjectShortName().ShortString()
 	plan, ok := h.blockPlans[key]
@@ -511,8 +521,12 @@ func (h *AObjectHandle) buildBlockPlan(
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
 	overlapBlockCnt := 0
-	pkf := h.p.changesHandle.pkFilter
-	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
+	var pkf *engine.PKFilter
+	var pkSeqnum uint16
+	if changes := h.changeHandler(); changes != nil {
+		pkf = changes.pkFilter
+		pkSeqnum = uint16(changes.primarySeqnum)
+	}
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
 		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)

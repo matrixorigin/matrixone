@@ -7,18 +7,18 @@ data branch create table t1 from t0;
 insert into t1 values (4,40);
 data branch create table t2 from t0;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-4  ¦  40
+a	b
+1	1
+2	2
+3	3
+4	40
 data branch pick t2 into t1 keys(4);
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-4  ¦  40
+a	b
+1	1
+2	2
+3	3
+4	40
 drop table t0;
 drop table t1;
 drop table t2;
@@ -29,14 +29,14 @@ delete from t1 where a = 2;
 data branch create table t2 from t0;
 delete from t2 where a = 2;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-3  ¦  3
+a	b
+1	1
+3	3
 data branch pick t2 into t1 keys(2);
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-3  ¦  3
+a	b
+1	1
+3	3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -46,15 +46,15 @@ data branch create table t1 from t0;
 data branch create table t2 from t0;
 delete from t2 where a = 2;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3
+a	b
+1	1
+2	2
+3	3
 data branch pick t2 into t1 keys(2);
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-3  ¦  3
+a	b
+1	1
+3	3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -65,17 +65,17 @@ delete from t1 where a = 2;
 data branch create table t2 from t0;
 update t2 set b = 200 where a = 2;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-3  ¦  3
+a	b
+1	1
+3	3
 data branch pick t2 into t1 keys(2) when conflict fail;
 internal error: conflict: t2 INSERT and t1 INSERT on pk(2) with different values
 data branch pick t2 into t1 keys(2) when conflict accept;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  200  𝄀
-3  ¦  3
+a	b
+1	1
+2	200
+3	3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -87,21 +87,21 @@ insert into t1 values (6,6);
 data branch create table t2 from t0;
 delete from t2 where a = 3;
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  𝄀
-2  ¦  2  𝄀
-3  ¦  3  𝄀
-4  ¦  4  𝄀
-5  ¦  5  𝄀
-6  ¦  6
+a	b
+1	10
+2	2
+3	3
+4	4
+5	5
+6	6
 data branch pick t2 into t1 keys(3);
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  𝄀
-2  ¦  2  𝄀
-4  ¦  4  𝄀
-5  ¦  5  𝄀
-6  ¦  6
+a	b
+1	10
+2	2
+4	4
+5	5
+6	6
 drop table t0;
 drop table t1;
 drop table t2;
@@ -111,10 +111,10 @@ create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,1),(2,2);
 data branch pick t2 into t1 keys(3);
 select * from t1 order by a asc;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  3
+a	b
+1	1
+2	2
+3	3
 drop table t1;
 drop table t2;
 drop database test;

@@ -8,24 +8,24 @@ data branch create table t2 from t0;
 insert into t2 values (40.25,'date'),(50.50,'elderberry'),(60.00,'fig');
 data branch pick t2 into t1 keys(40.25, 60.00);
 select * from t1 order by price;
-➤ price[3,10,2]  ¦  name[12,-1,0]  𝄀
-10.50  ¦  apple  𝄀
-20.00  ¦  banana  𝄀
-30.75  ¦  cherry  𝄀
-40.25  ¦  date  𝄀
-60.00  ¦  fig
+price	name
+10.50	apple
+20.00	banana
+30.75	cherry
+40.25	date
+60.00	fig
 data branch diff t2 against t1;
-➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  price[3,-1,0]  ¦  name[12,0,0]  𝄀
-t2  ¦  INSERT  ¦  50.50  ¦  elderberry
+diff t2 against t1	flag	price	name
+t2	INSERT	50.50	elderberry
 data branch pick t2 into t1 keys(50.50);
 select * from t1 order by price;
-➤ price[3,10,2]  ¦  name[12,-1,0]  𝄀
-10.50  ¦  apple  𝄀
-20.00  ¦  banana  𝄀
-30.75  ¦  cherry  𝄀
-40.25  ¦  date  𝄀
-50.50  ¦  elderberry  𝄀
-60.00  ¦  fig
+price	name
+10.50	apple
+20.00	banana
+30.75	cherry
+40.25	date
+50.50	elderberry
+60.00	fig
 drop table t0;
 drop table t1;
 drop table t2;
@@ -36,10 +36,10 @@ data branch create table t2 from t0;
 insert into t2 values (300.000003,'c'),(400.000004,'d');
 data branch pick t2 into t1 keys(300.000003);
 select * from t1 order by amount;
-➤ amount[3,30,6]  ¦  label[12,-1,0]  𝄀
-100.000001  ¦  a  𝄀
-200.000002  ¦  b  𝄀
-300.000003  ¦  c
+amount	label
+100.000001	a
+200.000002	b
+300.000003	c
 drop table t0;
 drop table t1;
 drop table t2;
@@ -50,11 +50,11 @@ data branch create table t2 from t0;
 insert into t2 values (3.50,'new1'),(4.75,'new2'),(5.25,'new3');
 data branch pick t2 into t1 keys(select val from t2 where val > 4.00);
 select * from t1 order by val;
-➤ val[3,10,2]  ¦  info[12,-1,0]  𝄀
-1.00  ¦  base1  𝄀
-2.00  ¦  base2  𝄀
-4.75  ¦  new2  𝄀
-5.25  ¦  new3
+val	info
+1.00	base1
+2.00	base2
+4.75	new2
+5.25	new3
 drop table t0;
 drop table t1;
 drop table t2;
@@ -64,11 +64,11 @@ create table t2 (d decimal(10,2), v int, primary key(d));
 insert into t2 values (3.33, 3),(4.44, 4),(5.55, 5);
 data branch pick t2 into t1 keys(3.33, 5.55);
 select * from t1 order by d;
-➤ d[3,10,2]  ¦  v[4,32,0]  𝄀
-1.11  ¦  1  𝄀
-2.22  ¦  2  𝄀
-3.33  ¦  3  𝄀
-5.55  ¦  5
+d	v
+1.11	1
+2.22	2
+3.33	3
+5.55	5
 drop table t1;
 drop table t2;
 create table t0 (val decimal(10,2), tag varchar(10), primary key(val));
@@ -78,12 +78,12 @@ data branch create table t2 from t0;
 insert into t2 values (-5.25,'neg2'),(25.75,'pos2');
 data branch pick t2 into t1 keys(-5.25, 25.75);
 select * from t1 order by val;
-➤ val[3,10,2]  ¦  tag[12,-1,0]  𝄀
--10.50  ¦  neg  𝄀
--5.25  ¦  neg2  𝄀
-0.00  ¦  zero  𝄀
-10.50  ¦  pos  𝄀
-25.75  ¦  pos2
+val	tag
+-10.50	neg
+-5.25	neg2
+0.00	zero
+10.50	pos
+25.75	pos2
 drop table t0;
 drop table t1;
 drop table t2;
