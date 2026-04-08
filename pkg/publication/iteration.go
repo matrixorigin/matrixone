@@ -149,6 +149,14 @@ func InitializeIterationContext(
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		_ = localTxn.Rollback(ctxWithTimeout)
+	}()
 
 	// Register the transaction with the engine
 	err = cnEngine.New(ctx, localTxn)
@@ -157,9 +165,12 @@ func InitializeIterationContext(
 	}
 
 	defer func() {
+		if err != nil {
+			return
+		}
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
-		localTxn.Commit(ctxWithTimeout)
+		_ = localTxn.Commit(ctxWithTimeout)
 	}()
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
@@ -801,7 +812,9 @@ func RequestUpstreamSnapshot(
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
 	}
-	result.Close()
+	if result != nil {
+		result.Close()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -1176,6 +1189,15 @@ func ExecuteIteration(
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
 	}
+	cleanupLocalTxn := true
+	defer func() {
+		if !cleanupLocalTxn {
+			return
+		}
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		_ = localTxn.Rollback(ctxWithTimeout)
+	}()
 
 	// Register the transaction with the engine
 	err = cnEngine.New(ctx, localTxn)
@@ -1191,6 +1213,7 @@ func ExecuteIteration(
 
 	iterationCtx.LocalTxn = localTxn
 	iterationCtx.LocalExecutor.(*InternalSQLExecutor).SetTxn(localTxn)
+	cleanupLocalTxn = false
 
 	// Declare syncProtectionJobID here so it can be accessed in defer
 	var syncProtectionJobID string
@@ -1282,7 +1305,6 @@ func ExecuteIteration(
 				)
 			}
 		}
-		err = nil
 	}()
 
 	// Update iteration state in defer to ensure it's always called

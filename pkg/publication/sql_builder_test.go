@@ -87,14 +87,14 @@ func TestGetDdlSQL_EmptySnapshotName(t *testing.T) {
 }
 
 func TestQueryMoCcprLogSQL(t *testing.T) {
-	sql := PublicationSQLBuilder.QueryMoCcprLogSQL("task-uuid")
-	assert.Contains(t, sql, "task-uuid")
+	sql := PublicationSQLBuilder.QueryMoCcprLogSQL("task-'uuid")
+	assert.Contains(t, sql, "task-''uuid")
 	assert.Contains(t, sql, "SELECT")
 }
 
 func TestQueryMoCcprLogFullSQL(t *testing.T) {
-	sql := PublicationSQLBuilder.QueryMoCcprLogFullSQL("task-uuid")
-	assert.Contains(t, sql, "task-uuid")
+	sql := PublicationSQLBuilder.QueryMoCcprLogFullSQL("task-'uuid")
+	assert.Contains(t, sql, "task-''uuid")
 }
 
 func TestQuerySnapshotTsSQL(t *testing.T) {
@@ -118,8 +118,8 @@ func TestGCStatusSQL(t *testing.T) {
 }
 
 func TestUpdateMoCcprLogSQL(t *testing.T) {
-	sql := PublicationSQLBuilder.UpdateMoCcprLogSQL("task1", 1, 100, "{}", "err", 2)
-	assert.Contains(t, sql, "task1")
+	sql := PublicationSQLBuilder.UpdateMoCcprLogSQL("task'1", 1, 100, "{}", "err", 2)
+	assert.Contains(t, sql, "task''1")
 }
 
 func TestUpdateMoCcprLogNoContextSQL(t *testing.T) {
@@ -129,8 +129,8 @@ func TestUpdateMoCcprLogNoContextSQL(t *testing.T) {
 }
 
 func TestQueryMoCcprLogStateBeforeUpdateSQL(t *testing.T) {
-	sql := PublicationSQLBuilder.QueryMoCcprLogStateBeforeUpdateSQL("task1")
-	assert.Contains(t, sql, "task1")
+	sql := PublicationSQLBuilder.QueryMoCcprLogStateBeforeUpdateSQL("task'1")
+	assert.Contains(t, sql, "task''1")
 }
 
 func TestUpdateMoCcprLogNoStateSQL(t *testing.T) {
@@ -146,8 +146,8 @@ func TestUpdateMoCcprLogNoStateNoContextSQL(t *testing.T) {
 }
 
 func TestUpdateMoCcprLogIterationStateAndCnUuidSQL(t *testing.T) {
-	sql := PublicationSQLBuilder.UpdateMoCcprLogIterationStateAndCnUuidSQL("task1", 1, "cn-uuid-1")
-	assert.Contains(t, sql, "task1")
+	sql := PublicationSQLBuilder.UpdateMoCcprLogIterationStateAndCnUuidSQL("task'1", 1, "cn-uuid-1")
+	assert.Contains(t, sql, "task''1")
 	assert.Contains(t, sql, "cn-uuid-1")
 }
 

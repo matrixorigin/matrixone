@@ -2032,6 +2032,37 @@ func Test_insertCCPRDbAndTableRecords_GoodPath(t *testing.T) {
 	})
 }
 
+func Test_insertCCPRDbAndTableRecords_EscapesStrings(t *testing.T) {
+	convey.Convey("insertCCPRDbAndTableRecords escapes SQL strings", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := context.Background()
+		tableIDs := map[string]TableIDInfo{
+			"db'.t'": {TableID: 100, DbID: 1, DbName: "db'name", TableName: "t'name"},
+		}
+
+		var executed []string
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().
+			Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			}).
+			Times(2)
+
+		err := insertCCPRDbAndTableRecords(ctx, bh, tableIDs, "task'id", uint32(1))
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(executed, convey.ShouldHaveLength, 2)
+		convey.So(executed[0], convey.ShouldContainSubstring, escapeSQLString("task'id"))
+		convey.So(executed[0], convey.ShouldContainSubstring, escapeSQLString("db'name"))
+		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("task'id"))
+		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("db'name"))
+		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("t'name"))
+	})
+}
+
 func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

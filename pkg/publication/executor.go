@@ -106,6 +106,7 @@ func PublicationTaskExecutorFactory(
 			logutil.Error("PublicationTaskExecutor is already running")
 			return moerr.NewErrExecutorRunning(ctx, "PublicationTaskExecutor")
 		}
+		defer running.Store(false)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err = NewPublicationTaskExecutor(
@@ -123,16 +124,16 @@ func PublicationTaskExecutorFactory(
 		attachToTask(ctx, task.GetID(), exec)
 
 		exec.runningMu.Lock()
-		defer exec.runningMu.Unlock()
 		if exec.running {
+			exec.runningMu.Unlock()
 			return
 		}
 		err = exec.initStateLocked()
+		exec.runningMu.Unlock()
 		if err != nil {
 			return
 		}
 		exec.run(ctx)
-		<-ctx.Done()
 		return
 	}
 }
@@ -280,27 +281,25 @@ func (exec *PublicationTaskExecutor) Start() error {
 }
 
 func (exec *PublicationTaskExecutor) initStateLocked() error {
-	exec.running = true
 	logutil.Info(
 		"Publication-Task Start",
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp, exec.upstreamSQLHelperFactory)
-	exec.worker = worker
-	exec.ctx = ctx
-	exec.cancel = cancel
 	err := retryPublication(
 		ctx,
 		func() error {
-			return exec.replay(exec.ctx)
+			return exec.replay(ctx)
 		},
 		exec.option.RetryOption,
 	)
 	if err != nil {
+		worker.Stop()
+		cancel()
 		return err
 	}
 	// Update tasks with state != error and drop_at is empty to complete
-	err = exec.updateNonErrorTasksToComplete(exec.ctx)
+	err = exec.updateNonErrorTasksToComplete(ctx)
 	if err != nil {
 		logutil.Error(
 			"Publication-Task update non-error tasks to complete failed",
@@ -308,6 +307,10 @@ func (exec *PublicationTaskExecutor) initStateLocked() error {
 		)
 		// Don't return error, continue execution
 	}
+	exec.worker = worker
+	exec.ctx = ctx
+	exec.cancel = cancel
+	exec.running = true
 	exec.wg.Add(1)
 	return nil
 }

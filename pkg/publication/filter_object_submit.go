@@ -568,6 +568,18 @@ func ApplyObjects(
 	}
 
 	// Phase 4: Wait for all TOMBSTONE filter jobs to complete
+	tombstoneResults := make(map[*ObjectWithTableInfo]*FilterObjectJobResult, len(tombstoneObjects))
+	for _, info := range tombstoneObjects {
+		if info.Delete {
+			continue
+		}
+		filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+		if filterResult.Err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
+			return
+		}
+		tombstoneResults[info] = filterResult
+	}
 	for _, info := range tombstoneObjects {
 		if info.Stats.GetAppendable() {
 			upstreamObjID := info.Stats.ObjectName().ObjectId()
@@ -589,11 +601,7 @@ func ApplyObjects(
 					}
 				}
 			} else {
-				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
-				if filterResult.Err != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
-					return
-				}
+				filterResult := tombstoneResults[info]
 				// Query existing mapping from aobjectMap and delete old downstream object
 				if aobjectMap != nil {
 					if existingMapping, exists := aobjectMap.Get(upstreamIDStr); exists {
@@ -634,11 +642,7 @@ func ApplyObjects(
 					Delete:      true,
 				})
 			} else {
-				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
-				if filterResult.Err != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to filter tombstone object: %v", filterResult.Err)
-					return
-				}
+				filterResult := tombstoneResults[info]
 				if !filterResult.DownstreamStats.IsZero() {
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
 						Stats:       filterResult.DownstreamStats,

@@ -452,7 +452,7 @@ func (b publicationSQLBuilder) QueryMoCcprLogSQL(
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogSqlTemplate_Idx].SQL,
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -464,7 +464,7 @@ func (b publicationSQLBuilder) QueryMoCcprLogFullSQL(
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogFullSqlTemplate_Idx].SQL,
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -546,7 +546,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
 		subscriptionState,
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -566,7 +566,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoContextSQL(
 		iterationLSN,
 		escapeSQLString(errorMessage),
 		subscriptionState,
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -575,7 +575,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoContextSQL(
 func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID string) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx].SQL,
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -597,7 +597,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 		watermark,
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -617,7 +617,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateNoContextSQL(
 		iterationLSN,
 		watermark,
 		escapeSQLString(errorMessage),
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 
@@ -632,7 +632,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateAndCnUuidSQL(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx].SQL,
 		iterationState,
 		escapeSQLString(cnUUID),
-		taskID,
+		escapeSQLString(taskID),
 	)
 }
 

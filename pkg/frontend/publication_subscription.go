@@ -1207,11 +1207,11 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 	// Query by pub_name only, without account_id filter
 	var sql string
 	if accountNameColExists {
-		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", pubName)
+		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", escapeSQLString(pubName))
 	} else {
 		// For old schema without account_name column
 		sql = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs" +
-			fmt.Sprintf(" where pub_name = '%s'", pubName)
+			fmt.Sprintf(" where pub_name = '%s'", escapeSQLString(pubName))
 	}
 
 	bh.ClearExecResultSet()
@@ -2766,7 +2766,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 	}
 	// Get KeyEncryptionKey from service
 	pu := getPu(ses.GetService())
-	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+	aesKey, err := cdc.AesCFBDecodeWithKey(
 		ctx,
 		encryptedKey,
 		[]byte(pu.SV.KeyEncryptionKey),
@@ -2782,7 +2782,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		Ip:       host,
 		Port:     port,
 	}
-	encodedPassword, err := uriInfo.GetEncodedPassword()
+	encodedPassword, err := cdc.AesCFBEncodeWithKey([]byte(uriInfo.Password), []byte(aesKey))
 	if err != nil {
 		return err
 	}
@@ -2973,18 +2973,18 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			0,
 			'%s'
 		)`,
-		taskID,
-		string(cs.PubName),
-		cs.SubscriptionAccountName,
-		syncLevel,
+		escapeSQLString(taskID),
+		escapeSQLString(string(cs.PubName)),
+		escapeSQLString(cs.SubscriptionAccountName),
+		escapeSQLString(syncLevel),
 		accountId,
-		dbName,
-		tableName,
-		encryptedUri,
-		string(syncConfigJSON),
+		escapeSQLString(dbName),
+		escapeSQLString(tableName),
+		escapeSQLString(encryptedUri),
+		escapeSQLString(string(syncConfigJSON)),
 		subscriptionState,
 		iterationState,
-		strings.ReplaceAll(contextJSON, "'", "''"),
+		escapeSQLString(contextJSON),
 	)
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -3372,8 +3372,8 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 				catalog.MO_CATALOG,
 				catalog.MO_CCPR_DBS,
 				info.DbID,
-				taskID,
-				info.DbName,
+				escapeSQLString(taskID),
+				escapeSQLString(info.DbName),
 				accountId,
 			)
 			if err := bh.Exec(ctx, sql); err != nil {
@@ -3388,9 +3388,9 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 			catalog.MO_CATALOG,
 			catalog.MO_CCPR_TABLES,
 			info.TableID,
-			taskID,
-			info.DbName,
-			info.TableName,
+			escapeSQLString(taskID),
+			escapeSQLString(info.DbName),
+			escapeSQLString(info.TableName),
 			accountId,
 		)
 		if err := bh.Exec(ctx, sql); err != nil {

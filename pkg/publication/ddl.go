@@ -1137,9 +1137,9 @@ func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, 
 		catalog.MO_CATALOG,
 		catalog.MO_CCPR_TABLES,
 		tableID,
-		taskID,
-		dbName,
-		tableName,
+		escapeSQLString(taskID),
+		escapeSQLString(dbName),
+		escapeSQLString(tableName),
 		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
@@ -1164,8 +1164,8 @@ func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, tas
 		catalog.MO_CATALOG,
 		catalog.MO_CCPR_DBS,
 		dbID,
-		taskID,
-		dbName,
+		escapeSQLString(taskID),
+		escapeSQLString(dbName),
 		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
