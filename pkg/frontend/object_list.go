@@ -498,6 +498,9 @@ func ResolveSnapshotWithSnapshotNameWithoutSession(
 func handleInternalObjectList(ses FeSession, execCtx *ExecCtx, ic *InternalCmdObjectList) error {
 	ctx := execCtx.reqCtx
 	session := ses.(*Session)
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "object_list"); err != nil {
+		return err
+	}
 
 	var (
 		mrs      = ses.GetMysqlResultSet()

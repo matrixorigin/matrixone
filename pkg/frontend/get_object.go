@@ -19,30 +19,15 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
-
-func init() {
-	// Periodically log chunkSemaphore statistics
-	go func() {
-		for {
-			time.Sleep(10 * time.Second)
-			waiting := atomic.LoadInt64(&chunkSemaphoreWaiting)
-			holding := atomic.LoadInt64(&chunkSemaphoreHolding)
-			finished := atomic.LoadInt64(&chunkSemaphoreFinished)
-			logutil.Infof("[chunkSemaphore] STATS: waiting=%d, holding=%d, finished=%d, max=%d", waiting, holding, finished, getObjectMaxConcurrent)
-		}
-	}()
-}
 
 const (
 	// getObjectChunkSize is the size of each chunk for GetObject (100MB)
@@ -53,16 +38,11 @@ const (
 	getObjectMaxConcurrent = getObjectMaxMemory / getObjectChunkSize
 )
 
-// chunkBufferPool is a pool for reusing 100MB buffers in GetObject
-var chunkBufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, getObjectChunkSize)
-		return &buf
-	},
-}
-
-// chunkSemaphore limits concurrent memory usage for GetObject (5GB max)
-var chunkSemaphore = make(chan struct{}, getObjectMaxConcurrent)
+var (
+	chunkResourceOnce sync.Once
+	chunkBufferPool   *sync.Pool
+	chunkSemaphore    chan struct{}
+)
 
 // Counters for tracking semaphore usage (only counts goroutines currently waiting or holding)
 var (
@@ -70,6 +50,26 @@ var (
 	chunkSemaphoreHolding  int64 // goroutines currently holding semaphore
 	chunkSemaphoreFinished int64 // total finished requests
 )
+
+func initGetObjectResources() {
+	chunkBufferPool = &sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, getObjectChunkSize)
+			return &buf
+		},
+	}
+	chunkSemaphore = make(chan struct{}, getObjectMaxConcurrent)
+}
+
+func getChunkBufferPool() *sync.Pool {
+	chunkResourceOnce.Do(initGetObjectResources)
+	return chunkBufferPool
+}
+
+func getChunkSemaphore() chan struct{} {
+	chunkResourceOnce.Do(initGetObjectResources)
+	return chunkSemaphore
+}
 
 // GetObjectPermissionChecker is the function to check publication permission for GetObject
 // This is exported as a variable to allow stubbing in tests
@@ -156,9 +156,10 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 
 	atomic.AddInt64(&chunkSemaphoreWaiting, 1)
 	atomic.LoadInt64(&chunkSemaphoreHolding)
+	semaphore := getChunkSemaphore()
 
 	select {
-	case chunkSemaphore <- struct{}{}:
+	case semaphore <- struct{}{}:
 		// acquired - remove from waiting, add to holding
 		atomic.AddInt64(&chunkSemaphoreWaiting, -1)
 		atomic.AddInt64(&chunkSemaphoreHolding, 1)
@@ -168,15 +169,15 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 		return nil, ctx.Err()
 	}
 	defer func() {
-		<-chunkSemaphore
+		<-semaphore
 		atomic.AddInt64(&chunkSemaphoreHolding, -1)
 		atomic.AddInt64(&chunkSemaphoreFinished, 1)
 	}()
 
 	// Get buffer from pool for reuse
-	bufPtr := chunkBufferPool.Get().(*[]byte)
+	bufPtr := getChunkBufferPool().Get().(*[]byte)
 	buf := *bufPtr
-	defer chunkBufferPool.Put(bufPtr)
+	defer getChunkBufferPool().Put(bufPtr)
 
 	// Use pre-allocated buffer in IOEntry.Data to avoid fileservice internal allocation
 	entry := fileservice.IOEntry{
@@ -333,6 +334,9 @@ func handleGetObject(
 func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetObject) error {
 	ctx := execCtx.reqCtx
 	session := ses.(*Session)
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "get_object"); err != nil {
+		return err
+	}
 
 	var (
 		mrs      = ses.GetMysqlResultSet()

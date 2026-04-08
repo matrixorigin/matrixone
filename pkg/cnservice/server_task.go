@@ -348,7 +348,7 @@ func (s *service) registerExecutorsLocked() {
 			s.task.runner.Attach,
 			s.cfg.UUID,
 			common.PublicationAllocator,
-			nil,  // upstreamSQLHelperFactory can be nil for now
+			nil,
 			s.pu, // pass ParameterUnit from service
 		),
 	)

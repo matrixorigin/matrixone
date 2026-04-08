@@ -59,6 +59,9 @@ var getAccountFromPublicationFunc = getAccountFromPublication
 func handleInternalCheckSnapshotFlushed(ses FeSession, execCtx *ExecCtx, cmd *InternalCmdCheckSnapshotFlushed) error {
 	ctx := execCtx.reqCtx
 	session := ses.(*Session)
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "check_snapshot_flushed"); err != nil {
+		return err
+	}
 
 	var mrs MysqlResultSet
 	session.ClearAllMysqlResultSet()

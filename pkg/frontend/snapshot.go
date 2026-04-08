@@ -2950,6 +2950,9 @@ func getAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccoun
 // It checks permission via publication and returns snapshot ts
 func handleGetSnapshotTs(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetSnapshotTs) error {
 	ctx := execCtx.reqCtx
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "get_snapshot_ts"); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -2988,6 +2991,9 @@ func handleGetSnapshotTs(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetSnap
 // It checks permission via publication and returns database names covered by the snapshot
 func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatabases) error {
 	ctx := execCtx.reqCtx
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "get_databases"); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3077,6 +3083,9 @@ func handleGetDatabases(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDatab
 // It checks permission via publication and returns mo_indexes records at the snapshot timestamp
 func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoIndexes) error {
 	ctx := execCtx.reqCtx
+	if err := ensurePublicationInternalCmdAccess(ctx, ses, "get_mo_indexes"); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3180,6 +3189,9 @@ func handleGetMoIndexes(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetMoInd
 func handleInternalGetDdl(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetDdl) error {
 	var err error
 	ctx := execCtx.reqCtx
+	if err = ensurePublicationInternalCmdAccess(ctx, ses, "get_ddl"); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 

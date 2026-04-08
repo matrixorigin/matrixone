@@ -54,6 +54,15 @@ func TestCreateUpstreamExecutor_InternalSQLExecutor_InvalidAccountID(t *testing.
 	assert.Contains(t, err.Error(), "failed to parse account ID")
 }
 
+func TestCreateUpstreamExecutor_InternalSQLExecutor_RequiresHelperFactory(t *testing.T) {
+	_, _, err := createUpstreamExecutor(
+		context.Background(), "cn1", nil, nil, nil,
+		"internal_sql_executor:0", nil, nil, nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires upstreamSQLHelperFactory")
+}
+
 func TestCreateUpstreamExecutor_ExternalConn_InvalidFormat(t *testing.T) {
 	_, _, err := createUpstreamExecutor(
 		context.Background(), "cn1", nil, nil, nil,

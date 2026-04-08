@@ -955,6 +955,9 @@ func createUpstreamExecutor(
 		} else {
 			return nil, 0, moerr.NewInternalErrorf(ctx, "invalid upstream_conn format: %s, expected internal_sql_executor or internal_sql_executor:<account_id>", upstreamConn)
 		}
+		if upstreamSQLHelperFactory == nil {
+			return nil, 0, moerr.NewInternalError(ctx, "internal_sql_executor upstream requires upstreamSQLHelperFactory")
+		}
 
 		// Use provided retry options or defaults
 		retryOpt := sqlExecutorRetryOpt
