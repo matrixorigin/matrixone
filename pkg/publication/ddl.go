@@ -1513,9 +1513,12 @@ func canDoColumnChangesInplace(oldCols, newCols map[string]*columnInfo) bool {
 		// Try to find matching column by position or by name
 		found := false
 		for newName, newCol := range newCols {
-			// Skip if already matched
-			if oldCol.position == newCol.position {
-				// Same position, check if types match
+			if oldName == newName {
+				// Same name but different position - not inplace
+				if oldCol.position != newCol.position {
+					return false
+				}
+				// Same name, same position, check if types match
 				if oldCol.typ != newCol.typ ||
 					oldCol.defaultVal != newCol.defaultVal ||
 					oldCol.nullable != newCol.nullable {
@@ -1523,9 +1526,15 @@ func canDoColumnChangesInplace(oldCols, newCols map[string]*columnInfo) bool {
 				}
 				found = true
 				break
-			} else if oldName == newName {
-				// Same name but different position - not inplace
-				return false
+			} else if oldCol.position == newCol.position {
+				// Same position, different name (rename), check if types match
+				if oldCol.typ != newCol.typ ||
+					oldCol.defaultVal != newCol.defaultVal ||
+					oldCol.nullable != newCol.nullable {
+					return false
+				}
+				found = true
+				break
 			}
 		}
 		if !found {
