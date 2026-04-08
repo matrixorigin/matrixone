@@ -1430,13 +1430,16 @@ func restoreToDatabaseOrTableWithPitr(
 			return
 		}
 
+		// Skip master check for TABLE/DATABASE level restore:
+		// 1. User explicitly specifies which table(s) to restore
+		// 2. If the table is referenced by other tables restored earlier, master check would incorrectly block
 		if err = reCreateTableWithPitr(ctx,
 			sid,
 			bh,
 			pitrName,
 			ts,
 			tblInfo,
-			false); err != nil {
+			true); err != nil {
 			return
 		}
 	}
@@ -1834,7 +1837,8 @@ func restoreSystemDatabaseWithPitr(
 			return
 		}
 
-		if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo, false); err != nil {
+		// Skip master check for system tables - they are restored as part of the system database
+		if err = reCreateTableWithPitr(ctx, sid, bh, pitrName, ts, tblInfo, true); err != nil {
 			return
 		}
 	}
