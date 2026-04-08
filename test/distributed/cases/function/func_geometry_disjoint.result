@@ -20,8 +20,8 @@ select st_disjoint(st_geomfromtext(null), st_geomfromtext('POINT(2 2)')) as disj
 ➤ disjoint_null[-7,1,0]  𝄀
 null
 select st_disjoint(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
--- @regex("ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations", true)
-invalid input: ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations
+-- @regex("ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs", true)
+invalid input: ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs
 select st_disjoint(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
 -- @regex("polygons with holes are not supported", true)
 invalid input: polygons with holes are not supported

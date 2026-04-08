@@ -5428,7 +5428,7 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StIntersects)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5517,7 +5517,7 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StDisjoint)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, and POLYGON combinations")
+	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, or POLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
