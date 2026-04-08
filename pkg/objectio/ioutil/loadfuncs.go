@@ -90,26 +90,34 @@ func LoadColumnsData2(
 		return
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
-		if needCopy {
+		if needCopy || err != nil {
+			// needCopy: caller owns copied vectors; IOVector can be freed now.
+			// err != nil: clean up IOVector internally so callers don't have
+			// to call release on error paths.
 			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
+		// needCopy=false, success: caller must call release to free IOVector
+		// after it is done with the zero-copy vectors.
 		release = func() {
 			objectio.ReleaseIOVector(&ioVectors)
-			for _, vec := range vectors {
-				vec.Close()
-			}
 		}
 	}()
 	var obj any
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
+			for _, col := range vectors {
+				if col != nil {
+					col.Close()
+				}
+			}
+			vectors = nil
 			return
 		}
 
@@ -120,20 +128,18 @@ func LoadColumnsData2(
 				vPool.GetMPool(),
 				vPool,
 			); err != nil {
+				for _, col := range vectors {
+					if col != nil {
+						col.Close()
+					}
+				}
+				vectors = nil
 				return
 			}
 		} else {
 			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
 		}
 		vectors[i] = vec
-	}
-	if err != nil {
-		for _, col := range vectors {
-			if col != nil {
-				col.Close()
-			}
-		}
-		return nil, release, err
 	}
 	return
 }

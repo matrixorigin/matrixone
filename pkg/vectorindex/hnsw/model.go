@@ -411,41 +411,6 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 	return idx.Index.Contains(uint64(key))
 }
 
-// load chunk from database
-func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	stream_chan chan executor.Result,
-	error_chan chan error,
-	buffer []byte) (stream_closed bool, err error) {
-	var res executor.Result
-	var ok bool
-
-	procCtx := sqlproc.GetContext()
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
-	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-	for i, chunkId := range chunkIds {
-		data := bat.Vecs[1].GetRawBytesAt(i)
-		offset := chunkId * vectorindex.MaxChunkSize
-		copy(buffer[offset:], data)
-	}
-	return false, nil
-}
-
 func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -454,6 +419,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	view bool) (err error) {
 
 	var (
+		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
 		error_chan  = make(chan error, 2)
 		wg          sync.WaitGroup
@@ -469,16 +435,33 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	}
 	idx.View = true
 
-	if idx.buffer == nil {
-		// model buffer is nil
+	if len(idx.Path) == 0 {
+		// Stream index chunks from DB into a temp file, then let usearch
+		// mmap it via View(). This keeps the index data entirely off the
+		// Go heap, eliminating GC pressure for multi-GB indexes.
 
-		idx.buffer = make([]byte, idx.FileSize)
+		fp, err = os.CreateTemp("", "hnsw")
+		if err != nil {
+			return err
+		}
+		// Assign Path immediately so the deferred cleanup can always
+		// find and remove the temp file, even if errors occur before
+		// the streaming phase completes.
+		idx.Path = fp.Name()
 		defer func() {
+			if fp != nil {
+				fp.Close()
+			}
 			if err != nil {
-				// release buffer when error
+				// clean up on error
 				idx.Destroy()
 			}
 		}()
+
+		err = fallocate.Fallocate(fp, 0, idx.FileSize)
+		if err != nil {
+			return err
+		}
 
 		// run streaming sql
 		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
@@ -502,7 +485,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		// incremental load from database
 		sql_closed := false
 		for !sql_closed {
-			sql_closed, err = idx.loadChunkFromBuffer(ctx, sqlproc, stream_chan, error_chan, idx.buffer)
+			sql_closed, err = idx.loadChunk(ctx, sqlproc, stream_chan, error_chan, fp)
 			if err != nil {
 				// notify the producer to stop the sql streaming
 				cancel(err)
@@ -532,17 +515,31 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 			return
 		}
 
+		fp.Close()
+		fp = nil
 	}
 
-	chksum := vectorindex.CheckSumFromBuffer(idx.buffer)
+	// verify checksum from file
+	chksum, err := vectorindex.CheckSum(idx.Path)
+	if err != nil {
+		return err
+	}
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index buffer")
+		return moerr.NewInternalError(sqlproc.GetContext(), "Checksum mismatch with index file")
 	}
 
 	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			usearchidx.Destroy()
+			if idx.Index == usearchidx {
+				idx.Index = nil
+			}
+		}
+	}()
 
 	err = usearchidx.ChangeThreadsSearch(uint(nthread))
 	if err != nil {
@@ -554,7 +551,9 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 
-	err = usearchidx.ViewBuffer(idx.buffer, uint(idx.FileSize))
+	// View() mmaps the file — data stays off Go heap, OS can page out
+	// under memory pressure. File must remain until Destroy().
+	err = usearchidx.View(idx.Path)
 	if err != nil {
 		return err
 	}
@@ -640,7 +639,6 @@ func (idx *HnswModel[T]) LoadIndex(
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
 		error_chan  = make(chan error, 2)
-		fname       string
 		wg          sync.WaitGroup
 	)
 
@@ -667,22 +665,22 @@ func (idx *HnswModel[T]) LoadIndex(
 			return err
 		}
 
-		fname = fp.Name()
+		// Assign Path immediately so cleanup can find the file on error.
+		idx.Path = fp.Name()
 
-		// load index to memory
 		defer func() {
 			if fp != nil {
 				fp.Close()
 				fp = nil
 			}
 
-			if view {
-				// if view == true, remove the file.  right now view equals to read-only model when search.
-				// since model loads into memory anyway, we can safely remove the file after load.
-				// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
-				// for update, we need this file for Load() and unload().
-				if len(fname) > 0 {
-					os.Remove(fname)
+			if err != nil || view {
+				// On error: always remove the temp file.
+				// On success with view: Load() copies data to C heap,
+				// file is no longer needed.
+				if len(idx.Path) > 0 {
+					os.Remove(idx.Path)
+					idx.Path = ""
 				}
 			}
 		}()
@@ -745,7 +743,6 @@ func (idx *HnswModel[T]) LoadIndex(
 			return
 		}
 
-		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
 
@@ -764,6 +761,14 @@ func (idx *HnswModel[T]) LoadIndex(
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			usearchidx.Destroy()
+			if idx.Index == usearchidx {
+				idx.Index = nil
+			}
+		}
+	}()
 
 	err = usearchidx.ChangeThreadsSearch(uint(nthread))
 	if err != nil {
@@ -777,13 +782,19 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if view {
 		err = usearchidx.Load(idx.Path)
+		if err != nil {
+			return err
+		}
 		idx.View = true
 	} else {
 		err = usearchidx.Load(idx.Path)
-		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
+		err = usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		if err != nil {
+			return err
+		}
 	}
 
 	// always get the number of item and capacity when model loaded.

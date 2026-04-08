@@ -42,9 +42,9 @@ func TestTransferPage(t *testing.T) {
 	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
-	transferMap := make(api.TransferMap)
+	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
@@ -63,9 +63,9 @@ func TestTransferPage(t *testing.T) {
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
-	transferMap = make(api.TransferMap)
+	transferMap = make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
@@ -97,9 +97,9 @@ func TestTransferTable(t *testing.T) {
 	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
 	assert.NoError(t, err)
 	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
-	transferMap := make(api.TransferMap)
+	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
-		transferMap[uint32(i)] = api.TransferDestPos{
+		transferMap[i] = api.TransferDestPos{
 			BlkIdx: 0,
 			RowIdx: uint32(i),
 		}
@@ -126,4 +126,39 @@ func TestTransferTable(t *testing.T) {
 	assert.Equal(t, int64(1), pinned.Item().RefCount())
 	pinned.Close()
 	assert.Equal(t, int64(0), pinned.Item().RefCount())
+}
+
+func TestTransferPageTrainDetachedOwnsCopy(t *testing.T) {
+	sid := objectio.NewSegmentid()
+	src := common.ID{
+		BlockID: *objectio.NewBlockid(sid, 1, 0),
+	}
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
+
+	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
+	assert.NoError(t, err)
+
+	page := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
+	defer page.Close()
+
+	transferMap := make(api.TransferMap, 2)
+	transferMap[0] = api.TransferDestPos{ObjIdx: 0, BlkIdx: 0, RowIdx: 7}
+	transferMap[1] = api.TransferDestPos{ObjIdx: 0, BlkIdx: 0, RowIdx: 9}
+
+	page.TrainDetached(transferMap)
+
+	transferMap[0] = api.TransferDestPos{ObjIdx: api.NoTransfer, BlkIdx: 99, RowIdx: 99}
+	transferMap[1] = api.TransferDestPos{ObjIdx: api.NoTransfer, BlkIdx: 99, RowIdx: 99}
+
+	rowID, ok := page.Transfer(0)
+	assert.True(t, ok)
+	blockID, offset := rowID.Decode()
+	assert.Equal(t, createdObjs[0], blockID.Object())
+	assert.Equal(t, uint32(7), offset)
+
+	rowID, ok = page.Transfer(1)
+	assert.True(t, ok)
+	blockID, offset = rowID.Decode()
+	assert.Equal(t, createdObjs[0], blockID.Object())
+	assert.Equal(t, uint32(9), offset)
 }

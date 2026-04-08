@@ -469,6 +469,9 @@ import (
 
 %token <str> UNUSED BINDINGS
 
+// Generated Columns
+%token <str> GENERATED ALWAYS STORED VIRTUAL
+
 // Do
 %token <str> DO
 
@@ -721,7 +724,7 @@ import (
 %type <updateExprs> update_list on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt
+%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -9937,6 +9940,27 @@ column_attribute_elem:
 	{
 		$$ = tree.NewAttributeHeaders()
 	}
+|   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
+    {
+        $$ = tree.NewAttributeGeneratedAlways($5, $7)
+    }
+|   AS '(' expression ')' generated_column_type_opt
+    {
+        $$ = tree.NewAttributeGeneratedAlways($3, $5)
+    }
+
+generated_column_type_opt:
+    {
+        $$ = false
+    }
+|   VIRTUAL
+    {
+        $$ = false
+    }
+|   STORED
+    {
+        $$ = true
+    }
 
 enforce:
     ENFORCED
@@ -11003,7 +11027,7 @@ function_call_aggregate:
 |   APPROX_COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -11078,7 +11102,7 @@ function_call_aggregate:
 |   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -13188,6 +13212,7 @@ non_reserved_keyword:
     ACCOUNT
 |   ACCOUNTS
 |   AGAINST
+|   ALWAYS
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ATTRIBUTE
@@ -13257,6 +13282,7 @@ non_reserved_keyword:
 |   FULL
 |   FIXED
 |   FIELDS
+|   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
@@ -13354,6 +13380,7 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
+|   STORED
 |   STORES
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
@@ -13381,6 +13408,7 @@ non_reserved_keyword:
 |   VARCHAR
 |   VARIABLES
 |   VIEW
+|   VIRTUAL
 |   WRITE
 |   WARNINGS
 |   WORK

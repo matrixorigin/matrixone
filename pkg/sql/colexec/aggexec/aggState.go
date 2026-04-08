@@ -105,6 +105,10 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 		for i, typ := range info.stateTypes {
 			ag.vecs[i] = vector.NewOffHeapVecWithType(typ)
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
+				for j := 0; j <= i; j++ {
+					ag.vecs[j].Free(mp)
+				}
+				ag.vecs = nil
 				return err
 			}
 			if info.emptyNull && setNulls {
@@ -125,6 +129,8 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 		}
 
 		if ag.argbuf, err = mp.Alloc(bufsz, true); err != nil {
+			mpool.FreeSlice(mp, ag.argCnt)
+			ag.argCnt = nil
 			return err
 		}
 		arena := arenaskl.NewArena(ag.argbuf)

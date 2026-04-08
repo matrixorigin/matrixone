@@ -15,9 +15,6 @@
 package aggexec
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -235,11 +232,3 @@ var (
 		return types.T_text.ToType()
 	}
 )
-
-func SpecialAggValuesString() string {
-	pairs := make([]string, 0, len(specialAgg))
-	for key, value := range specialAgg {
-		pairs = append(pairs, fmt.Sprintf("%d:%v", key, value))
-	}
-	return strings.Join(pairs, "; ")
-}

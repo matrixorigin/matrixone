@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1684,6 +1686,70 @@ func TestRangeLockWithInterleavedRowLocks(t *testing.T) {
 			// Cleanup
 			require.NoError(t, l.Unlock(ctx, txn1, timestamp.Timestamp{PhysicalTime: 2}))
 			require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{PhysicalTime: 3}))
+		},
+	)
+}
+
+func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, nil, logger)
+				defer events.close()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+
+				txnID := []byte("txn1")
+				fsp := newFixedSlicePool(2)
+				txn := newActiveTxn(txnID, string(txnID), fsp, "")
+				defer reuse.Free(txn, nil)
+
+				waitTxn := pb.WaitTxn{TxnID: txnID, CreatedOn: "test"}
+				w := acquireWaiter(waitTxn, "test", logger)
+
+				holderTxnID := []byte("holder1")
+				holderWaitTxn := pb.WaitTxn{TxnID: holderTxnID, CreatedOn: "test"}
+				h := newHolders()
+				h.add(holderWaitTxn)
+				wq := newWaiterQueue()
+				wq.init(logger)
+				conflictWith := Lock{
+					createAt: time.Now(),
+					holders:  h,
+					waiters:  wq,
+				}
+
+				c := &lockContext{
+					ctx:     context.Background(),
+					txn:     txn,
+					waitTxn: waitTxn,
+					opts: LockOptions{
+						LockOptions: pb.LockOptions{
+							Granularity: pb.Granularity_Range,
+							Mode:        pb.LockMode_Exclusive,
+							Policy:      pb.WaitPolicy_Wait,
+						},
+					},
+					w:                w,
+					rangeLastWaitKey: []byte{99},
+					result:           pb.Result{},
+				}
+
+				// rangeLastWaitKey {99} is not in the store, so the error log
+				// branch (previously a panic) should execute without crashing.
+				err := lt.handleLockConflictLocked(c, []byte{1}, conflictWith)
+				assert.NoError(t, err)
+				assert.Equal(t, []byte{1}, c.rangeLastWaitKey)
+			})
 		},
 	)
 }

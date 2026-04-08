@@ -82,6 +82,11 @@ func (builder *QueryBuilder) bindExternalScan(
 						return -1, nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", colName)
 					}
 					tbColIdx := tableDef.Name2ColIndex[colName]
+					if tableDef.Cols[tbColIdx].GeneratedCol != nil {
+						return -1, nil, moerr.NewInvalidInputf(ctx.GetContext(),
+							"the value specified for generated column '%s' in table '%s' is not allowed",
+							colName, tableDef.Name)
+					}
 					colExpr := &plan.Expr{
 						Typ: tableDef.Cols[tbColIdx].Typ,
 						Expr: &plan.Expr_Col{
@@ -113,7 +118,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if len(tbColToDataCol) == 0 {
 		idx := 0
 		for _, col := range tableDef.Cols {
-			if !col.Hidden {
+			if !col.Hidden && col.GeneratedCol == nil {
 				tbColToDataCol[col.Name] = int32(len(insertColToExpr))
 
 				insertColToExpr[col.Name] = &plan.Expr{

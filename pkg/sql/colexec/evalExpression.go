@@ -1392,6 +1392,13 @@ func GetExprZoneMap(
 			default:
 				ivecs := make([]*vector.Vector, len(args))
 				if isAllConst(args) { // constant fold
+					defer func() {
+						for _, v := range ivecs {
+							if v != nil {
+								v.Free(proc.Mp())
+							}
+						}
+					}()
 					for i, arg := range args {
 						if vecs[arg.AuxId] != nil {
 							vecs[arg.AuxId].Free(proc.Mp())

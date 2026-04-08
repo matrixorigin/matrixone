@@ -44,12 +44,6 @@ func WithDedupAll() SinkerOption {
 	}
 }
 
-func WithBufferSizeCap(size int) SinkerOption {
-	return func(sinker *Sinker) {
-		sinker.config.bufferSizeCap = size
-	}
-}
-
 func WithTailSizeCap(size int) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.config.tailSizeCap = size
@@ -86,6 +80,7 @@ var _ FileSinker = new(FSinkerImpl)
 
 type FSinkerImpl struct {
 	writer *BlockWriter
+	arena  *objectio.WriteArena
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
@@ -99,19 +94,25 @@ type FSinkerImpl struct {
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 	if s.writer == nil {
+		if s.arena == nil {
+			s.arena = objectio.GetArena(objectio.ArenaLarge)
+		}
+		s.arena.Reset()
 		if s.isTombstone {
-			s.writer = ConstructTombstoneWriter(
+			s.writer = ConstructTombstoneWriterWithArena(
 				s.hiddenSelection,
 				s.fs,
+				s.arena,
 			)
 		} else {
-			s.writer = ConstructWriter(
+			s.writer = ConstructWriterWithArena(
 				s.schemaVersion,
 				s.seqnums,
 				s.sortKeyPos,
 				s.isPrimaryKey,
 				s.isTombstone,
 				s.fs,
+				s.arena,
 			)
 		}
 	}
@@ -146,8 +147,19 @@ func (s *FSinkerImpl) Reset() {
 }
 
 func (s *FSinkerImpl) Close() error {
-	// s.writer.Reset
 	s.writer = nil
+	if s.arena != nil {
+		// Reset grows the arena if needed (adaptive sizing), then return it
+		// to the free list so the pre-warmed backing array, serialBuf and
+		// compressBuf are reused by the next FSinkerImpl.
+		s.arena.Reset()
+		objectio.PutArena(s.arena)
+		s.arena = nil
+		// Debounce the idle-drain timer so pools stay warm during
+		// active CN pipeline execution.  When CN (and TN) are both
+		// idle for arenaDrainDelay the pools will drain automatically.
+		objectio.ScheduleArenaDrain()
+	}
 	return nil
 }
 
@@ -323,7 +335,6 @@ type Sinker struct {
 	config struct {
 		allMergeSorted bool
 		dedupAll       bool
-		bufferSizeCap  int
 		tailSizeCap    int
 		offHeap        bool
 	}
@@ -360,9 +371,9 @@ func (sinker *Sinker) String() string {
 		sinker.schema.attrs, sinker.schema.attrTypes, sinker.schema.sortKeyIdx))
 
 	buf.WriteString(fmt.Sprintf(
-		"config:{allMergeSorted=%v, dedupAll=%v, bufferSizeCap=%d, tailSizeCap=%d}; ",
+		"config:{allMergeSorted=%v, dedupAll=%v, tailSizeCap=%d}; ",
 		sinker.config.allMergeSorted, sinker.config.dedupAll,
-		sinker.config.bufferSizeCap, sinker.config.tailSizeCap))
+		sinker.config.tailSizeCap))
 
 	return buf.String()
 }
@@ -377,8 +388,7 @@ func (sinker *Sinker) fillDefaults() {
 
 	if sinker.buf.buffers == nil {
 		sinker.buf.isOwner = true
-		sinker.buf.buffers = containers.NewOneSchemaBatchBuffer(
-			sinker.config.bufferSizeCap,
+		sinker.buf.buffers = containers.NewBatchFreeList(
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 			sinker.config.offHeap,
@@ -390,7 +400,7 @@ func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
 }
 
-func (sinker *Sinker) fetchBuffer() *batch.Batch {
+func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	x := sinker.buf.buffers.Len()
 	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes)
 	y := sinker.buf.buffers.Len()
@@ -400,7 +410,10 @@ func (sinker *Sinker) fetchBuffer() *batch.Batch {
 		sinker.buf.bufStats.updateBytes(-bat.Size())
 	}
 
-	return bat
+	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		return nil, err
+	}
+	return bat, nil
 }
 
 func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
@@ -474,11 +487,15 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 	if sinker.schema.sortKeyIdx == -1 {
 		return nil
 	}
+	var idxBuf []int64
+	var shuffleBuf []byte
 	for _, bat := range sinker.staged.inMemory {
-		if err := mergeutil.SortColumnsByIndex(
+		if err := mergeutil.SortColumnsByIndexWithBuf(
 			bat.Vecs,
 			sinker.schema.sortKeyIdx,
 			sinker.mp,
+			&idxBuf,
+			&shuffleBuf,
 		); err != nil {
 			return err
 		}
@@ -493,18 +510,89 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	}
 
 	defer sinker.cleanupInMemoryStaged()
-	var sorted []*batch.Batch
-	innersinker := func(data *batch.Batch) error {
-		oneSorted := sinker.fetchBuffer()
-		_, err := oneSorted.AppendWithCopy(ctx, sinker.mp, data)
-		if err != nil {
-			sinker.putBackBuffer(oneSorted)
+
+	fSinker := sinker.getStageFileSinker()
+	defer sinker.resetFileSinker()
+
+	data := sinker.staged.inMemory
+
+	// merge sort
+	if sinker.schema.sortKeyIdx != -1 {
+		if sinker.config.dedupAll {
+			// dedup needs all sorted blocks present, so accumulate first.
+			if err := sinker.trySpillMergeSortAccumulate(
+				ctx, fSinker,
+			); err != nil {
+				return err
+			}
+			goto sync
+		}
+
+		// stream sorted blocks directly to fSinker, reusing one buffer.
+		if err := sinker.trySpillMergeSortStreaming(
+			ctx, fSinker,
+		); err != nil {
 			return err
 		}
-		sorted = append(sorted, oneSorted)
-		return nil
+		goto sync
 	}
 
+	// no sort key: spill directly
+	for _, bat := range data {
+		if err := fSinker.Sink(ctx, bat); err != nil {
+			return err
+		}
+	}
+
+sync:
+	stats, err := fSinker.Sync(ctx)
+	if err != nil {
+		return err
+	}
+
+	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
+	return nil
+}
+
+// trySpillMergeSortStreaming merge-sorts staged data and streams each full
+// block directly to the file sinker, reusing a single buffer. This avoids
+// accumulating all sorted blocks in memory and eliminates PreExtend churn.
+func (sinker *Sinker) trySpillMergeSortStreaming(
+	ctx context.Context, fSinker FileSinker,
+) error {
+	buffer, err := sinker.fetchBuffer()
+	if err != nil {
+		return err
+	}
+	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
+		if err := fSinker.Sink(ctx, data); err != nil {
+			return nil, err
+		}
+		data.CleanOnlyData()
+		return data, nil
+	}
+	buffer, err = mergeutil.MergeSortBatches(
+		sinker.staged.inMemory,
+		sinker.schema.sortKeyIdx,
+		buffer,
+		streamSinker,
+		sinker.mp,
+		sinker.putBackOneInMemory,
+	)
+	sinker.putBackBuffer(buffer)
+	return err
+}
+
+// trySpillMergeSortAccumulate merge-sorts staged data, accumulates all sorted
+// blocks, runs dedup, then writes to the file sinker.
+func (sinker *Sinker) trySpillMergeSortAccumulate(
+	ctx context.Context, fSinker FileSinker,
+) error {
+	var sorted []*batch.Batch
+	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
+		sorted = append(sorted, data)
+		return sinker.fetchBuffer()
+	}
 	defer func() {
 		for i, bat := range sorted {
 			sinker.putBackBuffer(bat)
@@ -513,49 +601,36 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		sorted = sorted[:0]
 	}()
 
-	data := sinker.staged.inMemory
-
-	// 1. merge sort
-	if sinker.schema.sortKeyIdx != -1 {
-		buffer := sinker.fetchBuffer() // note the lifecycle of buffer
-		defer sinker.putBackBuffer(buffer)
-		if err := mergeutil.MergeSortBatches(
-			sinker.staged.inMemory,
-			sinker.schema.sortKeyIdx,
-			buffer,
-			innersinker,
-			sinker.mp,
-			sinker.putBackOneInMemory,
-		); err != nil {
-			return err
-		}
-		data = sorted
+	buffer, err := sinker.fetchBuffer()
+	if err != nil {
+		return err
 	}
-
-	// 3. dedup
-	if sinker.config.dedupAll {
-		if err := containers.DedupSortedBatches(
-			sinker.schema.sortKeyIdx,
-			data,
-		); err != nil {
-			return err
-		}
-	}
-
-	// 4. spill
-	fSinker := sinker.getStageFileSinker()
-	defer sinker.resetFileSinker()
-	for _, bat := range data {
-		if err := fSinker.Sink(ctx, bat); err != nil {
-			return err
-		}
-	}
-	stats, err := fSinker.Sync(ctx)
+	buffer, err = mergeutil.MergeSortBatches(
+		sinker.staged.inMemory,
+		sinker.schema.sortKeyIdx,
+		buffer,
+		innersinker,
+		sinker.mp,
+		sinker.putBackOneInMemory,
+	)
+	sinker.putBackBuffer(buffer)
 	if err != nil {
 		return err
 	}
 
-	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
+	// dedup
+	if err := containers.DedupSortedBatches(
+		sinker.schema.sortKeyIdx,
+		sorted,
+	); err != nil {
+		return err
+	}
+
+	for _, bat := range sorted {
+		if err := fSinker.Sink(ctx, bat); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -594,12 +669,16 @@ func (sinker *Sinker) Write(
 		if curr == nil {
 			curr = sinker.popStaged()
 			if curr == nil {
-				curr = sinker.fetchBuffer()
+				if curr, err = sinker.fetchBuffer(); err != nil {
+					return
+				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
 				if err = sinker.pushStaged(ctx, curr); err != nil {
 					return
 				}
-				curr = sinker.fetchBuffer()
+				if curr, err = sinker.fetchBuffer(); err != nil {
+					return
+				}
 			}
 		}
 
@@ -626,6 +705,32 @@ func (sinker *Sinker) Write(
 		}
 	}
 	return
+}
+
+// WriteOwned stages a full-block batch directly without copying. The caller
+// transfers ownership: the sinker will clean the batch later.
+// If the batch is not exactly BlockMaxRows or there is a partially-filled
+// staged buffer, falls back to Write (which copies).
+func (sinker *Sinker) WriteOwned(
+	ctx context.Context,
+	data *batch.Batch,
+) (owned bool, err error) {
+	if data.RowCount() != objectio.BlockMaxRows {
+		return false, sinker.Write(ctx, data)
+	}
+	// Check if the last staged batch is partial (not full).
+	last := sinker.popStaged()
+	if last != nil {
+		if err = sinker.pushStaged(ctx, last); err != nil {
+			return false, err
+		}
+		if last.RowCount() < objectio.BlockMaxRows {
+			// Partial staged buffer exists; must copy to fill it.
+			return false, sinker.Write(ctx, data)
+		}
+	}
+	// No partial buffer; stage the batch directly.
+	return true, sinker.pushStaged(ctx, data)
 }
 
 func (sinker *Sinker) Sync(ctx context.Context) error {
@@ -687,6 +792,33 @@ func (sinker *Sinker) GetInMemoryThreshold() int {
 	return sinker.staged.memorySizeThreshold
 }
 
+// SyncAndTakeResults calls Sync, then extracts and returns the accumulated
+// results, resetting the sinker so it can accept more Write calls.
+func (sinker *Sinker) SyncAndTakeResults(ctx context.Context) ([]objectio.ObjectStats, []*batch.Batch, error) {
+	if err := sinker.Sync(ctx); err != nil {
+		return nil, nil, err
+	}
+	persisted := sinker.result.persisted
+	tail := sinker.result.tail
+	sinker.result.persisted = nil
+	sinker.result.tail = nil
+	return persisted, tail, nil
+}
+
+// TakeStagedBatches extracts the un-synced in-memory staged batches,
+// transferring ownership to the caller. The sinker's staged area is cleared.
+func (sinker *Sinker) TakeStagedBatches() []*batch.Batch {
+	bats := sinker.staged.inMemory
+	sinker.staged.inMemory = nil
+	sinker.staged.inMemorySize = 0
+	return bats
+}
+
+// StagedSize returns the current size of in-memory staged data.
+func (sinker *Sinker) StagedSize() int {
+	return sinker.staged.inMemorySize
+}
+
 func (sinker *Sinker) Close() error {
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -713,4 +845,27 @@ func (sinker *Sinker) Close() error {
 	sinker.mp = nil
 	sinker.fs = nil
 	return nil
+}
+
+// Reset discards all staged and result data without tearing down the sinker.
+// It is safe to call after an aborted pipeline execution so that the next
+// Write/Sync cycle starts from a clean state. The buf pool, file-sinker
+// executor (and its arena), mpool, and fileservice references are all kept
+// alive so they can be reused without reallocation.
+func (sinker *Sinker) Reset() {
+	sinker.cleanupInMemoryStaged()
+	sinker.staged.persisted = sinker.staged.persisted[:0]
+
+	for i := range sinker.result.tail {
+		if sinker.result.tail[i] != nil {
+			sinker.result.tail[i].Clean(sinker.mp)
+			sinker.result.tail[i] = nil
+		}
+	}
+	sinker.result.tail = sinker.result.tail[:0]
+	sinker.result.persisted = sinker.result.persisted[:0]
+
+	if sinker.fSinker.executor != nil {
+		sinker.fSinker.executor.Reset()
+	}
 }
