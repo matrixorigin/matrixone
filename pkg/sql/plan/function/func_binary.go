@@ -8408,7 +8408,10 @@ func geometryCovers(container, target []byte) (bool, error) {
 	switch containerType {
 	case "POINT":
 		if targetType != "POINT" {
-			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+			if targetType == "LINESTRING" || targetType == "POLYGON" {
+				return false, nil
+			}
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 		containerX, containerY, err := parsePointXYFromPayload(container)
 		if err != nil {
@@ -8440,8 +8443,10 @@ func geometryCovers(container, target []byte) (bool, error) {
 				return false, err
 			}
 			return lineStringCoveredByLineString(targetLine, containerLine), nil
+		case "POLYGON":
+			return false, nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
 		containerPolygon, err := polygonSingleRingPointsFromPayload(container)
@@ -8468,10 +8473,10 @@ func geometryCovers(container, target []byte) (bool, error) {
 			}
 			return polygonCoveredByPolygon(targetPolygon, containerPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
@@ -8491,22 +8496,28 @@ func geometryCoveredBy(candidate, container []byte) (bool, error) {
 		case "POINT", "LINESTRING", "POLYGON":
 			return geometryCovers(container, candidate)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "LINESTRING":
 		switch containerType {
+		case "POINT":
+			return false, nil
 		case "LINESTRING", "POLYGON":
 			return geometryCovers(container, candidate)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
-		if containerType != "POLYGON" {
-			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+		switch containerType {
+		case "POINT", "LINESTRING":
+			return false, nil
+		case "POLYGON":
+			return geometryCovers(container, candidate)
+		default:
+			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}
-		return geometryCovers(container, candidate)
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+		return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 

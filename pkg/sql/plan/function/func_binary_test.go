@@ -5982,6 +5982,9 @@ func initStCoversTestCase() []tcTemp {
 					[]string{
 						"POINT(0 0)",
 						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0 0,2 0)",
@@ -5999,9 +6002,12 @@ func initStCoversTestCase() []tcTemp {
 					[]string{
 						"POINT(0 0)",
 						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POINT(2 0)",
 						"LINESTRING(0.5 0,1.5 0)",
 						"LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
 						"POINT(1 1)",
 						"POINT(0 1)",
 						"LINESTRING(0.5 0.5,1.5 1.5)",
@@ -6011,11 +6017,11 @@ func initStCoversTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;LINESTRING(0 0,2 0)",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, true, false, true, true, true, true, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, false, false, true, true, false, false, true, true, true, true, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_covers null",
@@ -6051,7 +6057,7 @@ func TestStCoversRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(0 0)"},
+			[]string{"MULTIPOINT((0 0),(1 1))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"LINESTRING(0 0,2 0)"},
@@ -6060,7 +6066,7 @@ func TestStCoversRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCovers)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_COVERS only supports POINT/POINT, LINESTRING covers POINT/LINESTRING, or POLYGON covers POINT/LINESTRING/POLYGON")
+	require.Contains(t, info, "ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -6088,14 +6094,17 @@ func initStCoveredByTestCase() []tcTemp {
 						"POINT(2 0)",
 						"POINT(0 1)",
 						"POINT(3 3)",
+						"LINESTRING(0 0,2 0)",
 						"LINESTRING(0.5 0,1.5 0)",
 						"LINESTRING(0 0,2 0)",
 						"LINESTRING(-1 1,1 1)",
 						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;POINT(0 1)",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"POINT(0 0)",
@@ -6103,18 +6112,21 @@ func initStCoveredByTestCase() []tcTemp {
 						"LINESTRING(0 0,2 0)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
 						"LINESTRING(0 0,2 0)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, true, false, true, true, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, true, true, false, false, true, true, false, false, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_coveredby null",
@@ -6150,7 +6162,7 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"LINESTRING(0 0,2 0)"},
+			[]string{"MULTIPOINT((0 0),(1 1))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(0 0)"},
@@ -6159,7 +6171,7 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCoveredBy)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_COVEREDBY only supports POINT covered by POINT/LINESTRING/POLYGON, LINESTRING covered by LINESTRING/POLYGON, or POLYGON covered by POLYGON")
+	require.Contains(t, info, "ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
