@@ -2302,12 +2302,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
-				if err != nil || flag {
-					return true, err
-				}
-			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
 				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
@@ -3468,11 +3462,29 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// GPU offload: intercept /*+ GPU */ hint before normal processing.
+		// If sidecar is not configured, silently fall through to normal MO execution.
+		if isGPUOffloadQuery(query) {
+			ses.addSqlCount(1)
+			err = handleGPUOffload(ses, execCtx, query)
+			if err == nil {
+				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
+				return resp, nil
+			}
+			if err != errGPUNotConfigured {
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+				return resp, nil
+			}
+			// errGPUNotConfigured: strip hint and fall through to normal execution
+			query = stripGPUHint(query)
+		} else {
+			ses.addSqlCount(1)
+		}
 		// Inject rewrite rules hint before building UserInput (only if enabled)
 		if ses.rewriteEnabled.Load() {
 			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
 		}
-		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)

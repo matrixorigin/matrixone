@@ -129,6 +129,8 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo, setNulls bo
 		}
 
 		if ag.argbuf, err = mp.Alloc(bufsz, true); err != nil {
+			mpool.FreeSlice(mp, ag.argCnt)
+			ag.argCnt = nil
 			return err
 		}
 		arena := arenaskl.NewArena(ag.argbuf)

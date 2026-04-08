@@ -134,3 +134,19 @@ func (builder *QueryBuilder) resolveScanNodeFromProject(node *plan.Node, depth i
 
 	return nil
 }
+
+func isDescendingVectorSort(flag plan.OrderBySpec_OrderByFlag) bool {
+	return flag&plan.OrderBySpec_DESC != 0
+}
+
+func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortContext) (bool, error) {
+	if vecCtx == nil || !isDescendingVectorSort(vecCtx.sortDirection) {
+		return true, nil
+	}
+
+	// IVF/HNSW candidate generation is nearest-neighbor oriented: using it for
+	// DESC would pick near candidates first and then reverse-sort the reduced set,
+	// which is not equivalent to a true farthest-neighbor query. Keep the original
+	// execution path so the query naturally falls back to the exact/force behavior.
+	return false, nil
+}

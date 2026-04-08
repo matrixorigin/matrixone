@@ -616,13 +616,11 @@ message InsertCtx {
   TableDef table_def = 4;
 }
 
+// ReplaceCtx removed: legacy REPLACE path eliminated.
+// Keep field tag numbers reserved so they cannot be silently reused
+// by a future re-introduction with a different schema (wire-compat).
 message ReplaceCtx {
-  ObjectRef ref = 1;
-  bool add_affected_rows = 2;
-  bool is_cluster_table = 3;
-  TableDef table_def = 4;
-  string delete_cond = 5;
-  bool rewrite_from_on_duplicate_key = 9;
+  reserved 1 to 9;
 }
 
 message AnalyzeInfo {
@@ -743,7 +741,8 @@ message Node {
     // DML
     INSERT = 30;
     DELETE = 31;
-    REPLACE = 32;
+    // REPLACE = 32; // removed: legacy REPLACE path eliminated
+    reserved 32;
     LOCK_OP = 33;
     ON_DUPLICATE_KEY = 34;
     PRE_INSERT = 35;
@@ -866,7 +865,8 @@ message Node {
   ClusterTable cluster_table = 28;
   bool not_cacheable = 29;
   InsertCtx insert_ctx = 30;
-  ReplaceCtx replace_ctx = 31;
+  // ReplaceCtx replace_ctx = 31; // removed: legacy REPLACE path eliminated
+  reserved 31;
 
   IndexReaderParam index_reader_param = 32;
 
@@ -1063,7 +1063,8 @@ message Query {
     UNKNOWN = 0;
     SELECT = 1;
     INSERT = 2;
-    REPLACE = 3;
+    // REPLACE = 3; // removed: legacy REPLACE path eliminated
+    reserved 3;
     DELETE = 4;
     UPDATE = 5;
     MERGE = 6;
