@@ -88,17 +88,18 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error serializing plan: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println(string(data))
+		os.Stdout.Write(data)
+		os.Stdout.WriteString("\n")
 	case "summary":
-		fmt.Println(plan.Summary)
-		fmt.Printf("\nTasks (%d):\n", len(plan.Tasks))
+		os.Stdout.WriteString(plan.Summary + "\n")
+		os.Stdout.WriteString(fmt.Sprintf("\nTasks (%d):\n", len(plan.Tasks)))
 		for _, task := range plan.Tasks {
 			target := string(task.Package)
 			if target == "" {
 				target = string(task.Category)
 			}
-			fmt.Printf("  [%s] %s %-8s %s (%s)\n",
-				task.Priority.String(), task.ID, task.Type, target, task.Reason)
+			os.Stdout.WriteString(fmt.Sprintf("  [%s] %s %-8s %s (%s)\n",
+				task.Priority.String(), task.ID, task.Type, target, task.Reason))
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown format: %s (use json or summary)\n", format)
