@@ -988,19 +988,16 @@ func createUpstreamExecutor(
 			upstreamExecutor.SetUTHelper(utHelper)
 		}
 
-		// Set upstream SQL helper if factory is available
-		if upstreamSQLHelperFactory != nil {
-			// Create helper with nil txnOp - it will be updated when SetTxn is called
-			// Pass txnClient from InternalSQLExecutor so helper can create transactions when needed
-			helper := upstreamSQLHelperFactory(
-				nil, // txnOp will be set when SetTxn is called
-				txnEngine,
-				upstreamAccountID,
-				upstreamExecutor.GetInternalExec(),
-				upstreamExecutor.GetTxnClient(), // Pass txnClient so helper can create txn if needed
-			)
-			upstreamExecutor.SetUpstreamSQLHelper(helper)
-		}
+		// Create helper with nil txnOp - it will be updated when SetTxn is called
+		// Pass txnClient from InternalSQLExecutor so helper can create transactions when needed
+		helper := upstreamSQLHelperFactory(
+			nil, // txnOp will be set when SetTxn is called
+			txnEngine,
+			upstreamAccountID,
+			upstreamExecutor.GetInternalExec(),
+			upstreamExecutor.GetTxnClient(), // Pass txnClient so helper can create txn if needed
+		)
+		upstreamExecutor.SetUpstreamSQLHelper(helper)
 
 		return upstreamExecutor, upstreamAccountID, nil
 	}
