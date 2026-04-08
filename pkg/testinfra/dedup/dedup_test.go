@@ -94,10 +94,10 @@ func TestDedup(t *testing.T) {
 	f := NewSQLFingerprinter()
 	sqls := []string{
 		"SELECT * FROM t1 WHERE id = 1;",
-		"SELECT * FROM t1 WHERE id = 2;",  // duplicate of first
+		"SELECT * FROM t1 WHERE id = 2;", // duplicate of first
 		"INSERT INTO t1 VALUES (1, 'a');",
-		"INSERT INTO t1 VALUES (2, 'b');",  // duplicate of third
-		"DELETE FROM t1 WHERE id = 1;",     // unique
+		"INSERT INTO t1 VALUES (2, 'b');", // duplicate of third
+		"DELETE FROM t1 WHERE id = 1;",    // unique
 	}
 
 	result := f.Dedup(sqls)

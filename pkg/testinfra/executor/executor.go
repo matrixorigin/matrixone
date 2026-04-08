@@ -157,7 +157,7 @@ func (e *LocalExecutor) executeSCA(ctx context.Context, result *Result) error {
 
 // ExecutePlan runs all tasks in a TestPlan sequentially and returns results.
 func ExecutePlan(ctx context.Context, executor Executor, plan *types.TestPlan) []*Result {
-	var results []*Result
+	results := make([]*Result, 0, len(plan.Tasks))
 	for i := range plan.Tasks {
 		task := &plan.Tasks[i]
 		task.Status = types.TaskStatusRunning

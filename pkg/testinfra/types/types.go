@@ -154,8 +154,8 @@ type TestTask struct {
 	ID          string       `json:"id"`
 	Type        TestType     `json:"type"`
 	Category    TestCategory `json:"category,omitempty"`
-	Package     string       `json:"package,omitempty"`      // Go package for UT
-	TestFile    string       `json:"test_file,omitempty"`    // BVT .test file path
+	Package     string       `json:"package,omitempty"`   // Go package for UT
+	TestFile    string       `json:"test_file,omitempty"` // BVT .test file path
 	Priority    Priority     `json:"priority"`
 	EstDuration string       `json:"est_duration,omitempty"`
 	Status      TaskStatus   `json:"status"`
