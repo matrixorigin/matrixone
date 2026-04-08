@@ -1498,11 +1498,17 @@ func reCreateTableWithPitr(
 		}
 	}
 
+	// Use a context with IgnoreForeignKey=true for clone operations.
+	// This skips FK validation during restore, as FK tables are already restored
+	// in topological order by restoreTablesWithFkByPitr(). Without this, Resolve() can
+	// fail with ExpectedEOB when the database was drop+recreated in the same transaction.
+	cloneCtx := context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
+
 	// insert data
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
-	if err = bh.Exec(ctx, insertIntoSql); err != nil {
+	if err = bh.Exec(cloneCtx, insertIntoSql); err != nil {
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", pitrName, tblInfo.tblName, time.Since(beginTime)))
