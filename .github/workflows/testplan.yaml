@@ -1,0 +1,136 @@
+name: Generate TestPlan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.go'
+      - '**.c'
+      - '**.h'
+      - 'test/distributed/**'
+
+concurrency:
+  group: testplan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  generate-testplan:
+    name: Generate TestPlan
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build mo-testplan
+        run: go build -o mo-testplan ./cmd/mo-testplan
+
+      - name: Generate diff
+        run: |
+          git diff origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }} > /tmp/pr.diff
+
+      - name: Generate TestPlan (JSON)
+        run: |
+          ./mo-testplan \
+            --pr ${{ github.event.pull_request.number }} \
+            --base ${{ github.base_ref }} \
+            --head ${{ github.head_ref }} \
+            --diff /tmp/pr.diff \
+            --format json > /tmp/testplan.json
+
+      - name: Generate TestPlan (Summary)
+        id: summary
+        run: |
+          SUMMARY=$(./mo-testplan \
+            --pr ${{ github.event.pull_request.number }} \
+            --base ${{ github.base_ref }} \
+            --head ${{ github.head_ref }} \
+            --diff /tmp/pr.diff \
+            --format summary)
+          echo "testplan<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload TestPlan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: testplan-pr${{ github.event.pull_request.number }}
+          path: /tmp/testplan.json
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const testplan = JSON.parse(fs.readFileSync('/tmp/testplan.json', 'utf8'));
+            const taskCount = testplan.tasks.length;
+            const utTasks = testplan.tasks.filter(t => t.type === 'unit_test').length;
+            const bvtTasks = testplan.tasks.filter(t => t.type === 'bvt').length;
+            const scaTasks = testplan.tasks.filter(t => t.type === 'sca').length;
+
+            const body = `## 🤖 AI TestPlan Generated
+
+            **PR #${testplan.pr_number}** (${testplan.head_branch} → ${testplan.base_branch})
+
+            | Metric | Count |
+            |--------|-------|
+            | Files Changed | ${testplan.diff_summary.files.length} |
+            | Lines Added | ${testplan.diff_summary.total_added} |
+            | Lines Deleted | ${testplan.diff_summary.total_deleted} |
+            | **Total Tasks** | **${taskCount}** |
+            | Unit Tests | ${utTasks} |
+            | BVT Tests | ${bvtTasks} |
+            | Static Analysis | ${scaTasks} |
+
+            <details>
+            <summary>📋 Task Details</summary>
+
+            \`\`\`
+            ${process.env.TESTPLAN_SUMMARY || 'See artifact for details'}
+            \`\`\`
+
+            </details>
+
+            <details>
+            <summary>📦 Affected Packages</summary>
+
+            ${[...new Set(testplan.diff_summary.files.filter(f => f.package).map(f => f.package))].map(p => '- `' + p + '`').join('\n')}
+
+            </details>
+
+            > 💡 Full TestPlan JSON available as workflow artifact.
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(c => c.body.includes('🤖 AI TestPlan Generated'));
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+          env:
+            TESTPLAN_SUMMARY: ${{ steps.summary.outputs.testplan }}
