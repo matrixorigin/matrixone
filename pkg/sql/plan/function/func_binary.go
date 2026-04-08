@@ -7861,7 +7861,7 @@ type geometryParamInterval struct {
 	end   float64
 }
 
-const stDistanceSupportedPairsError = "ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, and LINESTRING/LINESTRING combinations in either argument order"
+const stDistanceSupportedPairsError = "ST_DISTANCE currently only supports POINT/POINT, POINT/LINESTRING, POINT/POLYGON, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations in either argument order"
 
 func geometryDistance(left, right []byte) (float64, error) {
 	leftType, err := geometryTypeNameFromPayload(left)
@@ -7920,6 +7920,12 @@ func geometryDistance(left, right []byte) (float64, error) {
 				return 0, err
 			}
 			return lineStringDistanceToLineString(leftLine, rightLine), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return lineStringDistanceToPolygon(leftLine, rightPolygon), nil
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -7928,14 +7934,22 @@ func geometryDistance(left, right []byte) (float64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if rightType != "POINT" {
+		switch rightType {
+		case "POINT":
+			x, y, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return pointDistanceToPolygon(geometryPoint2D{x: x, y: y}, leftPolygon), nil
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return lineStringDistanceToPolygon(rightLine, leftPolygon), nil
+		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
-		x, y, err := parsePointXYFromPayload(right)
-		if err != nil {
-			return 0, err
-		}
-		return pointDistanceToPolygon(geometryPoint2D{x: x, y: y}, leftPolygon), nil
 	default:
 		return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 	}
@@ -7954,6 +7968,21 @@ func lineStringDistanceToLineString(left, right []geometryPoint2D) float64 {
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
 			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[i+1], right[j], right[j+1]))
+		}
+	}
+	return minDistance
+}
+
+func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) float64 {
+	if lineStringIntersectsPolygon(line, polygon) {
+		return 0
+	}
+
+	minDistance := lineSegmentDistance(line[0], line[1], polygon[0], polygon[1])
+	for i := 0; i < len(line)-1; i++ {
+		for j := 0; j < len(polygon); j++ {
+			next := (j + 1) % len(polygon)
+			minDistance = math.Min(minDistance, lineSegmentDistance(line[i], line[i+1], polygon[j], polygon[next]))
 		}
 	}
 	return minDistance
