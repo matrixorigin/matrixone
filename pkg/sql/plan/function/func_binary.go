@@ -8225,7 +8225,7 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			}
 			return pointCrossesLineString(leftPoint, rightLine), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "LINESTRING":
 		leftLine, err := lineStringGeometryPointsFromPayload(left)
@@ -8252,7 +8252,7 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			}
 			return lineStringCrossesPolygon(leftLine, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	case "POLYGON":
 		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
@@ -8269,10 +8269,10 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			}
 			return lineStringCrossesPolygon(rightLine, leftPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT/LINESTRING, LINESTRING/LINESTRING, and LINESTRING/POLYGON combinations")
+		return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
 	}
 }
 
