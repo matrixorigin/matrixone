@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -498,7 +497,7 @@ func Test_restoreTablesWithFk_AlwaysRestoresParentTables(t *testing.T) {
 			genKey("acc_test02", "aff01"): {dbName: "acc_test02", tblName: "aff01"},
 		}
 
-		err := restoreTablesWithFk(ctx, "", bh, "sp07", sortedFkTbls, fkTableMap, sysAccountID, 100, tree.RESTORELEVELACCOUNT)
+		err := restoreTablesWithFk(ctx, "", bh, "sp07", sortedFkTbls, fkTableMap, sysAccountID, 100)
 		convey.So(err, convey.ShouldBeNil)
 
 		// Both tables should have been restored (use, drop, clone for each)
@@ -531,7 +530,7 @@ func Test_restoreTablesWithFk_SkipsNilEntries(t *testing.T) {
 			// t1 not in map → should be skipped
 		}
 
-		err := restoreTablesWithFk(ctx, "", bh, "sp01", sortedFkTbls, fkTableMap, sysAccountID, 100, tree.RESTORELEVELACCOUNT)
+		err := restoreTablesWithFk(ctx, "", bh, "sp01", sortedFkTbls, fkTableMap, sysAccountID, 100)
 		convey.So(err, convey.ShouldBeNil)
 
 		// t2 should be restored, t1 should not
@@ -548,7 +547,7 @@ func Test_restoreTablesWithFk_EmptyList(t *testing.T) {
 		bh := &backgroundExecTestWithHistory{}
 		bh.init()
 
-		err := restoreTablesWithFk(ctx, "", bh, "sp01", nil, nil, sysAccountID, 100, tree.RESTORELEVELACCOUNT)
+		err := restoreTablesWithFk(ctx, "", bh, "sp01", nil, nil, sysAccountID, 100)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(len(bh.executedSqls), convey.ShouldEqual, 0)
 	})

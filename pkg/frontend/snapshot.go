@@ -681,7 +681,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, snapshot.ts, stmt.Level); err != nil {
+		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, snapshot.ts); err != nil {
 			return
 		}
 	}
@@ -1146,6 +1146,13 @@ func restoreToDatabaseOrTable(
 		}
 	}
 
+	// For TABLE level restore (restoreToTbl=true), skip master check because:
+	// 1. User explicitly specifies which table to restore
+	// 2. If the table is referenced by other tables that were restored earlier in this session,
+	//    the master check would incorrectly block the restore
+	// For DATABASE level restore, also skip master check since all tables are being restored together
+	skipMasterCheck := true
+
 	for _, tblInfo := range tableInfos {
 		key := genKey(dbName, tblInfo.tblName)
 
@@ -1165,7 +1172,7 @@ func restoreToDatabaseOrTable(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, false); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, skipMasterCheck); err != nil {
 			return
 		}
 	}
@@ -1217,7 +1224,8 @@ func restoreSystemDatabase(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, false); err != nil {
+		// Skip master check for system tables - they are restored as part of the system database
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, true); err != nil {
 			return
 		}
 	}
@@ -1284,17 +1292,14 @@ func restoreTablesWithFk(
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
 	toAccountId uint32,
-	snapshotTs int64,
-	restoreLevel tree.RestoreLevel) (err error) {
+	snapshotTs int64) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
-	// For TABLE level restore, getFkDeps() only captures outgoing FK edges (child->parent),
-	// not incoming references (other tables that reference the target table). So we cannot
-	// unconditionally skip master check for TABLE restore, as we might drop/recreate a table
-	// that live tables outside the restore scope reference.
-	// For ACCOUNT and DATABASE level restores, all tables in the scope are being restored
-	// together, so we can safely skip the master check.
-	skipMasterCheck := restoreLevel != tree.RESTORELEVELTABLE
+	// Tables in fkTableMap are being restored as a group in topological order (parents first,
+	// then children). We skip master check for all of them because:
+	// 1. They are part of the same restoration task
+	// 2. Any FK references between them will be properly re-established
+	// 3. References from tables outside fkTableMap will be handled by those tables' restore
 
 	// recreate tables as topo order
 	for _, key := range sortedFkTbls {
@@ -1302,7 +1307,7 @@ func restoreTablesWithFk(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshotTs))
-			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, skipMasterCheck); err != nil {
+			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, true); err != nil {
 				return
 			}
 		}
