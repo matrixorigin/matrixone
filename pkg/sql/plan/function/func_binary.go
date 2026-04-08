@@ -7787,15 +7787,7 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 
 func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
-		x1, y1, err := parsePointXYFromPayload(v1)
-		if err != nil {
-			return 0, err
-		}
-		x2, y2, err := parsePointXYFromPayload(v2)
-		if err != nil {
-			return 0, err
-		}
-		return math.Hypot(x1-x2, y1-y2), nil
+		return geometryDistance(v1, v2)
 	}, selectList)
 }
 
@@ -7867,6 +7859,117 @@ type geometryPoint2D struct {
 type geometryParamInterval struct {
 	start float64
 	end   float64
+}
+
+func geometryDistance(left, right []byte) (float64, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return 0, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return 0, err
+	}
+
+	switch leftType {
+	case "POINT":
+		x, y, err := parsePointXYFromPayload(left)
+		if err != nil {
+			return 0, err
+		}
+		leftPoint := geometryPoint2D{x: x, y: y}
+		switch rightType {
+		case "POINT":
+			rightX, rightY, err := parsePointXYFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return math.Hypot(x-rightX, y-rightY), nil
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return pointDistanceToLineString(leftPoint, rightLine), nil
+		case "POLYGON":
+			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			if err != nil {
+				return 0, err
+			}
+			return pointDistanceToPolygon(leftPoint, rightPolygon), nil
+		default:
+			return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
+		}
+	case "LINESTRING":
+		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		if err != nil {
+			return 0, err
+		}
+		if rightType != "POINT" {
+			return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
+		}
+		x, y, err := parsePointXYFromPayload(right)
+		if err != nil {
+			return 0, err
+		}
+		return pointDistanceToLineString(geometryPoint2D{x: x, y: y}, leftLine), nil
+	case "POLYGON":
+		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		if err != nil {
+			return 0, err
+		}
+		if rightType != "POINT" {
+			return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
+		}
+		x, y, err := parsePointXYFromPayload(right)
+		if err != nil {
+			return 0, err
+		}
+		return pointDistanceToPolygon(geometryPoint2D{x: x, y: y}, leftPolygon), nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
+	}
+}
+
+func pointDistanceToLineString(point geometryPoint2D, line []geometryPoint2D) float64 {
+	minDistance := pointDistanceToLineSegment(point, line[0], line[1])
+	for i := 1; i < len(line)-1; i++ {
+		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, line[i], line[i+1]))
+	}
+	return minDistance
+}
+
+func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) float64 {
+	if pointIntersectsPolygon(point, polygon) {
+		return 0
+	}
+
+	minDistance := pointDistanceToLineSegment(point, polygon[0], polygon[1])
+	for i := 1; i < len(polygon); i++ {
+		next := (i + 1) % len(polygon)
+		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, polygon[i], polygon[next]))
+	}
+	return minDistance
+}
+
+func pointDistanceToLineSegment(point, start, end geometryPoint2D) float64 {
+	dx := end.x - start.x
+	dy := end.y - start.y
+	if dx == 0 && dy == 0 {
+		return math.Hypot(point.x-start.x, point.y-start.y)
+	}
+
+	projection := ((point.x-start.x)*dx + (point.y-start.y)*dy) / (dx*dx + dy*dy)
+	if projection <= 0 {
+		return math.Hypot(point.x-start.x, point.y-start.y)
+	}
+	if projection >= 1 {
+		return math.Hypot(point.x-end.x, point.y-end.y)
+	}
+
+	closestX := start.x + projection*dx
+	closestY := start.y + projection*dy
+	return math.Hypot(point.x-closestX, point.y-closestY)
 }
 
 func geometryContains(container, target []byte) (bool, error) {

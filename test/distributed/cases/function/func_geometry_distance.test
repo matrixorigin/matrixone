@@ -1,5 +1,10 @@
 select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)')) as d1;
 select st_distance(st_geomfromtext('POINT(-1 -1)'), st_geomfromtext('POINT(2 3)')) as d2;
 select st_distance(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as dnull;
--- @regex("geometry is not a POINT",true)
-select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(1 1)'));
+select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as d3;
+select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(3 0)')) as d4;
+select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d5;
+select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(3 1)')) as d6;
+select st_distance(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d7;
+-- @regex("ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON",true)
+select st_distance(st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('LINESTRING(1 0,2 1)'));

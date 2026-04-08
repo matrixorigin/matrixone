@@ -5086,6 +5086,69 @@ func initStDistanceTestCase() []tcTemp {
 				[]bool{false, false}),
 		},
 		{
+			info: "test st_distance point to linestring",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance linestring to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 0)", "POINT(3 0)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance point to polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1, 0},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_distance polygon to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 1)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
 			info: "test st_distance null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5120,7 +5183,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 			[]string{"LINESTRING(0 0,1 1)"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(1 1)"},
+			[]string{"LINESTRING(1 0,2 1)"},
 			[]bool{false}),
 	}
 	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
@@ -5128,7 +5191,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "geometry is not a POINT")
+	require.Contains(t, info, "ST_DISTANCE currently only supports POINT paired with POINT, LINESTRING, or POLYGON")
 }
 
 func initStContainsTestCase() []tcTemp {
