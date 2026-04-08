@@ -25881,7 +25881,7 @@ yydefault:
 //line mysql_sql.y:11203
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			es := tree.NewNumVal("*", "*", false, tree.P_char)
+			es := tree.NewNumVal("*", "*", false, tree.P_star)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),
@@ -25984,7 +25984,7 @@ yydefault:
 //line mysql_sql.y:11278
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
-			es := tree.NewNumVal("*", "*", false, tree.P_char)
+			es := tree.NewNumVal("*", "*", false, tree.P_star)
 			yyLOCAL = &tree.FuncExpr{
 				Func:       tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:   tree.NewCStr(yyDollar[1].str, 1),

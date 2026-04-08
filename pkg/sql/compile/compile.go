@@ -409,8 +409,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Replace:
-		return s.replace(c)
 	case TableClone:
 		return s.TableClone(c)
 	}
@@ -501,6 +499,26 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
+	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
+	// verified before the REPLACE execution modifies any rows.
+	query := c.pn.GetQuery()
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		for _, sql := range query.DetectSqls {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
+					// Only translate the "check returned false" signal into the
+					// parent-row-referenced error; pass through real execution
+					// errors (syntax, permissions, network, txn conflicts) so
+					// they are not masked.
+					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
+						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+					}
+					return err
+				}
+			}
+		}
+	}
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -578,10 +596,17 @@ func (c *Compile) runOnce() (err error) {
 
 	//detect fk self refer
 	//update, insert
-	query := c.pn.GetQuery()
+	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		err = detectFkSelfRefer(c, query.DetectSqls)
+		// Filter out pre-check SQLs (already executed before the main operation)
+		var postCheckSqls []string
+		for _, sql := range query.DetectSqls {
+			if !strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				postCheckSqls = append(postCheckSqls, sql)
+			}
+		}
+		err = detectFkSelfRefer(c, postCheckSqls)
 	}
 	//alter table ... add/drop foreign key
 	if err == nil && c.pn.GetDdl() != nil {
@@ -607,13 +632,6 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		switch qry.Query.StmtType {
-		case plan.Query_REPLACE:
-			return []*Scope{
-				newScope(Replace).
-					withPlan(pn),
-			}, nil
-		}
 		scopes, err := c.compileQuery(qry.Query)
 		if err != nil {
 			return nil, err

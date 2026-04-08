@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -898,50 +896,6 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 	}
-}
-
-func (s *Scope) replace(c *Compile) error {
-	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
-	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
-	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
-	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
-
-	delAffectedRows := uint64(0)
-	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
-		if err != nil {
-			return err
-		}
-		delAffectedRows = result.AffectedRows
-	}
-	var sql string
-	if rewriteFromOnDuplicateKey {
-		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
-		sql = c.sql[:idx]
-	} else {
-		removed := removeStringBetween(c.sql, "/*", "*/")
-		sql = "insert " + strings.TrimSpace(removed)[7:]
-	}
-	result, err := c.runSqlWithResult(sql, NoAccountId)
-	if err != nil {
-		return err
-	}
-	c.addAffectedRows(result.AffectedRows + delAffectedRows)
-	return nil
-}
-
-func removeStringBetween(s, start, end string) string {
-	startIndex := strings.Index(s, start)
-	for startIndex != -1 {
-		endIndex := strings.Index(s, end)
-		if endIndex == -1 || startIndex > endIndex {
-			return s
-		}
-
-		s = s[:startIndex] + s[endIndex+len(end):]
-		startIndex = strings.Index(s, start)
-	}
-	return s
 }
 
 // defaultStarCountTombstoneThreshold: when estimated tombstone rows exceed this, skip StarCount

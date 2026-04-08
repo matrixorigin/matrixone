@@ -2390,6 +2390,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil
+	case tree.P_star:
+		expr := makePlan2StringConstExprWithType(astExpr.String())
+		return expr, nil
 	case tree.P_nulltext:
 		expr := MakePlan2NullTextConstExprWithType(astExpr.String())
 		return expr, nil

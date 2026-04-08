@@ -107,7 +107,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
 	if replaceStmt != nil {
-		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
+		return bindAndOptimizeReplaceQuery(ctx, replaceStmt, isPrepareStmt, false)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)

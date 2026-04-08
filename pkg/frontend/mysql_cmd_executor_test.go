@@ -2574,13 +2574,6 @@ func Test_checkModify(t *testing.T) {
 		},
 		{
 			node: &plan.Node{
-				ReplaceCtx: &plan0.ReplaceCtx{},
-			},
-			expected_flag: true,
-			expected_err:  false,
-		},
-		{
-			node: &plan.Node{
 				DeleteCtx: &plan0.DeleteCtx{},
 			},
 			expected_flag: true,
