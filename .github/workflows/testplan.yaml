@@ -1,7 +1,7 @@
 name: Generate TestPlan
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
     paths:
       - '**.go'
@@ -21,9 +21,11 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - name: Checkout code
+      # Checkout the BASE branch (safe — not fork code)
+      - name: Checkout base branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
 
       - name: Set up Go
@@ -34,9 +36,12 @@ jobs:
       - name: Build mo-testplan
         run: go build -o mo-testplan ./cmd/mo-testplan
 
-      - name: Generate diff
+      - name: Generate diff via GitHub API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git diff origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }} > /tmp/pr.diff
+          gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
+            -H "Accept: application/vnd.github.v3.diff" > /tmp/pr.diff
 
       - name: Generate TestPlan (JSON)
         run: |
