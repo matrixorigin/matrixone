@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/testinfra/types"
 )
 
@@ -82,7 +83,7 @@ func (e *LocalExecutor) Execute(ctx context.Context, task types.TestTask) (*Resu
 	case types.TestTypeSCA:
 		err = e.executeSCA(ctx, result)
 	default:
-		err = fmt.Errorf("unknown task type: %s", task.Type)
+		err = moerr.NewInternalErrorNoCtxf("unknown task type: %s", task.Type)
 	}
 
 	result.EndedAt = time.Now()
@@ -100,7 +101,7 @@ func (e *LocalExecutor) Execute(ctx context.Context, task types.TestTask) (*Resu
 
 func (e *LocalExecutor) executeUT(ctx context.Context, task types.TestTask, result *Result) error {
 	if task.Package == "" {
-		return fmt.Errorf("UT task requires a package")
+		return moerr.NewInternalErrorNoCtx("UT task requires a package")
 	}
 
 	args := []string{
@@ -121,7 +122,7 @@ func (e *LocalExecutor) executeUT(ctx context.Context, task types.TestTask, resu
 
 func (e *LocalExecutor) executeBVT(ctx context.Context, task types.TestTask, result *Result) error {
 	if task.Category == "" && task.TestFile == "" {
-		return fmt.Errorf("BVT task requires a category or test_file")
+		return moerr.NewInternalErrorNoCtx("BVT task requires a category or test_file")
 	}
 
 	// For BVT, we document the command that would be run.
