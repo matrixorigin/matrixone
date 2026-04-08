@@ -112,6 +112,8 @@ func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, o
 		client: client,
 	}
 
+	RegisterManifestHTTP(tae)
+
 	return h
 }
 
