@@ -4306,12 +4306,15 @@ func decimal64ToDecimal128Array(
 			}
 		} else {
 			if totype.Scale == fromtype.Scale {
+				// Fast path: direct slice write with branchless sign extension.
+				// Bypasses AppendMustValue per-element overhead. The result
+				// vector length is already set by PreExtendAndReset.
+				dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
 				for i = 0; i < l; i++ {
-					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
-					if v[i].Sign() {
-						fromdec.B64_127 = ^fromdec.B64_127
+					dst[i] = types.Decimal128{
+						B0_63:   uint64(v[i]),
+						B64_127: uint64(int64(v[i]) >> 63),
 					}
-					to.AppendMustValue(fromdec)
 				}
 			} else {
 				for i = 0; i < l; i++ {
@@ -4331,37 +4334,53 @@ func decimal64ToDecimal128Array(
 		}
 	} else {
 		// with any null value
-		var dft types.Decimal128
-		for i = 0; i < l; i++ {
-			v, null := from.GetValue(i)
-			if null {
-				if err := to.Append(dft, true); err != nil {
-					return err
+		if totype.Width >= fromtype.Width && totype.Scale == fromtype.Scale {
+			// Fast path: direct slice write with branchless sign extension.
+			// Copy null bitmap from source, then convert non-null values.
+			srcVec := from.GetSourceVector()
+			rsVec := to.GetResultVector()
+			rsVec.GetNulls().Or(srcVec.GetNulls())
+			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
+			v := vector.MustFixedColWithTypeCheck[types.Decimal64](srcVec)
+			for i = 0; i < l; i++ {
+				dst[i] = types.Decimal128{
+					B0_63:   uint64(v[i]),
+					B64_127: uint64(int64(v[i]) >> 63),
 				}
-			} else {
-				fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-				if v.Sign() {
-					fromdec.B64_127 = ^fromdec.B64_127
-				}
-				if totype.Width < fromtype.Width {
-					dec := fromdec.Format(fromtype.Scale)
-					result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
-					if err != nil {
-						return err
-					}
-					if err = to.Append(result, false); err != nil {
+			}
+		} else {
+			var dft types.Decimal128
+			for i = 0; i < l; i++ {
+				v, null := from.GetValue(i)
+				if null {
+					if err := to.Append(dft, true); err != nil {
 						return err
 					}
 				} else {
-					if totype.Scale == fromtype.Scale {
-						to.AppendMustValue(fromdec)
-					} else {
-						result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+					fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+					if v.Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
+					if totype.Width < fromtype.Width {
+						dec := fromdec.Format(fromtype.Scale)
+						result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 						if err != nil {
 							return err
 						}
 						if err = to.Append(result, false); err != nil {
 							return err
+						}
+					} else {
+						if totype.Scale == fromtype.Scale {
+							to.AppendMustValue(fromdec)
+						} else {
+							result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+							if err != nil {
+								return err
+							}
+							if err = to.Append(result, false); err != nil {
+								return err
+							}
 						}
 					}
 				}

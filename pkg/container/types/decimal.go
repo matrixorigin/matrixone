@@ -622,6 +622,16 @@ func (x Decimal64) Add64(y Decimal64) (Decimal64, error) {
 	return z, err
 }
 
+// Add128Unchecked performs 128-bit addition without overflow checking.
+// This is safe for SUM aggregation where the accumulator range (10^38)
+// vastly exceeds any practical sum of Decimal64 values.
+func (x Decimal128) Add128Unchecked(y Decimal128) Decimal128 {
+	var carry uint64
+	x.B0_63, carry = bits.Add64(x.B0_63, y.B0_63, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carry)
+	return x
+}
+
 func (x Decimal128) Add128(y Decimal128) (Decimal128, error) {
 	signx := x.Sign()
 	err := error(nil)

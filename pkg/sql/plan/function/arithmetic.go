@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -234,25 +233,11 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		}
 		noNullInput := !inputHasNull(parameters[0]) && !inputHasNull(parameters[1])
 
-		if err := decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList); err != nil {
+		if err := decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList); err != nil {
 			return err
 		}
 		if noNullInput {
 			result.GetResultVector().GetNulls().Reset()
-		}
-		return nil
-	}
-
-	// Result-type driven: handles cross-type promotions where inputs may not
-	// yet be decimal256 but the planner chose decimal256 as the result type
-	// (e.g. decimal128 + int64 → decimal256).  The paramType-based switch
-	// below covers the case where inputs are already decimal256.
-	if resultType.Oid == types.T_decimal256 {
-		if err := decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Add(v2, scale1, scale2)
-			return r, err
-		}, selectList, false); err != nil {
-			return err
 		}
 		return nil
 	}
@@ -305,17 +290,11 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
-		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
-			r, _, err := v1.Add(v2, scale1, scale2)
-			return r, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Add, selectList)
 	case types.T_decimal128:
-		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Add, selectList)
 	case types.T_decimal256:
-		return decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Add(v2, scale1, scale2)
-			return r, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Add, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32], selectList)
@@ -383,17 +362,11 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 - v2
 		}, selectList)
 	case types.T_decimal64:
-		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
-			r, _, err := v1.Sub(v2, scale1, scale2)
-			return r, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64Sub, selectList)
 	case types.T_decimal128:
-		return decimal128ArithArray(parameters, result, proc, length, decimal128SubArray, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Sub, selectList)
 	case types.T_decimal256:
-		return decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Sub(v2, scale1, scale2)
-			return r, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Sub, selectList)
 
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
@@ -477,17 +450,11 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 * v2
 		}, selectList)
 	case types.T_decimal64:
-		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			rt, _, err := x.Mul(y, scale1, scale2)
-			return rt, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64Mul, selectList)
 	case types.T_decimal128:
-		return decimal128ArithArray(parameters, result, proc, length, decimal128MultiArray, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul, selectList)
 	case types.T_decimal256:
-		return decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Mul(v2, scale1, scale2)
-			return r, err
-		}, selectList, false)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256Mul, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)
@@ -523,20 +490,14 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			return v1 / v2
 		}, selectList)
 	case types.T_decimal64:
-		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			rt, _, err := x.Div(y, scale1, scale2)
-			return rt, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernel(shouldError), selectList)
 	case types.T_decimal128:
-		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			r, _, err := v1.Div(v2, scale1, scale2)
-			return r, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernel(shouldError), selectList)
 	case types.T_decimal256:
-		return decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Div(v2, scale1, scale2)
-			return r, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256DivKernel(shouldError), selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:
@@ -740,7 +701,6 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
-// decimalIntegerDiv performs integer division for decimal types (DIV operator)
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
@@ -789,20 +749,14 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			return math.Mod(v1, v2)
 		}, selectList)
 	case types.T_decimal64:
-		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
-			r, _, err := v1.Mod(v2, scale1, scale2)
-			return r, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal64, types.Decimal64](parameters, result, proc, length, d64ModKernel(shouldError), selectList)
 	case types.T_decimal128:
-		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			r, _, err := v1.Mod(v2, scale1, scale2)
-			return r, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128ModKernel(shouldError), selectList)
 	case types.T_decimal256:
-		return decimalArith[types.Decimal256](parameters, result, proc, length, func(v1, v2 types.Decimal256, scale1, scale2 int32) (types.Decimal256, error) {
-			r, _, err := v1.Mod(v2, scale1, scale2)
-			return r, err
-		}, selectList, true)
+		shouldError := checkDivisionByZeroBehavior(proc, selectList)
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256ModKernel(shouldError), selectList)
 	}
 	panic("unreached code")
 }
@@ -859,664 +813,6 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	return types.ArrayToBytes[T](r), nil
 }
 
-func decimal128ScaleArray(v, rs []types.Decimal128, len int, n int32) error {
-	for i := 0; i < len; i++ {
-		rs[i] = v[i]
-		err := rs[i].ScaleInplace(n)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func decimal128ScaleArrayWithNulls(v, rs []types.Decimal128, len int, n int32, rsnull *nulls.Nulls) error {
-	for i := 0; i < len; i++ {
-		rs[i] = v[i]
-		if rsnull.Contains(uint64(i)) {
-			continue
-		}
-		err := rs[i].ScaleInplace(n)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	len1 := len(v1)
-	len2 := len(v2)
-	var err error
-	if rsnull.IsEmpty() {
-		if len1 == len2 {
-			// all vector, or all constant
-			if scale1 > scale2 {
-				err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else if scale1 < scale2 {
-				err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					rs[i] = v1[i]
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if len1 == 1 {
-				// v1 constant, v2 vector
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len2; i++ {
-						err = rs[i].AddInplace(&v1[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					for i := 0; i < len2; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v1[0]
-					for i := 0; i < len2; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				// v1 vector, v2 constant
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					for i := 0; i < len1; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len1; i++ {
-						err = rs[i].AddInplace(&v2[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v2[0]
-					for i := 0; i < len1; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	} else {
-		if len1 == len2 {
-			// all vector, or all constant
-			if scale1 > scale2 {
-				err = decimal128ScaleArrayWithNulls(v2, rs, len2, scale1-scale2, rsnull)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else if scale1 < scale2 {
-				err = decimal128ScaleArrayWithNulls(v1, rs, len1, scale2-scale1, rsnull)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i] = v1[i]
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if len1 == 1 {
-				// v1 constant, v2 vector
-				if scale1 > scale2 {
-					err = decimal128ScaleArrayWithNulls(v2, rs, len2, scale1-scale2, rsnull)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						err = rs[i].AddInplace(&v1[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v1[0]
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				// v1 vector, v2 constant
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArrayWithNulls(v1, rs, len1, scale2-scale1, rsnull)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						err = rs[i].AddInplace(&v2[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v2[0]
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func decimal128SubArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	len1 := len(v1)
-	len2 := len(v2)
-	var err error
-
-	if rsnull.IsEmpty() {
-		if len1 == len2 {
-			// all vector, or all constant
-			if scale1 > scale2 {
-				err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else if scale1 < scale2 {
-				err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-					rs[i].MinusInplace()
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					rs[i] = v2[i]
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if len1 == 1 {
-				// v1 constant, v2 vector
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len2; i++ {
-						rs[i].MinusInplace()
-						err = rs[i].AddInplace(&v1[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					tmp.MinusInplace()
-					for i := 0; i < len2; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						rs[i].MinusInplace()
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v1[0]
-					tmp.MinusInplace()
-					for i := 0; i < len2; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						rs[i].MinusInplace()
-						if err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				// v1 vector, v2 constant
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					tmp.MinusInplace()
-					for i := 0; i < len1; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len1; i++ {
-						rs[i].MinusInplace()
-						err = rs[i].AddInplace(&v2[0])
-						if err != nil {
-							return err
-						}
-						rs[i].MinusInplace()
-					}
-				} else {
-					tmp := v2[0]
-					tmp.MinusInplace()
-					for i := 0; i < len1; i++ {
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	} else {
-		if len1 == len2 {
-			// all vector, or all constant
-			if scale1 > scale2 {
-				err = decimal128ScaleArrayWithNulls(v2, rs, len2, scale1-scale2, rsnull)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			} else if scale1 < scale2 {
-				err = decimal128ScaleArrayWithNulls(v1, rs, len1, scale2-scale1, rsnull)
-				if err != nil {
-					return err
-				}
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v2[i])
-					if err != nil {
-						return err
-					}
-					rs[i].MinusInplace()
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i] = v2[i]
-					rs[i].MinusInplace()
-					err = rs[i].AddInplace(&v1[i])
-					if err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			if len1 == 1 {
-				// v1 constant, v2 vector
-				if scale1 > scale2 {
-					err = decimal128ScaleArrayWithNulls(v2, rs, len2, scale1-scale2, rsnull)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i].MinusInplace()
-						err = rs[i].AddInplace(&v1[0])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					tmp.MinusInplace()
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						rs[i].MinusInplace()
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					tmp := v1[0]
-					tmp.MinusInplace()
-					for i := 0; i < len2; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v2[i])
-						rs[i].MinusInplace()
-						if err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				// v1 vector, v2 constant
-				if scale1 > scale2 {
-					err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
-					if err != nil {
-						return err
-					}
-					tmp := rs[0]
-					tmp.MinusInplace()
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				} else if scale1 < scale2 {
-					err = decimal128ScaleArrayWithNulls(v1, rs, len1, scale2-scale1, rsnull)
-					if err != nil {
-						return err
-					}
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i].MinusInplace()
-						err = rs[i].AddInplace(&v2[0])
-						if err != nil {
-							return err
-						}
-						rs[i].MinusInplace()
-					}
-				} else {
-					tmp := v2[0]
-					tmp.MinusInplace()
-					for i := 0; i < len1; i++ {
-						if rsnull.Contains(uint64(i)) {
-							continue
-						}
-						rs[i] = tmp
-						err = rs[i].AddInplace(&v1[i])
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128MultiArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	len1 := len(v1)
-	len2 := len(v2)
-	var err error
-
-	if rsnull.IsEmpty() {
-		var scale int32 = 12
-		if scale1 > scale {
-			scale = scale1
-		}
-		if scale2 > scale {
-			scale = scale2
-		}
-		if scale1+scale2 < scale {
-			scale = scale1 + scale2
-		}
-		scale = scale - scale1 - scale2
-
-		if len1 == len2 {
-			for i := 0; i < len1; i++ {
-				rs[i] = v1[i]
-				err = rs[i].MulInplace(&v2[i], scale, scale1, scale2)
-				if err != nil {
-					return err
-				}
-			}
-		} else {
-			if len1 == 1 {
-				for i := 0; i < len2; i++ {
-					rs[i] = v1[0]
-					err = rs[i].MulInplace(&v2[i], scale, scale1, scale2)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					rs[i] = v1[i]
-					err = rs[i].MulInplace(&v2[0], scale, scale1, scale2)
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	} else {
-		var scale int32 = 12
-		if scale1 > scale {
-			scale = scale1
-		}
-		if scale2 > scale {
-			scale = scale2
-		}
-		if scale1+scale2 < scale {
-			scale = scale1 + scale2
-		}
-		scale = scale - scale1 - scale2
-
-		if len1 == len2 {
-			for i := 0; i < len1; i++ {
-				if rsnull.Contains(uint64(i)) {
-					continue
-				}
-				rs[i] = v1[i]
-				err = rs[i].MulInplace(&v2[i], scale, scale1, scale2)
-				if err != nil {
-					return err
-				}
-			}
-		} else {
-			if len1 == 1 {
-				for i := 0; i < len2; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i] = v1[0]
-					err = rs[i].MulInplace(&v2[i], scale, scale1, scale2)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := 0; i < len1; i++ {
-					if rsnull.Contains(uint64(i)) {
-						continue
-					}
-					rs[i] = v1[i]
-					err = rs[i].MulInplace(&v2[0], scale, scale1, scale2)
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// decimalIntegerDiv performs integer division for decimal types (DIV operator)
 func decimalIsZero[T templateDec](v T) bool {
 	switch d := any(v).(type) {
 	case types.Decimal64:
