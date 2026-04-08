@@ -198,6 +198,8 @@ func (m *InspectResp) ConsoleString() string {
 	switch m.Typ {
 	case InspectNormal:
 		return fmt.Sprintf("\nmsg: %s\n\n%v", m.Message, string(m.Payload))
+	case InspectJSON:
+		return string(m.Payload)
 	default:
 		return fmt.Sprintf("\nmsg: %s\n\n unhandled resp type %v", m.Message, m.Typ)
 	}
@@ -206,6 +208,7 @@ func (m *InspectResp) ConsoleString() string {
 const (
 	InspectNormal = 0
 	InspectCata   = 1
+	InspectJSON   = 2
 )
 
 func (m *InspectResp) GetResponse() any {

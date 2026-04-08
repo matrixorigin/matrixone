@@ -366,6 +366,12 @@ type FrontendParameters struct {
 	// timeout of authenticating user. different from session timeout
 	// including mysql protocol handshake, checking user, loading session variables
 	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
+
+	// GPU sidecar URL for offloading queries to DuckDB via /*+ GPU */ hint.
+	// When set, this becomes the default for the gpu_sidecar_url session variable.
+	// Can be overridden per-session with SET gpu_sidecar_url = '...' or
+	// globally for new sessions with SET GLOBAL gpu_sidecar_url = '...'.
+	GPUSidecarURL string `toml:"gpuSidecarUrl" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
