@@ -506,8 +506,8 @@ func TestBuildGPUResultSet_ColumnCountMismatch(t *testing.T) {
 			{Name: "c", Type: "DOUBLE"},
 		},
 		Data: []json.RawMessage{
-			json.RawMessage(`[1, "ok", 3.14]`),   // correct: 3 columns
-			json.RawMessage(`[2, "short"]`),        // wrong: 2 columns
+			json.RawMessage(`[1, "ok", 3.14]`), // correct: 3 columns
+			json.RawMessage(`[2, "short"]`),    // wrong: 2 columns
 		},
 		Rows: 2,
 	}
