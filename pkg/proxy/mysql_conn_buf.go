@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +32,10 @@ const (
 	defaultBufLen = 8192
 	// defaultExtraBufLen is the default extra buffer size, 2K.
 	defaultExtraBufLen = 2048
+	// writeBufLen is the buffer size for batching writes to the destination
+	// in the server-to-client direction. 64KB reduces write syscalls by ~100x
+	// for typical MySQL result set rows (~200-500 bytes each).
+	writeBufLen = 65536
 	// MySQL header length is 4 bytes, with 3 bytes data length
 	// and 1 byte sequence number.
 	mysqlHeadLen = 4
@@ -106,6 +111,11 @@ type msgBuf struct {
 	respC chan []byte
 	// connCacheEnabled is a function returns if the connection cache is enabled.
 	connCacheEnabled bool
+	// bufDst batches writes to the forwarding destination (client conn in s2c direction).
+	// When set, sendTo() writes to this buffer instead of dst directly, flushing only when
+	// the source read buffer is drained. This reduces write syscalls dramatically for large
+	// result sets. Protected by writeMu during write/flush operations.
+	bufDst *bufio.Writer
 }
 
 // newMsgBuf creates a new message buffer.
@@ -218,6 +228,17 @@ func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
 	}
 }
 
+// flushBufDst flushes any buffered write data. Must be called under writeMu
+// or when no concurrent sendTo/writeDataDirectly calls are possible.
+func (b *msgBuf) flushBufDst() error {
+	if b.bufDst == nil {
+		return nil
+	}
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
+	return b.bufDst.Flush()
+}
+
 // sendTo sends the data in buffer to destination.
 func (b *msgBuf) sendTo(dst io.Writer) error {
 	l, err := b.preRecv()
@@ -267,8 +288,16 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+
+	// Use buffered writer if available to batch multiple small writes
+	// into fewer syscalls.
+	w := dst
+	if b.bufDst != nil {
+		w = b.bufDst
+	}
+
 	// Write the data in buffer.
-	n, err := dst.Write(b.buf[readPos:writePos])
+	n, err := w.Write(b.buf[readPos:writePos])
 	if err != nil {
 		return err
 	}
@@ -278,7 +307,7 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 
 	// The buffer does not hold all packet data, so continue to read the packet.
 	if dataLeft > 0 {
-		m, err := io.CopyN(dst, b.src, int64(dataLeft))
+		m, err := io.CopyN(w, b.src, int64(dataLeft))
 		if err != nil {
 			return err
 		}
@@ -286,6 +315,17 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 			return io.ErrShortWrite
 		}
 	}
+
+	// Flush when source buffer is drained — no more packets immediately available.
+	// During a burst of result set rows, writes accumulate in bufDst.
+	// When we've processed the last packet in the read buffer, flush all
+	// accumulated writes in a single syscall.
+	if b.bufDst != nil && b.readAvail() == 0 {
+		if ferr := b.bufDst.Flush(); ferr != nil {
+			return ferr
+		}
+	}
+
 	return err
 }
 
@@ -350,6 +390,13 @@ func (b *msgBuf) receiveAtLeast(n int) error {
 func (b *msgBuf) writeDataDirectly(dst io.Writer, data []byte) error {
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	// Flush any buffered forwarding data first to maintain packet ordering.
+	// Without this, data written directly could arrive before buffered data.
+	if b.bufDst != nil {
+		if err := b.bufDst.Flush(); err != nil {
+			return err
+		}
+	}
 	_, err := dst.Write(data)
 	if err != nil {
 		return err

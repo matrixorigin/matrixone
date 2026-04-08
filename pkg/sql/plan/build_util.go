@@ -969,6 +969,127 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
+// genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
+// no other row references the PK values being replaced (parent→child safety).
+// These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
+func genPreCheckSqlsForReplaceFKSelfRefer(
+	ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+	stmt *tree.Replace,
+) ([]string, error) {
+	if stmt.Rows == nil {
+		return nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil
+	}
+
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		// Only RESTRICT / NO_ACTION need a parent→child pre-check.
+		// CASCADE / SET_NULL / SET_DEFAULT semantics allow the operation to
+		// proceed and let the cascading action handle the children, so a
+		// pre-check would incorrectly block valid REPLACEs.
+		if fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION {
+			continue
+		}
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(referCols) != 1 || len(fkCols) != 1 {
+			continue
+		}
+
+		// Build column name → position in the Replace column list.
+		// Names are stored lower-cased in ColDef.Name; the user-supplied
+		// AST identifiers may use any casing, so normalize both sides.
+		colNameToPos := make(map[string]int)
+		if len(stmt.Columns) > 0 {
+			for i, col := range stmt.Columns {
+				colNameToPos[strings.ToLower(string(col))] = i
+			}
+		} else {
+			// Implicit column list: same visible-column rule as
+			// getInsertColsFromStmt — skip hidden cols (e.g. composite PK
+			// helper, fake PK, cluster-by composite, Row_ID), since the
+			// user VALUES list never supplies them.
+			pos := 0
+			for _, col := range cols {
+				if col.Hidden {
+					continue
+				}
+				colNameToPos[col.Name] = pos
+				pos++
+			}
+		}
+
+		refPos, ok := colNameToPos[referCols[0]]
+		if !ok {
+			continue
+		}
+
+		// The pre-check SQL embeds referenced PK values directly into a
+		// background statement. That is only semantics-preserving for
+		// static literals (NumVal/StrVal, including NULL via NumVal
+		// P_null). Non-literals such as prepared-statement parameters
+		// (ParamExpr "?"), function calls (rand(), uuid(), now()),
+		// subqueries, arithmetic, etc. would be re-evaluated when the
+		// pre-check runs and may not match the value actually written
+		// by REPLACE — skip pre-check generation in those cases.
+		//
+		// Trade-off: prepared REPLACE on RESTRICT self-ref FK tables and
+		// REPLACE with non-literal PK expressions lose the parent-row
+		// safety check. The full fix needs to defer pre-check generation
+		// to compile time after parameters/expressions are evaluated,
+		// which is a larger change left for follow-up work.
+		isSimpleLiteralExpr := func(expr tree.Expr) bool {
+			switch expr.(type) {
+			case *tree.NumVal, *tree.StrVal:
+				return true
+			default:
+				return false
+			}
+		}
+
+		hasUnsafeRefExpr := false
+		var valStrs []string
+		for _, row := range valuesClause.Rows {
+			if refPos >= len(row) {
+				continue
+			}
+			if !isSimpleLiteralExpr(row[refPos]) {
+				hasUnsafeRefExpr = true
+				break
+			}
+			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
+		}
+		if hasUnsafeRefExpr || len(valStrs) == 0 {
+			continue
+		}
+
+		inList := strings.Join(valStrs, ",")
+		tableClause := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from %s where `%s` in (%s) and `%s` is not null and `%s` not in (%s)",
+			tableClause, fkCols[0], inList, fkCols[0], referCols[0], inList,
+		)
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
 func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")

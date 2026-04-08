@@ -33,57 +33,60 @@ type roaringFilter struct {
 	testAndAddFunc func(f *roaringFilter, v *vector.Vector) (int, any)
 }
 
-func newroaringFilter(t types.T) *roaringFilter {
-	var add func(f *roaringFilter, v *vector.Vector)
-	var test func(f *roaringFilter, v *vector.Vector) (int, any)
-	var testAndAdd func(f *roaringFilter, v *vector.Vector) (int, any)
+func newRoaringFilter(t types.T) *roaringFilter {
+	f := &roaringFilter{b: roaring.New()}
 
 	switch t {
 	case types.T_int8:
-		add = addFunc[int8]
-		test = testFunc[int8]
-		testAndAdd = testAndAddFunc[int8]
+		f.addFunc = addFunc[int8]
+		f.testFunc = testFunc[int8]
+		f.testAndAddFunc = testAndAddFunc[int8]
 	case types.T_int16:
-		add = addFunc[int16]
-		test = testFunc[int16]
-		testAndAdd = testAndAddFunc[int16]
+		f.addFunc = addFunc[int16]
+		f.testFunc = testFunc[int16]
+		f.testAndAddFunc = testAndAddFunc[int16]
 	case types.T_int32:
-		add = addFunc[int32]
-		test = testFunc[int32]
-		testAndAdd = testAndAddFunc[int32]
+		f.addFunc = addFunc[int32]
+		f.testFunc = testFunc[int32]
+		f.testAndAddFunc = testAndAddFunc[int32]
 	case types.T_uint8:
-		add = addFunc[uint8]
-		test = testFunc[uint8]
-		testAndAdd = testAndAddFunc[uint8]
+		f.addFunc = addFunc[uint8]
+		f.testFunc = testFunc[uint8]
+		f.testAndAddFunc = testAndAddFunc[uint8]
 	case types.T_uint16:
-		add = addFunc[uint16]
-		test = testFunc[uint16]
-		testAndAdd = testAndAddFunc[uint16]
+		f.addFunc = addFunc[uint16]
+		f.testFunc = testFunc[uint16]
+		f.testAndAddFunc = testAndAddFunc[uint16]
 	case types.T_uint32:
-		add = addFunc[uint32]
-		test = testFunc[uint32]
-		testAndAdd = testAndAddFunc[uint32]
+		f.addFunc = addFunc[uint32]
+		f.testFunc = testFunc[uint32]
+		f.testAndAddFunc = testAndAddFunc[uint32]
+	default:
+		panic("unsupported type for roaring filter: " + t.String())
 	}
 
-	f := &roaringFilter{
-		addFunc:        add,
-		testFunc:       test,
-		testAndAddFunc: testAndAdd,
-		b:              roaring.New(),
-	}
 	return f
 }
 
 func addFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) {
 	ss := vector.MustFixedColNoTypeCheck[T](v)
-	for _, s := range ss {
+	nsp := v.GetNulls()
+	for i, s := range ss {
+		// SQL standard: NULL != NULL, skip NULLs from duplicate check
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
 		f.b.Add(uint32(s))
 	}
 }
 
 func testFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
 	ss := vector.MustFixedColNoTypeCheck[T](v)
+	nsp := v.GetNulls()
 	for i, s := range ss {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
 		if f.b.Contains(uint32(s)) {
 			return i, s
 		}
@@ -92,8 +95,12 @@ func testFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
 }
 
 func testAndAddFunc[T canUseRoaring](f *roaringFilter, v *vector.Vector) (int, any) {
-	ss := vector.MustFixedColWithTypeCheck[T](v)
+	ss := vector.MustFixedColNoTypeCheck[T](v)
+	nsp := v.GetNulls()
 	for i, s := range ss {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
 		if !f.b.CheckedAdd(uint32(s)) {
 			return i, s
 		}

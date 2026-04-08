@@ -883,15 +883,16 @@ func (e *Engine) setPushClientStatus(ready bool) {
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
-	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
 
-	//  When removing the PartitionState, you need to remove the tid in globalStats,
-	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	//e.globalStats.RemoveTid(tblId)
+	// Remove the tid from globalStats AFTER releasing Engine lock to avoid
+	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
+	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
