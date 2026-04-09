@@ -46,13 +46,15 @@ func d64Add(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
 	len1, len2 := len(v1), len(v2)
+	noNull := rsnull.IsEmpty()
+
 	if len1 == len2 {
-		if rsnull.IsEmpty() {
+		if noNull {
 			for i := 0; i < len1; i++ {
-				var err error
-				rs[i], err = v1[i].Add64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = v1[i] + v2[i]
+				signX := uint64(v1[i]) >> 63
+				if signX == uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", v1[i].Format(0), v2[i].Format(0))
 				}
 			}
 		} else {
@@ -60,21 +62,21 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = v1[i].Add64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = v1[i] + v2[i]
+				signX := uint64(v1[i]) >> 63
+				if signX == uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", v1[i].Format(0), v2[i].Format(0))
 				}
 			}
 		}
 	} else if len1 == 1 {
 		a := v1[0]
-		if rsnull.IsEmpty() {
+		signA := uint64(a) >> 63
+		if noNull {
 			for i := 0; i < len2; i++ {
-				var err error
-				rs[i], err = a.Add64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = a + v2[i]
+				if signA == uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", a.Format(0), v2[i].Format(0))
 				}
 			}
 		} else {
@@ -82,21 +84,20 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = a.Add64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = a + v2[i]
+				if signA == uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", a.Format(0), v2[i].Format(0))
 				}
 			}
 		}
 	} else {
 		b := v2[0]
-		if rsnull.IsEmpty() {
+		signB := uint64(b) >> 63
+		if noNull {
 			for i := 0; i < len1; i++ {
-				var err error
-				rs[i], err = v1[i].Add64(b)
-				if err != nil {
-					return err
+				rs[i] = v1[i] + b
+				if uint64(v1[i])>>63 == signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", v1[i].Format(0), b.Format(0))
 				}
 			}
 		} else {
@@ -104,10 +105,9 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = v1[i].Add64(b)
-				if err != nil {
-					return err
+				rs[i] = v1[i] + b
+				if uint64(v1[i])>>63 == signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Add overflow: %s+%s", v1[i].Format(0), b.Format(0))
 				}
 			}
 		}
@@ -174,13 +174,15 @@ func d64Sub(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
 	len1, len2 := len(v1), len(v2)
+	noNull := rsnull.IsEmpty()
+
 	if len1 == len2 {
-		if rsnull.IsEmpty() {
+		if noNull {
 			for i := 0; i < len1; i++ {
-				var err error
-				rs[i], err = v1[i].Sub64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = v1[i] - v2[i]
+				signX := uint64(v1[i]) >> 63
+				if signX != uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", v1[i].Format(0), v2[i].Format(0))
 				}
 			}
 		} else {
@@ -188,21 +190,21 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = v1[i].Sub64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = v1[i] - v2[i]
+				signX := uint64(v1[i]) >> 63
+				if signX != uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", v1[i].Format(0), v2[i].Format(0))
 				}
 			}
 		}
 	} else if len1 == 1 {
 		a := v1[0]
-		if rsnull.IsEmpty() {
+		signA := uint64(a) >> 63
+		if noNull {
 			for i := 0; i < len2; i++ {
-				var err error
-				rs[i], err = a.Sub64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = a - v2[i]
+				if signA != uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", a.Format(0), v2[i].Format(0))
 				}
 			}
 		} else {
@@ -210,21 +212,20 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = a.Sub64(v2[i])
-				if err != nil {
-					return err
+				rs[i] = a - v2[i]
+				if signA != uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", a.Format(0), v2[i].Format(0))
 				}
 			}
 		}
 	} else {
 		b := v2[0]
-		if rsnull.IsEmpty() {
+		signB := uint64(b) >> 63
+		if noNull {
 			for i := 0; i < len1; i++ {
-				var err error
-				rs[i], err = v1[i].Sub64(b)
-				if err != nil {
-					return err
+				rs[i] = v1[i] - b
+				if uint64(v1[i])>>63 != signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", v1[i].Format(0), b.Format(0))
 				}
 			}
 		} else {
@@ -232,10 +233,9 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) error {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				var err error
-				rs[i], err = v1[i].Sub64(b)
-				if err != nil {
-					return err
+				rs[i] = v1[i] - b
+				if uint64(v1[i])>>63 != signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal64 Sub overflow: %s-%s", v1[i].Format(0), b.Format(0))
 				}
 			}
 		}
@@ -293,6 +293,7 @@ func d64SubDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 }
 
 // d64ScaleIntoRs scales vec[i] by 10^scaleDiff into rs[i], respecting nulls.
+// scaleDiff is bounded by Decimal64 max scale (18), so Pow10[scaleDiff] is safe (Pow10 has 20 entries).
 
 func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
@@ -706,24 +707,36 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) error 
 	if len1 == len2 {
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, v2[i].B64_127, carry)
+				if signX == v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", v1[i].Format(0), v2[i].Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, v2[i].B64_127, carry)
+				if signX == v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", v1[i].Format(0), v2[i].Format(0))
+				}
 			}
 		}
 	} else if len1 == 1 {
 		a := v1[0]
+		signA := a.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
 				rs[i].B0_63, carry = bits.Add64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(a.B64_127, v2[i].B64_127, carry)
+				if signA == v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", a.Format(0), v2[i].Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len2; i++ {
@@ -732,14 +745,21 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) error 
 				}
 				rs[i].B0_63, carry = bits.Add64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(a.B64_127, v2[i].B64_127, carry)
+				if signA == v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", a.Format(0), v2[i].Format(0))
+				}
 			}
 		}
 	} else {
 		b := v2[0]
+		signB := b.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len1; i++ {
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, b.B64_127, carry)
+				if v1[i].B64_127>>63 == signB && v1[i].B64_127>>63 != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", v1[i].Format(0), b.Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len1; i++ {
@@ -748,6 +768,9 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) error 
 				}
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, b.B64_127, carry)
+				if v1[i].B64_127>>63 == signB && v1[i].B64_127>>63 != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", v1[i].Format(0), b.Format(0))
+				}
 			}
 		}
 	}
@@ -826,24 +849,36 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) error 
 	if len1 == len2 {
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, v2[i].B64_127, borrow)
+				if signX != v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", v1[i].Format(0), v2[i].Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, v2[i].B64_127, borrow)
+				if signX != v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", v1[i].Format(0), v2[i].Format(0))
+				}
 			}
 		}
 	} else if len1 == 1 {
 		a := v1[0]
+		signA := a.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
 				rs[i].B0_63, borrow = bits.Sub64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(a.B64_127, v2[i].B64_127, borrow)
+				if signA != v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", a.Format(0), v2[i].Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len2; i++ {
@@ -852,22 +887,34 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) error 
 				}
 				rs[i].B0_63, borrow = bits.Sub64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(a.B64_127, v2[i].B64_127, borrow)
+				if signA != v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", a.Format(0), v2[i].Format(0))
+				}
 			}
 		}
 	} else {
 		b := v2[0]
+		signB := b.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, b.B64_127, borrow)
+				if signX != signB && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", v1[i].Format(0), b.Format(0))
+				}
 			}
 		} else {
 			for i := 0; i < len1; i++ {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, b.B64_127, borrow)
+				if signX != signB && signX != rs[i].B64_127>>63 {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Sub overflow: %s-%s", v1[i].Format(0), b.Format(0))
+				}
 			}
 		}
 	}
@@ -1032,9 +1079,10 @@ func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 
 func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) error {
 	xhi, yhi := x.B64_127, y.B64_127
-	// Fast path: both fit in int64 (B64_127 is 0 or ^0).
-	if (xhi+1) <= 1 && (yhi+1) <= 1 {
-		// Extract sign: bit 63 of B64_127.
+	// Fast path: both values fit in int64 range [-2^63, 2^63-1].
+	// Sign-extension check: if B0_63 interpreted as int64 sign-extends to B64_127,
+	// the full 128-bit value is representable as int64.
+	if uint64(int64(x.B0_63)>>63) == xhi && uint64(int64(y.B0_63)>>63) == yhi {
 		neg := (xhi ^ yhi) >> 63
 		// Get absolute values of int64 representation.
 		xi := int64(x.B0_63)
@@ -1429,7 +1477,7 @@ func d256Sub(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 }
 
 // d256AddSameScale adds two Decimal256 vectors with the same scale, inlining
-// the 4-limb carry chain from Add256.
+// the 4-limb carry chain and overflow check to avoid the non-inlinable Add256 method.
 func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) error {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -1442,35 +1490,56 @@ func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) error 
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := v1[i].Add256(v2[i])
-			if err != nil {
-				return err
+			x, y := v1[i], v2[i]
+			signX := x.B192_255 >> 63
+			signY := y.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(x.B0_63, y.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(x.B64_127, y.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(x.B128_191, y.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(x.B192_255, y.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signX == signY && signX != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Add overflow: %s+%s", x.Format(0), y.Format(0))
 			}
-			rs[i] = r
 		}
 	} else if len1 == 1 {
 		a := v1[0]
+		signA := a.B192_255 >> 63
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := a.Add256(v2[i])
-			if err != nil {
-				return err
+			y := v2[i]
+			signY := y.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(a.B0_63, y.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(a.B64_127, y.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(a.B128_191, y.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(a.B192_255, y.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signA == signY && signA != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Add overflow: %s+%s", a.Format(0), y.Format(0))
 			}
-			rs[i] = r
 		}
 	} else {
 		b := v2[0]
+		signB := b.B192_255 >> 63
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := v1[i].Add256(b)
-			if err != nil {
-				return err
+			x := v1[i]
+			signX := x.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(x.B0_63, b.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(x.B64_127, b.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(x.B128_191, b.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(x.B192_255, b.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signX == signB && signX != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Add overflow: %s+%s", x.Format(0), b.Format(0))
 			}
-			rs[i] = r
 		}
 	}
 	return nil
@@ -1535,7 +1604,8 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	return d256AddSameScale(v1, v2, rs, rsnull)
 }
 
-// d256SubSameScale subtracts two Decimal256 vectors with the same scale.
+// d256SubSameScale subtracts two Decimal256 vectors with the same scale, inlining
+// the 4-limb borrow chain and overflow check to avoid the non-inlinable Sub256 method.
 func d256SubSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) error {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -1548,35 +1618,56 @@ func d256SubSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) error 
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := v1[i].Sub256(v2[i])
-			if err != nil {
-				return err
+			x, y := v1[i], v2[i]
+			signX := x.B192_255 >> 63
+			signY := y.B192_255 >> 63
+			var b uint64
+			rs[i].B0_63, b = bits.Sub64(x.B0_63, y.B0_63, 0)
+			rs[i].B64_127, b = bits.Sub64(x.B64_127, y.B64_127, b)
+			rs[i].B128_191, b = bits.Sub64(x.B128_191, y.B128_191, b)
+			rs[i].B192_255, _ = bits.Sub64(x.B192_255, y.B192_255, b)
+			signR := rs[i].B192_255 >> 63
+			if signX != signY && signX != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", x.Format(0), y.Format(0))
 			}
-			rs[i] = r
 		}
 	} else if len1 == 1 {
 		a := v1[0]
+		signA := a.B192_255 >> 63
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := a.Sub256(v2[i])
-			if err != nil {
-				return err
+			y := v2[i]
+			signY := y.B192_255 >> 63
+			var b uint64
+			rs[i].B0_63, b = bits.Sub64(a.B0_63, y.B0_63, 0)
+			rs[i].B64_127, b = bits.Sub64(a.B64_127, y.B64_127, b)
+			rs[i].B128_191, b = bits.Sub64(a.B128_191, y.B128_191, b)
+			rs[i].B192_255, _ = bits.Sub64(a.B192_255, y.B192_255, b)
+			signR := rs[i].B192_255 >> 63
+			if signA != signY && signA != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", a.Format(0), y.Format(0))
 			}
-			rs[i] = r
 		}
 	} else {
 		b := v2[0]
+		signB := b.B192_255 >> 63
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, err := v1[i].Sub256(b)
-			if err != nil {
-				return err
+			x := v1[i]
+			signX := x.B192_255 >> 63
+			var bw uint64
+			rs[i].B0_63, bw = bits.Sub64(x.B0_63, b.B0_63, 0)
+			rs[i].B64_127, bw = bits.Sub64(x.B64_127, b.B64_127, bw)
+			rs[i].B128_191, bw = bits.Sub64(x.B128_191, b.B128_191, bw)
+			rs[i].B192_255, _ = bits.Sub64(x.B192_255, b.B192_255, bw)
+			signR := rs[i].B192_255 >> 63
+			if signX != signB && signX != signR {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", x.Format(0), b.Format(0))
 			}
-			rs[i] = r
 		}
 	}
 	return nil

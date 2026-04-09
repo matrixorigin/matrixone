@@ -426,7 +426,15 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 				xcnt := 0
 				err := exec.state[i].iter(uint16(j), func(k []byte) error {
 					ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
-					sum = sum.Add128Unchecked(*ptr)
+					if exec.overflowCheck {
+						var addErr error
+						sum, addErr = sum.Add128(*ptr)
+						if addErr != nil {
+							return addErr
+						}
+					} else {
+						sum = sum.Add128Unchecked(*ptr)
+					}
 					xcnt++
 					return nil
 				})

@@ -827,6 +827,27 @@ func TestD128Mul(t *testing.T) {
 			require.Equal(t, want, rs[i], "d128 vec-const mul[%d]", i)
 		}
 	})
+
+	// Regression: values in [2^63, 2^64-1] must fall through to slow path,
+	// not be mis-handled by the int64 fast path.
+	t.Run("NearInt64Boundary", func(t *testing.T) {
+		boundary := []types.Decimal128{
+			{B0_63: 0x8000000000000001, B64_127: 0}, // 2^63+1, positive
+			{B0_63: 0xFFFFFFFFFFFFFFFF, B64_127: 0}, // 2^64-1, positive
+			{B0_63: 0x8000000000000000, B64_127: 0}, // 2^63, positive
+			{B0_63: 0x7FFFFFFFFFFFFFFF, B64_127: 0}, // 2^63-1, max int64
+		}
+		one := []types.Decimal128{{B0_63: 1, B64_127: 0}}
+		for _, x := range boundary {
+			v1 := []types.Decimal128{x}
+			rs := make([]types.Decimal128, 1)
+			nul := nulls.NewWithSize(1)
+			require.NoError(t, d128Mul(v1, one, rs, 0, 0, nul))
+			want, _, err := x.Mul(one[0], 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[0], "boundary %v × 1", x)
+		}
+	})
 }
 
 func TestD128Div(t *testing.T) {
