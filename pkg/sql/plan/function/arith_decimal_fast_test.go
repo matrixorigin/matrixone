@@ -848,6 +848,30 @@ func TestD128Mul(t *testing.T) {
 			require.Equal(t, want, rs[0], "boundary %v × 1", x)
 		}
 	})
+
+	// Exercises the inlined MulInplace slow path with large-value batches.
+	t.Run("LargeValues", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(99))
+		v1 := make([]types.Decimal128, testBatchSize)
+		v2 := make([]types.Decimal128, testBatchSize)
+		rs := make([]types.Decimal128, testBatchSize)
+		for i := range v1 {
+			// Large positive: B0_63 bit 63 set → not representable as int64.
+			v1[i] = types.Decimal128{B0_63: rng.Uint64() | (1 << 63), B64_127: 0}
+			v2[i] = types.Decimal128{B0_63: uint64(rng.Int63n(1_000_000) + 1), B64_127: 0}
+			if rng.Intn(2) == 0 {
+				v2[i] = v2[i].Minus()
+			}
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		err := d128Mul(v1, v2, rs, 2, 3, nul)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := v1[i].Mul(v2[i], 2, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d128Mul large[%d] %v × %v", i, v1[i], v2[i])
+		}
+	})
 }
 
 func TestD128Div(t *testing.T) {
@@ -1800,6 +1824,47 @@ func BenchmarkD128Mul_Generic(b *testing.B) {
 	for i := range xs {
 		xs[i] = randD128Small(rng)
 		ys[i] = randD128Small(rng)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			rs[i], _, _ = xs[i].Mul(ys[i], 2, 3)
+		}
+	}
+}
+
+func BenchmarkD128Mul_FastLarge(b *testing.B) {
+	// Values that don't fit in int64 — exercises the inlined MulInplace slow path.
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		// Large positive value: B0_63 has bit 63 set, B64_127=0 → not int64-representable.
+		xs[i] = types.Decimal128{B0_63: rng.Uint64() | (1 << 63), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(1_000_000) + 1), B64_127: 0}
+		if rng.Intn(2) == 0 {
+			ys[i] = ys[i].Minus()
+		}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Mul(xs, ys, rs, 2, 3, nul)
+	}
+}
+
+func BenchmarkD128Mul_GenericLarge(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal128{B0_63: rng.Uint64() | (1 << 63), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(1_000_000) + 1), B64_127: 0}
+		if rng.Intn(2) == 0 {
+			ys[i] = ys[i].Minus()
+		}
 	}
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {

@@ -1163,9 +1163,63 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 		return nil
 	}
 
-	// Slow path: genuinely large Decimal128 values.
-	*dst = *x
-	return dst.MulInplace(y, scaleAdj, scale1, scale2)
+	// Slow path: genuinely large Decimal128 values — inline MulInplace.
+	signx := x.B64_127 >> 63
+	signy := y.B64_127 >> 63
+	neg := signx ^ signy
+
+	// Absolute values.
+	ax, ay := *x, *y
+	if signx != 0 {
+		ax = ax.Minus()
+	}
+	if signy != 0 {
+		ay = ay.Minus()
+	}
+
+	// Try 128×128→128 unsigned multiply (inline Mul128InPlace).
+	// result = ax.lo*ay.lo + cross*2^64 where cross = ax.lo*ay.hi or ax.hi*ay.lo.
+	if ax.B64_127 == 0 || ay.B64_127 == 0 {
+		zhi, zlo := bits.Mul64(ax.B0_63, ay.B0_63)
+		var crossHi, crossLo uint64
+		if ax.B64_127 == 0 {
+			crossHi, crossLo = bits.Mul64(ax.B0_63, ay.B64_127)
+		} else {
+			crossHi, crossLo = bits.Mul64(ax.B64_127, ay.B0_63)
+		}
+		rhi, carry := bits.Add64(zhi, crossLo, 0)
+		if (crossHi | carry | (rhi >> 63)) == 0 {
+			dst.B0_63 = zlo
+			dst.B64_127 = rhi
+			if scaleAdj != 0 {
+				if err := dst.ScaleInplace(scaleAdj); err != nil {
+					return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(scale1), y.Format(scale2))
+				}
+			}
+			negMask := -neg
+			dst.B0_63 ^= negMask
+			dst.B64_127 ^= negMask
+			var c uint64
+			dst.B0_63, c = bits.Add64(dst.B0_63, 0, neg)
+			dst.B64_127, _ = bits.Add64(dst.B64_127, 0, c)
+			return nil
+		}
+	}
+
+	// D256 fallback: multiply in 256-bit, scale, truncate.
+	x2 := types.Decimal256{B0_63: ax.B0_63, B64_127: ax.B64_127}
+	y2 := types.Decimal256{B0_63: ay.B0_63, B64_127: ay.B64_127}
+	x2, _ = x2.Mul256(y2)
+	x2, _ = x2.Scale(scaleAdj)
+	if x2.B128_191 != 0 || x2.B192_255 != 0 || x2.B64_127>>63 != 0 {
+		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(scale1), y.Format(scale2))
+	}
+	dst.B0_63 = x2.B0_63
+	dst.B64_127 = x2.B64_127
+	if neg != 0 {
+		*dst = dst.Minus()
+	}
+	return nil
 }
 
 // ---- Decimal128 division ----
