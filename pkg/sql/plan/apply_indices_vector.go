@@ -150,3 +150,54 @@ func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortCo
 	// execution path so the query naturally falls back to the exact/force behavior.
 	return false, nil
 }
+
+func (builder *QueryBuilder) stabilizeExactVectorSort(vecCtx *vectorSortContext) {
+	if builder == nil || vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+		return
+	}
+	sortNode := vecCtx.sortNode
+	if len(sortNode.OrderBy) != 1 || len(sortNode.Children) != 1 {
+		return
+	}
+	tableDef := vecCtx.scanNode.TableDef
+	if tableDef == nil || tableDef.Pkey == nil {
+		return
+	}
+	pkPos, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	if !ok || int(pkPos) >= len(tableDef.Cols) {
+		return
+	}
+	pkExpr := builder.buildPkExprFromNode(sortNode.Children[0], tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
+	if pkExpr == nil {
+		pkExpr = builder.projectVectorSortTiebreak(vecCtx.childNode, tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
+	}
+	if pkExpr == nil {
+		return
+	}
+
+	// Exact vector search keeps the original sort path. Add the primary key as a
+	// deterministic tiebreaker so equal-distance top-k queries stay stable after
+	// reload/compaction changes the physical scan order.
+	sortNode.OrderBy = append(sortNode.OrderBy, &plan.OrderBySpec{Expr: pkExpr})
+}
+
+func (builder *QueryBuilder) projectVectorSortTiebreak(projectNode *plan.Node, pkType plan.Type, pkName string) *plan.Expr {
+	if builder == nil || projectNode == nil || projectNode.NodeType != plan.Node_PROJECT || len(projectNode.Children) != 1 || len(projectNode.BindingTags) == 0 {
+		return nil
+	}
+	pkExpr := builder.buildPkExprFromNode(projectNode.Children[0], pkType, pkName)
+	if pkExpr == nil {
+		return nil
+	}
+
+	colPos := int32(len(projectNode.ProjectList))
+	projectNode.ProjectList = append(projectNode.ProjectList, pkExpr)
+	return &plan.Expr{
+		Typ: pkType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: projectNode.BindingTags[0],
+			ColPos: colPos,
+			Name:   pkName,
+		}},
+	}
+}
