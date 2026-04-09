@@ -7,6 +7,12 @@ POLYGON((0 0,1 0,1 1,0 0))
 select st_astext(cast(null as geometry)) as null_text;
 ➤ null_text[12,-1,0]  𝄀
 null
+select st_astext(cast('INVALID' as geometry)) as invalid_geom;
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values ('LINESTRING(0 0,1 1)'), ('POINT(3 4)');
@@ -15,3 +21,12 @@ select st_astext(g) as geom_text from t1 order by 1;
 LINESTRING(0 0,1 1)  𝄀
 POINT(3 4)
 drop table t1;
+drop table if exists t_invalid_geom;
+create table t_invalid_geom(g geometry);
+insert into t_invalid_geom values ('INVALID');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+insert into t_invalid_geom values ('POINT(NaN 1)');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+drop table t_invalid_geom;

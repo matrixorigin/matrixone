@@ -16,6 +16,12 @@ create table geo_point_bad(g point);
 insert into geo_point_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
 drop table geo_point_bad;
 
+drop table if exists geo_point_nan_bad;
+create table geo_point_nan_bad(g point);
+-- @regex("invalid geometry payload",true)
+insert into geo_point_nan_bad values ('POINT(NaN 1)');
+drop table geo_point_nan_bad;
+
 drop table if exists geo_alter_bad;
 create table geo_alter_bad(g point);
 -- @regex("currently unsupport change from original geometry subtype POINT to LINESTRING",true)

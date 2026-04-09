@@ -1170,7 +1170,7 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		}
 
-		valueSubtype, err := geometryTypeNameFromPayload(payload)
+		wkt, valueSubtype, valueSRID, valueSRIDDefined, err := validateGeometryPayload(payload)
 		if err != nil {
 			return nil, err
 		}
@@ -1180,10 +1180,6 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 
 		if !columnSRIDDefined {
 			return payload, nil
-		}
-		wkt, valueSRID, valueSRIDDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
 		}
 		if !valueSRIDDefined {
 			valueSRID = 0

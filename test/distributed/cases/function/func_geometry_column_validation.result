@@ -18,6 +18,12 @@ insert into geo_point_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
 -- @regex("cannot store LINESTRING in POINT column", true)
 invalid input: cannot store LINESTRING in POINT column
 drop table geo_point_bad;
+drop table if exists geo_point_nan_bad;
+create table geo_point_nan_bad(g point);
+insert into geo_point_nan_bad values ('POINT(NaN 1)');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+drop table geo_point_nan_bad;
 drop table if exists geo_alter_bad;
 create table geo_alter_bad(g point);
 alter table geo_alter_bad modify column g linestring;

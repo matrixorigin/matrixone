@@ -2334,6 +2334,30 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			want:     []string{"short", longString260, "medium length string"},
 			wantErr:  false,
 		},
+		{
+			name:     "VARCHAR to GEOMETRY with valid point",
+			inputs:   []string{"POINT(1 2)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			want:     []string{"POINT(1 2)"},
+			wantErr:  false,
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects invalid payload",
+			inputs:   []string{"INVALID"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects non-finite coordinates",
+			inputs:   []string{"POINT(NaN 1)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
 	}
 
 	for _, tt := range tests {

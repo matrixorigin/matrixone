@@ -5368,6 +5368,24 @@ func strToStr(
 		}
 		return nil
 	}
+	if toType.Oid == types.T_geometry {
+		for i = 0; i < l; i++ {
+			v, null := from.GetStrValue(i)
+			if null {
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, _, _, _, err := validateGeometryPayload(v); err != nil {
+				return err
+			}
+			if err := to.AppendBytes(v, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	// Get source type to check if it's TEXT
 	fromType := from.GetSourceVector().GetType()
 	isSourceText := fromType.Oid == types.T_text
