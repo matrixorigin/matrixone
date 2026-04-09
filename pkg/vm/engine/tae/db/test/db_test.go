@@ -75,6 +75,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -10637,21 +10638,37 @@ func TestTransferDeleteVectorRealloc(t *testing.T) {
 	}
 	testutil.CompactBlocks(t, 0, tae.DB, "db", schema, false)
 
-	// Start delete txn: delete 2 rows from the first object.
-	// The tombstone anode ends up with capacity=2 after these 2 appends.
+	// Start delete txn: delete 1 row from EACH object.
+	// Having deletes from 2 different objects is critical: when the first
+	// transfer removes object-A from readSet, object-B must remain.
+	// With the bug, object-B's transfer is skipped (poison read), so
+	// checkAll finds object-B still in readSet → r-w conflict.
 	txnDel, rel := tae.GetRelation()
 	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[0].Vecs[0].Get(0))))
-	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[0].Vecs[0].Get(1))))
+	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[1].Vecs[0].Get(0))))
 
 	// Merge both non-appendable objects → old objects become soft-deleted,
 	// transfer pages are created in Runtime.TransferDelsMap.
 	testutil.MergeBlocks(t, 0, tae.DB, "db", schema, false)
 
+	// Enable memory poisoning so that freed buffers are filled with 0xDD.
+	// Without this, use-after-free reads stale-but-valid data from the freed
+	// buffer, making the bug non-deterministic.
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
+
+	// Skip the Freeze-phase TransferDeletes so that only the PrePrepare
+	// pass runs. Without this, the double-pass compensates for the bug:
+	// the 2nd pass picks up rows missed by the 1st pass.
+	txnimpl.EnableDebugSkipFreezePhaseTransfer()
+	defer txnimpl.DisableDebugSkipFreezePhaseTransfer()
+
 	// Commit the delete txn.
 	// TransferDeletes Part 2 iterates the 2 tombstone entries:
 	//   iter 0: checkOne → r-w conflict → TransferDeleteRows → appends 1 row
 	//           to same anode → capacity 2→3 → mpool.Grow → realloc
-	//   iter 1: without fix, rowids[1] reads freed buffer → garbage ObjectID
+	//           → mpool.Free poisons old buffer with 0xDD
+	//   iter 1: without fix, rowids[1] reads poisoned buffer → garbage ObjectID
 	//           → checkOne returns nil → object stays in readSet →
 	//           checkAll → spurious r-w conflict
 	err := txnDel.Commit(ctx)
