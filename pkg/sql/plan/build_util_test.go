@@ -114,7 +114,7 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), typ.Id)
 	require.Equal(t, "POINT", typ.Enumvalues)
-	applyColumnAttributesToType(&typ, colDef.Attributes)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
 	require.Equal(t, "POINT", typ.Enumvalues)
 
 	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry)", 1)
@@ -138,7 +138,7 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 
 	typ, err = getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
-	applyColumnAttributesToType(&typ, colDef.Attributes)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
 	require.Equal(t, "POINT;SRID=4326", typ.Enumvalues)
 
 	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry srid 0)", 1)
@@ -150,8 +150,24 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 
 	typ, err = getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
-	applyColumnAttributesToType(&typ, colDef.Attributes)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
 	require.Equal(t, "SRID=0", typ.Enumvalues)
+}
+
+func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (a int srid 4326)", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	err = applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SRID is only supported for GEOMETRY columns")
 }
 
 func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {

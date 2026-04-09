@@ -53,7 +53,9 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
-	applyColumnAttributesToType(&colType, specNewColumn.Attributes)
+	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+		return false, err
+	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}

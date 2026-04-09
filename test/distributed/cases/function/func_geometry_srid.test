@@ -28,6 +28,9 @@ create table geo_srid_value_bad(g point not null srid 4326);
 insert into geo_srid_value_bad values (st_geomfromtext('POINT(1 1)', 0));
 drop table geo_srid_value_bad;
 
+-- @regex("SRID is only supported for GEOMETRY columns",true)
+create table geo_srid_attr_bad(a int srid 4326);
+
 drop table if exists geo_srid_alter_bad;
 create table geo_srid_alter_bad(g point not null srid 4326);
 -- @regex("currently unsupport change from original geometry SRID 4326 to 0",true)

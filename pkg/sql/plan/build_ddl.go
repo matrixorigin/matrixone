@@ -336,7 +336,9 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			if err != nil {
 				return err
 			}
-			applyColumnAttributesToType(&colType, def.Attributes)
+			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+				return err
+			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
@@ -1041,7 +1043,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			applyColumnAttributesToType(&colType, def.Attributes)
+			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+				return err
+			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {

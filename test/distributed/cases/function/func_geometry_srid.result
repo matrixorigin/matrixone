@@ -43,6 +43,9 @@ insert into geo_srid_value_bad values (st_geomfromtext('POINT(1 1)', 0));
 -- @regex("The SRID of the geometry does not match the SRID of the column", true)
 invalid input: The SRID of the geometry does not match the SRID of the column 'POINT'. The SRID of the geometry is 0, but the SRID of the column is 4326. Consider changing the SRID of the geometry or the SRID property of the column.
 drop table geo_srid_value_bad;
+create table geo_srid_attr_bad(a int srid 4326);
+-- @regex("SRID is only supported for GEOMETRY columns", true)
+invalid input: SRID is only supported for GEOMETRY columns
 drop table if exists geo_srid_alter_bad;
 create table geo_srid_alter_bad(g point not null srid 4326);
 alter table geo_srid_alter_bad modify column g point not null srid 0;

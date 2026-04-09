@@ -38,7 +38,9 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
-	applyColumnAttributesToType(&nTy, nColSpec.Attributes)
+	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
+		return false, err
+	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return false, err

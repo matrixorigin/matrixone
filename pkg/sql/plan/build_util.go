@@ -265,9 +265,14 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
-func applyColumnAttributesToType(colType *plan.Type, attrs []tree.ColumnAttribute) {
+func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
 	if !isGeometryPlanType(colType) {
-		return
+		for _, attr := range attrs {
+			if _, ok := attr.(*tree.AttributeSRID); ok {
+				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
+			}
+		}
+		return nil
 	}
 	subtype := geometrySubtypeName(colType)
 	srid, sridDefined := geometrySRIDValue(colType)
@@ -278,6 +283,7 @@ func applyColumnAttributesToType(colType *plan.Type, attrs []tree.ColumnAttribut
 		}
 	}
 	colType.Enumvalues = geometryMetadataString(subtype, srid, sridDefined)
+	return nil
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
