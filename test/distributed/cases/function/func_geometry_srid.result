@@ -27,6 +27,9 @@ insert into geo_srid_value_ok values (st_geomfromtext('POINT(1 1)', 4326));
 select st_astext(g) as point_text, st_srid(g) as point_srid from geo_srid_value_ok;
 ➤ point_text[12,-1,0]  ¦  point_srid[4,32,0]  𝄀
 POINT(1 1)  ¦  4326
+select st_geomfromtext('POINT(1 1)', 5000000000);
+-- @regex("SRID should be between 0 and 4294967295", true)
+invalid input: SRID should be between 0 and 4294967295
 drop table geo_srid_value_ok;
 drop table if exists geo_srid_value_bad;
 create table geo_srid_value_bad(g point not null srid 4326);

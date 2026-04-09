@@ -1042,10 +1042,23 @@ func TestStGeomFromText(t *testing.T) {
 func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT(2 3)"}, []bool{false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32}, []bool{false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)"}, []bool{false})
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT(2 3)"}, []bool{false, false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+}
+
+func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{5000000000}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, []string{""}, []bool{true})
 
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
 	s, info := fcTC.Run()
