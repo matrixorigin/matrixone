@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -46,9 +47,11 @@ import (
 )
 
 var (
-	retryError                           = moerr.NewTxnNeedRetryNoCtx()
-	retryWithDefChangedError             = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-	defaultWaitTimeOnRetryLock           = time.Second
+	retryError                 = moerr.NewTxnNeedRetryNoCtx()
+	retryWithDefChangedError   = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	defaultWaitTimeOnRetryLock = time.Second
+	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
+	// holding CN resources for hours while the outer statement context is still alive.
 	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
 )
 
@@ -835,13 +838,17 @@ func canRetryLock(
 	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) &&
+	if !shouldBypassHeldLockTableCheck(err) &&
 		txn.HasLockTable(table) {
+		// Once this CN already recorded the lock table, backend availability errors
+		// should fail fast and let whole-txn rollback tear the txn down. Continuing
+		// to retry here only extends the lifetime of an already broken explicit txn.
 		return false
 	}
 
 	wait, ok := getRetryWaitDuration(err, retryState)
 	if !ok {
+		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
 	}
 	return waitToRetryLock(ctx, wait)
@@ -855,13 +862,15 @@ func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// txn that is already doomed to exit.
 		return ctx.Err() == nil
 	}
 }
 
 func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
 	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
-		return defaultWaitTimeOnRetryLock, true
+		return 0, false
 	}
 
 	now := time.Now()
@@ -890,10 +899,13 @@ func getLockRetryExitError(ctx context.Context, err error) error {
 }
 
 func isRetryLockError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
 		isBoundedRetryLockError(err)
+}
+
+func shouldBypassHeldLockTableCheck(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
 }
 
 func isBoundedRetryLockError(err error) bool {
@@ -901,6 +913,28 @@ func isBoundedRetryLockError(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
+}
+
+func logLockRetryBudgetStop(
+	err error,
+	table uint64,
+	txn client.TxnOperator,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Uint64("table-id", table),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if txn != nil {
+		fields = append(fields, zap.String("txn-id", hex.EncodeToString(txn.Txn().ID)))
+	}
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 || retryState.backendRetryDeadline.IsZero() {
+		logutil.Warn("lock retry disabled by non-positive backend retry budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	logutil.Warn("lock retry budget exhausted for backend availability error", fields...)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to

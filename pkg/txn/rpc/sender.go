@@ -31,10 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 var (
-	defaultWaitTimeOnRetryBackendSend    = 300 * time.Millisecond
+	defaultWaitTimeOnRetryBackendSend = 300 * time.Millisecond
+	// Keep backend send retries bounded so rollback/catalog RPCs fail in finite
+	// time instead of stretching broken explicit txns for hours.
 	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
 )
 
@@ -204,6 +207,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 			if isBackendConnectRetryError(err) {
 				wait, ok := getBackendRetryWaitDuration(&retryState)
 				if !ok {
+					s.logBackendRetryStop(err, tn, request, retryState)
 					return txn.TxnResponse{}, err
 				}
 				if !waitToRetrySend(ctx, wait) {
@@ -245,7 +249,7 @@ type backendRetryState struct {
 
 func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, bool) {
 	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
-		return defaultWaitTimeOnRetryBackendSend, true
+		return 0, false
 	}
 
 	now := time.Now()
@@ -271,14 +275,40 @@ func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// request whose caller has already given up.
 		return ctx.Err() == nil
 	}
 }
 
 func isBackendConnectRetryError(err error) bool {
+	// A closed backend can come back during TN/backend restart or address refresh,
+	// so we retry it for the same bounded window as the other backend-availability
+	// errors instead of waiting indefinitely.
 	return moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
+}
+
+func (s *sender) logBackendRetryStop(
+	err error,
+	tn metadata.TNShard,
+	request txn.TxnRequest,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.String("txn-id", hex.EncodeToString(request.Txn.ID)),
+		zap.String("method", request.Method.String()),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender backend retry budget exhausted", fields...)
 }
 
 func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {

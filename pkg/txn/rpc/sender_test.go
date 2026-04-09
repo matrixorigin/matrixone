@@ -455,6 +455,48 @@ func TestSendStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 	assert.Less(t, time.Since(start), oldWait)
 }
 
+func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
+
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 0
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.TNShard{
+				Address: testTN5Addr,
+			},
+			Payload: make([]byte, 10),
+		},
+	}
+
+	start := time.Now()
+	result, err := sd.Send(context.Background(), []txn.TxnRequest{req})
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t,
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	assert.Less(t, time.Since(start), defaultWaitTimeOnRetryBackendSend)
+}
+
 func TestSendWithTxnUnknown(t *testing.T) {
 	s := newTestTxnServer(t, testTN1Addr, nil)
 	defer func() {
