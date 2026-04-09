@@ -861,7 +861,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 	sql := "select " +
 		"'%s' as `Table`, " +
-		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
+		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"`idx`.`column_name` as `Column_name`, " +

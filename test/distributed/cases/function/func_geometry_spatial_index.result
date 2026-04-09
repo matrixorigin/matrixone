@@ -12,6 +12,23 @@ spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
   PRIMARY KEY (`id`),
   SPATIAL KEY `idx_g` (`g`)
 )
+show index from spatial_idx_t1;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+spatial_idx_t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+spatial_idx_t1  ¦  1  ¦  idx_g  ¦  1  ¦  g  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  rtree  ¦    ¦    ¦    ¦  YES  ¦  g
+select name, type, algo, column_name
+from mo_catalog.mo_indexes
+where name = 'idx_g'
+and table_id = (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'spatial_idx_t1'
+)
+order by column_name;
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+idx_g  ¦  SPATIAL  ¦  rtree  ¦  __mo_alias_id  𝄀
+idx_g  ¦  SPATIAL  ¦  rtree  ¦  g
 insert into spatial_idx_t1 values
 (1, st_geomfromtext('POINT(1 1)')),
 (2, st_geomfromtext('POINT(1 1)'));

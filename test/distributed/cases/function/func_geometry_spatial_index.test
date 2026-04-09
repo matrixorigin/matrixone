@@ -5,6 +5,17 @@ create table spatial_idx_t1(
 );
 create spatial index idx_g on spatial_idx_t1(g);
 show create table spatial_idx_t1;
+show index from spatial_idx_t1;
+select name, type, algo, column_name
+from mo_catalog.mo_indexes
+where name = 'idx_g'
+  and table_id = (
+    select rel_id
+    from mo_catalog.mo_tables
+    where reldatabase = database()
+      and relname = 'spatial_idx_t1'
+  )
+order by column_name;
 insert into spatial_idx_t1 values
     (1, st_geomfromtext('POINT(1 1)')),
     (2, st_geomfromtext('POINT(1 1)'));

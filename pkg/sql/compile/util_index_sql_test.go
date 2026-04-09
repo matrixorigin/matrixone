@@ -22,6 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIndexMetadataType(t *testing.T) {
+	require.Equal(t, INDEX_TYPE_UNIQUE, indexMetadataType(true, ""))
+	require.Equal(t, INDEX_TYPE_MULTIPLE, indexMetadataType(false, ""))
+	require.Equal(t, INDEX_TYPE_SPATIAL, indexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
+	require.Equal(t, INDEX_TYPE_FULLTEXT, indexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+}
+
 func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "files_related_mph",

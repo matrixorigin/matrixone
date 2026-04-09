@@ -38,6 +38,19 @@ const (
 	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
 
+func indexMetadataType(unique bool, algo string) string {
+	switch {
+	case unique:
+		return INDEX_TYPE_UNIQUE
+	case catalog.IsRTreeIndexAlgo(algo):
+		return INDEX_TYPE_SPATIAL
+	case catalog.IsFullTextIndexAlgo(algo):
+		return INDEX_TYPE_FULLTEXT
+	default:
+		return INDEX_TYPE_MULTIPLE
+	}
+}
+
 const (
 	INDEX_VISIBLE_YES = 1
 	INDEX_VISIBLE_NO  = 0
@@ -235,12 +248,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", indexDef.IndexName)
 
 					// 5. index_type
-					var index_type string
-					if indexDef.Unique {
-						index_type = INDEX_TYPE_UNIQUE
-					} else {
-						index_type = INDEX_TYPE_MULTIPLE
-					}
+					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
 					fmt.Fprintf(buffer, "'%s', ", index_type)
 
 					//6. algorithm
