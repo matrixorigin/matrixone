@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -261,7 +262,7 @@ func GetSnapshotInfoByName(ctx context.Context, sqlExecutor executor.SQLExecutor
 	}
 
 	// Query all snapshot fields: snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id
-	querySQL := fmt.Sprintf(`select snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, escapeSQLString(snapshotName))
+	querySQL := fmt.Sprintf(`select snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"))
 	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	queryResult, err := sqlExecutor.Exec(ctx, querySQL, opts)
 	if err != nil {

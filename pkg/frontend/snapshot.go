@@ -2901,7 +2901,7 @@ func getAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccoun
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
 			FROM mo_catalog.mo_pubs 
-			WHERE account_name = '%s' AND pub_name = '%s'`, escapeSQLString(pubAccountName), escapeSQLString(pubName))
+			WHERE account_name = '%s' AND pub_name = '%s'`, strings.ReplaceAll(pubAccountName, "'", "''"), strings.ReplaceAll(pubName, "'", "''"))
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(systemCtx, queryPubSQL)
