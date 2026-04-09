@@ -743,6 +743,9 @@ func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		if _, err := geometryTypeNameFromText(wkt); err != nil {
 			return nil, err
 		}
+		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+			return nil, err
+		}
 		return encodeGeometryPayload(wkt, 0, false), nil
 	}, selectList)
 }
@@ -786,6 +789,9 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
 		if _, err := geometryTypeNameFromText(wkt); err != nil {
+			return err
+		}
+		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
 			return err
 		}
 		if err := rs.AppendBytes(encodeGeometryPayload(wkt, uint32(sridValue), true), false); err != nil {
@@ -870,6 +876,38 @@ func geometryTypeNameFromPayload(payload []byte) (string, error) {
 	return geometryTypeNameFromText(s)
 }
 
+func validateFiniteCoordinatesInGeometryText(wkt string) error {
+	tokens := strings.FieldsFunc(wkt, func(r rune) bool {
+		switch r {
+		case '(', ')', ',', ' ', '\t', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+	for _, token := range tokens {
+		if token == "" {
+			continue
+		}
+		value, err := strconv.ParseFloat(token, 64)
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			continue
+		}
+		if err == nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+	}
+	return nil
+}
+
+func parseFiniteCoordinate(token string, errMsg string) (float64, error) {
+	value, err := strconv.ParseFloat(token, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, moerr.NewInvalidInputNoCtx(errMsg)
+	}
+	return value, nil
+}
+
 func parsePointXYFromPayload(payload []byte) (float64, float64, error) {
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
@@ -892,11 +930,11 @@ func parsePointXYFromPayload(payload []byte) (float64, float64, error) {
 	if len(coords) != 2 {
 		return 0, 0, moerr.NewInvalidInputNoCtx("invalid point payload")
 	}
-	x, err := strconv.ParseFloat(coords[0], 64)
+	x, err := parseFiniteCoordinate(coords[0], "invalid point payload")
 	if err != nil {
 		return 0, 0, moerr.NewInvalidInputNoCtx("invalid point payload")
 	}
-	y, err := strconv.ParseFloat(coords[1], 64)
+	y, err := parseFiniteCoordinate(coords[1], "invalid point payload")
 	if err != nil {
 		return 0, 0, moerr.NewInvalidInputNoCtx("invalid point payload")
 	}
@@ -1085,9 +1123,54 @@ func StY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 }
 
 func StNumGeometries(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v []byte) (int64, error) {
-		return geometryCountFromPayload(v)
-	}, selectList)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		isEmpty, err := geometryIsEmpty(v)
+		if err != nil {
+			return err
+		}
+		if isEmpty {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		count, err := geometryCountFromPayload(v)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(count, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func StGeometryN(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1420,6 +1503,14 @@ func dimensionFromPayload(payload []byte) (int64, error) {
 }
 
 func geometryDimensionFromText(wkt string) (int64, error) {
+	isEmpty, err := geometryIsEmpty(functionUtil.QuickStrToBytes(wkt))
+	if err != nil {
+		return 0, err
+	}
+	if isEmpty {
+		return -1, nil
+	}
+
 	typeName, err := geometryTypeNameFromText(wkt)
 	if err != nil {
 		return 0, err
@@ -1441,7 +1532,7 @@ func geometryDimensionFromText(wkt string) (int64, error) {
 		content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
 		items := splitTopLevelGeometryItems(content)
 		if len(items) == 0 {
-			return 0, moerr.NewInvalidInputNoCtx("invalid geometry collection payload")
+			return -1, nil
 		}
 		maxDimension := int64(-1)
 		for _, item := range items {
@@ -1452,9 +1543,6 @@ func geometryDimensionFromText(wkt string) (int64, error) {
 			if dimension > maxDimension {
 				maxDimension = dimension
 			}
-		}
-		if maxDimension < 0 {
-			return 0, moerr.NewInvalidInputNoCtx("invalid geometry collection payload")
 		}
 		return maxDimension, nil
 	default:
@@ -2508,11 +2596,11 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}
 
-	x, err := strconv.ParseFloat(coords[0], 64)
+	x, err := parseFiniteCoordinate(coords[0], errMsg)
 	if err != nil {
 		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}
-	y, err := strconv.ParseFloat(coords[1], 64)
+	y, err := parseFiniteCoordinate(coords[1], errMsg)
 	if err != nil {
 		return 0, 0, moerr.NewInvalidInputNoCtx(errMsg)
 	}

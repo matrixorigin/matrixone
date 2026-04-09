@@ -30,6 +30,9 @@ POINT(1 1)  ¦  4326
 select st_geomfromtext('POINT(1 1)', 5000000000);
 -- @regex("SRID should be between 0 and 4294967295", true)
 invalid input: SRID should be between 0 and 4294967295
+select st_geomfromtext('POINT(Inf 1)', 4326);
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
 drop table geo_srid_value_ok;
 drop table if exists geo_srid_value_bad;
 create table geo_srid_value_bad(g point not null srid 4326);

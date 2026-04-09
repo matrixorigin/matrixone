@@ -16,9 +16,12 @@ select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),POLYGON((0 0,
 select st_dimension(st_geomfromtext('MULTIPOINT((7 8),(9 10))', 4326)) as srid_dimension;
 ➤ srid_dimension[-5,64,0]  𝄀
 0
+select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_dimension;
+➤ empty_collection_dimension[-5,64,0]  𝄀
+-1
+select st_dimension(st_geomfromtext('MULTIPOINT()')) as empty_multipoint_dimension;
+➤ empty_multipoint_dimension[-5,64,0]  𝄀
+-1
 select st_dimension(st_geomfromtext(null)) as null_dimension;
 ➤ null_dimension[-5,64,0]  𝄀
 null
-select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION()'));
--- @regex("invalid geometry collection payload", true)
-invalid input: invalid geometry collection payload
