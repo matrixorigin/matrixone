@@ -21,6 +21,7 @@ import (
 	"runtime/trace"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -55,6 +56,15 @@ const (
 	TransferSinkerBufferSize          = common.Const1MBytes * 5
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
+
+// debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
+// TransferDeletes is skipped during the Freeze phase so that the
+// PrePrepare phase is the only transfer pass. This makes vector
+// reallocation bugs observable in a single-pass transfer.
+var debugSkipFreezePhaseTransfer atomic.Bool
+
+func EnableDebugSkipFreezePhaseTransfer()  { debugSkipFreezePhaseTransfer.Store(true) }
+func DisableDebugSkipFreezePhaseTransfer() { debugSkipFreezePhaseTransfer.Store(false) }
 
 type txnEntries struct {
 	entries []txnif.TxnEntry
@@ -140,6 +150,9 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 func (tbl *txnTable) PrePreareTransfer(
 	ctx context.Context, phase string, ts types.TS,
 ) (err error) {
+	if debugSkipFreezePhaseTransfer.Load() && phase == txnif.FreezePhase {
+		return
+	}
 	err = tbl.TransferDeletes(ctx, ts, phase)
 	tbl.transferedTS = ts
 	return
@@ -447,11 +460,9 @@ func (tbl *txnTable) TransferDeletes(
 		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
-		// TransferDeleteRows -> DeleteByPhyAddrKeys -> tableSpace.Append appends
-		// new rows to the same tombstone node being iterated. If the append exceeds
-		// the vector capacity, mpool.Grow reallocates the underlying buffer and
-		// frees the old one, leaving the rowids unsafe.Slice as a dangling pointer.
-		// Refresh the slice so subsequent iterations read from the new buffer.
+		// TransferDeleteRows may append to the same anode, which can
+		// trigger mpool.Grow and reallocate the underlying buffer.
+		// Refresh the rowids slice to avoid reading freed memory.
 		rowids = vector.MustFixedColNoTypeCheck[types.Rowid](
 			rowidVec.GetDownstreamVector(),
 		)
