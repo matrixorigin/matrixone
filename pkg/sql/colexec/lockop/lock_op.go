@@ -893,6 +893,11 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 
 func getLockRetryExitError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
+		if isBoundedRetryLockError(err) {
+			// Preserve the backend failure so explicit txns do not survive on a raw
+			// context error after backend retry has already proven the path unhealthy.
+			return err
+		}
 		return ctxErr
 	}
 	return err

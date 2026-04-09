@@ -63,7 +63,7 @@ var (
 	sid = ""
 )
 
-func TestLockWithRetryStopsOnDeadlineExceededContext(t *testing.T) {
+func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -93,11 +93,11 @@ func TestLockWithRetryStopsOnDeadlineExceededContext(t *testing.T) {
 		LockOptions{},
 		types.Type{},
 	)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	require.Less(t, time.Since(start), 200*time.Millisecond)
 }
 
-func TestLockWithRetryStopsOnCanceledContext(t *testing.T) {
+func TestLockWithRetryReturnsBackendErrorWhenCanceledContextStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -127,11 +127,11 @@ func TestLockWithRetryStopsOnCanceledContext(t *testing.T) {
 		LockOptions{},
 		types.Type{},
 	)
-	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	require.Less(t, time.Since(start), 200*time.Millisecond)
 }
 
-func TestLockWithRetryStopsWhenContextCanceledDuringRetryWait(t *testing.T) {
+func TestLockWithRetryReturnsBackendErrorWhenContextCanceledDuringRetryWait(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -165,7 +165,7 @@ func TestLockWithRetryStopsWhenContextCanceledDuringRetryWait(t *testing.T) {
 		LockOptions{},
 		types.Type{},
 	)
-	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 

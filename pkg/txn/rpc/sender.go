@@ -212,7 +212,9 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 				}
 				if !waitToRetrySend(ctx, wait) {
 					if ctxErr := ctx.Err(); ctxErr != nil {
-						return txn.TxnResponse{}, ctxErr
+						// Preserve the backend failure so upper layers can tear down an
+						// explicit txn instead of leaving it alive on a raw context error.
+						return txn.TxnResponse{}, err
 					}
 					return txn.TxnResponse{}, err
 				}
