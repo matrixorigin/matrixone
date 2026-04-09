@@ -299,22 +299,28 @@ func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *n
 	scaleFactor := types.Decimal64(types.Pow10[scaleDiff])
 	if rsnull.IsEmpty() {
 		for i := 0; i < n; i++ {
+			signBit := vec[i] >> 63
+			mask := -signBit
 			var err error
-			rs[i], err = vec[i].Mul64(scaleFactor)
+			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
 			if err != nil {
 				return err
 			}
+			rs[i] = (rs[i] ^ mask) + signBit
 		}
 	} else {
 		for i := 0; i < n; i++ {
 			if bmp.Contains(uint64(i)) {
 				continue
 			}
+			signBit := vec[i] >> 63
+			mask := -signBit
 			var err error
-			rs[i], err = vec[i].Mul64(scaleFactor)
+			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
 			if err != nil {
 				return err
 			}
+			rs[i] = (rs[i] ^ mask) + signBit
 		}
 	}
 	return nil
