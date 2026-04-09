@@ -670,6 +670,7 @@ func init() {
 		"skip":                       CONFLICT_SKIP,
 		"accept":                     CONFLICT_ACCEPT,
 		"diff":                       DIFF,
+		"pick":                       PICK,
 		"conflict":                   CONFLICT,
 		"output":                     OUTPUT,
 	}

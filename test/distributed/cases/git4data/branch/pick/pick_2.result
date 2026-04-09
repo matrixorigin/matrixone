@@ -1,0 +1,154 @@
+drop database if exists test;
+create database test;
+use test;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2);
+data branch create table t1 from t0;
+insert into t1 values (3,30);
+data branch create table t2 from t0;
+insert into t2 values (3,40);
+data branch pick t2 into t1 keys(3);
+internal error: conflict: t2 INSERT and t1 INSERT on pk(3) with different values
+data branch pick t2 into t1 keys(3) when conflict skip;
+select * from t1 order by a asc;
+a	b
+1	1
+2	2
+3	30
+data branch pick t2 into t1 keys(3) when conflict accept;
+select * from t1 order by a asc;
+a	b
+1	1
+2	2
+3	40
+drop table t0;
+drop table t1;
+drop table t2;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,10),(2,20);
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,100),(3,30);
+data branch pick t2 into t1 keys(1);
+internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 order by a asc;
+a	b
+1	10
+2	20
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 order by a asc;
+a	b
+1	100
+2	20
+data branch pick t2 into t1 keys(3);
+select * from t1 order by a asc;
+a	b
+1	100
+2	20
+3	30
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2),(3,3);
+data branch create table t1 from t0;
+update t1 set b = 10 where a = 1;
+data branch create table t2 from t0;
+update t2 set b = 20 where a = 1;
+data branch pick t2 into t1 keys(1);
+internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 order by a asc;
+a	b
+1	10
+2	2
+3	3
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 order by a asc;
+a	b
+1	20
+2	2
+3	3
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, c varchar(20), primary key(a));
+insert into t0 values (1, 10, 'hello'), (2, 20, NULL), (3, NULL, 'world');
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t1 values (4, 100, NULL);
+insert into t2 values (4, NULL, 'new');
+data branch pick t2 into t1 keys(4) when conflict fail;
+internal error: conflict: t2 INSERT and t1 INSERT on pk(4) with different values
+data branch pick t2 into t1 keys(4) when conflict skip;
+select * from t1 where a = 4;
+a	b	c
+4	100	null
+data branch pick t2 into t1 keys(4) when conflict accept;
+select * from t1 where a = 4;
+a	b	c
+4	null	new
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 select *, 0 from generate_series(1, 20) g;
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+update t1 set b = a * 10 where a % 2 = 0;
+update t2 set b = a * 100 where a % 3 = 0;
+insert into t2 values (21, 21), (22, 22), (23, 23);
+data branch pick t2 into t1 keys(6, 12, 18, 21, 22, 23) when conflict skip;
+select * from t1 where a in (6, 12, 18, 21, 22, 23) order by a asc;
+a	b
+6	60
+12	120
+18	180
+21	21
+22	22
+23	23
+data branch pick t2 into t1 keys(6) when conflict accept;
+select * from t1 where a = 6;
+a	b
+6	600
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,10),(2,20);
+data branch create table t1 from t0;
+delete from t1 where a = 1;
+data branch create table t2 from t0;
+update t2 set b = 111 where a = 1;
+data branch pick t2 into t1 keys(1) when conflict fail;
+internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+data branch pick t2 into t1 keys(1) when conflict skip;
+select count(*) from t1 where a = 1;
+count(*)
+0
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 where a = 1;
+a	b
+1	111
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,10),(2,20);
+data branch create table t1 from t0;
+update t1 set b = 999 where a = 1;
+data branch create table t2 from t0;
+delete from t2 where a = 1;
+data branch pick t2 into t1 keys(1) when conflict fail;
+internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 where a = 1;
+a	b
+1	999
+data branch pick t2 into t1 keys(1) when conflict accept;
+select count(*) from t1 where a = 1;
+count(*)
+0
+drop table t0;
+drop table t1;
+drop table t2;
+drop database test;
