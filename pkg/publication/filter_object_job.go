@@ -477,8 +477,8 @@ type FilterObjectJob struct {
 	pubName                 string
 	ccprCache               CCPRTxnCacheWriter
 	txnID                   []byte
-	aobjectMap              AObjectMap // Used for tombstone rowid rewriting
-	ttlChecker              TTLChecker // TTL expiration checker
+	aobjectMap              *AObjectMap // Used for tombstone rowid rewriting
+	ttlChecker              TTLChecker  // TTL expiration checker
 	result                  chan *FilterObjectJobResult
 }
 
@@ -497,7 +497,7 @@ func NewFilterObjectJob(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) *FilterObjectJob {
 	return &FilterObjectJob{

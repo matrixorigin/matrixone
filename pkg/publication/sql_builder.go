@@ -299,14 +299,14 @@ func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
 	case "account":
 		return fmt.Sprintf(
 			PublicationCreateCcprSnapshotForAccountSqlTemplate,
-			snapshotName,
+			escapeBacktickIdentifier(snapshotName),
 			escapeSQLString(subscriptionAccountName),
 			escapeSQLString(publicationName),
 		)
 	case "database":
 		return fmt.Sprintf(
 			PublicationCreateCcprSnapshotForDatabaseSqlTemplate,
-			snapshotName,
+			escapeBacktickIdentifier(snapshotName),
 			escapeSQLString(dbName),
 			escapeSQLString(subscriptionAccountName),
 			escapeSQLString(publicationName),
@@ -314,7 +314,7 @@ func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
 	case "table":
 		return fmt.Sprintf(
 			PublicationCreateCcprSnapshotForTableSqlTemplate,
-			snapshotName,
+			escapeBacktickIdentifier(snapshotName),
 			escapeSQLString(dbName),
 			escapeSQLString(tableName),
 			escapeSQLString(subscriptionAccountName),
@@ -324,7 +324,7 @@ func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
 		// Default to account level
 		return fmt.Sprintf(
 			PublicationCreateCcprSnapshotForAccountSqlTemplate,
-			snapshotName,
+			escapeBacktickIdentifier(snapshotName),
 			escapeSQLString(subscriptionAccountName),
 			escapeSQLString(publicationName),
 		)
@@ -334,7 +334,7 @@ func (b publicationSQLBuilder) CreateCcprSnapshotSQL(
 // DropCcprSnapshotSQL creates SQL for dropping a CCPR snapshot
 // Uses: DROP SNAPSHOT IF EXISTS `snapshotName` FROM account PUBLICATION pubname
 func (b publicationSQLBuilder) DropCcprSnapshotSQL(snapshotName string, subscriptionAccountName string, publicationName string) string {
-	return fmt.Sprintf(PublicationDropCcprSnapshotSqlTemplate, snapshotName, escapeSQLString(subscriptionAccountName), escapeSQLString(publicationName))
+	return fmt.Sprintf(PublicationDropCcprSnapshotSqlTemplate, escapeBacktickIdentifier(snapshotName), escapeSQLString(subscriptionAccountName), escapeSQLString(publicationName))
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -704,6 +704,11 @@ func (b publicationSQLBuilder) UnregisterSyncProtectionSQL(jobID string) string 
 // ------------------------------------------------------------------------------------------------
 // Helper functions
 // ------------------------------------------------------------------------------------------------
+
+// escapeBacktickIdentifier escapes backticks within an identifier for safe use in backtick-quoted SQL identifiers.
+func escapeBacktickIdentifier(s string) string {
+	return strings.ReplaceAll(s, "`", "``")
+}
 
 // escapeSQLString escapes special characters in SQL string literals to prevent SQL injection.
 // It follows the SQL standard escaping rules:

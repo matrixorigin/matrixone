@@ -142,10 +142,7 @@ func (mc *MemoryController) Free(data []byte, memType MemoryType) {
 
 	// Release semaphore if this was a large allocation
 	if size > 10*1024*1024 {
-		select {
-		case <-mc.largeSem:
-		default:
-		}
+		<-mc.largeSem
 	}
 }
 
@@ -519,9 +516,8 @@ func ReleaseAObjectMapping(mapping *AObjectMapping) {
 // ============================================================================
 
 var (
-	globalMemoryController     *MemoryController
-	globalMemoryControllerOnce sync.Once
-	globalMemoryControllerMu   sync.RWMutex
+	globalMemoryController   *MemoryController
+	globalMemoryControllerMu sync.RWMutex
 )
 
 // GetGlobalMemoryController returns the global memory controller instance
@@ -529,10 +525,7 @@ func GetGlobalMemoryController() *MemoryController {
 	globalMemoryControllerMu.RLock()
 	mc := globalMemoryController
 	globalMemoryControllerMu.RUnlock()
-	if mc != nil {
-		return mc
-	}
-	return nil
+	return mc
 }
 
 // SetGlobalMemoryController sets the global memory controller instance
@@ -542,10 +535,19 @@ func SetGlobalMemoryController(mc *MemoryController) {
 	globalMemoryControllerMu.Unlock()
 }
 
-// InitGlobalMemoryController initializes the global memory controller
+// InitGlobalMemoryController initializes the global memory controller.
+// Uses double-checked locking to ensure only one controller is created.
 func InitGlobalMemoryController(mp *mpool.MPool, maxBytes int64) *MemoryController {
-	globalMemoryControllerOnce.Do(func() {
+	globalMemoryControllerMu.RLock()
+	mc := globalMemoryController
+	globalMemoryControllerMu.RUnlock()
+	if mc != nil {
+		return mc
+	}
+	globalMemoryControllerMu.Lock()
+	defer globalMemoryControllerMu.Unlock()
+	if globalMemoryController == nil {
 		globalMemoryController = NewMemoryController(mp, maxBytes)
-	})
+	}
 	return globalMemoryController
 }

@@ -37,6 +37,14 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+// sanitizeSQLInput escapes a string for safe SQL interpolation WITHOUT wrapping in quotes.
+// This differs from escapeSQLString() in rewrite_rule.go which adds surrounding quotes.
+func sanitizeSQLInput(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 const (
 	// account
 	getAccountIdNamesSql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1"
@@ -1165,9 +1173,9 @@ func getPubInfo(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo
 
 	var sql string
 	if accountNameColExists {
-		sql = fmt.Sprintf(getPubInfoSql, accountId) + fmt.Sprintf(" and pub_name = '%s'", pubName)
+		sql = fmt.Sprintf(getPubInfoSql, accountId) + fmt.Sprintf(" and pub_name = '%s'", sanitizeSQLInput(pubName))
 	} else {
-		sql = fmt.Sprintf(getPubInfoSqlOld, accountId) + fmt.Sprintf(" and pub_name = '%s'", pubName)
+		sql = fmt.Sprintf(getPubInfoSqlOld, accountId) + fmt.Sprintf(" and pub_name = '%s'", sanitizeSQLInput(pubName))
 	}
 
 	bh.ClearExecResultSet()
@@ -1207,11 +1215,11 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 	// Query by pub_name only, without account_id filter
 	var sql string
 	if accountNameColExists {
-		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", escapeSQLString(pubName))
+		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", sanitizeSQLInput(pubName))
 	} else {
 		// For old schema without account_name column
 		sql = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs" +
-			fmt.Sprintf(" where pub_name = '%s'", escapeSQLString(pubName))
+			fmt.Sprintf(" where pub_name = '%s'", sanitizeSQLInput(pubName))
 	}
 
 	bh.ClearExecResultSet()
@@ -1290,7 +1298,7 @@ func getPubInfosByDbname(ctx context.Context, bh BackgroundExec, dbName string) 
 	if err != nil {
 		return
 	}
-	sql := fmt.Sprintf(getPubInfoSql, accountId) + fmt.Sprintf(" and database_name = '%s'", dbName)
+	sql := fmt.Sprintf(getPubInfoSql, accountId) + fmt.Sprintf(" and database_name = '%s'", sanitizeSQLInput(dbName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
@@ -1489,10 +1497,10 @@ func getSubInfosFromPub(ctx context.Context, bh BackgroundExec, pubAccountName, 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := getSubsSql
 	if len(pubAccountName) > 0 {
-		sql += fmt.Sprintf(" and pub_account_name = '%s'", pubAccountName)
+		sql += fmt.Sprintf(" and pub_account_name = '%s'", sanitizeSQLInput(pubAccountName))
 	}
 	if len(pubName) > 0 {
-		sql += fmt.Sprintf(" and pub_name = '%s'", pubName)
+		sql += fmt.Sprintf(" and pub_name = '%s'", sanitizeSQLInput(pubName))
 	}
 	if subscribed {
 		sql += " and sub_name is not null"
@@ -2266,12 +2274,12 @@ func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList str
 			return "", err
 		}
 	}
-	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, dbName, dbId, tablesStr, accountId, pubName), nil
+	return fmt.Sprintf(updatePubInfoFormat, sanitizeSQLInput(accountList), sanitizeSQLInput(comment), sanitizeSQLInput(dbName), dbId, sanitizeSQLInput(tablesStr), accountId, sanitizeSQLInput(pubName)), nil
 }
 
 func insertMoSubs(ctx context.Context, bh BackgroundExec, subInfo *pubsub.SubInfo) (err error) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	sql := fmt.Sprintf(insertIntoMoSubsFormat, subInfo.SubAccountId, subInfo.SubAccountName, subInfo.PubAccountId, subInfo.PubAccountName, subInfo.PubName, subInfo.PubDbName, subInfo.PubTables, subInfo.PubComment, subInfo.Status)
+	sql := fmt.Sprintf(insertIntoMoSubsFormat, subInfo.SubAccountId, sanitizeSQLInput(subInfo.SubAccountName), subInfo.PubAccountId, sanitizeSQLInput(subInfo.PubAccountName), sanitizeSQLInput(subInfo.PubName), sanitizeSQLInput(subInfo.PubDbName), sanitizeSQLInput(subInfo.PubTables), sanitizeSQLInput(subInfo.PubComment), subInfo.Status)
 	return bh.Exec(ctx, sql)
 }
 
@@ -2293,9 +2301,9 @@ func batchInsertMoSubs(
 	valuesFormat := "(%d, '%s', %d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
 	for _, accId := range accIds {
 		values = append(values, fmt.Sprintf(valuesFormat,
-			accId, accIdInfoMap[accId].Name,
-			pubAccountId, pubAccountName,
-			pubName, pubDbName, pubTables, pubComment,
+			accId, sanitizeSQLInput(accIdInfoMap[accId].Name),
+			pubAccountId, sanitizeSQLInput(pubAccountName),
+			sanitizeSQLInput(pubName), sanitizeSQLInput(pubDbName), sanitizeSQLInput(pubTables), sanitizeSQLInput(pubComment),
 			pubsub.SubStatusNormal,
 		))
 	}
@@ -2317,9 +2325,9 @@ func batchUpdateMoSubs(
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(batchUpdateMoSubsFormat,
-		pubDbName, pubTables, pubComment,
+		sanitizeSQLInput(pubDbName), sanitizeSQLInput(pubTables), sanitizeSQLInput(pubComment),
 		status,
-		pubAccountName, pubName,
+		sanitizeSQLInput(pubAccountName), sanitizeSQLInput(pubName),
 		pubsub.JoinAccountIds(accIds),
 	)
 	return bh.Exec(ctx, sql)
@@ -2347,7 +2355,7 @@ func batchDeleteMoSubs(
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(batchDeleteMoSubsFormat,
-		pubAccountName, pubName,
+		sanitizeSQLInput(pubAccountName), sanitizeSQLInput(pubName),
 		pubsub.JoinAccountIds(accIds),
 	)
 	return bh.Exec(ctx, sql)
@@ -2530,7 +2538,7 @@ func dropSubAccountNameInSubAccounts(ctx context.Context, bh BackgroundExec, pub
 	} else {
 		str = str1 + pubsub.Sep + str2
 	}
-	sql := fmt.Sprintf(updatePubInfoAccountListFormat, str, pubAccountId, pubName)
+	sql := fmt.Sprintf(updatePubInfoAccountListFormat, str, pubAccountId, sanitizeSQLInput(pubName))
 
 	return bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql)
 }
@@ -2542,7 +2550,7 @@ func getSqlForInsertIntoMoPubs(ctx context.Context, accountId uint32, accountNam
 		}
 	}
 
-	return fmt.Sprintf(insertIntoMoPubsFormat, accountId, accountName, pubName, databaseName, databaseId, allTable, tableList, accountList, defines.GetRoleId(ctx), defines.GetUserId(ctx), comment), nil
+	return fmt.Sprintf(insertIntoMoPubsFormat, accountId, sanitizeSQLInput(accountName), sanitizeSQLInput(pubName), sanitizeSQLInput(databaseName), databaseId, allTable, sanitizeSQLInput(tableList), sanitizeSQLInput(accountList), defines.GetRoleId(ctx), defines.GetUserId(ctx), sanitizeSQLInput(comment)), nil
 }
 
 func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, accountId uint64) (string, error) {
@@ -2551,7 +2559,7 @@ func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid 
 			return "", err
 		}
 	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName, accountId), nil
+	return fmt.Sprintf(getDbIdAndTypFormat, sanitizeSQLInput(dbName), accountId), nil
 }
 
 func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
@@ -2565,7 +2573,7 @@ func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bo
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(dropPubFormat, accountId, pubName), nil
+	return fmt.Sprintf(dropPubFormat, accountId, sanitizeSQLInput(pubName)), nil
 }
 
 func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
@@ -2577,7 +2585,7 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(getDbPubCountFormat, accountId, dbName), nil
+	return fmt.Sprintf(getDbPubCountFormat, accountId, sanitizeSQLInput(dbName)), nil
 }
 
 func checkColExists(ctx context.Context, bh BackgroundExec, dbName, tblName, colName string) (exists bool, err error) {
@@ -2668,7 +2676,7 @@ func checkUpstreamPublicationCoverage(
 	defer upstreamExecutor.Close()
 
 	// Execute SHOW PUBLICATION COVERAGE on upstream
-	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE %s", pubName)
+	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE `%s`", strings.ReplaceAll(pubName, "`", "``"))
 	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, publication.InvalidAccountID, coverageSQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to check publication coverage on upstream: %v", err)
@@ -2973,18 +2981,18 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			0,
 			'%s'
 		)`,
-		escapeSQLString(taskID),
-		escapeSQLString(string(cs.PubName)),
-		escapeSQLString(cs.SubscriptionAccountName),
-		escapeSQLString(syncLevel),
+		sanitizeSQLInput(taskID),
+		sanitizeSQLInput(string(cs.PubName)),
+		sanitizeSQLInput(cs.SubscriptionAccountName),
+		sanitizeSQLInput(syncLevel),
 		accountId,
-		escapeSQLString(dbName),
-		escapeSQLString(tableName),
-		escapeSQLString(encryptedUri),
-		escapeSQLString(string(syncConfigJSON)),
+		sanitizeSQLInput(dbName),
+		sanitizeSQLInput(tableName),
+		sanitizeSQLInput(encryptedUri),
+		sanitizeSQLInput(string(syncConfigJSON)),
 		subscriptionState,
 		iterationState,
-		escapeSQLString(contextJSON),
+		sanitizeSQLInput(contextJSON),
 	)
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -3372,8 +3380,8 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 				catalog.MO_CATALOG,
 				catalog.MO_CCPR_DBS,
 				info.DbID,
-				escapeSQLString(taskID),
-				escapeSQLString(info.DbName),
+				sanitizeSQLInput(taskID),
+				sanitizeSQLInput(info.DbName),
 				accountId,
 			)
 			if err := bh.Exec(ctx, sql); err != nil {
@@ -3388,9 +3396,9 @@ func insertCCPRDbAndTableRecords(ctx context.Context, bh BackgroundExec, tableID
 			catalog.MO_CATALOG,
 			catalog.MO_CCPR_TABLES,
 			info.TableID,
-			escapeSQLString(taskID),
-			escapeSQLString(info.DbName),
-			escapeSQLString(info.TableName),
+			sanitizeSQLInput(taskID),
+			sanitizeSQLInput(info.DbName),
+			sanitizeSQLInput(info.TableName),
 			accountId,
 		)
 		if err := bh.Exec(ctx, sql); err != nil {

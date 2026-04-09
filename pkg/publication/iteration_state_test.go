@@ -64,7 +64,7 @@ func TestUpdateIterationState_WithContext_Success(t *testing.T) {
 	iterCtx := &IterationContext{
 		TaskID:           "t1",
 		SubscriptionName: "sub1",
-		AObjectMap:       make(AObjectMap),
+		AObjectMap:       NewAObjectMap(),
 		TableIDs:         map[TableKey]uint64{{DBName: "db", TableName: "tbl"}: 1},
 	}
 	err := UpdateIterationState(context.Background(), mock, "t1", IterationStateCompleted, 1, iterCtx, "", false, SubscriptionStateRunning, true)
@@ -115,7 +115,7 @@ func TestUpdateIterationStateNoSubscriptionState_WithContext_Success(t *testing.
 	iterCtx := &IterationContext{
 		TaskID:             "t1",
 		SubscriptionName:   "sub1",
-		AObjectMap:         make(AObjectMap),
+		AObjectMap:         NewAObjectMap(),
 		TableIDs:           map[TableKey]uint64{{DBName: "db", TableName: "tbl"}: 1},
 		IndexTableMappings: map[string]string{"idx1": "idx1_down"},
 	}
@@ -383,17 +383,17 @@ func TestUpdateIterationState_WithAObjectMap(t *testing.T) {
 		},
 	}
 	ts := types.BuildTS(100, 1)
+	aom := NewAObjectMap()
+	aom.Set("obj1", &AObjectMapping{
+		IsTombstone:     true,
+		DBName:          "db1",
+		TableName:       "tbl1",
+		DownstreamStats: *objectio.NewObjectStats(),
+	})
 	iterCtx := &IterationContext{
-		TaskID:           "t1",
-		SubscriptionName: "sub1",
-		AObjectMap: AObjectMap{
-			"obj1": &AObjectMapping{
-				IsTombstone:     true,
-				DBName:          "db1",
-				TableName:       "tbl1",
-				DownstreamStats: *objectio.NewObjectStats(),
-			},
-		},
+		TaskID:             "t1",
+		SubscriptionName:   "sub1",
+		AObjectMap:         aom,
 		TableIDs:           map[TableKey]uint64{{DBName: "db", TableName: "tbl"}: 1},
 		IndexTableMappings: map[string]string{"idx1": "idx1_down"},
 	}

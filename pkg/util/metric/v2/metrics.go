@@ -311,6 +311,19 @@ func initCCPRMetrics() {
 
 	// Sync protection counters
 	registry.MustRegister(ccprSyncProtectionCounter)
+
+	// Memory metrics
+	registry.MustRegister(ccprMemoryGauge)
+	registry.MustRegister(ccprMemoryAllocCounter)
+	registry.MustRegister(ccprMemoryAllocBytesCounter)
+	registry.MustRegister(ccprMemoryFreeCounter)
+	registry.MustRegister(ccprPoolCounter)
+	registry.MustRegister(CCPRMemoryAllocSizeHistogram)
+	registry.MustRegister(CCPRMemoryWaitDurationHistogram)
+	registry.MustRegister(CCPRMemoryLimitGauge)
+
+	// Replication lag gauge
+	registry.MustRegister(CCPRReplicationLagGauge)
 }
 
 var (

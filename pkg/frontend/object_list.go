@@ -470,7 +470,7 @@ func ResolveSnapshotWithSnapshotNameWithoutSession(
 	}
 
 	// Query mo_snapshots table to get snapshot timestamp
-	sql := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, snapshotName)
+	sql := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"))
 	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	result, err := sqlExecutor.Exec(ctx, sql, opts)
 	if err != nil {

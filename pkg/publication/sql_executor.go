@@ -396,38 +396,41 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 
 	connStr = strings.TrimPrefix(connStr, "mysql://")
 
-	// Split by @ to separate user:password and host:port
-	parts := strings.Split(connStr, "@")
-	if len(parts) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port or mysql://user:password@host:port")
+	// Split by last @ to separate user:password and host:port
+	// Using LastIndex because passwords may contain '@'
+	atIdx := strings.LastIndex(connStr, "@")
+	if atIdx < 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, missing '@'")
 	}
+	userPart := connStr[:atIdx]
+	hostPart := connStr[atIdx+1:]
 
 	// Parse user:password part
-	userPass := strings.Split(parts[0], ":")
+	userPass := strings.Split(userPart, ":")
 	if len(userPass) < 2 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format, expected account#user:password or user:password")
 	}
 
 	// Handle account#user format or standard user format
-	userPart := userPass[0]
+	userField := userPass[0]
 	var account string
 	var user string
 
-	if strings.Contains(userPart, "#") {
+	if strings.Contains(userField, "#") {
 		// Format: account#user
-		idx := strings.Index(userPart, "#")
-		if idx < 0 || idx == len(userPart)-1 {
+		idx := strings.Index(userField, "#")
+		if idx < 0 || idx == len(userField)-1 {
 			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty after account#")
 		}
-		account = userPart[:idx]
-		user = userPart[idx+1:]
+		account = userField[:idx]
+		user = userField[idx+1:]
 		if user == "" {
 			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
 		}
 	} else {
 		// Format: user (standard MySQL format, no account)
 		account = ""
-		user = userPart
+		user = userField
 		if user == "" {
 			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
 		}
@@ -440,7 +443,7 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 	}
 
 	// Parse host:port part
-	addrPart := parts[1]
+	addrPart := hostPart
 	// Remove any query parameters after /
 	slashIdx := strings.Index(addrPart, "/")
 	if slashIdx != -1 {

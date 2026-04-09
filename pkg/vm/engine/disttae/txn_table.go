@@ -2024,7 +2024,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 		tableName:    tbl.tableName,
 		databaseName: tbl.db.databaseName,
 		accountId:    tbl.accountId,
-		fileName:     fmt.Sprintf("soft_delete_object:%v", isTombstone), // Only store isTombstone in fileName
+		fileName:     makeSoftDeleteFileName(isTombstone),
 	}
 
 	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)

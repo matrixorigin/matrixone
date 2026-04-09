@@ -246,12 +246,12 @@ func (c *CCPRTxnCache) OnTxnRollback(txnID []byte) {
 	c.txnIndex.Delete(txnEntry)
 
 	if len(toGC) > 0 {
-		c.gcObjectsAsync(toGC)
+		c.gcObjects(toGC)
 	}
 }
 
-// gcObjectsAsync deletes object files from the file service
-func (c *CCPRTxnCache) gcObjectsAsync(objectNames []string) {
+// gcObjects deletes object files from the file service
+func (c *CCPRTxnCache) gcObjects(objectNames []string) {
 	if c.gcPool == nil || c.fs == nil || len(objectNames) == 0 {
 		return
 	}

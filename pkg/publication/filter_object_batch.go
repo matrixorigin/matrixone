@@ -146,7 +146,7 @@ func readSingleBlockToBatch(
 func rewriteTombstoneRowidsBatch(
 	ctx context.Context,
 	bat *batch.Batch,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	mp *mpool.MPool,
 ) error {
 	if bat == nil || bat.RowCount() == 0 || aobjectMap == nil {

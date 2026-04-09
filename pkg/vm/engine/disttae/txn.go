@@ -1957,10 +1957,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 
 	defer txn.delTransaction()
 
-	// For CCPR transactions, call OnTxnCommit to clean up the cache
-	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
-		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
-	}
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
@@ -2016,6 +2012,13 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// For CCPR transactions, call OnTxnCommit to clean up the cache
+	// This must happen after all commit operations succeed
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
+	}
+
 	return reqs, nil
 }
 

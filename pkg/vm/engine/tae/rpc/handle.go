@@ -60,7 +60,16 @@ import (
 const (
 	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 300
 	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
+
+	// softDeleteObjectPrefix is used to encode soft-delete intent in the fileName field.
+	// Format: "soft_delete_object:<is_tombstone>"
+	softDeleteObjectPrefix = "soft_delete_object:"
 )
+
+// isSoftDeleteEntry checks if a fileName encodes a soft-delete object operation.
+func isSoftDeleteEntry(fileName string) bool {
+	return strings.HasPrefix(fileName, softDeleteObjectPrefix)
+}
 
 type Handle struct {
 	db *db.DB
@@ -278,7 +287,7 @@ func (h *Handle) handleRequests(
 			if ae, ok := req.(*api.Entry); ok {
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
 				// Check if this is a soft delete object request
-				if wr.FileName != "" && strings.HasPrefix(wr.FileName, "soft_delete_object:") {
+				if wr.FileName != "" && isSoftDeleteEntry(wr.FileName) {
 					// Handle soft delete object separately
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
@@ -400,7 +409,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
 	// FileName format: "soft_delete_object:<is_tombstone>"
 	// Batch contains ObjectID in first column (binary, 18 bytes)
-	isSoftDeleteObject := req.FileName != "" && strings.HasPrefix(req.FileName, "soft_delete_object:")
+	isSoftDeleteObject := req.FileName != "" && isSoftDeleteEntry(req.FileName)
 	if isSoftDeleteObject {
 		// Parse ObjectID from batch
 		if req.Batch != nil && req.Batch.RowCount() > 0 && len(req.Batch.Vecs) > 0 {
@@ -410,11 +419,9 @@ func (h *Handle) apiEntryToWriteEntry(
 				if len(objIDBytes) == types.ObjectidSize {
 					objID := objectio.ObjectId(objIDBytes)
 					req.ObjectID = &objID
-					// Parse IsTombstone from FileName (format: "soft_delete_object:<bool>")
-					parts := strings.Split(req.FileName, ":")
-					if len(parts) == 2 && parts[0] == "soft_delete_object" {
-						req.IsTombstone = parts[1] == "true"
-					}
+					// Parse IsTombstone from FileName
+					isTombstoneStr := strings.TrimPrefix(req.FileName, softDeleteObjectPrefix)
+					req.IsTombstone = isTombstoneStr == "true"
 					logutil.Info("TN parsed soft delete object from batch",
 						zap.String("object_id", objID.ShortStringEx()),
 						zap.Bool("is_tombstone", req.IsTombstone),

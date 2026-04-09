@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,7 +277,7 @@ func (exec *PublicationTaskExecutor) Start() error {
 	if err != nil {
 		return err
 	}
-	go exec.run(context.Background())
+	go exec.run(exec.ctx)
 	return nil
 }
 
@@ -348,13 +349,21 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 		)
 	}()
 	defer exec.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			logutil.Error("Publication-Task run panic recovered",
+				zap.Any("panic", r),
+				zap.String("stack", string(debug.Stack())),
+			)
+		}
+	}()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
+	defer syncTaskTrigger.Stop()
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
+	defer gcTrigger.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
 			// apply mo_ccpr_log
@@ -392,14 +401,21 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			}
 			if !ok {
 				logutil.Error("Publication-Task lease check failed, stopping executor")
-				go exec.Stop()
-				break
+				exec.cancel()
+				return
 			}
+			exec.runningMu.Lock()
+			if !exec.running || exec.worker == nil {
+				exec.runningMu.Unlock()
+				return
+			}
+			worker := exec.worker
+			exec.runningMu.Unlock()
 			for _, task := range candidateTasks {
 				task.State = IterationStatePending
 				exec.setTask(task)
 				// Only trigger tasks that are not completed
-				err = exec.worker.Submit(task.TaskID, task.LSN, task.State)
+				err = worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
 					logutil.Error(
 						"Publication-Task submit task failed",
@@ -485,12 +501,16 @@ func (exec *PublicationTaskExecutor) applyCcprLog(ctx context.Context, from, to 
 		"publication apply ccpr log",
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
-	if txnOp != nil {
-		defer txnOp.Commit(ctx)
-	}
 	if err != nil {
 		return
 	}
+	defer func() {
+		if err != nil {
+			_ = txnOp.Rollback(ctx)
+		} else {
+			_ = txnOp.Commit(ctx)
+		}
+	}()
 	err = exec.txnEngine.New(ctx, txnOp)
 	if err != nil {
 		return
@@ -1248,7 +1268,7 @@ var ExecWithResult = func(
 	// Import executor package and use it
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
-		panic("missing internal sql executor")
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("missing internal sql executor")
 	}
 
 	exec := v.(executor.SQLExecutor)

@@ -411,7 +411,7 @@ func ApplyObjects(
 	subscriptionAccountName string,
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (err error) {
 	// Check TTL before starting

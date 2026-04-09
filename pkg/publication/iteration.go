@@ -436,7 +436,7 @@ func UpdateIterationState(
 			// Convert AObjectMap to serializable format
 			aobjectMapJSON := make(map[string]AObjectMappingJSON)
 			if iterationCtx.AObjectMap != nil {
-				for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+				iterationCtx.AObjectMap.Range(func(upstreamIDStr string, mapping *AObjectMapping) {
 					mappingJSON := AObjectMappingJSON{
 						IsTombstone: mapping.IsTombstone,
 						DBName:      mapping.DBName,
@@ -448,7 +448,7 @@ func UpdateIterationState(
 						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
 					}
 					aobjectMapJSON[upstreamIDStr] = mappingJSON
-				}
+				})
 			}
 
 			// Convert TableIDs to string map for JSON serialization
@@ -549,7 +549,7 @@ func UpdateIterationStateNoSubscriptionState(
 			// Convert AObjectMap to serializable format
 			aobjectMapJSON := make(map[string]AObjectMappingJSON)
 			if iterationCtx.AObjectMap != nil {
-				for upstreamIDStr, mapping := range iterationCtx.AObjectMap {
+				iterationCtx.AObjectMap.Range(func(upstreamIDStr string, mapping *AObjectMapping) {
 					mappingJSON := AObjectMappingJSON{
 						IsTombstone: mapping.IsTombstone,
 						DBName:      mapping.DBName,
@@ -561,7 +561,7 @@ func UpdateIterationStateNoSubscriptionState(
 						mappingJSON.DownstreamStats = base64.StdEncoding.EncodeToString(statsBytes)
 					}
 					aobjectMapJSON[upstreamIDStr] = mappingJSON
-				}
+				})
 			}
 
 			// Convert TableIDs to string map for JSON serialization
@@ -1378,12 +1378,13 @@ func ExecuteIteration(
 			}
 
 			if updateErr != nil {
-				// Log error but don't override the original error
-				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", updateErr)
-				logutil.Error("ccpr-iteration error",
+				logutil.Error("ccpr-iteration: failed to update iteration state",
 					zap.String("task_id", iterationCtx.String()),
-					zap.Error(err),
+					zap.Error(updateErr),
 				)
+				if err == nil {
+					err = updateErr // Propagate the error
+				}
 			}
 		}
 	}()

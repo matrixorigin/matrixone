@@ -285,6 +285,9 @@ func UnregisterSyncProtection(
 }
 
 // BuildBloomFilterFromObjectMap builds a bloom filter from the object map using object name strings
+// TODO(M4): Bloom filter false positive rate may cause unnecessary GC protection retention.
+// Consider evaluating the impact and tuning parameters, or using an exact-match structure
+// when the object count is small enough.
 func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTableInfo, mp *mpool.MPool) (string, error) {
 	if len(objectMap) == 0 {
 		return "", nil
@@ -401,6 +404,8 @@ func registerSyncProtectionOnDownstreamImpl(
 	}
 
 	// 2. Register protection on downstream (gcTS=0 since we skip gc_status query)
+	// TODO(LOW): The TTL duration (default ~20 min) may be insufficient for large replication
+	// jobs. Consider dynamically adjusting TTL based on estimated job duration or object count.
 	ttlExpireTS = time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
 	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, 0, ttlExpireTS, taskID)
 	if err != nil {
@@ -414,6 +419,10 @@ func registerSyncProtectionOnDownstreamImpl(
 // RegisterSyncProtectionWithRetry registers sync protection with timeout-based retry
 // Similar to WaitForSnapshotFlushed, it retries on ErrGCRunning and ErrMaxCountReached
 // until the total timeout is reached.
+//
+// TODO(LOW): Current sync protection is at the object level via bloom filter. Consider
+// adding table-level merge exclusion to prevent merges on downstream tables during
+// active replication, which could cause object ID conflicts.
 //
 // Parameters:
 //   - ctx: context for cancellation

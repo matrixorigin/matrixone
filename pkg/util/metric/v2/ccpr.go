@@ -416,4 +416,15 @@ var (
 			Name:      "memory_limit_bytes",
 			Help:      "Configured memory limit in bytes.",
 		})
+
+	// Replication lag gauge
+	CCPRReplicationLagGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "ccpr",
+			Name:      "replication_lag_seconds",
+			Help:      "Replication lag in seconds between upstream and downstream.",
+		},
+		[]string{"task_id"},
+	)
 )

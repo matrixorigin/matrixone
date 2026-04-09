@@ -100,32 +100,46 @@ func CollectObjectList(
 	bat **batch.Batch,
 	mp *mpool.MPool,
 ) (objectList string, err error) {
-	fillInObjectListFn := func(iter btree.IterG[objectio.ObjectEntry], bat **batch.Batch, isTombstone bool, mp *mpool.MPool) {
+	fillInObjectListFn := func(iter btree.IterG[objectio.ObjectEntry], bat **batch.Batch, isTombstone bool, mp *mpool.MPool) error {
+		defer iter.Release()
 		for iter.Next() {
 			objEntry := iter.Item()
 			if tailCheckFn(objEntry, start, end) {
 				deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&end)
-				// Append dbname
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
-				// Append tablename
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
-				// Append ObjectStats as bytes
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
-				// Append CreateTime
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
-				// Append DeleteTime
-				if deleted {
-					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
-				} else {
-					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp); err != nil {
+					return err
 				}
-				// Append isTombstone
-				vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp); err != nil {
+					return err
+				}
+				if deleted {
+					if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp); err != nil {
+						return err
+					}
+				} else {
+					if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp); err != nil {
+						return err
+					}
+				}
+				if err := vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	fillInObjectListFn(state.dataObjectsNameIndex.Iter(), bat, false, mp)
-	fillInObjectListFn(state.tombstoneObjectsNameIndex.Iter(), bat, true, mp)
+	if err = fillInObjectListFn(state.dataObjectsNameIndex.Iter(), bat, false, mp); err != nil {
+		return
+	}
+	if err = fillInObjectListFn(state.tombstoneObjectsNameIndex.Iter(), bat, true, mp); err != nil {
+		return
+	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	return
 }
@@ -138,33 +152,47 @@ func CollectSnapshotObjectList(
 	bat **batch.Batch,
 	mp *mpool.MPool,
 ) (objectList string, err error) {
-	fillInObjectListFn := func(iter btree.IterG[objectio.ObjectEntry], bat **batch.Batch, isTombstone bool, mp *mpool.MPool) {
+	fillInObjectListFn := func(iter btree.IterG[objectio.ObjectEntry], bat **batch.Batch, isTombstone bool, mp *mpool.MPool) error {
+		defer iter.Release()
 		for iter.Next() {
 			objEntry := iter.Item()
 			if snapshotCheckFn(objEntry, snapshotTS) {
 
 				deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&snapshotTS)
-				// Append dbname
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
-				// Append tablename
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
-				// Append ObjectStats as bytes
-				vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
-				// Append CreateTime
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
-				// Append DeleteTime
-				if deleted {
-					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
-				} else {
-					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp); err != nil {
+					return err
 				}
-				// Append isTombstone
-				vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp); err != nil {
+					return err
+				}
+				if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp); err != nil {
+					return err
+				}
+				if deleted {
+					if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp); err != nil {
+						return err
+					}
+				} else {
+					if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp); err != nil {
+						return err
+					}
+				}
+				if err := vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	fillInObjectListFn(state.dataObjectsNameIndex.Iter(), bat, false, mp)
-	fillInObjectListFn(state.tombstoneObjectsNameIndex.Iter(), bat, true, mp)
+	if err = fillInObjectListFn(state.dataObjectsNameIndex.Iter(), bat, false, mp); err != nil {
+		return
+	}
+	if err = fillInObjectListFn(state.tombstoneObjectsNameIndex.Iter(), bat, true, mp); err != nil {
+		return
+	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	return
 }
@@ -188,27 +216,36 @@ func GetObjectListFromCKP(
 	}
 
 	// Fill function to append object entry to batch
-	fillInObjectListFn := func(objEntry objectio.ObjectEntry, isTombstone bool, mp *mpool.MPool) {
+	fillInObjectListFn := func(objEntry objectio.ObjectEntry, isTombstone bool, mp *mpool.MPool) error {
 		if tailCheckFn(objEntry, start, end) {
-			// Append dbname
 
 			deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&end)
-			vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
-			// Append tablename
-			vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
-			// Append ObjectStats as bytes
-			vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
-			// Append CreateTime
-			vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
-			// Append DeleteTime
-			if deleted {
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
-			} else {
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+			if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp); err != nil {
+				return err
 			}
-			// Append isTombstone
-			vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
+			if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp); err != nil {
+				return err
+			}
+			if err := vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp); err != nil {
+				return err
+			}
+			if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp); err != nil {
+				return err
+			}
+			if deleted {
+				if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp); err != nil {
+					return err
+				}
+			} else {
+				if err := vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp); err != nil {
+					return err
+				}
+			}
+			if err := vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
 
 	// Create checkpoint readers
@@ -234,8 +271,7 @@ func GetObjectListFromCKP(
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
 			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
-				fillInObjectListFn(obj, isTombstone, mp)
-				return
+				return fillInObjectListFn(obj, isTombstone, mp)
 			},
 		); err != nil {
 			return

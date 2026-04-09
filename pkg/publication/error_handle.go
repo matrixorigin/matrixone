@@ -213,12 +213,15 @@ func (DefaultClassifier) IsRetryable(err error) bool {
 		}
 	}
 
-	// Check error message for common retryable network patterns
+	// Check error message for common retryable network patterns.
+	// NOTE: This is heuristic-based pattern matching. Patterns are chosen to be
+	// specific enough to avoid false positives while catching common transient errors.
 	errMsg := strings.ToLower(err.Error())
 	retryablePatterns := []string{
 		"connection reset",
 		"connection timed out",
 		"connection timeout",
+		"connection refused",
 		"dial tcp",
 		"i/o timeout",
 		"broken pipe",
@@ -226,11 +229,12 @@ func (DefaultClassifier) IsRetryable(err error) bool {
 		"use of closed network connection",
 		"temporary failure",
 		"service unavailable",
+		"temporarily unavailable",
 		"timeout",
 		"network error",
 		"rpc error",
-		"backend",
-		"unavailable",
+		"backend error",
+		"backend is not available",
 		"invalid connection",
 	}
 

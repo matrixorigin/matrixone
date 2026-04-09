@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+
+	"go.uber.org/zap"
 )
 
 // ErrSyncProtectionTTLExpired is returned when sync protection TTL has expired
@@ -82,7 +86,7 @@ func FilterObject(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
 	// Check TTL before processing
@@ -132,7 +136,7 @@ func filterAppendableObject(
 	getChunkWorker GetChunkWorker,
 	subscriptionAccountName string,
 	pubName string,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (*FilterObjectResult, error) {
 	// Check TTL before processing
@@ -212,27 +216,46 @@ type AObjectMapping struct {
 // AObjectMap stores the mapping from upstream aobj to downstream object stats
 // Key: upstreamID (string), Value: *AObjectMapping
 // This map is used to track appendable object transformations during CCPR sync
-type AObjectMap map[string]*AObjectMapping
+type AObjectMap struct {
+	mu sync.RWMutex
+	m  map[string]*AObjectMapping
+}
 
 // NewAObjectMap creates a new AObjectMap instance
-func NewAObjectMap() AObjectMap {
-	return make(AObjectMap)
+func NewAObjectMap() *AObjectMap {
+	return &AObjectMap{m: make(map[string]*AObjectMapping)}
 }
 
 // Get retrieves the mapping for an upstream aobj
-func (m AObjectMap) Get(upstreamID string) (*AObjectMapping, bool) {
-	mapping, exists := m[upstreamID]
+func (am *AObjectMap) Get(upstreamID string) (*AObjectMapping, bool) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	mapping, exists := am.m[upstreamID]
 	return mapping, exists
 }
 
 // Set stores or updates the mapping for an upstream aobj
-func (m AObjectMap) Set(upstreamID string, mapping *AObjectMapping) {
-	m[upstreamID] = mapping
+func (am *AObjectMap) Set(upstreamID string, mapping *AObjectMapping) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.m[upstreamID] = mapping
 }
 
 // Delete removes the mapping for an upstream aobj
-func (m AObjectMap) Delete(upstreamID string) {
-	delete(m, upstreamID)
+func (am *AObjectMap) Delete(upstreamID string) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	delete(am.m, upstreamID)
+}
+
+// Range iterates over all entries in the map, calling f for each.
+// The callback receives a copy of each key-value pair.
+func (am *AObjectMap) Range(f func(upstreamID string, mapping *AObjectMapping)) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	for k, v := range am.m {
+		f(k, v)
+	}
 }
 
 // rewriteTombstoneRowids rewrites delete rowids in tombstone batch using aobjectMap
@@ -241,7 +264,7 @@ func (m AObjectMap) Delete(upstreamID string) {
 func rewriteTombstoneRowids(
 	ctx context.Context,
 	bat *containers.Batch,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	mp *mpool.MPool,
 ) error {
 	if bat == nil || bat.Length() == 0 || aobjectMap == nil {
@@ -288,6 +311,10 @@ func rewriteTombstoneRowids(
 					rowids[i].SetRowOffset(newRowOffset)
 				}
 			}
+		} else {
+			logutil.Warn("ccpr-tombstone: skipping rowid rewrite for unmapped appendable object",
+				zap.String("upstreamID", upstreamIDStr),
+			)
 		}
 	}
 
@@ -329,7 +356,7 @@ func filterNonAppendableObject(
 	pubName string,
 	ccprCache CCPRTxnCacheWriter,
 	txnID []byte,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
 	// Check TTL before processing
@@ -578,7 +605,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	stats *objectio.ObjectStats,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
-	aobjectMap AObjectMap,
+	aobjectMap *AObjectMap,
 ) (objectio.ObjectStats, error) {
 	// Step 1: Parse object metadata
 	metaExtent := stats.Extent()

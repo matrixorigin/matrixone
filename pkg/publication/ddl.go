@@ -443,6 +443,9 @@ func ProcessDDLChanges(
 					}
 				}
 				// For alter, drop first then create
+				// TODO(M1): This drop+create pattern is not atomic. If the create fails after
+				// a successful drop, the table is lost. Consider wrapping in a transaction or
+				// implementing a compensating action to restore the table on create failure.
 				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
 				}
@@ -476,13 +479,15 @@ func ProcessDDLChanges(
 				// Using ExecSQLInDatabase to set default database for statements that need it
 				for _, alterSQL := range ddlInfo.AlterStatements {
 					result, cancel, err := iterationCtx.LocalExecutor.ExecSQLInDatabase(downstreamCtx, nil, iterationCtx.SrcInfo.AccountID, alterSQL, dbName, true, true, time.Minute)
+					if cancel != nil {
+						defer cancel()
+					}
+					if result != nil {
+						defer result.Close()
+					}
 					if err != nil {
 						return moerr.NewInternalErrorf(ctx, "failed to execute alter inplace for %s.%s: %v, SQL: %s", dbName, tableName, err, alterSQL)
 					}
-					if result != nil {
-						result.Close()
-					}
-					cancel()
 				}
 				// Process index table mappings after table creation
 				if err := processIndexTableMappings(downstreamCtx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
@@ -814,25 +819,29 @@ func createTable(
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
 	result, cancel, err := executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createDBSQL, true, false, time.Minute)
+	if cancel != nil {
+		defer cancel()
+	}
+	if result != nil {
+		defer result.Close()
+	}
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
-	if result != nil {
-		result.Close()
-	}
-	cancel()
 
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	result, cancel, err = executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createSQL, true, false, time.Minute)
+	result2, cancel2, err := executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createSQL, true, false, time.Minute)
+	if cancel2 != nil {
+		defer cancel2()
+	}
+	if result2 != nil {
+		defer result2.Close()
+	}
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
-	if result != nil {
-		result.Close()
-	}
-	cancel()
 	// Process index table mappings after table creation
 	if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
@@ -1143,13 +1152,15 @@ func insertCCPRTable(ctx context.Context, executor SQLExecutor, tableID uint64, 
 		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
+	if cancel != nil {
+		defer cancel()
+	}
+	if result != nil {
+		defer result.Close()
+	}
 	if err != nil {
 		return err
 	}
-	if result != nil {
-		result.Close()
-	}
-	cancel()
 	return nil
 }
 
@@ -1169,13 +1180,15 @@ func insertCCPRDb(ctx context.Context, executor SQLExecutor, dbIDStr string, tas
 		accountID,
 	)
 	result, cancel, err := executor.ExecSQL(ctx, nil, catalog.System_Account, sql, true, true, time.Minute)
+	if cancel != nil {
+		defer cancel()
+	}
+	if result != nil {
+		defer result.Close()
+	}
 	if err != nil {
 		return err
 	}
-	if result != nil {
-		result.Close()
-	}
-	cancel()
 	return nil
 }
 

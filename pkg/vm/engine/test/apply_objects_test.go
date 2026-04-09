@@ -436,7 +436,7 @@ var applyObjectCases = []applyObjectCase{
 }
 
 func TestApplyObjects(t *testing.T) {
-	dir := "/tmp/test_apply_objects"
+	dir := t.TempDir()
 	for _, testCase := range applyObjectCases {
 		testCase.preDataFn(t, dir, CollectAndExportObjects)
 		runApplyObjects(t, dir, testCase.ddlFn)
