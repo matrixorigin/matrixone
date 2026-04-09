@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 )
 
-type SinkerT func(*batch.Batch) error
+// SinkerT takes ownership of the full buffer and returns a clean, empty
+// replacement batch (with capacity retained) for MergeSortBatches to fill.
+type SinkerT func(*batch.Batch) (*batch.Batch, error)
 
 func MergeSortBatches(
 	batches []*batch.Batch,
@@ -35,7 +37,7 @@ func MergeSortBatches(
 	sinker SinkerT,
 	mp *mpool.MPool,
 	putBack func(int),
-) error {
+) (*batch.Batch, error) {
 	var merge mergeInterface
 	nulls := make([]*nulls.Nulls, len(batches))
 	for i, b := range batches {
@@ -118,12 +120,15 @@ func MergeSortBatches(
 	)
 	size := len(batches)
 	buffer.CleanOnlyData()
+	if err := buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+		return buffer, err
+	}
 	for size > 0 {
 		batchIndex, rowIndex, size = merge.getNextPos()
 		for i := range buffer.Vecs {
 			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
 			if err != nil {
-				return err
+				return buffer, err
 			}
 		}
 		// all data in batches[batchIndex] are used. Clean it.
@@ -134,34 +139,54 @@ func MergeSortBatches(
 		if lens == objectio.BlockMaxRows {
 			lens = 0
 			buffer.SetRowCount(objectio.BlockMaxRows)
-			if err := sinker(buffer); err != nil {
-				return err
+			var err error
+			if buffer, err = sinker(buffer); err != nil {
+				return buffer, err
 			}
-			// force clean
-			buffer.CleanOnlyData()
+			if err = buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+				return buffer, err
+			}
 		}
 	}
 	if lens > 0 {
 		buffer.SetRowCount(lens)
-		if err := sinker(buffer); err != nil {
-			return err
+		var err error
+		if buffer, err = sinker(buffer); err != nil {
+			return buffer, err
 		}
-		buffer.CleanOnlyData()
 	}
-	return nil
+	return buffer, nil
 }
 
 func SortColumnsByIndex(
 	cols []*vector.Vector, sortIdx int, mp *mpool.MPool,
 ) (err error) {
+	var idxBuf []int64
+	var shuffleBuf []byte
+	return SortColumnsByIndexWithBuf(cols, sortIdx, mp, &idxBuf, &shuffleBuf)
+}
+
+// SortColumnsByIndexWithBuf sorts all columns by the sort key column at sortIdx.
+// idxBuf is a scratch buffer for the permutation index array; shuffleBuf is a
+// scratch buffer for the shuffle operation. Both are grown as needed and
+// retained across calls for reuse.
+func SortColumnsByIndexWithBuf(
+	cols []*vector.Vector, sortIdx int, mp *mpool.MPool, idxBuf *[]int64, shuffleBuf *[]byte,
+) (err error) {
 	sortKey := cols[sortIdx]
-	sortedIdx := make([]int64, sortKey.Length())
-	for i := 0; i < len(sortedIdx); i++ {
+	n := sortKey.Length()
+	if cap(*idxBuf) < n {
+		*idxBuf = make([]int64, n)
+	} else {
+		*idxBuf = (*idxBuf)[:n]
+	}
+	sortedIdx := *idxBuf
+	for i := 0; i < n; i++ {
 		sortedIdx[i] = int64(i)
 	}
 	sort.Sort(false, false, true, sortedIdx, sortKey)
 	for i := 0; i < len(cols); i++ {
-		err = cols[i].Shuffle(sortedIdx, mp)
+		err = cols[i].ShuffleWithBuf(sortedIdx, mp, shuffleBuf)
 		if err != nil {
 			return
 		}

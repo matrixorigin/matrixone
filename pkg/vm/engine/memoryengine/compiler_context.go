@@ -343,11 +343,12 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Scale:       attr.Type.Scale,
 			Enumvalues:  attr.EnumVlaues,
 		},
-		Default:   attr.Default,
-		Primary:   attr.Primary,
-		Pkidx:     int32(idx),
-		Comment:   attr.Comment,
-		ClusterBy: attr.ClusterBy,
-		Seqnum:    uint32(attr.Seqnum),
+		Default:      attr.Default,
+		Primary:      attr.Primary,
+		Pkidx:        int32(idx),
+		Comment:      attr.Comment,
+		ClusterBy:    attr.ClusterBy,
+		Seqnum:       uint32(attr.Seqnum),
+		GeneratedCol: attr.GeneratedCol,
 	}
 }

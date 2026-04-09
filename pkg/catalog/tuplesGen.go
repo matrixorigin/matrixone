@@ -50,6 +50,8 @@ type Column struct {
 	UpdateExpr      []byte
 	Seqnum          uint16
 	EnumValues      string
+	HasGenerated    int8
+	GeneratedExpr   []byte
 }
 
 type Table struct {
@@ -158,6 +160,16 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 			if len(expr) > 0 {
 				col.HasUpdate = 1
 				col.UpdateExpr = expr
+			}
+		}
+		if attrDef.Attr.GeneratedCol != nil {
+			expr, err := types.Encode(attrDef.Attr.GeneratedCol)
+			if err != nil {
+				return nil, err
+			}
+			if len(expr) > 0 {
+				col.HasGenerated = 1
+				col.GeneratedExpr = expr
 			}
 		}
 		if attrDef.Attr.IsHidden {
@@ -604,6 +616,14 @@ func GenCreateColumnTuples(cols []Column, m *mpool.MPool, packer *types.Packer) 
 		packer.EncodeStringType([]byte(col.TableName))
 		packer.EncodeStringType([]byte(col.Name))
 		if err = vector.AppendBytes(bat.Vecs[idx], packer.Bytes(), false, m); err != nil {
+			return nil, err
+		}
+		idx = MO_COLUMNS_ATT_HAS_GENERATED_IDX
+		if err = vector.AppendFixed(bat.Vecs[idx], col.HasGenerated, false, m); err != nil {
+			return nil, err
+		}
+		idx = MO_COLUMNS_ATT_GENERATED_IDX
+		if err = vector.AppendBytes(bat.Vecs[idx], col.GeneratedExpr, false, m); err != nil {
 			return nil, err
 		}
 

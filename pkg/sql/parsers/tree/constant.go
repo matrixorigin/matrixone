@@ -38,6 +38,7 @@ const (
 	P_bit
 	P_ScoreBinary
 	P_nulltext
+	P_star // the * in count(*), not a string literal
 )
 
 type P_KIND uint8

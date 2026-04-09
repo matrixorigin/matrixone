@@ -225,9 +225,7 @@ func NewFlushTableTailTask(
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
 		task.transMappings = make(api.TransferMaps, len(task.aObjHandles))
-		for i := range len(task.aObjHandles) {
-			task.transMappings[i] = make(api.TransferMap)
-		}
+		// entries populated lazily by AddSortPhaseMapping per source block
 	}
 
 	task.createAt = time.Now()
@@ -541,7 +539,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings[objIdx], totalRowCnt, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
 	}
 	return
 }
@@ -649,7 +647,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 			}
 		}
 		if !isTombstone && task.doTransfer {
-			mergesort.CleanTransMapping(task.transMappings)
+			mergesort.ReleaseTransferMaps(task.transMappings)
 		}
 		return nil
 	}
@@ -685,14 +683,21 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
+	arena := objectio.GetArena(objectio.ArenaSmall)
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
+
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&objID)
-	writer, err := ioutil.NewBlockWriterNew(
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.rt.Fs,
 		name,
 		schema.Version,
 		seqnums,
 		isTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
@@ -712,6 +717,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 	} else if schema.HasSortKey() {
 		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
+	}
+	if !isTombstone && schema.HasFakePK() {
+		writer.SetFakePK(uint16(schema.GetPrimaryKey().Idx))
 	}
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(bat)

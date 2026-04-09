@@ -425,6 +425,9 @@ func (bat *Batch) InsertVector(
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
+	if vec != nil {
+		vec.SetOffHeap(bat.offHeap)
+	}
 	bat.Attrs = append(bat.Attrs, "")
 	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
 	bat.Attrs[pos] = attr
@@ -451,7 +454,11 @@ func (bat *Batch) CloneSelectedColumns(
 	cloned.offHeap = bat.offHeap
 	var typ types.Type
 	for idx := range selectCols {
-		cloned.Vecs[idx] = vector.NewVec(typ)
+		if bat.offHeap {
+			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
+		} else {
+			cloned.Vecs[idx] = vector.NewVec(typ)
+		}
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)

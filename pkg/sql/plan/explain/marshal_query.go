@@ -202,8 +202,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "split", nil
 	case plan.Node_GATHER:
 		return "gather", nil
-	case plan.Node_REPLACE:
-		return "replace", nil
 	case plan.Node_TIME_WINDOW:
 		return "time_window", nil
 	case plan.Node_FILL:
@@ -620,11 +618,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_UNIQUE:
 		labels = append(labels, models.Label{
 			Name:  Label_Unique,
-			Value: []string{},
-		})
-	case plan.Node_REPLACE:
-		labels = append(labels, models.Label{
-			Name:  Label_Replace,
 			Value: []string{},
 		})
 	case plan.Node_UNKNOWN:

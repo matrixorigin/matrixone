@@ -267,9 +267,17 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 	blkCnt := 0
 	bufferRowCnt := 0
 	k := 0
+	releaseAll := func() {
+		for _, f := range releaseFs {
+			if f != nil {
+				f()
+			}
+		}
+	}
 	for am.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
+			releaseAll()
 			return nil, nil, nil, ctx.Err()
 		default:
 		}
@@ -286,6 +294,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 		for i := range batches[blkCnt].Vecs {
 			err := batches[blkCnt].Vecs[i].UnionOne(am.bats[blkIdx].Vecs[i].GetDownstreamVector(), rowIdx, am.vpool.GetMPool())
 			if err != nil {
+				releaseAll()
 				return nil, nil, nil, err
 			}
 		}

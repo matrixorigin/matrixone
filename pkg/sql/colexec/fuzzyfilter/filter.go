@@ -102,7 +102,7 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 
 		if useRoaring {
-			ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+			ctr.roaringFilter = newRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 		} else {
 			//@see https://hur.st/bloomfilter/
 			var probability float64
@@ -315,6 +315,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
+	// InplaceSort reorders data but NOT the null bitmap.
+	// Reset bitmap before sort to avoid corruption.
+	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
 	data, err := ctr.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {

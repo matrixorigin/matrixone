@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -44,14 +46,14 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 
 	// Write build batch to spill file
 	buildBucketName := "test_rebuild_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	// Setup HashJoin with EqConds
 	hashJoin := &HashJoin{
@@ -75,9 +77,9 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   nil, // empty probe
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: nil, // empty probe
+		depth:   1,
 	}
 
 	// Call rebuildHashmapForBucket
@@ -97,11 +99,67 @@ func TestRebuildHashmapForBucket(t *testing.T) {
 	require.Equal(t, 100, totalRows)
 
 	jm.Free()
+}
 
-	// Verify build file was deleted
-	_, err = spillfs.OpenFile(context.Background(), buildBucketName)
-	require.Error(t, err, "build file should be deleted after rebuild")
+// TestRebuildEmptyBuildBucket tests that rebuilding a bucket with no build data
+// returns nil JoinMap and closes the probe fd for inner join.
+func TestRebuildEmptyBuildBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
 
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	// Create an empty build file (no data written).
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), "test_empty_build")
+	require.NoError(t, err)
+	buildFd := buildFile // already at position 0, no data
+
+	// Create a probe file with some data.
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	probeBat.SetRowCount(3)
+
+	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), "test_empty_build_probe")
+	require.NoError(t, err)
+	ctr := &container{}
+	pw := spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, probeBat, &pw, analyzer)
+	require.NoError(t, err)
+	probeFd := pw.handOffFd()
+
+	// Inner join: empty build → no matches possible.
+	hashJoin := &HashJoin{
+		EqConds: [][]*plan.Expr{
+			{}, // probe side (not used in rebuild)
+			{ // build side
+				{
+					Typ:  plan.Type{Id: int32(types.T_int32), Width: 32},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+			},
+		},
+		HashOnPK: false,
+	}
+
+	bucket := spillBucket{
+		buildFd: buildFd,
+		probeFd: probeFd,
+		depth:   1,
+	}
+
+	jm, reSpilled, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	require.NoError(t, err)
+	require.Nil(t, jm, "empty build should return nil JoinMap")
+	require.False(t, reSpilled)
+
+	// probeFd should have been closed (inner join discards probe for empty build).
+	// Verify by attempting to read — should fail.
+	buf := make([]byte, 1)
+	_, readErr := probeFd.Read(buf)
+	require.Error(t, readErr, "probe fd should be closed for inner join with empty build")
 }
 
 // TestReSpillBucket tests the re-spilling logic when memory threshold is exceeded
@@ -125,14 +183,14 @@ func TestReSpillBucket(t *testing.T) {
 
 	// Write build and probe batches to spill files
 	buildBucketName := "test_respill_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_respill_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -176,9 +234,9 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   probeFd,
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: probeFd,
+		depth:   1,
 	}
 
 	// Set a very low threshold to force re-spilling
@@ -198,6 +256,104 @@ func TestReSpillBucket(t *testing.T) {
 	require.NotNil(t, subBucket.buildFd, "sub-bucket should have a build fd")
 
 	// Cleanup all sub-buckets
+	for _, sb := range hashJoin.ctr.spillQueue {
+		if sb.buildFd != nil {
+			sb.buildFd.Close()
+		}
+		if sb.probeFd != nil {
+			sb.probeFd.Close()
+		}
+	}
+}
+
+// TestReSpillDiscardsProbeForEmptyBuild verifies that during re-spill, probe
+// rows mapping to empty build sub-buckets are discarded (inner join), and those
+// sub-buckets are not enqueued.
+func TestReSpillDiscardsProbeForEmptyBuild(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	// Use very few rows (5) so only a few of 32 sub-buckets get data,
+	// leaving many sub-buckets empty.
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
+	buildBat.SetRowCount(5)
+
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector(makeSequence(1000), nil, proc.Mp())
+	probeBat.SetRowCount(1000)
+
+	// Write build and probe to spill files.
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), "test_discard_build")
+	require.NoError(t, err)
+	ctr := &container{}
+	bw := spillBucketWriter{file: buildFile}
+	_, err = ctr.flushBucketBuffer(proc, buildBat, &bw, analyzer)
+	require.NoError(t, err)
+	buildFd := bw.handOffFd()
+
+	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), "test_discard_probe")
+	require.NoError(t, err)
+	pw := spillBucketWriter{file: probeFile}
+	_, err = ctr.flushBucketBuffer(proc, probeBat, &pw, analyzer)
+	require.NoError(t, err)
+	probeFd := pw.handOffFd()
+
+	hashJoin := &HashJoin{
+		EqConds: [][]*plan.Expr{
+			{ // probe side
+				{
+					Typ:  plan.Type{Id: int32(types.T_int32), Width: 32},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+			},
+			{ // build side
+				{
+					Typ:  plan.Type{Id: int32(types.T_int32), Width: 32},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+			},
+		},
+		HashOnPK: false,
+	}
+
+	bucket := spillBucket{
+		buildFd:  buildFd,
+		probeFd:  probeFd,
+		baseName: "discard_test",
+		depth:    1,
+	}
+
+	// Force re-spill.
+	hashJoin.ctr.spillThreshold = 1
+
+	// Initialize probe-side eqCondExecs (required for evalJoinCondition during probe scatter).
+	hashJoin.ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+	require.NoError(t, err)
+	hashJoin.ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.ctr.eqCondExecs))
+
+	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	require.NoError(t, err)
+	require.Nil(t, jm, "should re-spill")
+
+	// With 5 build rows across 32 sub-buckets, most sub-buckets should be empty.
+	// Only sub-buckets with build data should be enqueued.
+	require.Greater(t, len(hashJoin.ctr.spillQueue), 0)
+	require.Less(t, len(hashJoin.ctr.spillQueue), spillNumBuckets,
+		"not all sub-buckets should be enqueued — empty build sub-buckets should be discarded")
+
+	// Every enqueued sub-bucket must have a build fd.
+	for _, sb := range hashJoin.ctr.spillQueue {
+		require.NotNil(t, sb.buildFd, "enqueued sub-bucket must have build data")
+		// For inner join, probe without build is useless — but probe with build should be present.
+	}
+
+	// Cleanup.
 	for _, sb := range hashJoin.ctr.spillQueue {
 		if sb.buildFd != nil {
 			sb.buildFd.Close()
@@ -229,14 +385,14 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 
 	// Write to spill files
 	buildBucketName := "test_depth_limit_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_depth_limit_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -271,9 +427,9 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 
 	// Bucket at max depth
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   depthProbeFd,
-		depth:     spillMaxPass, // at max depth
+		buildFd: buildFd,
+		probeFd: depthProbeFd,
+		depth:   spillMaxPass, // at max depth
 	}
 
 	// Set low threshold - but should NOT re-spill because we're at max depth
@@ -319,14 +475,14 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 
 	// Write to spill files
 	buildBucketName := "test_multilevel_build"
-	buildFile, err := spillfs.CreateFile(context.Background(), buildBucketName)
+	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), buildBucketName)
 	require.NoError(t, err)
 
 	ctr := &container{}
 	buildFile_sw := spillBucketWriter{file: buildFile}
 	_, err = ctr.flushBucketBuffer(proc, buildBat, &buildFile_sw, analyzer)
 	require.NoError(t, err)
-	buildFile.Close()
+	buildFd := buildFile_sw.handOffFd()
 
 	probeBucketName := "test_multilevel_probe"
 	probeFile, err := spillfs.CreateAndRemoveFile(context.Background(), probeBucketName)
@@ -360,9 +516,9 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 	}
 
 	bucket := spillBucket{
-		buildFile: buildBucketName,
-		probeFd:   multiProbeFd,
-		depth:     1,
+		buildFd: buildFd,
+		probeFd: multiProbeFd,
+		depth:   1,
 	}
 
 	// Set very low threshold to force multiple levels of spilling

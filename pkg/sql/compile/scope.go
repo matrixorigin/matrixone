@@ -16,9 +16,7 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -706,16 +704,18 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 
 	// reset filter
 	if len(nonPkFilters) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
+		// Phase 2: if the leaf op is TableScan (inline filter path), set RuntimeFilterExprs directly.
+		// Otherwise fall back to the legacy Filter operator path.
+		leafOp := vm.GetLeafOp(s.RootOp)
+		if ts, ok := leafOp.(*table_scan.TableScan); ok {
+			ts.RuntimeFilterExprs = nonPkFilters
+		} else {
+			arg, ok := leafOp.(*filter.Filter)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			arg.RuntimeFilterExprs = nonPkFilters
 		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
@@ -896,50 +896,6 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 	}
-}
-
-func (s *Scope) replace(c *Compile) error {
-	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
-	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
-	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
-	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
-
-	delAffectedRows := uint64(0)
-	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
-		if err != nil {
-			return err
-		}
-		delAffectedRows = result.AffectedRows
-	}
-	var sql string
-	if rewriteFromOnDuplicateKey {
-		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
-		sql = c.sql[:idx]
-	} else {
-		removed := removeStringBetween(c.sql, "/*", "*/")
-		sql = "insert " + strings.TrimSpace(removed)[7:]
-	}
-	result, err := c.runSqlWithResult(sql, NoAccountId)
-	if err != nil {
-		return err
-	}
-	c.addAffectedRows(result.AffectedRows + delAffectedRows)
-	return nil
-}
-
-func removeStringBetween(s, start, end string) string {
-	startIndex := strings.Index(s, start)
-	for startIndex != -1 {
-		endIndex := strings.Index(s, end)
-		if endIndex == -1 || startIndex > endIndex {
-			return s
-		}
-
-		s = s[:startIndex] + s[endIndex+len(end):]
-		startIndex = strings.Index(s, start)
-	}
-	return s
 }
 
 // defaultStarCountTombstoneThreshold: when estimated tombstone rows exceed this, skip StarCount

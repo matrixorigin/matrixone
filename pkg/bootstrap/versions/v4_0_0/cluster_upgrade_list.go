@@ -37,6 +37,8 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_alter_mo_pitr,
 	upg_create_mo_feature_registry,
 	upg_init_mo_feature_registry,
+	upg_mo_columns_add_attr_has_generated,
+	upg_mo_columns_add_attr_generated,
 }
 
 var upg_mo_iscp_log_new = versions.UpgradeEntry{
@@ -187,5 +189,39 @@ var upg_create_system_metrics_metric_4000 = versions.UpgradeEntry{
 	UpgSql:    CreateMetric_4000,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC)
+	},
+}
+
+var upg_mo_columns_add_attr_has_generated = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_COLUMNS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: fmt.Sprintf(
+		"alter table %s.%s add column %s tinyint not null default 0",
+		catalog.MO_CATALOG, catalog.MO_COLUMNS, catalog.SystemColAttr_HasGenerated,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_COLUMNS, catalog.SystemColAttr_HasGenerated)
+		if err != nil {
+			return false, err
+		}
+		return info.IsExits, nil
+	},
+}
+
+var upg_mo_columns_add_attr_generated = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_COLUMNS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: fmt.Sprintf(
+		"alter table %s.%s add column %s varchar(2048) not null default ''",
+		catalog.MO_CATALOG, catalog.MO_COLUMNS, catalog.SystemColAttr_Generated,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_COLUMNS, catalog.SystemColAttr_Generated)
+		if err != nil {
+			return false, err
+		}
+		return info.IsExits, nil
 	},
 }

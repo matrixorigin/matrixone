@@ -29,7 +29,7 @@ type hllSketch struct {
 }
 
 func makeHllSketch(_ *mpool.MPool) (MarshalerUnmarshaler, error) {
-	return &hllSketch{Sketch: hll.New()}, nil
+	return &hllSketch{Sketch: hll.NewNoSparse()}, nil
 }
 
 func (s *hllSketch) MarshalBinary() ([]byte, error) {
@@ -46,7 +46,7 @@ func (s *hllSketch) UnmarshalFromReader(r io.Reader) error {
 		return err
 	}
 	if s.Sketch == nil {
-		s.Sketch = hll.New()
+		s.Sketch = hll.NewNoSparse()
 	}
 	return s.Sketch.UnmarshalBinary(bs)
 }
@@ -133,8 +133,17 @@ func (exec *approxCountExec) SetExtraInformation(partialResult any, groupIndex i
 	return nil
 }
 
-func (exec *approxCountExec) Flush() ([]*vector.Vector, error) {
+func (exec *approxCountExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {

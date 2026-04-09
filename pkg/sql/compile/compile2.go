@@ -669,11 +669,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 }
 
 func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
-	switch planType := c.pn.Plan.(type) {
+	switch c.pn.Plan.(type) {
 	case *plan.Plan_Query:
-		if planType.Query.StmtType != plan.Query_REPLACE {
-			c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
-		}
+		c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
 	case *plan.Plan_Ddl:
 		handleDdlPlanAnalyze(runC, stats)
 	}

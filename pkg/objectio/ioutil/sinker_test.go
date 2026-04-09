@@ -69,7 +69,6 @@ func TestNewSinker(t *testing.T) {
 		proc.Mp(),
 		fs,
 		WithMemorySizeThreshold(1),
-		WithBufferSizeCap(1),
 		WithAllMergeSorted(),
 		WithDedupAll(),
 		WithTailSizeCap(1),
