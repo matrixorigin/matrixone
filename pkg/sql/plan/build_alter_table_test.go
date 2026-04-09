@@ -53,6 +53,42 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildNotNullColumnValGeometry(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  plan.Type
+		want string
+	}{
+		{
+			name: "point",
+			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT"},
+			want: "st_geomfromtext('POINT EMPTY')",
+		},
+		{
+			name: "point with srid",
+			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+			want: "st_geomfromtext('POINT EMPTY', 4326)",
+		},
+		{
+			name: "generic geometry",
+			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"},
+			want: "st_geomfromtext('GEOMETRYCOLLECTION EMPTY')",
+		},
+		{
+			name: "multipolygon with srid",
+			typ:  plan.Type{Id: int32(types.T_geometry), Enumvalues: "MULTIPOLYGON;SRID=0"},
+			want: "st_geomfromtext('MULTIPOLYGON EMPTY', 0)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			col := &ColDef{Name: "g", Typ: tt.typ}
+			assert.Equal(t, tt.want, buildNotNullColumnVal(col))
+		})
+	}
+}
+
 func Test_checkChangeTypeCompatible(t *testing.T) {
 	type args struct {
 		ctx    context.Context

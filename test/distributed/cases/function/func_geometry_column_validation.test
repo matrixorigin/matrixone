@@ -21,3 +21,17 @@ create table geo_alter_bad(g point);
 -- @regex("currently unsupport change from original geometry subtype POINT to LINESTRING",true)
 alter table geo_alter_bad modify column g linestring;
 drop table geo_alter_bad;
+
+drop table if exists geo_alter_add_point_not_null;
+create table geo_alter_add_point_not_null(id int);
+insert into geo_alter_add_point_not_null values (1), (2);
+alter table geo_alter_add_point_not_null add column g point not null;
+select id, st_astext(g) as point_text from geo_alter_add_point_not_null order by id;
+drop table geo_alter_add_point_not_null;
+
+drop table if exists geo_alter_add_point_srid_not_null;
+create table geo_alter_add_point_srid_not_null(id int);
+insert into geo_alter_add_point_srid_not_null values (1);
+alter table geo_alter_add_point_srid_not_null add column g point not null srid 4326;
+select id, st_astext(g) as point_text, st_srid(g) as point_srid from geo_alter_add_point_srid_not_null;
+drop table geo_alter_add_point_srid_not_null;
