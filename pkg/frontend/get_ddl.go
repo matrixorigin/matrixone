@@ -438,18 +438,18 @@ func getddlbatch(
 		return nil, moerr.NewInternalError(ctx, "txn is nil")
 	}
 
-	// Create a new batch with 4 columns: database name, table name, table id, table create sql
-	colNames := []string{"database name", "table name", "table id", "table create sql"}
+	// Create a new batch with 4 columns: dbname, tablename, tableid, tablesql
+	colNames := []string{"dbname", "tablename", "tableid", "tablesql"}
 	resultBatch := batch.New(colNames)
 
 	// Initialize vectors for each column
-	// Column 0: database name (varchar)
+	// Column 0: dbname (varchar)
 	resultBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	// Column 1: table name (varchar)
+	// Column 1: tablename (varchar)
 	resultBatch.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	// Column 2: table id (int64)
+	// Column 2: tableid (int64)
 	resultBatch.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	// Column 3: table create sql (varchar)
+	// Column 3: tablesql (varchar)
 	resultBatch.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
 
 	// If databaseName is provided, call visitDatabaseDdl with that database

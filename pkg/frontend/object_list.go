@@ -104,10 +104,12 @@ func processObjectListImpl(
 	// Parse snapshot (to timestamp)
 	if len(string(stmt.Snapshot)) > 0 {
 		snapshotTS, err := resolveSnapshot(ctx, string(stmt.Snapshot))
-		if err == nil && snapshotTS != nil {
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to resolve snapshot '%s': %v", string(stmt.Snapshot), err)
+		}
+		if snapshotTS != nil {
 			to = types.TimestampToTS(*snapshotTS)
 		} else {
-			// If parsing fails, use current timestamp
 			to = getCurrentTS()
 		}
 	} else {

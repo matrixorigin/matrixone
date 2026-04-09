@@ -168,7 +168,11 @@ func (c *CCPRConfig) GetChunkMaxConcurrent() int {
 	if c.GetChunkSize <= 0 {
 		return 1
 	}
-	return int(c.GetChunkMaxMemory / c.GetChunkSize)
+	maxConcurrent := int(c.GetChunkMaxMemory / c.GetChunkSize)
+	if maxConcurrent <= 0 {
+		return 1
+	}
+	return maxConcurrent
 }
 
 // ============================================================================
@@ -176,19 +180,26 @@ func (c *CCPRConfig) GetChunkMaxConcurrent() int {
 // ============================================================================
 
 var (
-	globalConfig     *CCPRConfig
-	globalConfigOnce sync.Once
-	globalConfigMu   sync.RWMutex
+	globalConfig   *CCPRConfig
+	globalConfigMu sync.RWMutex
 )
 
 // GetGlobalConfig returns the global CCPR configuration instance
 // If not initialized, returns the default configuration
 func GetGlobalConfig() *CCPRConfig {
-	globalConfigOnce.Do(func() {
-		globalConfig = DefaultCCPRConfig()
-	})
 	globalConfigMu.RLock()
-	defer globalConfigMu.RUnlock()
+	if globalConfig != nil {
+		cfg := globalConfig
+		globalConfigMu.RUnlock()
+		return cfg
+	}
+	globalConfigMu.RUnlock()
+
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+	if globalConfig == nil {
+		globalConfig = DefaultCCPRConfig()
+	}
 	return globalConfig
 }
 

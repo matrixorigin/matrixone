@@ -30,11 +30,13 @@ import (
 )
 
 const (
-	// getObjectChunkSize is the size of each chunk for GetObject (100MB)
+	// getObjectChunkSize is the size of each chunk for GetObject.
 	getObjectChunkSize = publication.GetChunkSize
-	// getObjectMaxMemory is the maximum memory for concurrent GetObject operations (5GB)
+	// getObjectMaxMemory is the maximum memory for concurrent GetObject operations,
+	// derived from publication.GetChunkMaxMemory.
 	getObjectMaxMemory = publication.GetChunkMaxMemory
-	// getObjectMaxConcurrent is the maximum concurrent chunk reads (5GB / 100MB = 50)
+	// getObjectMaxConcurrent is the maximum concurrent chunk reads, derived from
+	// the configured memory limit and chunk size.
 	getObjectMaxConcurrent = getObjectMaxMemory / getObjectChunkSize
 )
 
@@ -54,11 +56,11 @@ var (
 func initGetObjectResources() {
 	chunkBufferPool = &sync.Pool{
 		New: func() interface{} {
-			buf := make([]byte, getObjectChunkSize)
+			buf := make([]byte, int(getObjectChunkSize))
 			return &buf
 		},
 	}
-	chunkSemaphore = make(chan struct{}, getObjectMaxConcurrent)
+	chunkSemaphore = make(chan struct{}, int(getObjectMaxConcurrent))
 }
 
 func getChunkBufferPool() *sync.Pool {
@@ -180,10 +182,11 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 	defer getChunkBufferPool().Put(bufPtr)
 
 	// Use pre-allocated buffer in IOEntry.Data to avoid fileservice internal allocation
+	n := int(size)
 	entry := fileservice.IOEntry{
 		Offset: offset,
 		Size:   size,
-		Data:   buf[:size],
+		Data:   buf[:n],
 	}
 
 	err := fs.Read(ctx, &fileservice.IOVector{
@@ -195,8 +198,8 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 	}
 
 	// Copy result to a new slice (buffer will be returned to pool)
-	result := make([]byte, size)
-	copy(result, entry.Data[:size])
+	result := make([]byte, n)
+	copy(result, entry.Data[:n])
 
 	return result, nil
 }
