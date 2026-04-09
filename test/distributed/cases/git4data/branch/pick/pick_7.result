@@ -1,0 +1,58 @@
+drop database if exists test;
+create database test;
+use test;
+create table main_tbl (a int, b varchar(20), primary key(a));
+insert into main_tbl values (1,'init'),(2,'init'),(3,'init');
+data branch create table feature_tbl from main_tbl;
+insert into feature_tbl values (4,'feature-a');
+insert into feature_tbl values (5,'feature-b');
+insert into feature_tbl values (6,'feature-c');
+update feature_tbl set b = 'fix-1' where a = 1;
+update feature_tbl set b = 'fix-2' where a = 2;
+data branch diff feature_tbl against main_tbl;
+diff feature_tbl against main_tbl	flag	a	b
+feature_tbl	UPDATE	1	fix-1
+feature_tbl	UPDATE	2	fix-2
+feature_tbl	INSERT	4	feature-a
+feature_tbl	INSERT	5	feature-b
+feature_tbl	INSERT	6	feature-c
+data branch pick feature_tbl into main_tbl keys(4);
+select * from main_tbl order by a asc;
+a	b
+1	init
+2	init
+3	init
+4	feature-a
+data branch pick feature_tbl into main_tbl keys(1);
+select * from main_tbl order by a asc;
+a	b
+1	fix-1
+2	init
+3	init
+4	feature-a
+data branch pick feature_tbl into main_tbl keys(6);
+select * from main_tbl order by a asc;
+a	b
+1	fix-1
+2	init
+3	init
+4	feature-a
+6	feature-c
+data branch diff feature_tbl against main_tbl;
+diff feature_tbl against main_tbl	flag	a	b
+feature_tbl	UPDATE	2	fix-2
+feature_tbl	INSERT	5	feature-b
+data branch pick feature_tbl into main_tbl keys(2,5);
+select * from main_tbl order by a asc;
+a	b
+1	fix-1
+2	fix-2
+3	init
+4	feature-a
+5	feature-b
+6	feature-c
+data branch diff feature_tbl against main_tbl;
+diff feature_tbl against main_tbl	flag	a	b
+drop table main_tbl;
+drop table feature_tbl;
+drop database test;
