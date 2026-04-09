@@ -10596,6 +10596,77 @@ func TestTransferDeletes(t *testing.T) {
 	wg.Wait()
 }
 
+// TestTransferDeleteVectorRealloc verifies that TransferDeletes Part 2
+// refreshes the rowids unsafe.Slice after each TransferDeleteRows call.
+//
+// The tombstone anode is both the iteration source (via unsafe.Slice backed
+// by the vector buffer) and the append target (via DeleteByPhyAddrKeys).
+// When a transfer append exceeds vector capacity, mpool reallocates the
+// underlying buffer, freeing the old one. Without refreshing, subsequent
+// iterations read garbage from the dangling rowids slice, skip the transfer,
+// and leave the soft-deleted object in readSet — causing a spurious r-w
+// conflict at checkAll.
+func TestTransferDeleteVectorRealloc(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchema(2, 0)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+
+	// Create 10 rows with unique PKs, split into 2 batches of 5.
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	// Append batch 0 and compact → first non-appendable object
+	tae.CreateRelAndAppend(bats[0], true)
+	testutil.CompactBlocks(t, 0, tae.DB, "db", schema, false)
+
+	// Append batch 1 and compact → second non-appendable object
+	{
+		txn, rel := tae.GetRelation()
+		assert.NoError(t, rel.Append(ctx, bats[1]))
+		assert.NoError(t, txn.Commit(ctx))
+	}
+	testutil.CompactBlocks(t, 0, tae.DB, "db", schema, false)
+
+	// Start delete txn: delete 2 rows from the first object.
+	// The tombstone anode ends up with capacity=2 after these 2 appends.
+	txnDel, rel := tae.GetRelation()
+	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[0].Vecs[0].Get(0))))
+	assert.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(bats[0].Vecs[0].Get(1))))
+
+	// Merge both non-appendable objects → old objects become soft-deleted,
+	// transfer pages are created in Runtime.TransferDelsMap.
+	testutil.MergeBlocks(t, 0, tae.DB, "db", schema, false)
+
+	// Commit the delete txn.
+	// TransferDeletes Part 2 iterates the 2 tombstone entries:
+	//   iter 0: checkOne → r-w conflict → TransferDeleteRows → appends 1 row
+	//           to same anode → capacity 2→3 → mpool.Grow → realloc
+	//   iter 1: without fix, rowids[1] reads freed buffer → garbage ObjectID
+	//           → checkOne returns nil → object stays in readSet →
+	//           checkAll → spurious r-w conflict
+	err := txnDel.Commit(ctx)
+	assert.NoError(t, err,
+		"expected successful commit after delete transfer; "+
+			"r-w conflict here indicates rowids was not refreshed after vector reallocation")
+
+	// Verify: 10 rows - 2 deletes = 8 rows
+	{
+		txn, rel := tae.GetRelation()
+		testutil.CheckAllColRowsByScan(t, rel, 8, true)
+		assert.NoError(t, txn.Commit(ctx))
+	}
+}
+
 func TestGCKP(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
