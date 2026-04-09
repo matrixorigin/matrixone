@@ -46,8 +46,10 @@ import (
 )
 
 var (
-	retryError               = moerr.NewTxnNeedRetryNoCtx()
-	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	retryError                           = moerr.NewTxnNeedRetryNoCtx()
+	retryWithDefChangedError             = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	defaultWaitTimeOnRetryLock           = time.Second
+	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
 )
 
 const opName = "lock_op"
@@ -756,7 +758,9 @@ func doLock(
 	return true, result.TableDefChanged, newTS, nil
 }
 
-const defaultWaitTimeOnRetryLock = time.Second
+type lockRetryState struct {
+	backendRetryDeadline time.Time
+}
 
 func lockWithRetry(
 	ctx context.Context,
@@ -773,15 +777,16 @@ func lockWithRetry(
 ) (lock.Result, error) {
 	var result lock.Result
 	var err error
+	retryState := lockRetryState{}
 
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err) {
+	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(ctx, tableID, txnOp, err) {
+		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
 		}
 	}
@@ -820,7 +825,13 @@ func LockWithMayUpgrade(
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
-func canRetryLock(ctx context.Context, table uint64, txn client.TxnOperator, err error) bool {
+func canRetryLock(
+	ctx context.Context,
+	table uint64,
+	txn client.TxnOperator,
+	err error,
+	retryState *lockRetryState,
+) bool {
 	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
@@ -828,11 +839,16 @@ func canRetryLock(ctx context.Context, table uint64, txn client.TxnOperator, err
 		txn.HasLockTable(table) {
 		return false
 	}
-	return waitToRetryLock(ctx)
+
+	wait, ok := getRetryWaitDuration(err, retryState)
+	if !ok {
+		return false
+	}
+	return waitToRetryLock(ctx, wait)
 }
 
-func waitToRetryLock(ctx context.Context) bool {
-	timer := time.NewTimer(defaultWaitTimeOnRetryLock)
+func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
 	select {
@@ -841,6 +857,29 @@ func waitToRetryLock(ctx context.Context) bool {
 	case <-timer.C:
 		return ctx.Err() == nil
 	}
+}
+
+func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
+		return defaultWaitTimeOnRetryLock, true
+	}
+
+	now := time.Now()
+	if isBoundedRetryLockError(err) && retryState.backendRetryDeadline.IsZero() {
+		retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+	}
+	if retryState.backendRetryDeadline.IsZero() {
+		return defaultWaitTimeOnRetryLock, true
+	}
+	if !retryState.backendRetryDeadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.backendRetryDeadline)
+	if remaining < defaultWaitTimeOnRetryLock {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryLock, true
 }
 
 func getLockRetryExitError(ctx context.Context, err error) error {
@@ -854,6 +893,11 @@ func isRetryLockError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+		isBoundedRetryLockError(err)
+}
+
+func isBoundedRetryLockError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)

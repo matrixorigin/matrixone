@@ -33,6 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+var (
+	defaultWaitTimeOnRetryBackendSend    = 300 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
+)
+
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
 func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 	return func(s *sender) {
@@ -187,13 +192,26 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return nil
 	}
 
+	retryState := backendRetryState{}
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return txn.TxnResponse{}, ctxErr
+		}
+
 		err := reqFn()
 		if err != nil {
 			// These errors are retriable error. Retry to send request to TN.
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
-				time.Sleep(time.Millisecond * 300)
+			if isBackendConnectRetryError(err) {
+				wait, ok := getBackendRetryWaitDuration(&retryState)
+				if !ok {
+					return txn.TxnResponse{}, err
+				}
+				if !waitToRetrySend(ctx, wait) {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return txn.TxnResponse{}, ctxErr
+					}
+					return txn.TxnResponse{}, err
+				}
 				continue
 			}
 			return txn.TxnResponse{}, err
@@ -219,6 +237,48 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
+}
+
+type backendRetryState struct {
+	deadline time.Time
+}
+
+func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, bool) {
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return defaultWaitTimeOnRetryBackendSend, true
+	}
+
+	now := time.Now()
+	if retryState.deadline.IsZero() {
+		retryState.deadline = now.Add(defaultMaxWaitTimeOnRetryBackendSend)
+	}
+	if !retryState.deadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.deadline)
+	if remaining < defaultWaitTimeOnRetryBackendSend {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryBackendSend, true
+}
+
+func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return ctx.Err() == nil
+	}
+}
+
+func isBackendConnectRetryError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
 }
 
 func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {

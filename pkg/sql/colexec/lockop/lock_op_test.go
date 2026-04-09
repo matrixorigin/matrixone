@@ -165,6 +165,146 @@ func TestLockWithRetryStopsWhenContextCanceledDuringRetryWait(t *testing.T) {
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	ctx := context.Background()
+	expectedErr := moerr.NewBackendCannotConnectNoCtx("retryable")
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Less(t, time.Since(start), oldWait)
+}
+
+func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	ctx := context.Background()
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+	require.Less(t, time.Since(start), oldWait)
+}
+
+func TestLockWithRetryStopsWhenRollingRestartRetryBudgetExceeded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	ctx := context.Background()
+	expectedErr := moerr.NewRetryForCNRollingRestart()
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, expectedErr)
+	require.Less(t, time.Since(start), oldWait)
+}
+
 func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
