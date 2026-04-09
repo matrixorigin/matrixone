@@ -147,6 +147,27 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 	}
 }
 
+func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE spatial_src (
+		id INT NOT NULL,
+		g POINT NOT NULL,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName: "idx_g",
+		Parts:     []string{"g"},
+		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+	})
+
+	var snapshot *plan.Snapshot
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
+}
+
 func Test_SingleShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string

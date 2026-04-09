@@ -878,6 +878,14 @@ func decodeGeometryPayload(payload []byte) (wkt string, srid uint32, sridDefined
 	return wkt, uint32(parsed), true, nil
 }
 
+func GeometryPayloadToText(payload []byte) (string, error) {
+	wkt, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return "", err
+	}
+	return wkt, nil
+}
+
 func validateGeometryPayload(payload []byte) (wkt string, typeName string, srid uint32, sridDefined bool, err error) {
 	wkt, srid, sridDefined, err = decodeGeometryPayload(payload)
 	if err != nil {

@@ -10,7 +10,7 @@ spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
   `id` int NOT NULL,
   `g` point NOT NULL,
   PRIMARY KEY (`id`),
-  KEY `idx_g` USING rtree (`g`)
+  SPATIAL KEY `idx_g` (`g`)
 )
 insert into spatial_idx_t1 values
 (1, st_geomfromtext('POINT(1 1)')),
@@ -27,6 +27,53 @@ spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
   PRIMARY KEY (`id`)
 )
 drop table spatial_idx_t1;
+drop table if exists spatial_idx_path;
+create table spatial_idx_path(
+id int primary key,
+g point not null,
+payload int
+);
+create spatial index idx_g on spatial_idx_path(g);
+insert into spatial_idx_path values
+(1, st_geomfromtext('POINT(1 1)'), 10),
+(2, st_geomfromtext('POINT(2 2)'), 20),
+(3, st_geomfromtext('POINT(5 5)'), 30);
+explain select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on spatial_idx_path.idx_g  𝄀
+        Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
+explain select payload from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (spatial_idx_path.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on func_geometry_spatial_index.spatial_idx_path [ForceOneCN]  𝄀
+              Filter Cond: st_intersects(spatial_idx_path.g, 'POINT(1 1)')  𝄀
+              Runtime Filter Probe: spatial_idx_path.id  𝄀
+        ->  Index Table Scan on spatial_idx_path.idx_g [ForceOneCN]  𝄀
+              Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
+➤ id[4,32,0]  𝄀
+1
+update spatial_idx_path set g = st_geomfromtext('POINT(3 3)') where id = 2;
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(2 2)')) order by id;
+➤ id[4,32,0]
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
+➤ id[4,32,0]  𝄀
+2
+replace into spatial_idx_path values (2, st_geomfromtext('POINT(4 4)'), 40);
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
+➤ id[4,32,0]
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(4 4)')) order by id;
+➤ id[4,32,0]  𝄀
+2
+delete from spatial_idx_path where id = 1;
+select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
+➤ id[4,32,0]
+drop table spatial_idx_path;
 drop table if exists spatial_idx_t2;
 create table spatial_idx_t2(
 id int primary key,
@@ -46,3 +93,12 @@ create spatial index idx_g on spatial_idx_multi(g1, g2);
 -- @regex("SPATIAL INDEX only supports a single GEOMETRY column", true)
 not supported: SPATIAL INDEX only supports a single GEOMETRY column
 drop table spatial_idx_multi;
+drop table if exists spatial_idx_nullable;
+create table spatial_idx_nullable(
+id int primary key,
+g point
+);
+create spatial index idx_g on spatial_idx_nullable(g);
+-- @regex("All parts of a SPATIAL index must be declared NOT NULL", true)
+invalid input: All parts of a SPATIAL index must be declared NOT NULL
+drop table spatial_idx_nullable;

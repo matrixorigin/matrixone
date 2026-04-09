@@ -7861,7 +7861,49 @@ type geometryParamInterval struct {
 	end   float64
 }
 
-const stDistanceSupportedPairsError = "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs"
+const (
+	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs"
+	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
+)
+
+func isSimpleGeometryType(typeName string) bool {
+	switch typeName {
+	case "POINT", "LINESTRING", "POLYGON":
+		return true
+	default:
+		return false
+	}
+}
+
+func isIntersectsSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
+func geometrySRIDFromPayload(payload []byte) (uint32, error) {
+	_, srid, sridDefined, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return 0, err
+	}
+	if !sridDefined {
+		return 0, nil
+	}
+	return srid, nil
+}
+
+func ensureMatchingGeometrySRID(functionName string, left, right []byte) error {
+	leftSRID, err := geometrySRIDFromPayload(left)
+	if err != nil {
+		return err
+	}
+	rightSRID, err := geometrySRIDFromPayload(right)
+	if err != nil {
+		return err
+	}
+	if leftSRID != rightSRID {
+		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, leftSRID, rightSRID)
+	}
+	return nil
+}
 
 func geometryDistance(left, right []byte) (float64, error) {
 	leftType, err := geometryTypeNameFromPayload(left)
@@ -7871,6 +7913,11 @@ func geometryDistance(left, right []byte) (float64, error) {
 	rightType, err := geometryTypeNameFromPayload(right)
 	if err != nil {
 		return 0, err
+	}
+	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_DISTANCE", left, right); err != nil {
+			return 0, err
+		}
 	}
 
 	switch leftType {
@@ -8064,7 +8111,15 @@ func geometryContains(container, target []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(containerType) && isSimpleGeometryType(targetType) {
+		if err := ensureMatchingGeometrySRID("ST_CONTAINS", container, target); err != nil {
+			return false, err
+		}
+	}
+	return geometryContainsImpl(container, target, containerType, targetType)
+}
 
+func geometryContainsImpl(container, target []byte, containerType, targetType string) (bool, error) {
 	switch containerType {
 	case "POINT":
 		if targetType != "POINT" {
@@ -8149,12 +8204,17 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(candidateType) && isSimpleGeometryType(containerType) {
+		if err := ensureMatchingGeometrySRID("ST_WITHIN", candidate, container); err != nil {
+			return false, err
+		}
+	}
 
 	switch candidateType {
 	case "POINT":
 		switch containerType {
 		case "POINT", "LINESTRING", "POLYGON":
-			return geometryContains(container, candidate)
+			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8163,7 +8223,7 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 		case "POINT":
 			return false, nil
 		case "LINESTRING", "POLYGON":
-			return geometryContains(container, candidate)
+			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8172,7 +8232,7 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 		case "POINT", "LINESTRING":
 			return false, nil
 		case "POLYGON":
-			return geometryContains(container, candidate)
+			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8190,7 +8250,15 @@ func geometryIntersects(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isIntersectsSupportedGeometryType(leftType) && isIntersectsSupportedGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_INTERSECTS", left, right); err != nil {
+			return false, err
+		}
+	}
+	return geometryIntersectsImpl(left, right, leftType, rightType)
+}
 
+func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (bool, error) {
 	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
 		return multiGeometryIntersects(left, right)
 	}
@@ -8287,7 +8355,20 @@ func geometryIntersects(left, right []byte) (bool, error) {
 }
 
 func geometryDisjoint(left, right []byte) (bool, error) {
-	intersects, err := geometryIntersects(left, right)
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return false, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return false, err
+	}
+	if isIntersectsSupportedGeometryType(leftType) && isIntersectsSupportedGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_DISJOINT", left, right); err != nil {
+			return false, err
+		}
+	}
+	intersects, err := geometryIntersectsImpl(left, right, leftType, rightType)
 	if err != nil {
 		return false, err
 	}
@@ -8302,6 +8383,11 @@ func geometryTouches(left, right []byte) (bool, error) {
 	rightType, err := geometryTypeNameFromPayload(right)
 	if err != nil {
 		return false, err
+	}
+	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_TOUCHES", left, right); err != nil {
+			return false, err
+		}
 	}
 
 	switch leftType {
@@ -8400,6 +8486,11 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_CROSSES", left, right); err != nil {
+			return false, err
+		}
+	}
 
 	switch leftType {
 	case "POINT":
@@ -8478,6 +8569,11 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_OVERLAPS", left, right); err != nil {
+			return false, err
+		}
+	}
 
 	switch leftType {
 	case "POINT":
@@ -8532,6 +8628,11 @@ func geometryEquals(left, right []byte) (bool, error) {
 	rightType, err := geometryTypeNameFromPayload(right)
 	if err != nil {
 		return false, err
+	}
+	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+		if err := ensureMatchingGeometrySRID("ST_EQUALS", left, right); err != nil {
+			return false, err
+		}
 	}
 
 	switch leftType {
@@ -8597,7 +8698,15 @@ func geometryCovers(container, target []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(containerType) && isSimpleGeometryType(targetType) {
+		if err := ensureMatchingGeometrySRID("ST_COVERS", container, target); err != nil {
+			return false, err
+		}
+	}
+	return geometryCoversImpl(container, target, containerType, targetType)
+}
 
+func geometryCoversImpl(container, target []byte, containerType, targetType string) (bool, error) {
 	switch containerType {
 	case "POINT":
 		if targetType != "POINT" {
@@ -8682,12 +8791,17 @@ func geometryCoveredBy(candidate, container []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if isSimpleGeometryType(candidateType) && isSimpleGeometryType(containerType) {
+		if err := ensureMatchingGeometrySRID("ST_COVEREDBY", candidate, container); err != nil {
+			return false, err
+		}
+	}
 
 	switch candidateType {
 	case "POINT":
 		switch containerType {
 		case "POINT", "LINESTRING", "POLYGON":
-			return geometryCovers(container, candidate)
+			return geometryCoversImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8696,7 +8810,7 @@ func geometryCoveredBy(candidate, container []byte) (bool, error) {
 		case "POINT":
 			return false, nil
 		case "LINESTRING", "POLYGON":
-			return geometryCovers(container, candidate)
+			return geometryCoversImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8705,7 +8819,7 @@ func geometryCoveredBy(candidate, container []byte) (bool, error) {
 		case "POINT", "LINESTRING":
 			return false, nil
 		case "POLYGON":
-			return geometryCovers(container, candidate)
+			return geometryCoversImpl(container, candidate, containerType, candidateType)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs")
 		}

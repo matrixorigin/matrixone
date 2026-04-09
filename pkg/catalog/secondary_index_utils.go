@@ -58,6 +58,11 @@ func IsRegularIndexAlgo(algo string) bool {
 	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString() || _algo == MoIndexRTreeAlgo.ToString()
 }
 
+func IsRTreeIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexRTreeAlgo.ToString()
+}
+
 func IsIvfIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexIvfFlatAlgo.ToString()

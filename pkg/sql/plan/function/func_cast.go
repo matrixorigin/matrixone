@@ -5377,10 +5377,14 @@ func strToStr(
 				}
 				continue
 			}
-			if _, _, _, _, err := validateGeometryPayload(v); err != nil {
+			wkt := strings.TrimSpace(convertByteSliceToString(v))
+			if _, err := geometryTypeNameFromText(wkt); err != nil {
 				return err
 			}
-			if err := to.AppendBytes(v, false); err != nil {
+			if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+				return err
+			}
+			if err := to.AppendBytes(encodeGeometryPayload(wkt, 0, false), false); err != nil {
 				return err
 			}
 		}

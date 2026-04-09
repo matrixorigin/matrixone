@@ -111,9 +111,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if err != nil {
 				return 0, err
 			}
+			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
-			if len(idxDef.Parts) == 1 {
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			if !indexTableStoresSerializedKey(idxDef) {
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				for j, part := range idxDef.Parts {
@@ -351,7 +352,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}
 
 	// get old RowID for index tables
-	for i := range tableDef.Indexes {
+	for i, idxDef := range tableDef.Indexes {
 		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDefs[i])
 
@@ -366,7 +367,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldColName2Idx[idxTableDefs[i].Name+"."+catalog.Row_ID] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[catalog.Row_ID]}
 
-		idxPkPos := idxTableDefs[i].Name2ColIndex[catalog.IndexTableIndexColName]
+		lookupColName := indexLookupColumnName(idxDef)
+		idxPkPos := idxTableDefs[i].Name2ColIndex[lookupColName]
 		pkTyp := idxTableDefs[i].Cols[idxPkPos].Typ
 
 		leftExpr := &plan.Expr{
@@ -379,8 +381,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			},
 		}
 
-		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName]
-		oldColName2Idx[idxTableDefs[i].Name+"."+catalog.IndexTableIndexColName] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[catalog.IndexTableIndexColName]}
+		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName]
+		oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[lookupColName]}
 
 		rightExpr := &plan.Expr{
 			Typ: pkTyp,
@@ -494,7 +496,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		deleteCols := make([]plan.ColRef, 2)
 
 		newIdxPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
-		if len(idxDef.Parts) > 1 {
+		if indexTableStoresSerializedKey(idxDef) {
 			idxExpr := &plan.Expr{
 				Typ: fullProjList[newIdxPos].Typ,
 				Expr: &plan.Expr_Col{
@@ -522,9 +524,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		finalProjList = append(finalProjList, rowIdExpr)
 
 		oldIdxPos := int32(len(finalProjList))
-		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
+		lookupColName := indexLookupColumnName(idxDef)
+		lookupColIdx := idxTableDefs[i].Name2ColIndex[lookupColName]
+		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+lookupColName]
 		idxExpr := &plan.Expr{
-			Typ: finalProjList[newIdxPos].Typ,
+			Typ: idxTableDefs[i].Cols[lookupColIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: oldColRef[0],
@@ -725,10 +729,10 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 		idxTableName := idxDef.IndexTableName
 		colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
-		argsLen := len(idxDef.Parts)
-		if argsLen == 1 {
-			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+		if !indexTableStoresSerializedKey(idxDef) {
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
 		} else {
+			argsLen := len(idxDef.Parts)
 			args := make([]*plan.Expr, argsLen)
 
 			var colPos int32

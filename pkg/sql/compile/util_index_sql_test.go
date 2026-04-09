@@ -41,3 +41,24 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "serial_full(`order`,`id`)")
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
+
+func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "geo_t",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_spatial",
+		Parts:          []string{"g", catalog.CreateAlias("id")},
+		Unique:         false,
+		IndexAlgo:      "rtree",
+	}
+
+	sql := genInsertIndexTableSql(originTableDef, indexDef, "test", false)
+
+	require.Contains(t, sql, "select (`g`), `id` from `test`.`geo_t` where (`g`) is not null;")
+	require.NotContains(t, sql, "serial_full")
+}

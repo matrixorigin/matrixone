@@ -109,8 +109,12 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
+	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
+	if spatialIndex && len(indexDef.Parts) > 0 {
+		temp = partsToColsStr(indexDef.Parts[:1])
+	}
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
-		if len(indexDef.Parts) == 1 {
+		if len(indexDef.Parts) == 1 || spatialIndex {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
 		} else {
 			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
@@ -131,7 +135,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		} else {
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
-		if len(indexDef.Parts) == 1 {
+		if len(indexDef.Parts) == 1 || spatialIndex {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
 		} else {
 			if isUnique {

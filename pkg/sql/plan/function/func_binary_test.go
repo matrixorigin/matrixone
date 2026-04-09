@@ -6334,6 +6334,117 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "polygons with holes are not supported")
 }
 
+func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
+	boolTests := []struct {
+		name  string
+		fn    fEvalFn
+		label string
+		left  string
+		right string
+	}{
+		{
+			name:  "contains",
+			fn:    StContains,
+			label: "ST_CONTAINS",
+			left:  "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			right: "SRID=3857;POINT(1 1)",
+		},
+		{
+			name:  "within",
+			fn:    StWithin,
+			label: "ST_WITHIN",
+			left:  "SRID=4326;POINT(1 1)",
+			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		},
+		{
+			name:  "intersects",
+			fn:    StIntersects,
+			label: "ST_INTERSECTS",
+			left:  "SRID=4326;MULTILINESTRING((0 0,2 0))",
+			right: "SRID=3857;POINT(1 0)",
+		},
+		{
+			name:  "disjoint",
+			fn:    StDisjoint,
+			label: "ST_DISJOINT",
+			left:  "SRID=4326;POINT(0 0)",
+			right: "SRID=3857;POINT(1 1)",
+		},
+		{
+			name:  "touches",
+			fn:    StTouches,
+			label: "ST_TOUCHES",
+			left:  "SRID=4326;POINT(0 1)",
+			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		},
+		{
+			name:  "crosses",
+			fn:    StCrosses,
+			label: "ST_CROSSES",
+			left:  "SRID=4326;LINESTRING(-1 1,3 1)",
+			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		},
+		{
+			name:  "overlaps",
+			fn:    StOverlaps,
+			label: "ST_OVERLAPS",
+			left:  "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			right: "SRID=3857;POLYGON((1 0,3 0,3 2,1 2,1 0))",
+		},
+		{
+			name:  "equals",
+			fn:    StEquals,
+			label: "ST_EQUALS",
+			left:  "SRID=4326;POINT(0 0)",
+			right: "SRID=3857;POINT(0 0)",
+		},
+		{
+			name:  "covers",
+			fn:    StCovers,
+			label: "ST_COVERS",
+			left:  "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			right: "SRID=3857;POINT(1 1)",
+		},
+		{
+			name:  "coveredby",
+			fn:    StCoveredBy,
+			label: "ST_COVEREDBY",
+			left:  "SRID=4326;POINT(1 1)",
+			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		},
+	}
+
+	for _, tc := range boolTests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.left}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.right}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+			tcc := NewFunctionTestCase(proc, inputs, expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.False(t, succeed)
+			require.Contains(t, info, tc.label)
+			require.Contains(t, info, "different srids")
+		})
+	}
+
+	t.Run("distance", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(0 0)"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(3 4)"}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+		tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+		succeed, info := tcc.Run()
+		require.False(t, succeed)
+		require.Contains(t, info, "ST_DISTANCE")
+		require.Contains(t, info, "different srids")
+	})
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{

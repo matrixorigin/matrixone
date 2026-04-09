@@ -43,6 +43,39 @@ insert into geo_srid_value_bad values (st_geomfromtext('POINT(1 1)', 0));
 -- @regex("The SRID of the geometry does not match the SRID of the column", true)
 invalid input: The SRID of the geometry does not match the SRID of the column 'POINT'. The SRID of the geometry is 0, but the SRID of the column is 4326. Consider changing the SRID of the geometry or the SRID property of the column.
 drop table geo_srid_value_bad;
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_CONTAINS given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_WITHIN given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_intersects(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_INTERSECTS given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_disjoint(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 1)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_DISJOINT given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_touches(st_geomfromtext('POINT(0 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_TOUCHES given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_CROSSES given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_OVERLAPS given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_equals(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 0)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_EQUALS given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_COVERS given two geometries of different srids: 4326 and 3857, which should have been identical.
+select st_coveredby(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
+-- @regex("different srids", true)
+invalid input: Binary geometry function ST_COVEREDBY given two geometries of different srids: 4326 and 3857, which should have been identical.
 create table geo_srid_attr_bad(a int srid 4326);
 -- @regex("SRID is only supported for GEOMETRY columns", true)
 invalid input: SRID is only supported for GEOMETRY columns

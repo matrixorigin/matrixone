@@ -311,6 +311,23 @@ func Test_CastVarcharToGeometry(t *testing.T) {
 		require.Equal(t, types.T_geometry, resultVec.GetType().Oid)
 		require.True(t, resultVec.GetNulls().Contains(0))
 	})
+
+	t.Run("reject internal geometry payload syntax", func(t *testing.T) {
+		inputVec := testutil.MakeVarcharVector([]string{"SRID=4326;POINT(1 1)"}, nil, proc.Mp())
+		defer inputVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid geometry type")
+	})
 }
 
 func initCastTestCase() []tcTemp {

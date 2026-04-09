@@ -2049,6 +2049,9 @@ func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, 
 	if !isGeometryPlanType(&col.Typ) {
 		return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SPATIAL INDEX can only be created on GEOMETRY column '%s'", nameOrigin))
 	}
+	if col.Default == nil || col.Default.NullAbility {
+		return moerr.NewInvalidInput(ctx.GetContext(), "All parts of a SPATIAL index must be declared NOT NULL")
+	}
 	return nil
 }
 
@@ -2203,6 +2206,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
+	spatialIndex := indexInfo.KeyType == tree.INDEX_TYPE_RTREE
 
 	// 2. tableDef init
 	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
@@ -2278,13 +2282,17 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 	} else {
 		keyName = catalog.IndexTableIndexColName
+		idxColType := Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		if spatialIndex {
+			idxColType = colMap[indexParts[0]].Typ
+		}
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
+			Typ:  idxColType,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -2314,6 +2322,12 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			},
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
+		if spatialIndex {
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{catalog.IndexTablePrimaryColName},
+				PkeyColName: catalog.IndexTablePrimaryColName,
+			}
+		}
 	}
 
 	properties := []*plan.Property{

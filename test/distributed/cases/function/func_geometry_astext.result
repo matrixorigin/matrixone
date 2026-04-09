@@ -13,6 +13,12 @@ invalid input: invalid geometry payload
 select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
 -- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
+select st_geomfromtext('POINT(7 8)', 4326) as direct_geom;
+➤ direct_geom[-2,2147483647,0]  𝄀
+POINT(7 8)
+select cast('SRID=4326;POINT(9 9)' as geometry) as raw_payload_geom;
+-- @regex("invalid geometry type", true)
+invalid input: invalid geometry type
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values ('LINESTRING(0 0,1 1)'), ('POINT(3 4)');

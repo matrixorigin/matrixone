@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type ExportConfig struct {
@@ -475,8 +476,17 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				} else {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
-			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_geometry:
+				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
+				if err != nil {
+					sendByte(&BatchByte{err: err})
+					bat.Clean(mp)
+					return
+				}
+				value := addEscapeToString([]byte(text), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
@@ -1193,8 +1203,10 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		// Encode binary data as base64
 		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
-	case types.T_datalink, types.T_geometry:
+	case types.T_datalink:
 		return string(vec.GetBytesAt(i)), nil
+	case types.T_geometry:
+		return planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 	case types.T_array_float32:
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row.
@@ -88,8 +89,14 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		row[i] = vector.GetFixedAtNoTypeCheck[float32](vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt(rowIndex), !safeRefSlice)
+	case types.T_geometry:
+		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(rowIndex))
+		if err != nil {
+			return err
+		}
+		row[i] = []byte(text)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -213,8 +220,14 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		row[i] = colSlices.arrFloat32[sliceIdx][rowIndex]
 	case types.T_float64:
 		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
+	case types.T_geometry:
+		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex))
+		if err != nil {
+			return err
+		}
+		row[i] = []byte(text)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -581,8 +594,14 @@ func (slices *ColumnSlices) GetBytesBased(r uint64, i uint64) ([]byte, error) {
 	sliceIdx := slices.GetSliceIdx(i)
 	vec := slices.dataSet.Vecs[i]
 	switch vec.GetType().Oid { //get col
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return commonutil.CloneBytesIf(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)), !slices.safeRefSlice), nil
+	case types.T_geometry:
+		text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt2(slices.arrVarlena[sliceIdx], int(r)))
+		if err != nil {
+			return nil, err
+		}
+		return []byte(text), nil
 	default:
 		return nil, moerr.NewInternalError(slices.ctx, "invalid bytes based slice")
 	}

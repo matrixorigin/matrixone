@@ -611,7 +611,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
-			idxPkPos := idxTableDefs[i].Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(idxDef)
+			idxPkPos := idxTableDefs[i].Name2ColIndex[lookupColName]
 			pkTyp := idxTableDefs[i].Cols[idxPkPos].Typ
 
 			leftExpr := &plan.Expr{
@@ -729,10 +730,26 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			idxTableName := idxDef.IndexTableName
 
 			serialIdxPkExpr := func(idxDef *plan.IndexDef) (*plan.Expr, error) {
+				if !indexTableStoresSerializedKey(idxDef) {
+					colName := tableDef.Name + "." + indexPrimaryPartName(idxDef)
+					colPos, ok := colName2Idx[colName]
+					if !ok {
+						return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", indexPrimaryPartName(idxDef))
+					}
+					return &plan.Expr{
+						Typ: selectNode.ProjectList[colPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectTag,
+								ColPos: colPos,
+							},
+						},
+					}, nil
+				}
+
 				var colPos int32
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				var ok bool
-				// argsLen is alwarys greater than 1 for secondary index, so we can use serial_full directly
 				for k, part := range idxDef.Parts {
 					if colPos, ok = colName2Idx[tableDef.Name+"."+catalog.ResolveAlias(part)]; !ok {
 						return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
@@ -791,30 +808,60 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					serial_full(3, (1,2)), serial_full(10, (10,20)), serial_full(null, null), serial_full(null, null)
 				*/
 
-				delArgs := make([]*plan.Expr, len(idxDef.Parts))
-
-				var colPos int32
-				var ok bool
-				for k, part := range idxDef.Parts {
-					if colPos, ok = tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; !ok {
-						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
+				var delIdxExpr *plan.Expr
+				if !indexTableStoresSerializedKey(idxDef) {
+					colPos, ok := tableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
+					if !ok {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", indexPrimaryPartName(idxDef))
 					}
-
-					delArgs[k] = &plan.Expr{
+					delIdxExpr = &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
-								// use scanTag because we want to delete the row that is not null.
 								RelPos: scanTag,
 								ColPos: colPos,
 							},
 						},
 					}
-				}
+				} else {
+					delArgs := make([]*plan.Expr, len(idxDef.Parts))
 
-				delIdxExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", delArgs)
+					var colPos int32
+					var ok bool
+					for k, part := range idxDef.Parts {
+						if colPos, ok = tableDef.Name2ColIndex[catalog.ResolveAlias(part)]; !ok {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind insert err, can not find colName = %s", part)
+						}
+
+						delArgs[k] = &plan.Expr{
+							Typ: selectNode.ProjectList[colPos].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									// use scanTag because we want to delete the row that is not null.
+									RelPos: scanTag,
+									ColPos: colPos,
+								},
+							},
+						}
+					}
+
+					delIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", delArgs)
+				}
 				delColName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = [2]int32{finalProjTag, int32(len(newProjList))}
 				newProjList = append(newProjList, delIdxExpr)
+				if isSpatialIndexDef(idxDef) {
+					oldPkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+					delColName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = [2]int32{finalProjTag, int32(len(newProjList))}
+					newProjList = append(newProjList, &plan.Expr{
+						Typ: selectNode.ProjectList[oldPkPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: scanTag,
+								ColPos: int32(oldPkPos),
+							},
+						},
+					})
+				}
 			} else if onDupAction != plan.Node_UPDATE {
 				if err := projForAppendAllInputRows(); err != nil {
 					return 0, err
@@ -882,7 +929,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			idxTableNodeID := builder.appendNode(idxScanNode, bindCtx)
 
-			idxPkPos := idxTableDefs[i].Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(idxDef)
+			idxPkPos := idxTableDefs[i].Name2ColIndex[lookupColName]
 			pkTyp := idxTableDefs[i].Cols[idxPkPos].Typ
 
 			leftExpr := &plan.Expr{
@@ -897,7 +945,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 			idxTableName := idxDef.IndexTableName
 			delColName2Idx[idxTableName+"."+catalog.Row_ID] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[catalog.Row_ID]}
-			delPkIdx := delColName2Idx[idxTableName+"."+catalog.IndexTableIndexColName]
+			delPkIdx := delColName2Idx[idxTableName+"."+lookupColName]
 
 			rightExpr := &plan.Expr{
 				Typ: pkTyp,
@@ -987,7 +1035,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			deleteCols[0].RelPos = delRowIDIdx[0]
 			deleteCols[0].ColPos = delRowIDIdx[1]
 
-			delPkIdx := delColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName]
+			delPkIdx := delColName2Idx[idxTableDef.Name+"."+indexLookupColumnName(tableDef.Indexes[i])]
 			deleteCols[1].RelPos = delPkIdx[0]
 			deleteCols[1].ColPos = delPkIdx[1]
 		}
