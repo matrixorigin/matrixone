@@ -1,0 +1,48 @@
+drop table if exists spatial_idx_t1;
+create table spatial_idx_t1(
+id int primary key,
+g point not null
+);
+create spatial index idx_g on spatial_idx_t1(g);
+show create table spatial_idx_t1;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_g` USING rtree (`g`)
+)
+insert into spatial_idx_t1 values
+(1, st_geomfromtext('POINT(1 1)')),
+(2, st_geomfromtext('POINT(1 1)'));
+select count(*) as row_count from spatial_idx_t1;
+➤ row_count[-5,64,0]  𝄀
+2
+drop index idx_g on spatial_idx_t1;
+show create table spatial_idx_t1;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
+  `id` int NOT NULL,
+  `g` point NOT NULL,
+  PRIMARY KEY (`id`)
+)
+drop table spatial_idx_t1;
+drop table if exists spatial_idx_t2;
+create table spatial_idx_t2(
+id int primary key,
+a int
+);
+create spatial index idx_a on spatial_idx_t2(a);
+-- @regex("SPATIAL INDEX can only be created on GEOMETRY column", true)
+not supported: SPATIAL INDEX can only be created on GEOMETRY column 'a'
+drop table spatial_idx_t2;
+drop table if exists spatial_idx_multi;
+create table spatial_idx_multi(
+id int primary key,
+g1 point,
+g2 point
+);
+create spatial index idx_g on spatial_idx_multi(g1, g2);
+-- @regex("SPATIAL INDEX only supports a single GEOMETRY column", true)
+not supported: SPATIAL INDEX only supports a single GEOMETRY column
+drop table spatial_idx_multi;

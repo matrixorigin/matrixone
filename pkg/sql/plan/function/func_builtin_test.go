@@ -509,6 +509,7 @@ func Test_BuiltIn_Serial(t *testing.T) {
 			require.Nil(t, tuple, tc.info)
 		}
 	}
+
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
@@ -669,6 +670,46 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 			require.Equal(t, "6119dffd-2a6b-11ed-99e0-000c29847904", ustr, tc.info)
 			require.Nil(t, tuple[1], tc.info)
 		}
+	}
+}
+
+func Test_BuiltIn_SerialFullGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	input1 := []string{"POINT(1 2)", "POINT(1 2)"}
+	input2 := []int64{1, 2}
+
+	tc := tcTemp{
+		info: "test serial_full(geometry, int64)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), input1, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), input2, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"serial_full('POINT(1 2)', 1)", "serial_full('POINT(1 2)', 2)"}, nil),
+	}
+	opSerial := newOpSerial()
+	defer opSerial.Close()
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, opSerial.BuiltInSerialFull)
+	tcc.Run()
+
+	vec := tcc.GetResultVectorDirectly()
+	p1 := vector.GenerateFunctionStrParameter(vec)
+	{
+		v, null := p1.GetStrValue(0)
+		require.False(t, null, tc.info)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err, tc.info)
+		require.Equal(t, []byte(input1[0]), tuple[0], tc.info)
+		require.Equal(t, input2[0], tuple[1], tc.info)
+	}
+	{
+		v, null := p1.GetStrValue(1)
+		require.False(t, null, tc.info)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err, tc.info)
+		require.Equal(t, []byte(input1[1]), tuple[0], tc.info)
+		require.Equal(t, input2[1], tuple[1], tc.info)
 	}
 }
 
