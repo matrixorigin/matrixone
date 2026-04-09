@@ -1004,15 +1004,15 @@ func TestStAsText(t *testing.T) {
 func initStGeomFromTextTestCase() []tcTemp {
 	return []tcTemp{
 		{
-			info: "test st_geomfromtext point and polygon",
+			info: "test st_geomfromtext point polygon and empty",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
-					[]bool{false, false}),
+					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))", "POINT EMPTY", "LINESTRING EMPTY"},
+					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
-				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
-				[]bool{false, false}),
+				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))", "POINT EMPTY", "LINESTRING EMPTY"},
+				[]bool{false, false, false, false}),
 		},
 		{
 			info: "test st_geomfromtext null",
@@ -1055,10 +1055,10 @@ func TestStGeomFromTextRejectNonFiniteCoordinates(t *testing.T) {
 func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT(2 3)"}, []bool{false, false}),
-		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32}, []bool{false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT EMPTY", "LINESTRING EMPTY"}, []bool{false, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, math.MaxUint32, 0}, []bool{false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT(2 3)"}, []bool{false, false})
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=4294967295;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
 
 	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
 	s, info := fcTC.Run()

@@ -1,5 +1,7 @@
 select st_astext(st_geomfromtext('POINT(1 2)')) as point_text;
 select st_astext(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as polygon_text;
+select st_astext(st_geomfromtext('POINT EMPTY')) as empty_point_text;
+select st_astext(st_geomfromtext('LINESTRING EMPTY')) as empty_linestring_text;
 select st_astext(st_geomfromtext(null)) as null_text;
 -- @regex("invalid geometry payload",true)
 select st_geomfromtext('POINT(NaN 1)');

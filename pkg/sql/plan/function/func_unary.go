@@ -827,14 +827,24 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	if len(s) == 0 {
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
+	upper := strings.ToUpper(s)
+	if strings.HasSuffix(upper, " EMPTY") {
+		typeName := strings.TrimSpace(strings.TrimSuffix(upper, " EMPTY"))
+		switch typeName {
+		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
+			return typeName, nil
+		default:
+			return "", moerr.NewInvalidInputNoCtx("invalid geometry type")
+		}
+	}
 	openIdx := strings.IndexByte(s, '(')
 	if openIdx <= 0 {
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
-	typeName := strings.ToUpper(strings.TrimSpace(s[:openIdx]))
+	typeName := strings.TrimSpace(upper[:openIdx])
 	switch typeName {
-	case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION", "GEOMETRYCOLLECTION EMPTY":
-		return strings.TrimSuffix(typeName, " EMPTY"), nil
+	case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
+		return typeName, nil
 	case "GEOMETRY":
 		return typeName, nil
 	default:
