@@ -2524,6 +2524,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
+		if _, ok := stmt.(*tree.DataBranchPick); ok {
+			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
 			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())

@@ -129,21 +129,13 @@ func handleDelsOnLCA(
 		} else {
 			// real pk
 			valsBuf.Reset()
+			pkType := colTypes[expandedPKColIdxes[0]]
 			for i := range tBat.Vecs[0].Length() {
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				b := tBat.Vecs[0].GetRawBytesAt(i)
 				val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
-				switch x := val.(type) {
-				case []byte:
-					valsBuf.WriteString("'")
-					valsBuf.WriteString(string(x))
-					valsBuf.WriteString("'")
-				case string:
-					valsBuf.WriteString("'")
-					valsBuf.WriteString(string(x))
-					valsBuf.WriteString("'")
-				default:
-					valsBuf.WriteString(fmt.Sprintf("%v", x))
+				if err = formatValIntoString(ses, val, pkType, valsBuf); err != nil {
+					return nil, err
 				}
 				valsBuf.WriteString(")")
 				if i != tBat.Vecs[0].Length()-1 {
@@ -164,22 +156,9 @@ func handleDelsOnLCA(
 
 		for i := range pkNames {
 			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
-			switch typ := colTypes[expandedPKColIdxes[i]]; typ.Oid {
-			case types.T_int32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT)", pkNames[i]))
-			case types.T_int64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT)", pkNames[i]))
-			case types.T_uint32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as INT UNSIGNED)", pkNames[i]))
-			case types.T_uint64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as BIGINT UNSIGNED)", pkNames[i]))
-			case types.T_float32:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as FLOAT)", pkNames[i]))
-			case types.T_float64:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as DOUBLE)", pkNames[i]))
-			case types.T_varchar:
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as VARCHAR)", pkNames[i]))
-			default:
+			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", pkNames[i], castType))
+			} else {
 				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
 			}
 			if i != len(pkNames)-1 {
@@ -341,6 +320,35 @@ func handleDelsOnLCA(
 	)
 
 	return
+}
+
+func lcaProbeJoinCastType(typ types.Type) (string, bool) {
+	switch typ.Oid {
+	case types.T_bit:
+		return typ.DescString(), true
+	case types.T_int8, types.T_int16, types.T_int32:
+		return "INT", true
+	case types.T_int64:
+		return "BIGINT", true
+	case types.T_uint8, types.T_uint16, types.T_uint32:
+		return "INT UNSIGNED", true
+	case types.T_uint64:
+		return "BIGINT UNSIGNED", true
+	case types.T_float32:
+		return "FLOAT", true
+	case types.T_float64:
+		return "DOUBLE", true
+	case types.T_char, types.T_varchar, types.T_text:
+		return "VARCHAR", true
+	case types.T_binary, types.T_varbinary:
+		return "VARBINARY", true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return typ.DescString(), true
+	case types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year:
+		return typ.String(), true
+	default:
+		return "", false
+	}
 }
 
 // runLCAProbeWithReaderFallback reconstructs the same row shape as
@@ -597,6 +605,7 @@ func hashDiff(
 	emit emitFunc,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (
 	err error,
 ) {
@@ -648,7 +657,7 @@ func hashDiff(
 
 	buildBaseStart := time.Now()
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base",
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base", pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -656,7 +665,7 @@ func hashDiff(
 
 	buildTargetStart := time.Now()
 	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target",
+		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target", pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -725,6 +734,7 @@ func hashDiffIfHasLCA(
 
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
+		var pickConflictBat *batch.Batch
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
@@ -739,6 +749,17 @@ func hashDiffIfHasLCA(
 			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
+		}
+
+		appendPickConflict := func(baseWrapped batchWithKind, rowIdx int) error {
+			if !copt.preservePickConflicts || copt.conflictOpt == nil ||
+				copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT {
+				return nil
+			}
+			if pickConflictBat == nil {
+				pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			}
+			return pickConflictBat.UnionOne(baseWrapped.batch, int64(rowIdx), ses.proc.Mp())
 		}
 
 		checkConflict := func(tarWrapped, baseWrapped batchWithKind) (sels1, sels2 []int64, err3 error) {
@@ -777,6 +798,25 @@ func hashDiffIfHasLCA(
 						i++
 						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT {
+						if tarWrapped.kind == diffDelete &&
+							baseWrapped.kind == diffDelete &&
+							!tarWrapped.fromUpdate && !baseWrapped.fromUpdate {
+							if cmp, err3 = compareRowInWrappedBatches(
+								ctx, ses, tblStuff, i, j, true,
+								tarWrapped, baseWrapped,
+							); err3 != nil {
+								return
+							} else if cmp == 0 {
+								sels1 = append(sels1, int64(i))
+								sels2 = append(sels2, int64(j))
+								i++
+								j++
+								continue
+							}
+						}
+						if err3 = appendPickConflict(baseWrapped, j); err3 != nil {
+							return
+						}
 						// only keep the rows from tar
 						sels2 = append(sels2, int64(j))
 						i++
@@ -876,6 +916,19 @@ func hashDiffIfHasLCA(
 		if wrapped.batch.RowCount() == 0 {
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			return
+		}
+
+		if pickConflictBat != nil {
+			if stop, e := emitBatch(emit, batchWithKind{
+				batch: pickConflictBat,
+				kind:  diffDelete,
+				name:  tblStuff.baseRel.GetTableName(),
+				side:  diffSideBase,
+			}, false, tblStuff.retPool); e != nil {
+				return e
+			} else if stop {
+				return nil
+			}
 		}
 
 		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
@@ -1250,10 +1303,11 @@ func findDeleteAndUpdateBat(
 						if updateDeleteBat != nil {
 							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
 							if err2 = send(batchWithKind{
-								name:  tblName,
-								side:  side,
-								batch: updateDeleteBat,
-								kind:  diffDelete,
+								name:       tblName,
+								side:       side,
+								fromUpdate: true,
+								batch:      updateDeleteBat,
+								kind:       diffDelete,
 							}); err2 != nil {
 								return err2
 							}
@@ -1660,6 +1714,7 @@ func buildHashmapForTable(
 	tblStuff *tableStuff,
 	handles []engine.ChangesHandle,
 	side string,
+	pickKeyHashmap databranchutils.BranchHashmap,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
 	tombstoneHashmap databranchutils.BranchHashmap,
@@ -1750,11 +1805,43 @@ func buildHashmapForTable(
 			case <-ctx.Done():
 				taskErr = ctx.Err()
 			default:
+				// When a pickKeyHashmap is provided (PICK operation), filter
+				// the batch to keep only rows whose PK exists in the hashmap.
+				// This moves the precise PK filtering from the consumer
+				// (appendPickedBatchRows) into the producer, reducing the
+				// data that flows through hashDiff and the channel.
+				if pickKeyHashmap != nil {
+					pkIdx := tblStuff.def.pkColIdx
+					if isTombstone {
+						// After updateTombstoneBatch, tombstone PK is at Vec[0].
+						pkIdx = 0
+					}
+					var results []databranchutils.GetResult
+					results, taskErr = pickKeyHashmap.GetByVectors(
+						[]*vector.Vector{bat.Vecs[pkIdx]},
+					)
+					if taskErr != nil {
+						atomicErr.Store(taskErr)
+						return
+					}
+					var sels []int64
+					for i, r := range results {
+						if r.Exists {
+							sels = append(sels, int64(i))
+						}
+					}
+					if len(sels) == 0 {
+						return // all rows filtered out
+					}
+					if len(sels) < bat.RowCount() {
+						bat.Shrink(sels, false)
+						ll = bat.VectorCount()
+					}
+				}
+
 				if isTombstone {
-					// keep the commit ts
 					taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
 				} else {
-					// keep the commit ts
 					taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
 				}
 			}
