@@ -51,10 +51,10 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
-		emptyNull:  isSum,
+		emptyNull:  false, // Flush uses cnts==0 for null detection; must be false for spill correctness
 		saveArg:    isDistinct,
 	}
-	// Always allocate sum + count. Count tracks group-has-data for SUM (emptyNull)
+	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
 	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
 	return &exec
@@ -269,10 +269,10 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
-		emptyNull:  isSum,
+		emptyNull:  false, // Flush uses cnts==0 for null detection; must be false for spill correctness
 		saveArg:    isDistinct,
 	}
-	// Always allocate sum + count. Count tracks group-has-data for SUM (emptyNull)
+	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
 	exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
 	return &exec

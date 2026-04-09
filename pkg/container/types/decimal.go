@@ -1530,6 +1530,9 @@ func (x Decimal128) Div(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		}
 		z.B0_63 = x2.B0_63
 		z.B64_127 = x2.B64_127
+		if signx != signy {
+			z = z.Minus()
+		}
 		return
 	}
 	z, err = z.Div128(y1)
