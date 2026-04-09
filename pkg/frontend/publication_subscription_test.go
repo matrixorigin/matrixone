@@ -2055,11 +2055,11 @@ func Test_insertCCPRDbAndTableRecords_EscapesStrings(t *testing.T) {
 		err := insertCCPRDbAndTableRecords(ctx, bh, tableIDs, "task'id", uint32(1))
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(executed, convey.ShouldHaveLength, 2)
-		convey.So(executed[0], convey.ShouldContainSubstring, escapeSQLString("task'id"))
-		convey.So(executed[0], convey.ShouldContainSubstring, escapeSQLString("db'name"))
-		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("task'id"))
-		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("db'name"))
-		convey.So(executed[1], convey.ShouldContainSubstring, escapeSQLString("t'name"))
+		convey.So(executed[0], convey.ShouldContainSubstring, sanitizeSQLInput("task'id"))
+		convey.So(executed[0], convey.ShouldContainSubstring, sanitizeSQLInput("db'name"))
+		convey.So(executed[1], convey.ShouldContainSubstring, sanitizeSQLInput("task'id"))
+		convey.So(executed[1], convey.ShouldContainSubstring, sanitizeSQLInput("db'name"))
+		convey.So(executed[1], convey.ShouldContainSubstring, sanitizeSQLInput("t'name"))
 	})
 }
 

@@ -173,7 +173,7 @@ func TestParseUpstreamConn(t *testing.T) {
 			name:        "missing @ separator",
 			connStr:     "mysql://user:password",
 			wantErr:     true,
-			errContains: "expected mysql://",
+			errContains: "missing '@'",
 		},
 		{
 			name:        "empty user with account",

@@ -235,6 +235,7 @@ func (DefaultClassifier) IsRetryable(err error) bool {
 		"rpc error",
 		"backend error",
 		"backend is not available",
+		"backend unavailable",
 		"invalid connection",
 	}
 
