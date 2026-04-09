@@ -402,8 +402,9 @@ func (tbl *txnTable) TransferDeletes(
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
 	pkVec := deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
+	rowidVec := deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr)
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](
-		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		rowidVec.GetDownstreamVector(),
 	)
 	var pkType *types.Type
 	for i, end := 0, len(rowids); i < end; i++ {
@@ -443,6 +444,14 @@ func (tbl *txnTable) TransferDeletes(
 		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
+		// TransferDeleteRows -> DeleteByPhyAddrKeys -> tableSpace.Append appends
+		// new rows to the same tombstone node being iterated. If the append exceeds
+		// the vector capacity, mpool.Grow reallocates the underlying buffer and
+		// frees the old one, leaving the rowids unsafe.Slice as a dangling pointer.
+		// Refresh the slice so subsequent iterations read from the new buffer.
+		rowids = vector.MustFixedColNoTypeCheck[types.Rowid](
+			rowidVec.GetDownstreamVector(),
+		)
 	}
 	if transferd.IsEmpty() {
 		return
