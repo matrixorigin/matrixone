@@ -1,0 +1,112 @@
+drop database if exists test;
+create database test;
+use test;
+create table t0 (id int, name varchar(20), val int, primary key(id, name));
+insert into t0 values (1,'alice',10),(2,'bob',20),(3,'charlie',30);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (4,'dave',40),(5,'eve',50),(6,'frank',60);
+data branch pick t2 into t1 keys((4,'dave'),(6,'frank'));
+select * from t1 order by id, name;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  alice  ¦  10  𝄀
+2  ¦  bob  ¦  20  𝄀
+3  ¦  charlie  ¦  30  𝄀
+4  ¦  dave  ¦  40  𝄀
+6  ¦  frank  ¦  60
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  name[12,0,0]  ¦  val[4,0,0]  𝄀
+t2  ¦  INSERT  ¦  5  ¦  eve  ¦  50
+data branch pick t2 into t1 keys((5,'eve'));
+select * from t1 order by id, name;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  alice  ¦  10  𝄀
+2  ¦  bob  ¦  20  𝄀
+3  ¦  charlie  ¦  30  𝄀
+4  ¦  dave  ¦  40  𝄀
+5  ¦  eve  ¦  50  𝄀
+6  ¦  frank  ¦  60
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  name[12,0,0]  ¦  val[4,0,0]
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, c varchar(20), primary key(a, b));
+insert into t0 values (1,1,'base'),(2,2,'base');
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (3,3,'new'),(4,4,'new'),(5,5,'new'),(6,6,'new');
+data branch pick t2 into t1 keys(select a, b from t2 where a >= 4 and a % 2 = 0);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
+1  ¦  1  ¦  base  𝄀
+2  ¦  2  ¦  base  𝄀
+4  ¦  4  ¦  new  𝄀
+6  ¦  6  ¦  new
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  ¦  c[12,0,0]  𝄀
+t2  ¦  INSERT  ¦  3  ¦  3  ¦  new  𝄀
+t2  ¦  INSERT  ¦  5  ¦  5  ¦  new
+drop table t0;
+drop table t1;
+drop table t2;
+create table t1 (x int, y int, z int, primary key(x, y));
+insert into t1 values (1,1,10),(2,2,20);
+create table t2 (x int, y int, z int, primary key(x, y));
+insert into t2 values (3,3,30),(4,4,40),(5,5,50);
+data branch pick t2 into t1 keys((3,3),(5,5));
+select * from t1 order by x, y;
+➤ x[4,32,0]  ¦  y[4,32,0]  ¦  z[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30  𝄀
+5  ¦  5  ¦  50
+drop table t1;
+drop table t2;
+create table t0 (a int, b varchar(10), c int, primary key(a, b));
+insert into t0 values (1,'x',100);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (2,'y',200),(3,'z',300);
+data branch pick t2 into t1 keys(select a, b from t2 where a > 1);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  𝄀
+1  ¦  x  ¦  100  𝄀
+2  ¦  y  ¦  200  𝄀
+3  ¦  z  ¦  300
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  ¦  c[4,0,0]
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, c int, primary key(a, b));
+insert into t0 values (1,1,10),(2,2,20);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (3,3,30);
+data branch pick t2 into t1 keys(select a, b from t2 where a > 100);
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, c int, primary key(a, b));
+insert into t0 values (1,1,10);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (2,2,20),(3,3,30);
+create snapshot sp_before for account sys;
+insert into t2 values (4,4,40);
+data branch pick t2{snapshot=sp_before} into t1 keys((2,2),(3,3),(4,4));
+select * from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20  𝄀
+3  ¦  3  ¦  30
+drop snapshot sp_before;
+drop table t0;
+drop table t1;
+drop table t2;
+drop database test;

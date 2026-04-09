@@ -346,4 +346,90 @@ func TestObjectListFormat_GoodPath(t *testing.T) {
 	ctx6 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	stmt6.Format(ctx6)
 	require.Equal(t, "OBJECTLIST DATABASE db1 TABLE tbl1 SNAPSHOT snap6 AGAINST SNAPSHOT against6 FROM account1 PUBLICATION pub1", ctx6.String())
+
+func TestDataBranchPickLifecycle(t *testing.T) {
+	stmt := NewDataBranchPick()
+	require.NotNil(t, stmt)
+
+	require.Equal(t, frontendStatusTyp, stmt.StmtKind())
+	require.Equal(t, "branch pick", stmt.GetStatementType())
+	require.Equal(t, "branch pick", stmt.String())
+	require.Equal(t, "DataBranchPick", stmt.TypeName())
+
+	stmt.SrcTable.ObjectName = Identifier("src")
+	stmt.DstTable.ObjectName = Identifier("dst")
+	stmt.Keys = &PickKeys{Type: PickKeysValues}
+	stmt.ConflictOpt = &ConflictOpt{Opt: CONFLICT_SKIP}
+	stmt.BetweenFrom = "sp1"
+	stmt.BetweenTo = "sp2"
+	stmt.reset()
+	require.Equal(t, Identifier(""), stmt.SrcTable.ObjectName)
+	require.Nil(t, stmt.Keys)
+	require.Nil(t, stmt.ConflictOpt)
+	require.Empty(t, stmt.BetweenFrom)
+}
+
+func TestDataBranchPickFormat(t *testing.T) {
+	makeTN := func(name string) TableName {
+		var tn TableName
+		tn.ObjectName = Identifier(name)
+		return tn
+	}
+
+	// Basic KEYS with values
+	stmt := &DataBranchPick{
+		SrcTable: makeTN("src"),
+		DstTable: makeTN("dst"),
+		Keys: &PickKeys{
+			Type: PickKeysValues,
+			KeyExprs: []Expr{
+				NewNumVal[int64](1, "1", false, P_int64),
+				NewNumVal[int64](2, "2", false, P_int64),
+			},
+		},
+	}
+	ctx := NewFmtCtx(0)
+	stmt.Format(ctx)
+	require.Contains(t, ctx.String(), "data branch pick")
+	require.Contains(t, ctx.String(), "src")
+	require.Contains(t, ctx.String(), "into")
+	require.Contains(t, ctx.String(), "dst")
+	require.Contains(t, ctx.String(), "keys (")
+
+	// With BETWEEN SNAPSHOT
+	stmt2 := &DataBranchPick{
+		SrcTable:    makeTN("src"),
+		DstTable:    makeTN("dst"),
+		BetweenFrom: "snap_start",
+		BetweenTo:   "snap_end",
+	}
+	ctx = NewFmtCtx(0)
+	stmt2.Format(ctx)
+	result := ctx.String()
+	require.Contains(t, result, "between snapshot")
+	require.Contains(t, result, "snap_start")
+	require.Contains(t, result, "snap_end")
+
+	// With conflict options
+	for _, tt := range []struct {
+		opt    int
+		expect string
+	}{
+		{CONFLICT_FAIL, "fail"},
+		{CONFLICT_SKIP, "skip"},
+		{CONFLICT_ACCEPT, "accept"},
+	} {
+		stmt3 := &DataBranchPick{
+			SrcTable: makeTN("src"),
+			DstTable: makeTN("dst"),
+			Keys: &PickKeys{
+				Type:     PickKeysValues,
+				KeyExprs: []Expr{NewNumVal[int64](1, "1", false, P_int64)},
+			},
+			ConflictOpt: &ConflictOpt{Opt: tt.opt},
+		}
+		ctx = NewFmtCtx(0)
+		stmt3.Format(ctx)
+		require.Contains(t, ctx.String(), "when conflict "+tt.expect)
+	}
 }
