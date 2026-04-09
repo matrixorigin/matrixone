@@ -498,7 +498,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 			for i := 0; i < len1; i++ {
 				x := d64toD128(v1[i])
 				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -509,7 +509,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 				}
 				x := d64toD128(v1[i])
 				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -519,7 +519,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 		if rsnull.IsEmpty() {
 			for i := 0; i < len2; i++ {
 				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -529,7 +529,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 					continue
 				}
 				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -556,7 +556,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 				for i := 0; i < len1; i++ {
 					x := d64toD128(v1[i])
 					if !d128DivInline(x, absY64, signy, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
 					}
@@ -568,7 +568,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 					}
 					x := d64toD128(v1[i])
 					if !d128DivInline(x, absY64, signy, scaleFactor, &rs[i]) {
-						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
 					}
@@ -579,7 +579,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 		if rsnull.IsEmpty() {
 			for i := 0; i < len1; i++ {
 				x := d64toD128(v1[i])
-				if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -589,7 +589,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 					continue
 				}
 				x := d64toD128(v1[i])
-				if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1097,7 +1097,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 		// vec / vec
 		if rsnull.IsEmpty() {
 			for i := 0; i < len1; i++ {
-				if err := d128DivOneDispatch(v1[i], v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(v1[i], v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1106,7 +1106,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				if err := d128DivOneDispatch(v1[i], v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(v1[i], v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1116,7 +1116,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 		a := v1[0]
 		if rsnull.IsEmpty() {
 			for i := 0; i < len2; i++ {
-				if err := d128DivOneDispatch(a, v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(a, v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1125,7 +1125,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				if err := d128DivOneDispatch(a, v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOneDispatch(a, v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1151,7 +1151,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 			if rsnull.IsEmpty() {
 				for i := 0; i < len1; i++ {
 					if !d128DivInline(v1[i], absY64, signy, scaleFactor, &rs[i]) {
-						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
 					}
@@ -1162,7 +1162,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 						continue
 					}
 					if !d128DivInline(v1[i], absY64, signy, scaleFactor, &rs[i]) {
-						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
 					}
@@ -1172,7 +1172,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 		}
 		if rsnull.IsEmpty() {
 			for i := 0; i < len1; i++ {
-				if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1181,7 +1181,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError); err != nil {
+				if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 					return err
 				}
 			}
@@ -1192,7 +1192,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 
 // d128DivOneDispatch tries the fast inline path first, falls back to d128DivOne.
 func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32,
-	scaleFactor uint64, canInline bool, rsnull *nulls.Nulls, idx uint64, shouldError bool) error {
+	scaleFactor uint64, canInline bool, rsnull *nulls.Nulls, idx uint64, shouldError bool, scale1, scale2 int32) error {
 	// Zero-divisor check.
 	if y.B0_63 == 0 && y.B64_127 == 0 {
 		if shouldError {
@@ -1214,13 +1214,13 @@ func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj i
 			}
 		}
 	}
-	return d128DivOne(x, y, dst, scaleAdj, rsnull, idx, shouldError)
+	return d128DivOne(x, y, dst, scaleAdj, rsnull, idx, shouldError, scale1, scale2)
 }
 
 // d128DivOne computes a single D128 division with scale adjustment.
 // Handles all cases including overflow fallback to D256.
 
-func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rsnull *nulls.Nulls, idx uint64, shouldError bool) error {
+func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rsnull *nulls.Nulls, idx uint64, shouldError bool, scale1, scale2 int32) error {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
 		if shouldError {
 			return moerr.NewDivByZeroNoCtx()
@@ -1246,12 +1246,12 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		x2, err = x2.Scale(scaleAdj)
 		if err != nil {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s(Scale:%d)/%s(Scale:%d)",
-				x.Format(0), 0, y.Format(0), 0)
+				x.Format(0), scale1, y.Format(0), scale2)
 		}
 		x2, err = x2.Div256(y2)
 		if err != nil || x2.B192_255 != 0 || x2.B128_191 != 0 || x2.B64_127>>63 != 0 {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s(Scale:%d)/%s(Scale:%d)",
-				x.Format(0), 0, y.Format(0), 0)
+				x.Format(0), scale1, y.Format(0), scale2)
 		}
 		z = types.Decimal128{B0_63: x2.B0_63, B64_127: x2.B64_127}
 		if signx != signy {
