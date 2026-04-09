@@ -31,6 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
+)
+
+var (
+	defaultWaitTimeOnRetryBackendSend = 300 * time.Millisecond
+	// Keep backend send retries bounded so rollback/catalog RPCs fail in finite
+	// time instead of stretching broken explicit txns for hours.
+	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
 )
 
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
@@ -187,13 +195,29 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return nil
 	}
 
+	retryState := backendRetryState{}
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return txn.TxnResponse{}, ctxErr
+		}
+
 		err := reqFn()
 		if err != nil {
 			// These errors are retriable error. Retry to send request to TN.
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
-				time.Sleep(time.Millisecond * 300)
+			if isBackendConnectRetryError(err) {
+				wait, ok := getBackendRetryWaitDuration(&retryState)
+				if !ok {
+					s.logBackendRetryStop(err, tn, request, retryState)
+					return txn.TxnResponse{}, err
+				}
+				if !waitToRetrySend(ctx, wait) {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						// Preserve the backend failure so upper layers can tear down an
+						// explicit txn instead of leaving it alive on a raw context error.
+						return txn.TxnResponse{}, err
+					}
+					return txn.TxnResponse{}, err
+				}
 				continue
 			}
 			return txn.TxnResponse{}, err
@@ -219,6 +243,74 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
+}
+
+type backendRetryState struct {
+	deadline time.Time
+}
+
+func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, bool) {
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return 0, false
+	}
+
+	now := time.Now()
+	if retryState.deadline.IsZero() {
+		retryState.deadline = now.Add(defaultMaxWaitTimeOnRetryBackendSend)
+	}
+	if !retryState.deadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.deadline)
+	if remaining < defaultWaitTimeOnRetryBackendSend {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryBackendSend, true
+}
+
+func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// request whose caller has already given up.
+		return ctx.Err() == nil
+	}
+}
+
+func isBackendConnectRetryError(err error) bool {
+	// A closed backend can come back during TN/backend restart or address refresh,
+	// so we retry it for the same bounded window as the other backend-availability
+	// errors instead of waiting indefinitely.
+	return moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
+}
+
+func (s *sender) logBackendRetryStop(
+	err error,
+	tn metadata.TNShard,
+	request txn.TxnRequest,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.String("txn-id", hex.EncodeToString(request.Txn.ID)),
+		zap.String("method", request.Method.String()),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender backend retry budget exhausted", fields...)
 }
 
 func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {
