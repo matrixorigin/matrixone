@@ -475,7 +475,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				} else {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
-			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 				value := addEscapeToString(vec.GetBytesAt(i), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
@@ -695,7 +695,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			}
 		// Binary/varbinary has mysql_type_varchar.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err
@@ -1193,7 +1193,7 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		// Encode binary data as base64
 		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
-	case types.T_datalink:
+	case types.T_datalink, types.T_geometry:
 		return string(vec.GetBytesAt(i)), nil
 	case types.T_array_float32:
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
