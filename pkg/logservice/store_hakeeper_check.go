@@ -229,8 +229,10 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 		l.registerTaskUser()
 	case pb.TaskSchedulerRunning:
 		l.taskScheduler.StartScheduleCronTask()
+		l.taskScheduler.StartScheduleSQLTask()
 		l.taskScheduler.Schedule(state.CNState, state.Tick)
 	case pb.TaskSchedulerStopped:
+		l.taskScheduler.StopScheduleSQLTask()
 	default:
 		panic("unknown TaskScheduler state")
 	}

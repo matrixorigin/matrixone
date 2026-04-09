@@ -138,6 +138,12 @@ const (
 	// MOSysAsyncTask is the table name of async task table in mo_task.
 	MOSysAsyncTask = "sys_async_task"
 
+	// MOSQLTask is the table name of sql task table in mo_task.
+	MOSQLTask = "sql_task"
+
+	// MOSQLTaskRun is the table name of sql task run table in mo_task.
+	MOSQLTaskRun = "sql_task_run"
+
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 

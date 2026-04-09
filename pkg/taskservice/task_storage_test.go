@@ -323,6 +323,132 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 	}
 }
 
+func TestAddQueryUpdateDeleteSQLTask(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			mustGetTestSQLTask(t, s, 0)
+
+			t1 := newTestSQLTask("task-1", 1)
+			t2 := newTestSQLTask("task-2", 2)
+			mustAddTestSQLTask(t, s, 2, t1, t2)
+			mustAddTestSQLTask(t, s, 0, t1)
+
+			tasks := mustGetTestSQLTask(t, s, 2)
+			mustGetTestSQLTask(t, s, 1, WithTaskName(EQ, "task-1"))
+			mustGetTestSQLTask(t, s, 1, WithAccountID(EQ, 2))
+			mustGetTestSQLTask(t, s, 1, WithSQLTaskEnabled(true), WithLimitCond(1))
+
+			tasks[0].Timezone = "Asia/Shanghai"
+			mustUpdateTestSQLTask(t, s, 1, []SQLTask{tasks[0]}, WithTaskIDCond(EQ, tasks[0].TaskID))
+			assert.Equal(t, "Asia/Shanghai", mustGetTestSQLTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].TaskID))[0].Timezone)
+
+			mustDeleteTestSQLTask(t, s, 1, WithTaskIDCond(EQ, tasks[1].TaskID))
+			mustGetTestSQLTask(t, s, 1)
+		})
+	}
+}
+
+func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			run1 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning)
+			run2 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusFailed)
+			run2.TriggerType = SQLTaskTriggerManual
+			run2.AccountID = 2
+			mustAddTestSQLTaskRun(t, s, 2, run1, run2)
+
+			runs := mustGetTestSQLTaskRun(t, s, 2)
+			mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, 1), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
+			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskTriggerType(EQ, SQLTaskTriggerManual))
+			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 1))
+			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 2))
+
+			runs[0].Status = SQLTaskStatusSuccess
+			mustUpdateTestSQLTaskRun(t, s, 1, []SQLTaskRun{runs[0]}, WithSQLTaskRunIDCond(EQ, runs[0].RunID))
+			assert.Equal(t, SQLTaskStatusSuccess, mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, runs[0].RunID))[0].Status)
+		})
+	}
+}
+
+func TestTriggerSQLTask(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-1", 1)
+			sqlTask.TriggerCount = 0
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+			sqlTask.TriggerCount++
+			sqlTask.NextFireTime = 100
+
+			asyncTask := newTestAsyncTask("sql-task:1:1")
+			n, err := s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+			require.NoError(t, err)
+			require.Equal(t, 2, n)
+
+			mustGetTestAsyncTask(t, s, 1, WithTaskMetadataId(EQ, asyncTask.Metadata.ID))
+			assert.Equal(t, uint64(1), mustGetTestSQLTask(t, s, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0].TriggerCount)
+
+			n, err = s.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+			require.NoError(t, err)
+			require.Equal(t, 0, n)
+		})
+	}
+}
+
+func TestAcquireAndCompleteSQLTaskRun(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-1", 1)
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+
+			run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			runID, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, run)
+			require.NoError(t, err)
+			require.NotZero(t, runID)
+
+			_, err = s.AcquireSQLTaskRun(context.Background(), sqlTask, run)
+			require.ErrorIs(t, err, ErrSQLTaskOverlap)
+
+			run.RunID = runID
+			run.Status = SQLTaskStatusSuccess
+			run.FinishedAt = time.Now()
+			run.DurationSeconds = 1.25
+			updated, err := s.CompleteSQLTaskRun(context.Background(), run)
+			require.NoError(t, err)
+			require.Equal(t, 1, updated)
+
+			runs := mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, runID))
+			require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
+
+			run2 := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			runID2, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, run2)
+			require.NoError(t, err)
+			require.NotEqual(t, runID, runID2)
+		})
+	}
+}
+
 func mustGetTestAsyncTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.AsyncTask {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -405,6 +531,69 @@ func mustUpdateTestDaemonTask(t *testing.T, s TaskStorage, expectUpdated int, ta
 	require.Equal(t, expectUpdated, n)
 }
 
+func mustAddTestSQLTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...SQLTask) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.AddSQLTask(ctx, tasks...)
+	require.NoError(t, err)
+	require.Equal(t, expectAdded, n)
+}
+
+func mustGetTestSQLTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []SQLTask {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	tasks, err := s.QuerySQLTask(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectCount, len(tasks))
+	return tasks
+}
+
+func mustUpdateTestSQLTask(t *testing.T, s TaskStorage, expectUpdated int, tasks []SQLTask, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.UpdateSQLTask(ctx, tasks, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectUpdated, n)
+}
+
+func mustDeleteTestSQLTask(t *testing.T, s TaskStorage, expectDeleted int, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.DeleteSQLTask(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectDeleted, n)
+}
+
+func mustAddTestSQLTaskRun(t *testing.T, s TaskStorage, expectAdded int, runs ...SQLTaskRun) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.AddSQLTaskRun(ctx, runs...)
+	require.NoError(t, err)
+	require.Equal(t, expectAdded, n)
+}
+
+func mustGetTestSQLTaskRun(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []SQLTaskRun {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	runs, err := s.QuerySQLTaskRun(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectCount, len(runs))
+	return runs
+}
+
+func mustUpdateTestSQLTaskRun(t *testing.T, s TaskStorage, expectUpdated int, runs []SQLTaskRun, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.UpdateSQLTaskRun(ctx, runs, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectUpdated, n)
+}
+
 func mustDeleteTestDaemonTask(t *testing.T, s TaskStorage, expectUpdated int, conds ...Condition) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -434,4 +623,35 @@ func newTestDaemonTask(id uint64, mid string) task.DaemonTask {
 	v.Metadata.ID = mid
 	v.TaskRunner = mid
 	return v
+}
+
+func newTestSQLTask(name string, accountID uint32) SQLTask {
+	return SQLTask{
+		TaskName:       name,
+		AccountID:      accountID,
+		DatabaseName:   "db1",
+		CronExpr:       "0 * * * *",
+		Timezone:       "UTC",
+		SQLBody:        "select 1",
+		GateCondition:  "select 1",
+		Enabled:        true,
+		TriggerCount:   0,
+		NextFireTime:   10,
+		RetryLimit:     1,
+		TimeoutSeconds: 30,
+		Creator:        "root",
+	}
+}
+
+func newTestSQLTaskRun(taskID uint64, taskName, status string) SQLTaskRun {
+	return SQLTaskRun{
+		TaskID:        taskID,
+		TaskName:      taskName,
+		AccountID:     1,
+		Status:        status,
+		TriggerType:   SQLTaskTriggerScheduled,
+		AttemptNumber: 1,
+		GateResult:    true,
+		RunnerCN:      "cn1",
+	}
 }
