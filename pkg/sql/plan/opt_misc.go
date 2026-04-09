@@ -350,6 +350,7 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 func (builder *QueryBuilder) remapWindowClause(
 	expr *plan.Expr,
 	windowTag int32,
+	windowIdx int32,
 	projectionSize int32,
 	colMap map[[2]int32][2]int32,
 	remapInfo *RemapInfo,
@@ -362,8 +363,18 @@ func (builder *QueryBuilder) remapWindowClause(
 		// the filtering conditions also need to be remapped
 		if exprImpl.Col.RelPos == windowTag {
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
-			exprImpl.Col.RelPos = -1
-			exprImpl.Col.ColPos += projectionSize
+			if exprImpl.Col.ColPos == windowIdx {
+				// Current window function result: appended at end of batch
+				exprImpl.Col.RelPos = -1
+				exprImpl.Col.ColPos = projectionSize
+			} else {
+				// Earlier window function result: already in child's projection,
+				// look up via colMap
+				err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
+				if err != nil {
+					return err
+				}
+			}
 		} else {
 			// normal remap for other columns
 			// for example,
@@ -378,7 +389,7 @@ func (builder *QueryBuilder) remapWindowClause(
 	case *plan.Expr_F:
 		// loop function parameters
 		for _, arg := range exprImpl.F.Args {
-			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
+			err := builder.remapWindowClause(arg, windowTag, windowIdx, projectionSize, colMap, remapInfo)
 			if err != nil {
 				return err
 			}
