@@ -404,6 +404,58 @@ func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+// TestLockWithRetryStillRetriesBindChangeWhenBackendBudgetDisabled verifies that
+// disabling the backend retry budget (setting it to 0) only prevents retries for
+// backend availability errors, not for normal retryable errors like
+// ErrLockTableBindChanged.
+func TestLockWithRetryStillRetriesBindChangeWhenBackendBudgetDisabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = 0
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	gomock.InOrder(
+		// First call: ErrLockTableBindChanged should still be retried
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		// Second call: succeed
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{Timestamp: timestamp.Timestamp{PhysicalTime: 1}}, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.Timestamp.PhysicalTime)
+}
+
 func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

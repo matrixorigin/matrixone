@@ -33,6 +33,15 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	// Backoff parameters for remote lock table retry loops (unlock, getLock).
+	// These prevent CPU spinning when the remote lock service is temporarily
+	// unavailable.
+	remoteRetryInitialBackoff = 100 * time.Millisecond
+	remoteRetryMaxBackoff     = 5 * time.Second
+	remoteRetryMaxDuration    = 30 * time.Second
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -150,6 +159,8 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	backoff := remoteRetryInitialBackoff
+	deadline := time.Now().Add(remoteRetryMaxDuration)
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
@@ -171,6 +182,18 @@ func (l *remoteLockTable) unlock(
 		if err := l.handleError(err, false); err == nil {
 			return
 		}
+		if time.Now().After(deadline) {
+			l.logger.Error("unlock retry budget exhausted, giving up",
+				zap.Uint64("table-id", l.bind.Table),
+				zap.String("txn", hex.EncodeToString(txn.txnID)),
+				zap.Duration("budget", remoteRetryMaxDuration))
+			return
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > remoteRetryMaxBackoff {
+			backoff = remoteRetryMaxBackoff
+		}
 	}
 }
 
@@ -178,6 +201,8 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
+	backoff := remoteRetryInitialBackoff
+	deadline := time.Now().Add(remoteRetryMaxDuration)
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -191,6 +216,18 @@ func (l *remoteLockTable) getLock(
 		// why use loop is similar to unlock
 		if err = l.handleError(err, false); err == nil {
 			return
+		}
+		if time.Now().After(deadline) {
+			l.logger.Error("getLock retry budget exhausted, giving up",
+				zap.Uint64("table-id", l.bind.Table),
+				zap.String("txn", hex.EncodeToString(txn.TxnID)),
+				zap.Duration("budget", remoteRetryMaxDuration))
+			return
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > remoteRetryMaxBackoff {
+			backoff = remoteRetryMaxBackoff
 		}
 	}
 }
