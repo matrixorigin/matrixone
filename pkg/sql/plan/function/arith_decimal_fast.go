@@ -37,15 +37,65 @@ import (
 )
 
 func operandsAt[T any](v1, v2 []T, idx int) (T, T) {
-	a := v1[idx]
-	if len(v1) == 1 {
-		a = v1[0]
-	}
-	b := v2[idx]
-	if len(v2) == 1 {
-		b = v2[0]
-	}
-	return a, b
+	// Branchless: mask is 0 when len==1 (scalar), -1 when len>1 (vector).
+	// idx & 0 = 0 (always v[0]), idx & -1 = idx (v[idx]).
+	return v1[idx&-min(1, len(v1)-1)], v2[idx&-min(1, len(v2)-1)]
+}
+
+// ---- Branchless sign helpers ----
+
+// d128Abs makes a signed D128 absolute in-place, returns the sign bit (0 or 1).
+func d128Abs(x *types.Decimal128) uint64 {
+	sign := x.B64_127 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	return sign
+}
+
+// d128Negate conditionally negates a D128 in-place (two's complement).
+// sign=0: no-op. sign=1: negate.
+func d128Negate(x *types.Decimal128, sign uint64) {
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+}
+
+// d256Abs makes a signed D256 absolute in-place, returns the sign bit (0 or 1).
+func d256Abs(x *types.Decimal256) uint64 {
+	sign := x.B192_255 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	return sign
+}
+
+// d256Negate conditionally negates a D256 in-place (two's complement).
+// sign=0: no-op. sign=1: negate.
+func d256Negate(x *types.Decimal256, sign uint64) {
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
 }
 
 // ---- Inline Scale helpers ----
@@ -851,13 +901,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 		if hasNull && bmp.Contains(uint64(i)) {
 			continue
 		}
-		a, b := v1[i], v2[i]
-		if len1 == 1 {
-			a = v1[0]
-		}
-		if len2 == 1 {
-			b = v2[0]
-		}
+		a, b := operandsAt(v1, v2, i)
 		if b == 0 {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
@@ -983,35 +1027,17 @@ func d128DivPow10(x *types.Decimal128, n int32) {
 // d128ScaleUp scales a signed D128 up by 10^n. Branchless sign handling, in-place.
 // Returns false on overflow (x may be corrupted; callers use original for error msg).
 func d128ScaleUp(x *types.Decimal128, n int32) bool {
-	sign := x.B64_127 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	sign := d128Abs(x)
 	ok := d128MulPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	d128Negate(x, sign)
 	return ok
 }
 
 // d128ScaleDown divides a signed D128 by 10^n with round-half-up. Branchless, in-place.
 func d128ScaleDown(x *types.Decimal128, n int32) {
-	sign := x.B64_127 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	sign := d128Abs(x)
 	d128DivPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	d128Negate(x, sign)
 }
 
 // d256Mul1Limb multiplies unsigned D256 x by a single 64-bit factor p in-place.
@@ -1449,30 +1475,16 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 			d128DivPow10(dst, -scaleAdj)
 		}
 		// Branchless conditional negate (two's complement: XOR + add carry).
-		negMask := -neg // 0 or 0xFF..FF
-		dst.B0_63 ^= negMask
-		dst.B64_127 ^= negMask
-		var c uint64
-		dst.B0_63, c = bits.Add64(dst.B0_63, 0, neg)
-		dst.B64_127, _ = bits.Add64(dst.B64_127, 0, c)
+		d128Negate(dst, neg)
 		return nil
 	}
 
 	// Slow path: genuinely large Decimal128 values — inline MulInplace.
-	signx := x.B64_127 >> 63
-	signy := y.B64_127 >> 63
+	ax := *x
+	signx := d128Abs(&ax)
+	ay := *y
+	signy := d128Abs(&ay)
 	neg := signx ^ signy
-
-	// Branchless absolute values.
-	negMaskX := -signx
-	ax := types.Decimal128{B0_63: x.B0_63 ^ negMaskX, B64_127: x.B64_127 ^ negMaskX}
-	var c uint64
-	ax.B0_63, c = bits.Add64(ax.B0_63, signx, 0)
-	ax.B64_127, _ = bits.Add64(ax.B64_127, 0, c)
-	negMaskY := -signy
-	ay := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
-	ay.B0_63, c = bits.Add64(ay.B0_63, signy, 0)
-	ay.B64_127, _ = bits.Add64(ay.B64_127, 0, c)
 
 	// Try 128×128→128 unsigned multiply (inline Mul128InPlace).
 	// result = ax.lo*ay.lo + cross*2^64 where cross = ax.lo*ay.hi or ax.hi*ay.lo.
@@ -1491,12 +1503,7 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 			if scaleAdj != 0 {
 				d128DivPow10(dst, -scaleAdj)
 			}
-			negMask := -neg
-			dst.B0_63 ^= negMask
-			dst.B64_127 ^= negMask
-			var c uint64
-			dst.B0_63, c = bits.Add64(dst.B0_63, 0, neg)
-			dst.B64_127, _ = bits.Add64(dst.B64_127, 0, c)
+			d128Negate(dst, neg)
 			return nil
 		}
 	}
@@ -1511,11 +1518,7 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 	}
 	dst.B0_63 = x2.B0_63
 	dst.B64_127 = x2.B64_127
-	negMask := -neg
-	dst.B0_63 ^= negMask
-	dst.B64_127 ^= negMask
-	dst.B0_63, c = bits.Add64(dst.B0_63, neg, 0)
-	dst.B64_127, _ = bits.Add64(dst.B64_127, 0, c)
+	d128Negate(dst, neg)
 	return nil
 }
 
@@ -1665,12 +1668,8 @@ func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj i
 	}
 	// Try fast path: small scale, 64-bit divisor.
 	if canInline {
-		signyU := y.B64_127 >> 63
-		negMaskY := -signyU
-		absY := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
-		var cY uint64
-		absY.B0_63, cY = bits.Add64(absY.B0_63, signyU, 0)
-		absY.B64_127, _ = bits.Add64(absY.B64_127, 0, cY)
+		absY := y
+		signyU := d128Abs(&absY)
 		if absY.B64_127 == 0 {
 			if d128DivInline(x, absY.B0_63, signyU, scaleFactor, dst) {
 				return nil
@@ -1692,21 +1691,9 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		return nil
 	}
 
-	signxU := x.B64_127 >> 63
-	signyU := y.B64_127 >> 63
+	signxU := d128Abs(&x)
+	signyU := d128Abs(&y)
 	neg := signxU ^ signyU
-	// Branchless absolute values.
-	negMaskX := -signxU
-	x.B0_63 ^= negMaskX
-	x.B64_127 ^= negMaskX
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, signxU, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
-	negMaskY := -signyU
-	y.B0_63 ^= negMaskY
-	y.B64_127 ^= negMaskY
-	y.B0_63, c = bits.Add64(y.B0_63, signyU, 0)
-	y.B64_127, _ = bits.Add64(y.B64_127, 0, c)
 
 	// Inline scale-up: multiply unsigned x by 10^scaleAdj.
 	z := x
@@ -1722,11 +1709,7 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 		}
 		z = types.Decimal128{B0_63: x2.B0_63, B64_127: x2.B64_127}
-		negMask := -neg
-		z.B0_63 ^= negMask
-		z.B64_127 ^= negMask
-		z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
-		z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
+		d128Negate(&z, neg)
 		*dst = z
 		return nil
 	}
@@ -1737,11 +1720,7 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 	if err != nil {
 		return err
 	}
-	negMask := -neg
-	z.B0_63 ^= negMask
-	z.B64_127 ^= negMask
-	z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
-	z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
+	d128Negate(&z, neg)
 	*dst = z
 	return nil
 }
@@ -1753,14 +1732,7 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	scaleFactor uint64, dst *types.Decimal128) bool {
 
-	// Branchless absolute value of x.
-	signx := x.B64_127 >> 63
-	negMask := -signx
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, signx, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	signx := d128Abs(&x)
 
 	// Inline Scale: multiply |x| by scaleFactor (a uint64 power of 10).
 	// This is Mul128 with y = {scaleFactor, 0}, but without error allocation.
@@ -1791,11 +1763,8 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	}
 
 	// Branchless sign restore.
-	neg := signx ^ signy
-	negMaskR := -neg
-	z := types.Decimal128{B0_63: zLo ^ negMaskR, B64_127: zHi ^ negMaskR}
-	z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
-	z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
+	z := types.Decimal128{B0_63: zLo, B64_127: zHi}
+	d128Negate(&z, signx^signy)
 	*dst = z
 	return true
 }
@@ -1960,20 +1929,10 @@ func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, should
 // d128ModOne computes x mod y for signed Decimal128 values (same scale).
 // Result has the sign of x (Go % semantics).
 func d128ModOne(x, y types.Decimal128) types.Decimal128 {
-	// Branchless absolute value of x.
-	signx := x.B64_127 >> 63
-	negMaskX := -signx
-	ax := types.Decimal128{B0_63: x.B0_63 ^ negMaskX, B64_127: x.B64_127 ^ negMaskX}
-	var c uint64
-	ax.B0_63, c = bits.Add64(ax.B0_63, signx, 0)
-	ax.B64_127, _ = bits.Add64(ax.B64_127, 0, c)
-
-	// Branchless absolute value of y.
-	signY := y.B64_127 >> 63
-	negMaskY := -signY
-	ay := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
-	ay.B0_63, c = bits.Add64(ay.B0_63, signY, 0)
-	ay.B64_127, _ = bits.Add64(ay.B64_127, 0, c)
+	ax := x
+	signx := d128Abs(&ax)
+	ay := y
+	d128Abs(&ay)
 
 	// Inline mod: if ay fits in 64 bits, use efficient 2-div approach.
 	var r types.Decimal128
@@ -1986,10 +1945,7 @@ func d128ModOne(x, y types.Decimal128) types.Decimal128 {
 	}
 
 	// Restore x's sign.
-	r.B0_63 ^= negMaskX
-	r.B64_127 ^= negMaskX
-	r.B0_63, c = bits.Add64(r.B0_63, signx, 0)
-	r.B64_127, _ = bits.Add64(r.B64_127, 0, c)
+	d128Negate(&r, signx)
 	return r
 }
 
@@ -1998,18 +1954,10 @@ func d128ModOne(x, y types.Decimal128) types.Decimal128 {
 // Branchless abs + inline scale eliminates ~5 branches vs generic .Mod().
 // Returns (result, ok). ok=false only on D128 scaling overflow (rare).
 func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.Decimal128, bool) {
-	signx := x.B64_127 >> 63
-	negMaskX := -signx
-	ax := types.Decimal128{B0_63: x.B0_63 ^ negMaskX, B64_127: x.B64_127 ^ negMaskX}
-	var c uint64
-	ax.B0_63, c = bits.Add64(ax.B0_63, signx, 0)
-	ax.B64_127, _ = bits.Add64(ax.B64_127, 0, c)
-
-	signy := y.B64_127 >> 63
-	negMaskY := -signy
-	ay := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
-	ay.B0_63, c = bits.Add64(ay.B0_63, signy, 0)
-	ay.B64_127, _ = bits.Add64(ay.B64_127, 0, c)
+	ax := x
+	signx := d128Abs(&ax)
+	ay := y
+	d128Abs(&ay)
 
 	if !d128MulPow10(&ax, scaleAx) || !d128MulPow10(&ay, scaleAy) {
 		return types.Decimal128{}, false
@@ -2024,10 +1972,7 @@ func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.D
 		r, _ = ax.Mod128(ay)
 	}
 
-	r.B0_63 ^= negMaskX
-	r.B64_127 ^= negMaskX
-	r.B0_63, c = bits.Add64(r.B0_63, signx, 0)
-	r.B64_127, _ = bits.Add64(r.B64_127, 0, c)
+	d128Negate(&r, signx)
 	return r, true
 }
 
@@ -2066,13 +2011,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 		if hasNull && bmp.Contains(uint64(i)) {
 			continue
 		}
-		a, b := v1[i], v2[i]
-		if len1 == 1 {
-			a = v1[0]
-		}
-		if len2 == 1 {
-			b = v2[0]
-		}
+		a, b := operandsAt(v1, v2, i)
 		if b.B0_63 == 0 && b.B64_127 == 0 {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
@@ -2125,37 +2064,24 @@ func d256MulPow10(x *types.Decimal256, n int32) bool {
 // d256ScaleUp scales a signed D256 up by 10^n. Branchless sign handling, in-place.
 // Returns false on overflow (x may be corrupted; callers use original for error msg).
 func d256ScaleUp(x *types.Decimal256, n int32) bool {
-	sign := x.B192_255 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	sign := d256Abs(x)
 	ok := d256MulPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	d256Negate(x, sign)
 	return ok
 }
 
 // d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
-// n must be in [0, 38]. Branchless: always two stages via balanced split.
-// n=0 naturally divides by 1 twice (no-op).
+// n must be >= 1. Uses loop for n > 19 (same approach as d256MulPow10).
 func d256DivPow10(x *types.Decimal256, n int32) {
-	n1 := n >> 1
-	n2 := n - n1
+	for n > 19 {
+		d256DivPow10Once(x, types.Pow10[19])
+		n -= 19
+	}
+	d256DivPow10Once(x, types.Pow10[n])
+}
 
-	d := types.Pow10[n1]
+// d256DivPow10Once divides unsigned D256 x by d in-place with round-half-up.
+func d256DivPow10Once(x *types.Decimal256, d uint64) {
 	var rem uint64
 	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
 	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
@@ -2170,43 +2096,13 @@ func d256DivPow10(x *types.Decimal256, n int32) {
 	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
 	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
 	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-
-	d = types.Pow10[n2]
-	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
-	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
-	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-	dblLo, dblHi = bits.Add64(rem, rem, 0)
-	_, borrow = bits.Sub64(dblLo, d, 0)
-	round = (1 - borrow) | dblHi
-	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
 }
 
 // d256ScaleDown divides a signed D256 by 10^n with round-half-up. Branchless, in-place.
 func d256ScaleDown(x *types.Decimal256, n int32) {
-	sign := x.B192_255 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	sign := d256Abs(x)
 	d256DivPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	d256Negate(x, sign)
 }
 
 // ---- Decimal64 add/sub ----
@@ -2707,29 +2603,12 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 // d256MulInline performs a single D256 multiply with inlined schoolbook 4×4 cross-product.
 // Uses a single overflow flag instead of per-branch error returns.
 func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scale1, scale2 int32) error {
-	signxU := x.B192_255 >> 63
-	signyU := y.B192_255 >> 63
-	// Branchless absolute value for x.
-	negMaskX := -signxU
-	x0 := x.B0_63 ^ negMaskX
-	x1 := x.B64_127 ^ negMaskX
-	x2 := x.B128_191 ^ negMaskX
-	x3 := x.B192_255 ^ negMaskX
-	var cn uint64
-	x0, cn = bits.Add64(x0, signxU, 0)
-	x1, cn = bits.Add64(x1, 0, cn)
-	x2, cn = bits.Add64(x2, 0, cn)
-	x3, _ = bits.Add64(x3, 0, cn)
-	// Branchless absolute value for y.
-	negMaskY := -signyU
-	y0 := y.B0_63 ^ negMaskY
-	y1 := y.B64_127 ^ negMaskY
-	y2 := y.B128_191 ^ negMaskY
-	y3 := y.B192_255 ^ negMaskY
-	y0, cn = bits.Add64(y0, signyU, 0)
-	y1, cn = bits.Add64(y1, 0, cn)
-	y2, cn = bits.Add64(y2, 0, cn)
-	y3, _ = bits.Add64(y3, 0, cn)
+	xc := *x
+	signxU := d256Abs(&xc)
+	yc := *y
+	signyU := d256Abs(&yc)
+	x0, x1, x2, x3 := xc.B0_63, xc.B64_127, xc.B128_191, xc.B192_255
+	y0, y1, y2, y3 := yc.B0_63, yc.B64_127, yc.B128_191, yc.B192_255
 
 	// Early overflow: if both operands have high limbs set, product can't fit.
 	if (x3 != 0 && (y3|y2|y1) != 0) || (x2 != 0 && (y3|y2) != 0) || (x1 != 0 && y3 != 0) {
@@ -2788,16 +2667,7 @@ func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scale1, scale2
 	}
 
 	z := types.Decimal256{B0_63: z0, B64_127: z1, B128_191: z2, B192_255: z3}
-	neg := signxU ^ signyU
-	negMask := -neg
-	z.B0_63 ^= negMask
-	z.B64_127 ^= negMask
-	z.B128_191 ^= negMask
-	z.B192_255 ^= negMask
-	z.B0_63, cn = bits.Add64(z.B0_63, neg, 0)
-	z.B64_127, cn = bits.Add64(z.B64_127, 0, cn)
-	z.B128_191, cn = bits.Add64(z.B128_191, 0, cn)
-	z.B192_255, _ = bits.Add64(z.B192_255, 0, cn)
+	d256Negate(&z, signxU^signyU)
 	*dst = z
 	return nil
 }
