@@ -5460,7 +5460,7 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"LINESTRING(0 0,2 0)"},
@@ -5469,7 +5469,7 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StContains)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5590,6 +5590,41 @@ func TestStContainsWithPolygonHolePolygons(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStContainsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection contains point on member line interior",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "collection contains collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not contain uncovered member",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryContains(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
 func initStWithinTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5674,7 +5709,7 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(5 5)"},
@@ -5683,7 +5718,7 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StWithin)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5802,6 +5837,41 @@ func TestStWithinWithPolygonHolePolygons(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestStWithinWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "point within collection member line",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			want:  true,
+		},
+		{
+			name:  "collection within collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not within when one member is outside",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryWithin(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func initStIntersectsTestCase() []tcTemp {
@@ -6932,7 +7002,7 @@ func TestStCoversRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"LINESTRING(0 0,2 0)"},
@@ -6941,7 +7011,7 @@ func TestStCoversRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCovers)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_COVERS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -7061,6 +7131,41 @@ func TestStCoversWithPolygonHolePolygons(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStCoversWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection covers point on member line",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "collection covers collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not cover uncovered member",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCovers(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
 func initStCoveredByTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -7141,7 +7246,7 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(0 0)"},
@@ -7150,7 +7255,7 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCoveredBy)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_COVEREDBY only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -7270,6 +7375,41 @@ func TestStCoveredByWithPolygonHolePolygons(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStCoveredByWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "point covered by collection member line",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			want:  true,
+		},
+		{
+			name:  "collection covered by collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not covered by when one member is outside",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCoveredBy(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	boolTests := []struct {
 		name  string
@@ -7282,15 +7422,15 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "contains",
 			fn:    StContains,
 			label: "ST_CONTAINS",
-			left:  "SRID=4326;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-			right: "SRID=3857;MULTIPOINT((0.5 0.5),(4.5 1))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(3 0)",
 		},
 		{
 			name:  "within",
 			fn:    StWithin,
 			label: "ST_WITHIN",
-			left:  "SRID=4326;MULTIPOINT((0.5 0.5),(4.5 1))",
-			right: "SRID=3857;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			left:  "SRID=4326;POINT(3 0)",
+			right: "SRID=3857;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
 		},
 		{
 			name:  "intersects",
@@ -7338,15 +7478,15 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "covers",
 			fn:    StCovers,
 			label: "ST_COVERS",
-			left:  "SRID=4326;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-			right: "SRID=3857;MULTIPOINT((0 0),(4.5 1))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(3 0)",
 		},
 		{
 			name:  "coveredby",
 			fn:    StCoveredBy,
 			label: "ST_COVEREDBY",
-			left:  "SRID=4326;MULTIPOINT((0 0),(4.5 1))",
-			right: "SRID=3857;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			left:  "SRID=4326;POINT(3 0)",
+			right: "SRID=3857;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
 		},
 	}
 

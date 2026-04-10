@@ -25,8 +25,9 @@ select st_contains(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0.5 0),(5 0))')) as contains_multiline_multipoint;
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))')) as contains_multipolygon_multipoint;
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(5 0))')) as contains_multiline_multipoint_boundary;
--- @regex("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs",true)
-select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)'));
+select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as contains_geometrycollection_point;
+select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))')) as contains_geometrycollection_collection;
+select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))')) as contains_geometrycollection_collection_gap;
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)')) as contains_polygon_hole_point_inside_shell;
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1.5 1.5)')) as contains_polygon_hole_point_inside_hole;
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)')) as contains_polygon_hole_line_inside_shell;

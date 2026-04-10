@@ -73,9 +73,15 @@ select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(4.5 1))'), st_geomfromtex
 select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(3 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as coveredby_multipoint_multiline_gap;
 ➤ coveredby_multipoint_multiline_gap[-7,1,0]  𝄀
 0
-select st_coveredby(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)'));
--- @regex("ST_COVEREDBY only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
-invalid input: ST_COVEREDBY only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_coveredby(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_point_geometrycollection;
+➤ coveredby_point_geometrycollection[-7,1,0]  𝄀
+1
+select st_coveredby(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_geometrycollection_geometrycollection;
+➤ coveredby_geometrycollection_geometrycollection[-7,1,0]  𝄀
+1
+select st_coveredby(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_geometrycollection_geometrycollection_gap;
+➤ coveredby_geometrycollection_geometrycollection_gap[-7,1,0]  𝄀
+0
 select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_shell;
 ➤ coveredby_point_polygon_hole_inside_shell[-7,1,0]  𝄀
 1

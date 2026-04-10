@@ -49,10 +49,10 @@ invalid input: Binary geometry function ST_DISTANCE given two geometries of diff
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(3 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
-select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))', 3857));
+select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_CONTAINS given two geometries of different srids: 4326 and 3857, which should have been identical.
-select st_within(st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))', 4326), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 3857));
+select st_within(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_WITHIN given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
@@ -73,10 +73,10 @@ invalid input: Binary geometry function ST_OVERLAPS given two geometries of diff
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_EQUALS given two geometries of different srids: 4326 and 3857, which should have been identical.
-select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTIPOINT((0 0),(4.5 1))', 3857));
+select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_COVERS given two geometries of different srids: 4326 and 3857, which should have been identical.
-select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(4.5 1))', 4326), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 3857));
+select st_coveredby(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_COVEREDBY given two geometries of different srids: 4326 and 3857, which should have been identical.
 create table geo_srid_attr_bad(a int srid 4326);

@@ -33,9 +33,9 @@ select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3
 -- @regex("different srids",true)
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(3 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
 -- @regex("different srids",true)
-select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))', 3857));
+select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
 -- @regex("different srids",true)
-select st_within(st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))', 4326), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 3857));
+select st_within(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
 -- @regex("different srids",true)
 select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
 -- @regex("different srids",true)
@@ -49,9 +49,9 @@ select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfrom
 -- @regex("different srids",true)
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 3857));
 -- @regex("different srids",true)
-select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTIPOINT((0 0),(4.5 1))', 3857));
+select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
 -- @regex("different srids",true)
-select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(4.5 1))', 4326), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 3857));
+select st_coveredby(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
 
 -- @regex("SRID is only supported for GEOMETRY columns",true)
 create table geo_srid_attr_bad(a int srid 4326);
