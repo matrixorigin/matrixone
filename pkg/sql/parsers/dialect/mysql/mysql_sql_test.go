@@ -3844,3 +3844,40 @@ func TestSpatialColumnTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (a int srid 4326)",
+			output: "create table t (a int srid 4326)",
+		},
+		{
+			input:  "create table t (a varchar(20) srid 4326)",
+			output: "create table t (a varchar(20) srid 4326)",
+		},
+		{
+			input:  "create table t (a decimal(10,2) srid 4326)",
+			output: "create table t (a decimal(10, 2) srid 4326)",
+		},
+		{
+			input:  "alter table t add column a int srid 4326",
+			output: "alter table t add column a int srid 4326",
+		},
+		{
+			input:  "alter table t modify column a int srid 4326",
+			output: "alter table t modify column a int srid 4326",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}

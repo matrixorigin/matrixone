@@ -62,7 +62,7 @@ func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
 	}{
 		{
 			name: "add non-geometry srid column",
-			sql:  "alter table t1 add column c int srid 4326;",
+			sql:  "alter table t1 add column d int srid 4326;",
 		},
 		{
 			name: "modify non-geometry srid column",
