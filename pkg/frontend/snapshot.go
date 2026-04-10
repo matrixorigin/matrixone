@@ -1146,6 +1146,13 @@ func restoreToDatabaseOrTable(
 		}
 	}
 
+	// For TABLE level restore (restoreToTbl=true), skip master check because:
+	// 1. User explicitly specifies which table to restore
+	// 2. If the table is referenced by other tables that were restored earlier in this session,
+	//    the master check would incorrectly block the restore
+	// For DATABASE level restore, also skip master check since all tables are being restored together
+	skipMasterCheck := true
+
 	for _, tblInfo := range tableInfos {
 		key := genKey(dbName, tblInfo.tblName)
 
@@ -1165,7 +1172,7 @@ func restoreToDatabaseOrTable(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, skipMasterCheck); err != nil {
 			return
 		}
 	}
@@ -1217,7 +1224,8 @@ func restoreSystemDatabase(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		// Skip master check for system tables - they are restored as part of the system database
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, true); err != nil {
 			return
 		}
 	}
@@ -1287,13 +1295,19 @@ func restoreTablesWithFk(
 	snapshotTs int64) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
+	// Tables in fkTableMap are being restored as a group in topological order (parents first,
+	// then children). We skip master check for all of them because:
+	// 1. They are part of the same restoration task
+	// 2. Any FK references between them will be properly re-established
+	// 3. References from tables outside fkTableMap will be handled by those tables' restore
+
 	// recreate tables as topo order
 	for _, key := range sortedFkTbls {
 		// if tblInfo is nil, means that table is not in this restoration task, ignore
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshotTs))
-			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, true); err != nil {
 				return
 			}
 		}
@@ -1424,6 +1438,7 @@ func recreateTable(
 	tblInfo *tableInfo,
 	toAccountId uint32,
 	snapshotTs int64,
+	skipMasterCheck bool,
 ) (err error) {
 
 	getLogger(sid).Debug(
@@ -1437,12 +1452,17 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	var isMasterTable bool
-	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
-	if isMasterTable {
-		// skip restore the table which is master table
-		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
-		return
+	if !skipMasterCheck {
+		var isMasterTable bool
+		isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+		if err != nil {
+			return
+		}
+		if isMasterTable {
+			// skip restore the table which is master table
+			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
+			return
+		}
 	}
 
 	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
@@ -1467,12 +1487,18 @@ func recreateTable(
 		}
 	}
 
+	// Use a context with IgnoreForeignKey=true for clone operations.
+	// This skips FK validation during restore, as FK tables are already restored
+	// in topological order by restoreTablesWithFk(). Without this, Resolve() can
+	// fail with ExpectedEOB when the database was drop+recreated in the same transaction.
+	cloneCtx := context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
+
 	if curAccountId == toAccountId {
 		// insert data
 		insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
-		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
-		if err = bh.Exec(ctx, insertIntoSql); err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
+		if err = bh.Exec(cloneCtx, insertIntoSql); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
 				err = nil
 			} else {
@@ -1483,8 +1509,8 @@ func recreateTable(
 	} else {
 		insertIntoSql := fmt.Sprintf(restoreTableDataByNameFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
 		beginTime := time.Now()
-		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
-		if err = bh.ExecRestore(ctx, insertIntoSql, curAccountId, toAccountId); err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
+		if err = bh.ExecRestore(cloneCtx, insertIntoSql, curAccountId, toAccountId); err != nil {
 			return
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))

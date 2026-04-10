@@ -4605,6 +4605,17 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
+		// If IgnoreForeignKey is set (e.g., during snapshot restore), skip FK validation.
+		// This handles the case where Resolve() fails due to catalog cache visibility issues
+		// after database drop+recreate in the same transaction.
+		enabled, checkErr := IsForeignKeyChecksEnabled(ctx)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if !enabled {
+			fkData.ForwardRefer = true
+			return &fkData, nil
+		}
 		return nil, err
 	}
 	if parentTableDef == nil {

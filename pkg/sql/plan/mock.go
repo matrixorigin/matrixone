@@ -53,6 +53,9 @@ type MockCompilerContext struct {
 	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
 	ResolveAccountIdsFunc func([]string) ([]uint32, error)
 	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveWithErrorFunc  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
+	DefaultDatabaseFunc   func() string
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -102,6 +105,10 @@ func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	// Check if there's a custom resolver
+	if m.ResolveVariableFunc != nil {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
 	vars := make(map[string]interface{})
 	vars["str_var"] = "str"
 	vars["int_var"] = 20
@@ -1300,6 +1307,9 @@ func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot *Snapshot) (
 }
 
 func (m *MockCompilerContext) DefaultDatabase() string {
+	if m.DefaultDatabaseFunc != nil {
+		return m.DefaultDatabaseFunc()
+	}
 	return "tpch"
 }
 
@@ -1312,6 +1322,10 @@ func (m *MockCompilerContext) GetUserName() string {
 }
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	// Check if there's a custom resolver that returns errors
+	if m.ResolveWithErrorFunc != nil {
+		return m.ResolveWithErrorFunc(dbName, tableName, snapshot)
+	}
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
