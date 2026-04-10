@@ -494,7 +494,7 @@ func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
-	assert.Less(t, time.Since(start), defaultWaitTimeOnRetryBackendSend)
+	assert.Less(t, time.Since(start), 2*defaultWaitTimeOnRetryBackendSend)
 }
 
 func TestSendReturnsBackendErrorWhenContextCanceledDuringBackendRetryWait(t *testing.T) {
@@ -520,7 +520,7 @@ func TestSendReturnsBackendErrorWhenContextCanceledDuringBackendRetryWait(t *tes
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	time.AfterFunc(20*time.Millisecond, cancel)
+	time.AfterFunc(defaultWaitTimeOnRetryBackendSend+20*time.Millisecond, cancel)
 
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
@@ -540,7 +540,7 @@ func TestSendReturnsBackendErrorWhenContextCanceledDuringBackendRetryWait(t *tes
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
-	assert.Less(t, time.Since(start), defaultWaitTimeOnRetryBackendSend)
+	assert.Less(t, time.Since(start), 2*defaultWaitTimeOnRetryBackendSend)
 }
 
 func TestSendWithTxnUnknown(t *testing.T) {

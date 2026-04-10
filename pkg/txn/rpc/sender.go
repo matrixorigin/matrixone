@@ -98,6 +98,10 @@ func NewSender(
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
 		morpc.WithBackendStreamBufferSize(10000),
 		morpc.WithBackendReadTimeout(time.Second*30))
+	s.cfg.ClientOptions = append(s.cfg.ClientOptions,
+		// Bound morpc's initial backend auto-create wait so sender-side retry budget
+		// can stop broken TN/backend sends in finite time.
+		morpc.WithClientAutoCreateWaitTimeout(getBackendAutoCreateWaitTimeout()))
 	client, err := s.cfg.NewClient(
 		s.rt.ServiceUUID(),
 		"txn-client",
@@ -268,6 +272,22 @@ func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, 
 		return remaining, true
 	}
 	return defaultWaitTimeOnRetryBackendSend, true
+}
+
+func getBackendAutoCreateWaitTimeout() time.Duration {
+	if defaultWaitTimeOnRetryBackendSend <= 0 {
+		if defaultMaxWaitTimeOnRetryBackendSend > 0 {
+			return defaultMaxWaitTimeOnRetryBackendSend
+		}
+		return time.Millisecond
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	if defaultWaitTimeOnRetryBackendSend < defaultMaxWaitTimeOnRetryBackendSend {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	return defaultMaxWaitTimeOnRetryBackendSend
 }
 
 func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
