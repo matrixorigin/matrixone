@@ -1808,8 +1808,9 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 		if crossHi != 0 {
 			return false // overflow
 		}
-		zHi += crossLo
-		if zHi>>63 != 0 {
+		var carry uint64
+		zHi, carry = bits.Add64(zHi, crossLo, 0)
+		if carry != 0 || zHi>>63 != 0 {
 			return false // overflow (result must be positive D128)
 		}
 	}

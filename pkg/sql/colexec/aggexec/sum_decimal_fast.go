@@ -178,14 +178,12 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				xcnt := 0
 				err := exec.state[i].iter(uint16(j), func(k []byte) error {
 					ptr := util.UnsafeFromBytes[types.Decimal64](k[kAggArgPrefixSz:])
 					raw := *ptr
 					hi := uint64(int64(raw) >> 63)
 					val := types.Decimal128{B0_63: uint64(raw), B64_127: hi}
 					sum = sum.Add128Unchecked(val)
-					xcnt++
 					return nil
 				})
 				if err != nil {
@@ -423,7 +421,6 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				xcnt := 0
 				err := exec.state[i].iter(uint16(j), func(k []byte) error {
 					ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
 					if exec.overflowCheck {
@@ -435,7 +432,6 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					} else {
 						sum = sum.Add128Unchecked(*ptr)
 					}
-					xcnt++
 					return nil
 				})
 				if err != nil {
