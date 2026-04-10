@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -25,7 +24,9 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2969,7 +2970,7 @@ func Test_restoreViews(t *testing.T) {
 			ctx, ses, bh, "sp01", nil, viewMap, 0, 0)
 		require.NoError(t, err)
 
-		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews)
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		assert.NoError(t, err)
 
 		viewMap = map[string]*tableInfo{
@@ -2987,6 +2988,71 @@ func Test_restoreViews(t *testing.T) {
 		//
 		//err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews)
 		//assert.Error(t, err)
+	})
+}
+
+func Test_restoreViewsSkipMissingDependency(t *testing.T) {
+	convey.Convey("restoreViews skips missing dependency for clone", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		missingSQL := "create view skip_v as select * from missing_t"
+		okSQL := "create view ok_v as select 1"
+		bh.sql2err[missingSQL] = moerr.NewNoSuchTable(ctx, "db01", "missing_t")
+
+		viewMap := map[string]*tableInfo{
+			genKey("db01", "skip_v"): {
+				dbName:    "db01",
+				tblName:   "skip_v",
+				typ:       "VIEW",
+				createSql: missingSQL,
+			},
+			genKey("db01", "ok_v"): {
+				dbName:    "db01",
+				tblName:   "ok_v",
+				typ:       "VIEW",
+				createSql: okSQL,
+			},
+		}
+		sortedViews := []string{genKey("db01", "skip_v"), genKey("db01", "ok_v")}
+
+		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, true)
+		require.NoError(t, err)
+		require.Contains(t, bh.executedSQLs, okSQL)
+
+		bh.executedSQLs = nil
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+		require.Error(t, err)
+		require.NotContains(t, bh.executedSQLs, okSQL)
 	})
 }
 

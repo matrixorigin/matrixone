@@ -7589,8 +7589,10 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 }
 
 type backgroundExecTest struct {
-	currentSql string
-	sql2result map[string]ExecResult
+	currentSql   string
+	sql2result   map[string]ExecResult
+	sql2err      map[string]error
+	executedSQLs []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -7610,6 +7612,7 @@ func (bt *backgroundExecTest) ClearExecResultBatches() {
 
 func (bt *backgroundExecTest) init() {
 	bt.sql2result = make(map[string]ExecResult)
+	bt.sql2err = make(map[string]error)
 }
 
 func (bt *backgroundExecTest) Close() {
@@ -7625,12 +7628,14 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
-	return nil
+	bt.executedSQLs = append(bt.executedSQLs, s)
+	return bt.sql2err[s]
 }
 
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
 	bt.currentSql = s
-	return nil
+	bt.executedSQLs = append(bt.executedSQLs, s)
+	return bt.sql2err[s]
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
