@@ -7939,13 +7939,13 @@ func geometryDistance(left, right []byte) (float64, error) {
 			if err != nil {
 				return 0, err
 			}
-			return pointDistanceToLineString(leftPoint, rightLine), nil
+			return pointDistanceToLineString(leftPoint, rightLine)
 		case "POLYGON":
 			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return pointDistanceToPolygon(leftPoint, rightPolygon), nil
+			return pointDistanceToPolygon(leftPoint, rightPolygon)
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -7960,19 +7960,19 @@ func geometryDistance(left, right []byte) (float64, error) {
 			if err != nil {
 				return 0, err
 			}
-			return pointDistanceToLineString(geometryPoint2D{x: x, y: y}, leftLine), nil
+			return pointDistanceToLineString(geometryPoint2D{x: x, y: y}, leftLine)
 		case "LINESTRING":
 			rightLine, err := lineStringGeometryPointsFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return lineStringDistanceToLineString(leftLine, rightLine), nil
+			return lineStringDistanceToLineString(leftLine, rightLine)
 		case "POLYGON":
 			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return lineStringDistanceToPolygon(leftLine, rightPolygon), nil
+			return lineStringDistanceToPolygon(leftLine, rightPolygon)
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -7987,19 +7987,19 @@ func geometryDistance(left, right []byte) (float64, error) {
 			if err != nil {
 				return 0, err
 			}
-			return pointDistanceToPolygon(geometryPoint2D{x: x, y: y}, leftPolygon), nil
+			return pointDistanceToPolygon(geometryPoint2D{x: x, y: y}, leftPolygon)
 		case "LINESTRING":
 			rightLine, err := lineStringGeometryPointsFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return lineStringDistanceToPolygon(rightLine, leftPolygon), nil
+			return lineStringDistanceToPolygon(rightLine, leftPolygon)
 		case "POLYGON":
 			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return polygonDistanceToPolygon(leftPolygon, rightPolygon), nil
+			return polygonDistanceToPolygon(leftPolygon, rightPolygon)
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -8008,27 +8008,39 @@ func geometryDistance(left, right []byte) (float64, error) {
 	}
 }
 
-func pointDistanceToLineString(point geometryPoint2D, line []geometryPoint2D) float64 {
+func pointDistanceToLineString(point geometryPoint2D, line []geometryPoint2D) (float64, error) {
+	if len(line) < 2 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
 	minDistance := pointDistanceToLineSegment(point, line[0], line[1])
 	for i := 1; i < len(line)-1; i++ {
 		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, line[i], line[i+1]))
 	}
-	return minDistance
+	return minDistance, nil
 }
 
-func lineStringDistanceToLineString(left, right []geometryPoint2D) float64 {
+func lineStringDistanceToLineString(left, right []geometryPoint2D) (float64, error) {
+	if len(left) < 2 || len(right) < 2 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
 	minDistance := lineSegmentDistance(left[0], left[1], right[0], right[1])
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
 			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[i+1], right[j], right[j+1]))
 		}
 	}
-	return minDistance
+	return minDistance, nil
 }
 
-func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) float64 {
+func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) (float64, error) {
+	if len(line) < 2 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
+	}
+	if len(polygon) < 3 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
 	if lineStringIntersectsPolygon(line, polygon) {
-		return 0
+		return 0, nil
 	}
 
 	minDistance := lineSegmentDistance(line[0], line[1], polygon[0], polygon[1])
@@ -8038,12 +8050,15 @@ func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) float64 {
 			minDistance = math.Min(minDistance, lineSegmentDistance(line[i], line[i+1], polygon[j], polygon[next]))
 		}
 	}
-	return minDistance
+	return minDistance, nil
 }
 
-func polygonDistanceToPolygon(left, right []geometryPoint2D) float64 {
+func polygonDistanceToPolygon(left, right []geometryPoint2D) (float64, error) {
+	if len(left) < 3 || len(right) < 3 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
 	if polygonIntersectsPolygon(left, right) {
-		return 0
+		return 0, nil
 	}
 
 	minDistance := lineSegmentDistance(left[0], left[1], right[0], right[1])
@@ -8054,12 +8069,15 @@ func polygonDistanceToPolygon(left, right []geometryPoint2D) float64 {
 			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[leftNext], right[j], right[rightNext]))
 		}
 	}
-	return minDistance
+	return minDistance, nil
 }
 
-func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) float64 {
+func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) (float64, error) {
+	if len(polygon) < 3 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
 	if pointIntersectsPolygon(point, polygon) {
-		return 0
+		return 0, nil
 	}
 
 	minDistance := pointDistanceToLineSegment(point, polygon[0], polygon[1])
@@ -8067,7 +8085,7 @@ func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) fl
 		next := (i + 1) % len(polygon)
 		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, polygon[i], polygon[next]))
 	}
-	return minDistance
+	return minDistance, nil
 }
 
 func pointDistanceToLineSegment(point, start, end geometryPoint2D) float64 {

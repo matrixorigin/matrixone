@@ -1,0 +1,14 @@
+select st_dimension(
+st_geomfromtext(
+concat(repeat('GEOMETRYCOLLECTION(', 64), 'POINT(0 0)', repeat(')', 64))
+)
+) as boundary_dimension;
+➤ boundary_dimension[-5,64,0]  𝄀
+0
+select st_dimension(
+st_geomfromtext(
+concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
+)
+);
+-- @regex("geometry collection nesting depth exceeds 64", true)
+invalid input: geometry collection nesting depth exceeds 64

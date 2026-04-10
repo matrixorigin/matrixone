@@ -1001,6 +1001,8 @@ func splitTopLevelGeometryItems(content string) []string {
 	return items
 }
 
+const maxGeometryCollectionNestingDepth = 64
+
 func geometryCountFromPayload(payload []byte) (int64, error) {
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
@@ -1536,6 +1538,10 @@ func dimensionFromPayload(payload []byte) (int64, error) {
 }
 
 func geometryDimensionFromText(wkt string) (int64, error) {
+	return geometryDimensionFromTextWithDepth(wkt, 0)
+}
+
+func geometryDimensionFromTextWithDepth(wkt string, depth int) (int64, error) {
 	isEmpty, err := geometryIsEmpty(functionUtil.QuickStrToBytes(wkt))
 	if err != nil {
 		return 0, err
@@ -1557,6 +1563,9 @@ func geometryDimensionFromText(wkt string) (int64, error) {
 	case "POLYGON", "MULTIPOLYGON":
 		return 2, nil
 	case "GEOMETRYCOLLECTION":
+		if depth >= maxGeometryCollectionNestingDepth {
+			return 0, moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
+		}
 		openIdx := strings.IndexByte(wkt, '(')
 		closeIdx := strings.LastIndexByte(wkt, ')')
 		if openIdx < 0 || closeIdx <= openIdx {
@@ -1569,7 +1578,7 @@ func geometryDimensionFromText(wkt string) (int64, error) {
 		}
 		maxDimension := int64(-1)
 		for _, item := range items {
-			dimension, err := geometryDimensionFromText(strings.TrimSpace(item))
+			dimension, err := geometryDimensionFromTextWithDepth(strings.TrimSpace(item), depth+1)
 			if err != nil {
 				return 0, err
 			}

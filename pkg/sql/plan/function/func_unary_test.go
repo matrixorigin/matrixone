@@ -1872,6 +1872,24 @@ func TestStDimension(t *testing.T) {
 	}
 }
 
+func TestGeometryDimensionFromTextRejectExcessiveCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	dimension, err := geometryDimensionFromText(buildNestedCollection(maxGeometryCollectionNestingDepth))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), dimension)
+
+	_, err = geometryDimensionFromText(buildNestedCollection(maxGeometryCollectionNestingDepth + 1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
 func initStIsSimpleTestCase() []tcTemp {
 	return []tcTemp{
 		{

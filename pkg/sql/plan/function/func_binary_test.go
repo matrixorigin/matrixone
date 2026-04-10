@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -6443,6 +6444,66 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 		require.Contains(t, info, "ST_DISTANCE")
 		require.Contains(t, info, "different srids")
 	})
+}
+
+func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "point to linestring requires two points",
+			run: func() error {
+				_, err := pointDistanceToLineString(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 1, y: 1}})
+				return err
+			},
+		},
+		{
+			name: "linestring to linestring requires two points each",
+			run: func() error {
+				_, err := lineStringDistanceToLineString(
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+					[]geometryPoint2D{{x: 2, y: 2}},
+				)
+				return err
+			},
+		},
+		{
+			name: "point to polygon requires three points",
+			run: func() error {
+				_, err := pointDistanceToPolygon(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}})
+				return err
+			},
+		},
+		{
+			name: "linestring to polygon validates both sides",
+			run: func() error {
+				_, err := lineStringDistanceToPolygon(
+					[]geometryPoint2D{{x: 0, y: 0}},
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+				)
+				return err
+			},
+		},
+		{
+			name: "polygon to polygon requires three points each",
+			run: func() error {
+				_, err := polygonDistanceToPolygon(
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+				)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			require.Error(t, err)
+			require.True(t, strings.Contains(err.Error(), "invalid linestring payload") || strings.Contains(err.Error(), "invalid polygon payload"))
+		})
+	}
 }
 
 // L2 Distance
