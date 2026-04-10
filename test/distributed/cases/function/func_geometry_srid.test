@@ -54,6 +54,14 @@ select st_coveredby(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGO
 -- @regex("SRID is only supported for GEOMETRY columns",true)
 create table geo_srid_attr_bad(a int srid 4326);
 
+drop table if exists geo_srid_attr_alter_bad;
+create table geo_srid_attr_alter_bad(id int primary key, a int);
+-- @regex("SRID is only supported for GEOMETRY columns",true)
+alter table geo_srid_attr_alter_bad add column b int srid 4326;
+-- @regex("SRID is only supported for GEOMETRY columns",true)
+alter table geo_srid_attr_alter_bad modify column a int srid 4326;
+drop table geo_srid_attr_alter_bad;
+
 drop table if exists geo_srid_alter_bad;
 create table geo_srid_alter_bad(g point not null srid 4326);
 -- @regex("currently unsupport change from original geometry SRID 4326 to 0",true)

@@ -79,6 +79,15 @@ invalid input: Binary geometry function ST_COVEREDBY given two geometries of dif
 create table geo_srid_attr_bad(a int srid 4326);
 -- @regex("SRID is only supported for GEOMETRY columns", true)
 invalid input: SRID is only supported for GEOMETRY columns
+drop table if exists geo_srid_attr_alter_bad;
+create table geo_srid_attr_alter_bad(id int primary key, a int);
+alter table geo_srid_attr_alter_bad add column b int srid 4326;
+-- @regex("SRID is only supported for GEOMETRY columns", true)
+invalid input: SRID is only supported for GEOMETRY columns
+alter table geo_srid_attr_alter_bad modify column a int srid 4326;
+-- @regex("SRID is only supported for GEOMETRY columns", true)
+invalid input: SRID is only supported for GEOMETRY columns
+drop table geo_srid_attr_alter_bad;
 drop table if exists geo_srid_alter_bad;
 create table geo_srid_alter_bad(g point not null srid 4326);
 alter table geo_srid_alter_bad modify column g point not null srid 0;

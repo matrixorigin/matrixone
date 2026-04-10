@@ -155,19 +155,29 @@ func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 }
 
 func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {
-	stmt, err := mysql.ParseOne(context.Background(), "create table t (a int srid 4326)", 1)
-	require.NoError(t, err)
+	tests := []string{
+		"create table t (a int srid 4326)",
+		"create table t (a varchar(20) srid 4326)",
+		"create table t (a decimal(10,2) srid 4326)",
+	}
 
-	createTable, ok := stmt.(*tree.CreateTable)
-	require.True(t, ok)
-	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
-	require.True(t, ok)
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
 
-	typ, err := getTypeFromAst(context.Background(), colDef.Type)
-	require.NoError(t, err)
-	err = applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "SRID is only supported for GEOMETRY columns")
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			err = applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "SRID is only supported for GEOMETRY columns")
+		})
+	}
 }
 
 func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {

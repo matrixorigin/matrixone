@@ -53,6 +53,31 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "add non-geometry srid column",
+			sql:  "alter table t1 add column c int srid 4326;",
+		},
+		{
+			name: "modify non-geometry srid column",
+			sql:  "alter table t1 modify column b int srid 4326;",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildSingleStmt(mock, t, tt.sql)
+			assert.ErrorContains(t, err, "SRID is only supported for GEOMETRY columns")
+		})
+	}
+}
+
 func TestBuildNotNullColumnValGeometry(t *testing.T) {
 	tests := []struct {
 		name string
