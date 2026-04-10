@@ -235,7 +235,9 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		}
 		err := buildOutputSchema(ctx, ses, stmt, tblStuff)
 		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Contains(t, err.Error(), "nonexistent")
+		require.Contains(t, err.Error(), "t2")
 	})
 }
 
@@ -281,6 +283,7 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	t.Run("unknown column returns error", func(t *testing.T) {
 		_, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("xxx")}, tblStuff)
 		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		require.Contains(t, err.Error(), "xxx")
 	})
 }

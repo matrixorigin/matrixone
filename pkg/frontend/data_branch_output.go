@@ -172,7 +172,14 @@ func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]
 	for _, col := range columns {
 		idx, ok := nameToIdx[strings.ToLower(string(col))]
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtxf("column %q not found in table", string(col))
+			if tblStuff.tarRel != nil && tblStuff.tarRel.GetTableName() != "" {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"column %q not found in table %q",
+					string(col),
+					tblStuff.tarRel.GetTableName(),
+				)
+			}
+			return nil, moerr.NewInvalidInputNoCtxf("column %q not found", string(col))
 		}
 		if seen[idx] {
 			continue
