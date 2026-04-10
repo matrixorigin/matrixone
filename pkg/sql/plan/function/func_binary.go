@@ -7869,6 +7869,7 @@ type geometryParamInterval struct {
 const (
 	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
 	stEqualsSupportedPairsError         = "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stCrossesSupportedPairsError        = "ST_CROSSES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
 	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
 )
 
@@ -8656,77 +8657,71 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+	if isCrossesSupportedGeometryType(leftType) && isCrossesSupportedGeometryType(rightType) {
 		if err := ensureMatchingGeometrySRID("ST_CROSSES", left, right); err != nil {
 			return false, err
 		}
 	}
+	if !isCrossesSupportedGeometryType(leftType) || !isCrossesSupportedGeometryType(rightType) {
+		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+	}
 
 	switch leftType {
-	case "POINT":
-		x, y, err := parsePointXYFromPayload(left)
+	case "POINT", "MULTIPOINT":
+		if isPolygonGeometryType(rightType) || isPointGeometryType(rightType) {
+			return false, nil
+		}
+		leftPoints, err := pointGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		leftPoint := geometryPoint2D{x: x, y: y}
-		switch rightType {
-		case "POINT", "POLYGON":
-			return false, nil
-		case "LINESTRING":
-			rightLine, err := lineStringGeometryPointsFromPayload(right)
-			if err != nil {
-				return false, err
-			}
-			return pointCrossesLineString(leftPoint, rightLine), nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
-		}
-	case "LINESTRING":
-		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		rightLines, err := lineGeometryItems(right, rightType)
 		if err != nil {
 			return false, err
 		}
-		switch rightType {
-		case "POINT":
-			x, y, err := parsePointXYFromPayload(right)
-			if err != nil {
-				return false, err
-			}
-			return pointCrossesLineString(geometryPoint2D{x: x, y: y}, leftLine), nil
-		case "LINESTRING":
-			rightLine, err := lineStringGeometryPointsFromPayload(right)
-			if err != nil {
-				return false, err
-			}
-			return lineStringCrossesLineString(leftLine, rightLine), nil
-		case "POLYGON":
-			rightPolygon, err := polygonGeometryFromPayload(right)
-			if err != nil {
-				return false, err
-			}
-			return lineStringCrossesPolygonGeometry(leftLine, rightPolygon), nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
+		return pointCollectionCrossesLineCollection(leftPoints, rightLines), nil
+	case "LINESTRING", "MULTILINESTRING":
+		leftLines, err := lineGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
 		}
-	case "POLYGON":
-		switch rightType {
-		case "POINT", "POLYGON":
+		switch {
+		case isPointGeometryType(rightType):
+			rightPoints, err := pointGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			return pointCollectionCrossesLineCollection(rightPoints, leftLines), nil
+		case isLinearGeometryType(rightType):
+			rightLines, err := lineGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			return lineCollectionCrossesLineCollection(leftLines, rightLines), nil
+		case isPolygonGeometryType(rightType):
+			rightPolygons, err := polygonGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			return lineCollectionCrossesPolygonCollection(leftLines, rightPolygons), nil
+		default:
+			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+		}
+	case "POLYGON", "MULTIPOLYGON":
+		if isPointGeometryType(rightType) || isPolygonGeometryType(rightType) {
 			return false, nil
-		case "LINESTRING":
-			leftPolygon, err := polygonGeometryFromPayload(left)
-			if err != nil {
-				return false, err
-			}
-			rightLine, err := lineStringGeometryPointsFromPayload(right)
-			if err != nil {
-				return false, err
-			}
-			return lineStringCrossesPolygonGeometry(rightLine, leftPolygon), nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
+		leftPolygons, err := polygonGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
+		}
+		rightLines, err := lineGeometryItems(right, rightType)
+		if err != nil {
+			return false, err
+		}
+		return lineCollectionCrossesPolygonCollection(rightLines, leftPolygons), nil
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 	}
 }
 
@@ -10029,12 +10024,20 @@ func isTouchesSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
+func isCrossesSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
 func isOverlapsSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
 func isEqualsSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
+func isPointGeometryType(typeName string) bool {
+	return typeName == "POINT" || typeName == "MULTIPOINT"
 }
 
 func isLinearGeometryType(typeName string) bool {
@@ -10102,6 +10105,15 @@ func pointCollectionCoveredByPointCollection(candidate, container []geometryPoin
 		}
 	}
 	return true
+}
+
+func pointCollectionCrossesLineCollection(points []geometryPoint2D, lines [][]geometryPoint2D) bool {
+	for _, point := range points {
+		if pointCrossesLineCollection(point, lines) {
+			return true
+		}
+	}
+	return false
 }
 
 func multiGeometryTouches(left, right []byte, leftType, rightType string) (bool, error) {
@@ -10233,10 +10245,35 @@ func lineCollectionCoveredByLineCollection(candidate, container [][]geometryPoin
 	return true
 }
 
+func lineCollectionCrossesLineCollection(left, right [][]geometryPoint2D) bool {
+	if lineCollectionHasLinearOverlap(left, right) {
+		return false
+	}
+	for _, leftLine := range left {
+		for _, rightLine := range right {
+			if lineStringCrossesLineString(leftLine, rightLine) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func pointIntersectsPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
 	for _, polygon := range polygons {
 		if pointIntersectsPolygonGeometry(point, polygon.shape) {
 			return true
+		}
+	}
+	return false
+}
+
+func lineCollectionCrossesPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
+	for _, line := range lines {
+		for _, polygon := range polygons {
+			if lineStringCrossesPolygonGeometry(line, polygon.shape) {
+				return true
+			}
 		}
 	}
 	return false

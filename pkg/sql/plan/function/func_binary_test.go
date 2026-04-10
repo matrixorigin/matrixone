@@ -6318,8 +6318,16 @@ func initStCrossesTestCase() []tcTemp {
 						"LINESTRING(-1 0,3 0)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;LINESTRING(-1 1,3 1)",
+						"MULTIPOINT((1 0),(3 0))",
+						"LINESTRING(0 0,2 0)",
+						"MULTILINESTRING((0 0,2 2),(3 0,4 0))",
+						"MULTILINESTRING((0 0,2 0),(3 0,4 0))",
+						"LINESTRING(-1 1,3 1)",
+						"MULTILINESTRING((-1 1,3 1),(5 3,6 3))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"POINT(0 0)",
@@ -6337,12 +6345,20 @@ func initStCrossesTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(-1 1,3 1)",
 						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,2 0)",
+						"MULTIPOINT((1 0),(3 0))",
+						"MULTILINESTRING((0 2,2 0),(5 0,6 0))",
+						"LINESTRING(1 0,3 0)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"LINESTRING(-1 1,3 1)",
+						"SRID=4326;MULTILINESTRING((0 2,2 0),(5 0,6 0))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_crosses null",
@@ -6378,7 +6394,7 @@ func TestStCrossesRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
@@ -6387,7 +6403,7 @@ func TestStCrossesRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCrosses)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_CROSSES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 }
 
 func TestStCrossesWithPolygonHoleLines(t *testing.T) {
@@ -7168,8 +7184,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "crosses",
 			fn:    StCrosses,
 			label: "ST_CROSSES",
-			left:  "SRID=4326;LINESTRING(-1 1,3 1)",
-			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			left:  "SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))",
+			right: "SRID=3857;MULTILINESTRING((0 2,2 0),(5 0,6 0))",
 		},
 		{
 			name:  "overlaps",
