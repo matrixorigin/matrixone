@@ -18,5 +18,6 @@ select st_touches(st_geomfromtext(null), st_geomfromtext('LINESTRING(0 0,2 0)'))
 select st_touches(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 0)', 4326)) as touches_point_point_srid;
 -- @regex("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs",true)
 select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
--- @regex("polygons with holes are not supported",true)
-select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
+select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
+select st_touches(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inner_boundary;
+select st_touches(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inside_shell;

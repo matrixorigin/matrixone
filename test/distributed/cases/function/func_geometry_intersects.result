@@ -40,6 +40,9 @@ null
 select st_intersects(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
 -- @regex("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
 invalid input: ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
-select st_intersects(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
--- @regex("polygons with holes are not supported", true)
-invalid input: polygons with holes are not supported
+select st_intersects(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_point_polygon_hole_inside_shell;
+➤ intersects_point_polygon_hole_inside_shell[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_point_polygon_hole_inside_hole;
+➤ intersects_point_polygon_hole_inside_hole[-7,1,0]  𝄀
+0

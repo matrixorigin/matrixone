@@ -5263,6 +5263,30 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs")
 }
 
+func TestStDistanceWithPolygonHoles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(3 3)",
+				"POINT(1.5 1.5)",
+				"POINT(1 1.5)",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0.5, 0}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStContainsTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5360,16 +5384,19 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StContains)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StContains)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStWithinTestCase() []tcTemp {
@@ -5469,16 +5496,19 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StWithin)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StWithin)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStIntersectsTestCase() []tcTemp {
@@ -5572,16 +5602,19 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StIntersects)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StIntersects)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStDisjointTestCase() []tcTemp {
@@ -5669,16 +5702,19 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StDisjoint)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StDisjoint)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStTouchesTestCase() []tcTemp {
@@ -5778,16 +5814,20 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(0 1)"},
-			[]bool{false}),
+			[]string{"POINT(0 1)", "POINT(1 1.5)", "POINT(3 3)"},
+			[]bool{false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StTouches)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StTouches)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStCrossesTestCase() []tcTemp {
@@ -6218,16 +6258,20 @@ func TestStCoversRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)", "POINT(1 1.5)"},
+			[]bool{false, false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StCovers)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StCovers)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func initStCoveredByTestCase() []tcTemp {
@@ -6323,16 +6367,20 @@ func TestStCoveredByRejectInvalidInput(t *testing.T) {
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(3 3)"},
-			[]bool{false}),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)", "POINT(1 1.5)"},
+			[]bool{false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StCoveredBy)
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StCoveredBy)
 	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	require.True(t, succeed, info)
 }
 
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {

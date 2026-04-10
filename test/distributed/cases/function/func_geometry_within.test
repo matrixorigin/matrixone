@@ -17,5 +17,5 @@ select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((
 select st_within(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as within_null;
 -- @regex("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs",true)
 select st_within(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(0 0)'));
--- @regex("polygons with holes are not supported",true)
-select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
+select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_shell;
+select st_within(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_hole;
