@@ -366,15 +366,20 @@ type templateDec interface {
 	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
+type templateDecOut interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | int64
+}
+
 // decimalBatchArith is the batch arithmetic framework for all Decimal types.
 // It passes entire slices to the kernel function for batch processing with
 // minimal per-element overhead.
 //
 // TIn is the input element type, TOut is the output element type.
 // For same-type ops (add/sub): TIn == TOut. For D64×D64→D128 multiply: TIn=D64, TOut=D128.
+// For integer division (DIV): TIn=Decimal, TOut=int64.
 // The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
 // Scale values and null bitmap are provided for kernels that need them.
-func decimalBatchArith[TIn, TOut templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)

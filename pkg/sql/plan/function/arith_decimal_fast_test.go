@@ -2005,3 +2005,123 @@ func BenchmarkD256Div_Generic(b *testing.B) {
 		}
 	}
 }
+
+// ---- IntDiv (DIV operator) benchmarks ----
+
+func BenchmarkD64IntDiv_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64IntDiv(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD64IntDiv_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			d1 := types.Decimal128{B0_63: uint64(xs[i])}
+			if xs[i]>>63 != 0 {
+				d1.B64_127 = ^uint64(0)
+			}
+			d2 := types.Decimal128{B0_63: uint64(ys[i])}
+			r, rScale, _ := d1.Div(d2, 2, 2)
+			if rScale > 0 {
+				r, _ = r.Scale(-rScale)
+			}
+			rs[i], _ = decimal128ToInt64(r)
+		}
+	}
+}
+
+func BenchmarkD128IntDiv_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		// Values representable as int64 after truncation.
+		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128IntDiv(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD128IntDiv_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			r, rScale, _ := xs[i].Div(ys[i], 2, 2)
+			if rScale > 0 {
+				r, _ = r.Scale(-rScale)
+			}
+			rs[i], _ = decimal128ToInt64(r)
+		}
+	}
+}
+
+func BenchmarkD256IntDiv_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		// Values that fit in D128 and produce int64 results.
+		xs[i] = types.Decimal256{B0_63: uint64(rng.Int63())}
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256IntDiv(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD256IntDiv_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal256{B0_63: uint64(rng.Int63())}
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			r, rScale, _ := xs[i].Div(ys[i], 2, 2)
+			if rScale > 0 {
+				r, _ = r.Scale(-rScale)
+			}
+			rs[i], _ = decimal256ToInt64(r)
+		}
+	}
+}

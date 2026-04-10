@@ -20,9 +20,11 @@ package function
 // per-element GetValue/type-assertion/closure-call overhead.
 //
 // Layout:
-//   - Multiply: d64Mul, d128Mul, d256Mul
-//   - Add/Sub:  d64Add/d64Sub, d128Add/d128Sub, d256Add/d256Sub
-//   - Division: d64Div, d128Div, d256Div
+//   - Multiply:    d64Mul, d128Mul, d256Mul
+//   - Add/Sub:     d64Add/d64Sub, d128Add/d128Sub, d256Add/d256Sub
+//   - Division:    d64Div, d128Div, d256Div
+//   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
+//   - Modulo:      d64Mod, d128Mod, d256Mod
 
 import (
 	"math/bits"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func operandsAt[T any](v1, v2 []T, idx int) (T, T) {
@@ -2016,6 +2019,19 @@ func d256DivKernel(shouldError bool) func(v1, v2, rs []types.Decimal256, scale1,
 	}
 }
 
+// d256AllFitD128 checks if ALL elements in a D256 slice fit in a D128 value.
+// A D256 fits in D128 when the upper 128 bits are the sign extension of bit 127.
+// Returns true if the entire batch can use the D128 fast path.
+func d256AllFitD128(vs []types.Decimal256) bool {
+	overflow := uint64(0)
+	for i := range vs {
+		signExt := ^uint64(0) * (vs[i].B64_127 >> 63)
+		overflow |= vs[i].B128_191 ^ signExt
+		overflow |= vs[i].B192_255 ^ signExt
+	}
+	return overflow == 0
+}
+
 func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -2023,8 +2039,34 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
-	isZero := func(d types.Decimal256) bool {
+	isZero256 := func(d types.Decimal256) bool {
 		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
+	}
+
+	// Pre-compute D128 scale factors for fast path.
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	// Pre-scan: if all elements fit in D128, use the fast D128 division path
+	// for the entire batch without per-element fit checks.
+	if d256AllFitD128(v1) && d256AllFitD128(v2) {
+		return d256DivViaD128(v1, v2, rs, scaleAdj, rsnull, shouldError, scale1, scale2, hasNull, bmp)
+	}
+
+	// Slow path: use generic D256 division.
+	divGeneric := func(a, b types.Decimal256, dst *types.Decimal256) error {
+		r, _, err := a.Div(b, scale1, scale2)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+		}
+		*dst = r
+		return nil
 	}
 
 	if len1 == len2 {
@@ -2032,18 +2074,16 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if isZero256(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := v1[i].Div(v2[i], scale1, scale2)
-			if err != nil {
+			if err := divGeneric(v1[i], v2[i], &rs[i]); err != nil {
 				return err
 			}
-			rs[i] = r
 		}
 	} else if len1 == 1 {
 		a := v1[0]
@@ -2051,22 +2091,20 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if isZero256(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := a.Div(v2[i], scale1, scale2)
-			if err != nil {
+			if err := divGeneric(a, v2[i], &rs[i]); err != nil {
 				return err
 			}
-			rs[i] = r
 		}
 	} else {
 		b := v2[0]
-		if isZero(b) {
+		if isZero256(b) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2077,11 +2115,84 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, _, err := v1[i].Div(b, scale1, scale2)
-			if err != nil {
+			if err := divGeneric(v1[i], b, &rs[i]); err != nil {
 				return err
 			}
-			rs[i] = r
+		}
+	}
+	return nil
+}
+
+// d256DivViaD128 runs D256 division entirely through the D128 fast path.
+// Called only after d256AllFitD128 confirms all elements fit.
+func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj int32, rsnull *nulls.Nulls, shouldError bool, scale1, scale2 int32, hasNull bool, bmp *bitmap.Bitmap) error {
+	len1, len2 := len(v1), len(v2)
+
+	d256toD128 := func(d types.Decimal256) types.Decimal128 {
+		return types.Decimal128{B0_63: d.B0_63, B64_127: d.B64_127}
+	}
+	d128toD256 := func(d types.Decimal128) types.Decimal256 {
+		signExt := ^uint64(0) * (d.B64_127 >> 63)
+		return types.Decimal256{B0_63: d.B0_63, B64_127: d.B64_127, B128_191: signExt, B192_255: signExt}
+	}
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if y.B0_63 == 0 && y.B64_127 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			var r128 types.Decimal128
+			if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+				return err
+			}
+			rs[i] = d128toD256(r128)
+		}
+	} else if len1 == 1 {
+		x := d256toD128(v1[0])
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if y.B0_63 == 0 && y.B64_127 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			var r128 types.Decimal128
+			if err := d128DivOne(x, y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+				return err
+			}
+			rs[i] = d128toD256(r128)
+		}
+	} else {
+		y := d256toD128(v2[0])
+		if y.B0_63 == 0 && y.B64_127 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			nulls.AddRange(rsnull, 0, uint64(len1))
+			return nil
+		}
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			var r128 types.Decimal128
+			if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+				return err
+			}
+			rs[i] = d128toD256(r128)
 		}
 	}
 	return nil
@@ -2160,6 +2271,339 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 				return err
 			}
 			rs[i] = r
+		}
+	}
+	return nil
+}
+
+// ---- Integer division (DIV operator) ----
+// Returns int64 results. Uses the same division kernels as / but truncates
+// the fractional part and converts to int64.
+
+// d64IntDivKernel returns a closure matching the decimalBatchArith arithFn
+// signature for Decimal64 → int64 integer division.
+func d64IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d64IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
+	}
+}
+
+// d128IntDivKernel returns a closure for Decimal128 → int64 integer division.
+func d128IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d128IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
+	}
+}
+
+// d256IntDivKernel returns a closure for Decimal256 → int64 integer division.
+func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d256IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
+	}
+}
+
+func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	bmp := rsnull.GetBitmap()
+	hasNull := !rsnull.IsEmpty()
+	// Compute result scale (same as Decimal128.Div).
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	var scaleFactor uint64
+	canInline := scaleAdj >= 0 && scaleAdj <= 19
+	if canInline {
+		scaleFactor = types.Pow10[scaleAdj]
+	}
+
+	d64toD128 := func(v types.Decimal64) types.Decimal128 {
+		x := types.Decimal128{B0_63: uint64(v)}
+		if v>>63 != 0 {
+			x.B64_127 = ^uint64(0)
+		}
+		return x
+	}
+
+	len1, len2 := len(v1), len(v2)
+	for i := 0; i < max(len1, len2); i++ {
+		if hasNull && bmp.Contains(uint64(i)) {
+			continue
+		}
+		a, b := v1[i], v2[i]
+		if len1 == 1 {
+			a = v1[0]
+		}
+		if len2 == 1 {
+			b = v2[0]
+		}
+		if b == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsnull.Add(uint64(i))
+			continue
+		}
+		x, y := d64toD128(a), d64toD128(b)
+		var divResult types.Decimal128
+		if err := d128DivOneDispatch(x, y, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		// Truncate fractional part.
+		if scale > 0 {
+			var err error
+			divResult, err = divResult.Scale(-scale)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("Decimal64 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+			}
+		}
+		var err error
+		rs[i], err = decimal128ToInt64(divResult)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	bmp := rsnull.GetBitmap()
+	hasNull := !rsnull.IsEmpty()
+	// Compute result scale (same as Decimal128.Div).
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	var scaleFactor uint64
+	canInline := scaleAdj >= 0 && scaleAdj <= 19
+	if canInline {
+		scaleFactor = types.Pow10[scaleAdj]
+	}
+
+	len1, len2 := len(v1), len(v2)
+	for i := 0; i < max(len1, len2); i++ {
+		if hasNull && bmp.Contains(uint64(i)) {
+			continue
+		}
+		a, b := v1[i], v2[i]
+		if len1 == 1 {
+			a = v1[0]
+		}
+		if len2 == 1 {
+			b = v2[0]
+		}
+		if b.B0_63 == 0 && b.B64_127 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsnull.Add(uint64(i))
+			continue
+		}
+		var divResult types.Decimal128
+		if err := d128DivOneDispatch(a, b, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		// Truncate fractional part.
+		if scale > 0 {
+			var err error
+			divResult, err = divResult.Scale(-scale)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+			}
+		}
+		var err error
+		rs[i], err = decimal128ToInt64(divResult)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	len1, len2 := len(v1), len(v2)
+	hasNull := !rsnull.IsEmpty()
+	var bmp *bitmap.Bitmap
+	if hasNull {
+		bmp = rsnull.GetBitmap()
+	}
+	isZero256 := func(d types.Decimal256) bool {
+		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
+	}
+
+	// Pre-compute D128 scale factors for fast path.
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	// Pre-scan: if all elements fit in D128, use the fast D128 division path.
+	if d256AllFitD128(v1) && d256AllFitD128(v2) {
+		return d256IntDivViaD128(v1, v2, rs, scale, scaleAdj, rsnull, shouldError, scale1, scale2, hasNull, bmp)
+	}
+
+	// Slow path: generic D256 division.
+	divGeneric := func(a, b types.Decimal256, dst *int64) error {
+		divResult, resultScale, err := a.Div(b, scale1, scale2)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+		}
+		if resultScale > 0 {
+			divResult, err = divResult.Scale(-resultScale)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+			}
+		}
+		*dst, err = decimal256ToInt64(divResult)
+		return err
+	}
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if isZero256(v2[i]) {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			if err := divGeneric(v1[i], v2[i], &rs[i]); err != nil {
+				return err
+			}
+		}
+	} else if len1 == 1 {
+		a := v1[0]
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if isZero256(v2[i]) {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			if err := divGeneric(a, v2[i], &rs[i]); err != nil {
+				return err
+			}
+		}
+	} else {
+		b := v2[0]
+		if isZero256(b) {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			nulls.AddRange(rsnull, 0, uint64(len1))
+			return nil
+		}
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := divGeneric(v1[i], b, &rs[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// d256IntDivViaD128 runs D256 integer division through the D128 fast path.
+func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj int32, rsnull *nulls.Nulls, shouldError bool, scale1, scale2 int32, hasNull bool, bmp *bitmap.Bitmap) error {
+	len1, len2 := len(v1), len(v2)
+
+	d256toD128 := func(d types.Decimal256) types.Decimal128 {
+		return types.Decimal128{B0_63: d.B0_63, B64_127: d.B64_127}
+	}
+
+	divOne := func(x, y types.Decimal128, dst *int64, idx uint64) error {
+		var divResult types.Decimal128
+		if err := d128DivOne(x, y, &divResult, scaleAdj, rsnull, idx, shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		if scale > 0 {
+			var err error
+			divResult, err = divResult.Scale(-scale)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+			}
+		}
+		var err error
+		*dst, err = decimal128ToInt64(divResult)
+		return err
+	}
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if y.B0_63 == 0 && y.B64_127 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			if err := divOne(d256toD128(v1[i]), y, &rs[i], uint64(i)); err != nil {
+				return err
+			}
+		}
+	} else if len1 == 1 {
+		x := d256toD128(v1[0])
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if y.B0_63 == 0 && y.B64_127 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			if err := divOne(x, y, &rs[i], uint64(i)); err != nil {
+				return err
+			}
+		}
+	} else {
+		y := d256toD128(v2[0])
+		if y.B0_63 == 0 && y.B64_127 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			nulls.AddRange(rsnull, 0, uint64(len1))
+			return nil
+		}
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := divOne(d256toD128(v1[i]), y, &rs[i], uint64(i)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

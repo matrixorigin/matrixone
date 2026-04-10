@@ -531,11 +531,11 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return int64(v1 / v2)
 		}, selectList)
 	case types.T_decimal64:
-		return decimalIntegerDiv[types.Decimal64](parameters, result, proc, length, selectList)
+		return decimalBatchArith[types.Decimal64, int64](parameters, result, proc, length, d64IntDivKernel(proc, selectList), selectList)
 	case types.T_decimal128:
-		return decimalIntegerDiv[types.Decimal128](parameters, result, proc, length, selectList)
+		return decimalBatchArith[types.Decimal128, int64](parameters, result, proc, length, d128IntDivKernel(proc, selectList), selectList)
 	case types.T_decimal256:
-		return decimalIntegerDiv[types.Decimal256](parameters, result, proc, length, selectList)
+		return decimalBatchArith[types.Decimal256, int64](parameters, result, proc, length, d256IntDivKernel(proc, selectList), selectList)
 	}
 	panic("unreached code")
 }
@@ -813,19 +813,6 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	return types.ArrayToBytes[T](r), nil
 }
 
-func decimalIsZero[T templateDec](v T) bool {
-	switch d := any(v).(type) {
-	case types.Decimal64:
-		return d == 0
-	case types.Decimal128:
-		return d.B0_63 == 0 && d.B64_127 == 0
-	case types.Decimal256:
-		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
-	default:
-		panic("unsupported decimal type")
-	}
-}
-
 func decimal128ToInt64(v types.Decimal128) (int64, error) {
 	if v.Sign() {
 		if v.B64_127 != ^uint64(0) {
@@ -868,95 +855,4 @@ func decimal256ToInt64(v types.Decimal256) (int64, error) {
 	return int64(v.B0_63), nil
 }
 
-func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[int64](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
-	rsNull := rsVec.GetNulls()
 
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-			continue
-		}
-
-		if decimalIsZero(v2) {
-			if shouldError {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			rsNull.Add(i)
-			continue
-		}
-
-		var err error
-		switch any(v1).(type) {
-		case types.Decimal128:
-			d1 := any(v1).(types.Decimal128)
-			d2 := any(v2).(types.Decimal128)
-			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
-			if divErr != nil {
-				return divErr
-			}
-			if resultScale > 0 {
-				divResult, divErr = divResult.Scale(-resultScale)
-				if divErr != nil {
-					return divErr
-				}
-			}
-			rss[i], err = decimal128ToInt64(divResult)
-		case types.Decimal64:
-			// Convert Decimal64 to Decimal128
-			d1Val := any(v1).(types.Decimal64)
-			d2Val := any(v2).(types.Decimal64)
-			d1 := types.Decimal128{B0_63: uint64(d1Val), B64_127: 0}
-			// Check sign bit of Decimal64
-			if d1Val.Sign() {
-				d1.B64_127 = ^uint64(0)
-			}
-			d2 := types.Decimal128{B0_63: uint64(d2Val), B64_127: 0}
-			// Check sign bit of Decimal64
-			if d2Val.Sign() {
-				d2.B64_127 = ^uint64(0)
-			}
-			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
-			if divErr != nil {
-				return divErr
-			}
-			if resultScale > 0 {
-				divResult, divErr = divResult.Scale(-resultScale)
-				if divErr != nil {
-					return divErr
-				}
-			}
-			rss[i], err = decimal128ToInt64(divResult)
-		case types.Decimal256:
-			d1 := any(v1).(types.Decimal256)
-			d2 := any(v2).(types.Decimal256)
-			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
-			if divErr != nil {
-				return divErr
-			}
-			if resultScale > 0 {
-				divResult, divErr = divResult.Scale(-resultScale)
-				if divErr != nil {
-					return divErr
-				}
-			}
-			rss[i], err = decimal256ToInt64(divResult)
-		default:
-			panic("unsupported decimal type")
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}

@@ -751,7 +751,7 @@ SELECT a, a - b - b FROM decimal07;
 3  ¦  7459  𝄀
 4  ¦  -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM decimal07;
-invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243(Scale:0)/4(Scale:0)
+invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
 SELECT a, ABS(b) FROM decimal07;
 ➤ a[4,32,0]  ¦  ABS(b)[3,39,0]  𝄀
 1  ¦  3728193  𝄀
