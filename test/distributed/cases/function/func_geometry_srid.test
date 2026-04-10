@@ -45,7 +45,7 @@ select st_touches(st_geomfromtext('MULTIPOINT((0 0),(3 3))', 4326), st_geomfromt
 -- @regex("different srids",true)
 select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 2),(3 0,4 0))', 4326), st_geomfromtext('MULTILINESTRING((0 2,2 0),(5 0,6 0))', 3857));
 -- @regex("different srids",true)
-select st_overlaps(st_geomfromtext('MULTILINESTRING((0 0,3 0),(4 0,5 0))', 4326), st_geomfromtext('LINESTRING(1 0,4 0)', 3857));
+select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(2 2))', 3857));
 -- @regex("different srids",true)
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 3857));
 -- @regex("different srids",true)

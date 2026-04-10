@@ -8738,9 +8738,20 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		}
 	}
 	if !isOverlapsSupportedGeometryType(leftType) || !isOverlapsSupportedGeometryType(rightType) {
-		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
-	if leftType == "POINT" || rightType == "POINT" {
+	if isPointGeometryType(leftType) && isPointGeometryType(rightType) {
+		leftPoints, err := pointGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
+		}
+		rightPoints, err := pointGeometryItems(right, rightType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionOverlapsPointCollection(leftPoints, rightPoints), nil
+	}
+	if isPointGeometryType(leftType) || isPointGeometryType(rightType) {
 		return false, nil
 	}
 	if isLinearGeometryType(leftType) && isLinearGeometryType(rightType) {
@@ -10024,7 +10035,7 @@ func isCrossesSupportedGeometryType(typeName string) bool {
 }
 
 func isOverlapsSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
 func isEqualsSupportedGeometryType(typeName string) bool {
@@ -10100,6 +10111,28 @@ func pointCollectionCoveredByPointCollection(candidate, container []geometryPoin
 		}
 	}
 	return true
+}
+
+func pointCollectionOverlapsPointCollection(left, right []geometryPoint2D) bool {
+	hasSharedPoint := false
+	leftCoveredByRight := true
+	for _, leftPoint := range left {
+		covered := false
+		for _, rightPoint := range right {
+			if sameGeometryPoint(leftPoint, rightPoint) {
+				covered = true
+				hasSharedPoint = true
+				break
+			}
+		}
+		if !covered {
+			leftCoveredByRight = false
+		}
+	}
+	if !hasSharedPoint || leftCoveredByRight {
+		return false
+	}
+	return !pointCollectionCoveredByPointCollection(right, left)
 }
 
 func pointCollectionCoveredByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
