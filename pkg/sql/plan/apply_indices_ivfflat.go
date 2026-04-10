@@ -507,7 +507,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// When there are filters, over-fetch to get more candidates
 	// This ensures we have enough candidates after filtering
 	limitExpr := DeepCopyExpr(limit)
-	if len(scanNode.FilterList) > 0 {
+	if len(scanNode.FilterList) > 0 && !ivfCtx.pushdownEnabled {
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
 		if limitConst := limit.GetLit(); limitConst != nil {
@@ -530,7 +530,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 				)
 			} else {
 				logutil.Debugf(
-					"Post mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
+					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
 					originalLimit, overFetchFactor, len(scanNode.FilterList), newLimit,
 				)
 			}

@@ -321,7 +321,15 @@ func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
 			expected: 2.0,
 		},
 		{
+			limit:    99,
+			expected: 2.0,
+		},
+		{
 			limit:    100,
+			expected: 1.5,
+		},
+		{
+			limit:    199,
 			expected: 1.5,
 		},
 		{
