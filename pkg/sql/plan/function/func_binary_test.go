@@ -5692,12 +5692,15 @@ func initStIntersectsTestCase() []tcTemp {
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;LINESTRING(0 0,2 2)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POINT(2 2)",
+						"MULTIPOINT((0 1),(3 3))",
 						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
 						"LINESTRING(4 1,6 1)",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"POINT(1 1)",
@@ -5709,16 +5712,19 @@ func initStIntersectsTestCase() []tcTemp {
 						"POLYGON((2 1,4 1,4 3,2 3,2 1))",
 						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
 						"SRID=4326;POINT(1 1)",
+						"POINT(1 1)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(1 -1,1 1)",
 						"POINT(4 1)",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
 						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, true, true, true, true, false, true, true, true, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, true, true, true, true, true, false, true, true, false, true, true, true, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_intersects null",
@@ -5754,7 +5760,7 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(1 1)"},
@@ -5763,7 +5769,7 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StIntersects)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5842,12 +5848,15 @@ func initStDisjointTestCase() []tcTemp {
 						"LINESTRING(0 0,2 2)",
 						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"SRID=4326;LINESTRING(0 0,2 2)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POINT(2 2)",
+						"MULTIPOINT((0 1),(3 3))",
 						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
 						"LINESTRING(4 1,6 1)",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_geometry.ToType(),
 					[]string{
 						"POINT(2 2)",
@@ -5856,16 +5865,19 @@ func initStDisjointTestCase() []tcTemp {
 						"LINESTRING(0 2,2 0)",
 						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
 						"SRID=4326;POINT(1 1)",
+						"POINT(1 1)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 						"LINESTRING(1 -1,1 1)",
 						"POINT(4 1)",
 						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
 						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
 					},
-					[]bool{false, false, false, false, false, false, false, false, false, false}),
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, false, true, false, false, false, false, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false}),
+				[]bool{true, false, false, false, true, false, false, true, false, false, false, false, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
 			info: "test st_disjoint null",
