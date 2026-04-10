@@ -26,6 +26,7 @@ import (
 )
 
 func AssertPlan(ctx context.Context, sql string, pattern *MatchPattern) error {
+	// AssertPlan builds the SQL plan and validates it against the expected pattern.
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	mock := plan.NewMockOptimizer(false)
 	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
