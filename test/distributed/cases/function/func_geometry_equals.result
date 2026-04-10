@@ -46,6 +46,12 @@ null
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
 -- @regex("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs", true)
 invalid input: ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs
-select st_equals(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'));
--- @regex("polygons with holes are not supported", true)
-invalid input: polygons with holes are not supported
+select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as equals_polygon_hole_polygon_same;
+➤ equals_polygon_hole_polygon_same[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0))')) as equals_polygon_hole_polygon_filled;
+➤ equals_polygon_hole_polygon_filled[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))')) as equals_polygon_hole_polygon_diff_hole;
+➤ equals_polygon_hole_polygon_diff_hole[-7,1,0]  𝄀
+0

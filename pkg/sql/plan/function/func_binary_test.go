@@ -6078,6 +6078,31 @@ func TestStTouchesWithPolygonHoleLines(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStTouchesWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((2 2.5,3 2.5,3 3.5,2 3.5,2 2.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStCrossesTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -6298,19 +6323,31 @@ func TestStOverlapsRejectInvalidInput(t *testing.T) {
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
 	require.Contains(t, info, "ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
+}
 
-	holeInputs := []FunctionTestInput{
+func TestStOverlapsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((1 0,3 0,3 2,1 2,1 0))"},
-			[]bool{false}),
+			[]string{
+				"POLYGON((3 1,5 1,5 5,3 5,3 1))",
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StOverlaps)
-	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StOverlaps)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 func initStEqualsTestCase() []tcTemp {
@@ -6403,19 +6440,31 @@ func TestStEqualsRejectInvalidInput(t *testing.T) {
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
 	require.Contains(t, info, "ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
+}
 
-	holeInputs := []FunctionTestInput{
+func TestStEqualsWithPolygonHoles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"},
-			[]bool{false}),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,4 0,4 4,0 4,0 0))"},
-			[]bool{false}),
+			[]string{
+				polygon,
+				"POLYGON((0 0,6 0,6 6,0 6,0 0))",
+				"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
 	}
-	tcc = NewFunctionTestCase(proc, holeInputs, expect, StEquals)
-	succeed, info = tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "polygons with holes are not supported")
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StEquals)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 func initStCoversTestCase() []tcTemp {

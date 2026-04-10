@@ -22,5 +22,6 @@ select st_overlaps(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POINT(1
 select st_overlaps(st_geomfromtext(null), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_null;
 -- @regex("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs",true)
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
--- @regex("polygons with holes are not supported",true)
-select st_overlaps(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))'));
+select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((3 1,5 1,5 5,3 5,3 1))')) as overlaps_polygon_hole_polygon_partial;
+select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as overlaps_polygon_hole_polygon_contained;
+select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as overlaps_polygon_hole_polygon_inside_hole;

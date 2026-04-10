@@ -73,3 +73,12 @@ select st_touches(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('P
 select st_touches(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_crossing;
 ➤ touches_line_polygon_hole_crossing[-7,1,0]  𝄀
 0
+select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2 2.5,3 2.5,3 3.5,2 3.5,2 2.5))')) as touches_polygon_hole_polygon_boundary;
+➤ touches_polygon_hole_polygon_boundary[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as touches_polygon_hole_polygon_spans_hole;
+➤ touches_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
+0
+select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as touches_polygon_hole_polygon_equal;
+➤ touches_polygon_hole_polygon_equal[-7,1,0]  𝄀
+0

@@ -8618,15 +8618,15 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return lineStringTouchesPolygonGeometry(rightPoints, leftPolygon), nil
 		case "POLYGON":
-			leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+			leftPolygon, err := polygonGeometryFromPayload(left)
 			if err != nil {
 				return false, err
 			}
-			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			rightPolygon, err := polygonGeometryFromPayload(right)
 			if err != nil {
 				return false, err
 			}
-			return polygonTouchesPolygon(left, right, leftPolygon, rightPolygon)
+			return polygonTouchesPolygonGeometry(left, right, leftPolygon, rightPolygon)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8764,15 +8764,15 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 		if rightType != "POLYGON" {
 			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
-		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		leftPolygon, err := polygonGeometryFromPayload(left)
 		if err != nil {
 			return false, err
 		}
-		rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+		rightPolygon, err := polygonGeometryFromPayload(right)
 		if err != nil {
 			return false, err
 		}
-		return polygonOverlapsPolygon(left, right, leftPolygon, rightPolygon)
+		return polygonOverlapsPolygonGeometry(left, right, leftPolygon, rightPolygon)
 	default:
 		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
@@ -8833,15 +8833,26 @@ func geometryEquals(left, right []byte) (bool, error) {
 			}
 			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
-		leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+		leftPolygon, err := polygonGeometryFromPayload(left)
 		if err != nil {
 			return false, err
 		}
-		rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+		rightPolygon, err := polygonGeometryFromPayload(right)
 		if err != nil {
 			return false, err
 		}
-		return polygonCoveredByPolygon(leftPolygon, rightPolygon) && polygonCoveredByPolygon(rightPolygon, leftPolygon), nil
+		leftCovered, err := polygonCoveredByPolygonGeometry(left, leftPolygon, rightPolygon)
+		if err != nil {
+			return false, err
+		}
+		if !leftCovered {
+			return false, nil
+		}
+		rightCovered, err := polygonCoveredByPolygonGeometry(right, rightPolygon, leftPolygon)
+		if err != nil {
+			return false, err
+		}
+		return rightCovered, nil
 	default:
 		return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
 	}
@@ -9460,6 +9471,25 @@ func lineStringCoveredByPolygonGeometry(line []geometryPoint2D, polygon geometry
 	return true
 }
 
+func polygonRingCoveredByPolygonGeometry(ring []geometryPoint2D, polygon geometryPolygon2D) bool {
+	for _, point := range ring {
+		if !pointIntersectsPolygonGeometry(point, polygon) {
+			return false
+		}
+	}
+	for i := 0; i < len(ring); i++ {
+		next := (i + 1) % len(ring)
+		if sameGeometryPoint(ring[i], ring[next]) {
+			continue
+		}
+		_, hasOutside, _, _ := lineSegmentPolygonLocationFlagsGeometry(ring[i], ring[next], polygon)
+		if hasOutside {
+			return false
+		}
+	}
+	return true
+}
+
 func polygonCoveredByPolygon(candidate, container []geometryPoint2D) bool {
 	for _, point := range candidate {
 		if !pointInPolygon(container, point.x, point.y) && !pointOnPolygonBoundary(container, point.x, point.y) {
@@ -9493,7 +9523,7 @@ func polygonCoveredByPolygonGeometry(candidatePayload []byte, candidate, contain
 	}
 
 	for _, ring := range polygonGeometryRings(candidate) {
-		if !lineStringCoveredByPolygonGeometry(ring, container) {
+		if !polygonRingCoveredByPolygonGeometry(ring, container) {
 			return false, nil
 		}
 	}
@@ -9691,6 +9721,95 @@ func polygonTouchesPolygon(leftPayload, rightPayload []byte, left, right []geome
 		}
 	}
 	return touched, nil
+}
+
+func polygonTouchesPolygonGeometry(leftPayload, rightPayload []byte, left, right geometryPolygon2D) (bool, error) {
+	if err := validatePolygonGeometry(left); err != nil {
+		return false, err
+	}
+	if err := validatePolygonGeometry(right); err != nil {
+		return false, err
+	}
+	if !polygonIntersectsPolygonGeometry(left, right) {
+		return false, nil
+	}
+
+	leftInterior, err := polygonInteriorPointFromPayload(leftPayload)
+	if err != nil {
+		return false, err
+	}
+	if pointInPolygonGeometry(right, leftInterior.x, leftInterior.y) {
+		return false, nil
+	}
+
+	rightInterior, err := polygonInteriorPointFromPayload(rightPayload)
+	if err != nil {
+		return false, err
+	}
+	if pointInPolygonGeometry(left, rightInterior.x, rightInterior.y) {
+		return false, nil
+	}
+
+	touched := false
+	for _, ring := range polygonGeometryRings(left) {
+		for i := 0; i < len(ring); i++ {
+			next := (i + 1) % len(ring)
+			if sameGeometryPoint(ring[i], ring[next]) {
+				continue
+			}
+			segmentInside, _, segmentBoundaryTouched, _ := lineSegmentPolygonLocationFlagsGeometry(ring[i], ring[next], right)
+			if segmentInside {
+				return false, nil
+			}
+			if segmentBoundaryTouched {
+				touched = true
+			}
+		}
+	}
+	for _, ring := range polygonGeometryRings(right) {
+		for i := 0; i < len(ring); i++ {
+			next := (i + 1) % len(ring)
+			if sameGeometryPoint(ring[i], ring[next]) {
+				continue
+			}
+			segmentInside, _, segmentBoundaryTouched, _ := lineSegmentPolygonLocationFlagsGeometry(ring[i], ring[next], left)
+			if segmentInside {
+				return false, nil
+			}
+			if segmentBoundaryTouched {
+				touched = true
+			}
+		}
+	}
+	return touched, nil
+}
+
+func polygonOverlapsPolygonGeometry(leftPayload, rightPayload []byte, left, right geometryPolygon2D) (bool, error) {
+	if !polygonIntersectsPolygonGeometry(left, right) {
+		return false, nil
+	}
+	touches, err := polygonTouchesPolygonGeometry(leftPayload, rightPayload, left, right)
+	if err != nil {
+		return false, err
+	}
+	if touches {
+		return false, nil
+	}
+	leftCovered, err := polygonCoveredByPolygonGeometry(leftPayload, left, right)
+	if err != nil {
+		return false, err
+	}
+	if leftCovered {
+		return false, nil
+	}
+	rightCovered, err := polygonCoveredByPolygonGeometry(rightPayload, right, left)
+	if err != nil {
+		return false, err
+	}
+	if rightCovered {
+		return false, nil
+	}
+	return true, nil
 }
 
 func polygonInteriorPointFromPayload(payload []byte) (geometryPoint2D, error) {
