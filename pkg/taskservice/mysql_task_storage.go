@@ -843,7 +843,7 @@ func (m *mysqlTaskStorage) QuerySQLTask(ctx context.Context, conds ...Condition)
 		t.Enabled = enabled != 0
 		tasks = append(tasks, t)
 	}
-	return tasks, nil
+	return tasks, rows.Err()
 }
 
 func (m *mysqlTaskStorage) AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error) {
@@ -968,7 +968,7 @@ func (m *mysqlTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Conditi
 		run.GateResult = gateResult != 0
 		runs = append(runs, run)
 	}
-	return runs, nil
+	return runs, rows.Err()
 }
 
 func (m *mysqlTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error) {
@@ -1166,15 +1166,6 @@ func (m *mysqlTaskStorage) taskExistsTx(ctx context.Context, tx *sql.Tx, taskMet
 		return false, err
 	}
 	return count > 0, nil
-}
-
-func (m *mysqlTaskStorage) getSQLTaskTriggerCount(ctx context.Context, taskID uint64) (uint64, error) {
-	var triggerCount uint64
-	err := m.db.QueryRowContext(ctx, countSQLTaskTrigger, taskID).Scan(&triggerCount)
-	if err != nil {
-		return 0, err
-	}
-	return triggerCount, nil
 }
 
 func (m *mysqlTaskStorage) getSQLTaskTriggerCountTx(ctx context.Context, tx *sql.Tx, taskID uint64) (uint64, error) {

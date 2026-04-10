@@ -3107,7 +3107,7 @@ prepare_stmt:
 
 
 execute_stmt:
-    EXECUTE TASK ident
+    execute_sym TASK ident
     {
         $$ = &tree.ExecuteSQLTask{
             Name: tree.Identifier($3.Compare()),
@@ -6639,6 +6639,10 @@ table_alias:
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
     }
+|   TASK
+    {
+	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+    }
 |   STRING
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
@@ -6652,9 +6656,17 @@ as_name_opt:
     {
         $$ = $1
     }
+|   TASK
+    {
+        $$ = tree.NewCStr($1, 1)
+    }
 |   AS ident
     {
         $$ = $2
+    }
+|   AS TASK
+    {
+        $$ = tree.NewCStr($2, 1)
     }
 |   STRING
     {
@@ -9507,10 +9519,37 @@ table_name:
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
     }
+|   TASK table_snapshot_opt
+    {
+        tblName := yylex.(*Lexer).GetDbOrTblName($1)
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
+    }
 |   ident '.' ident table_snapshot_opt
     {
         dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
         tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
+    }
+|   ident '.' TASK table_snapshot_opt
+    {
+        dbName := yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblName($3)
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
+    }
+|   TASK '.' ident table_snapshot_opt
+    {
+        dbName := yylex.(*Lexer).GetDbOrTblName($1)
+        tblName := yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
+        $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
+    }
+|   TASK '.' TASK table_snapshot_opt
+    {
+        dbName := yylex.(*Lexer).GetDbOrTblName($1)
+        tblName := yylex.(*Lexer).GetDbOrTblName($3)
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
     }

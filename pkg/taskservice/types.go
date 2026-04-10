@@ -461,20 +461,6 @@ var (
 		CondAccount:       {},
 		CondLastHeartbeat: {},
 	}
-	sqlTaskWhereConditionCodes = map[condCode]struct{}{
-		CondTaskID:         {},
-		CondCdcTaskName:    {},
-		CondAccountID:      {},
-		CondSQLTaskEnabled: {},
-	}
-	sqlTaskRunWhereConditionCodes = map[condCode]struct{}{
-		CondSQLTaskRunID:       {},
-		CondTaskID:             {},
-		CondCdcTaskName:        {},
-		CondAccountID:          {},
-		CondSQLTaskRunStatus:   {},
-		CondSQLTaskTriggerType: {},
-	}
 )
 
 type conditions map[condCode]condition

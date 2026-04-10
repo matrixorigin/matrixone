@@ -151,7 +151,9 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
-	defer taskService.StopScheduleCronTask()
+	defer func() {
+		require.NoError(t, taskService.Close())
+	}()
 
 	store, err := getTestStore(genCfg, false, taskService)
 	assert.NoError(t, err)
@@ -907,11 +909,12 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				}
 				return false
 			}
-			completed := tn()
-			if completed {
-				store.taskScheduler.StopScheduleCronTask()
-				return
-			}
+				completed := tn()
+				if completed {
+					store.taskScheduler.StopScheduleCronTask()
+					store.taskScheduler.StopScheduleSQLTask()
+					return
+				}
 			time.Sleep(100 * time.Millisecond)
 		}
 		t.Fatalf("failed to reschedule expired tasks")

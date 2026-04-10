@@ -192,6 +192,9 @@ func newSQLTaskHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 
 	store := taskservice.NewMemTaskStorage()
 	ts := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
 	getPu(ses.GetService()).TaskService = ts
 	return ses, ts, store
 }
