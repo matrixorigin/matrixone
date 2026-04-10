@@ -21,3 +21,6 @@ select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('P
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
 select st_touches(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inner_boundary;
 select st_touches(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inside_shell;
+select st_touches(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_boundary;
+select st_touches(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_chord;
+select st_touches(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_crossing;

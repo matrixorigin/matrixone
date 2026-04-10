@@ -58,3 +58,15 @@ select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1 1.5)')) as covers_polygon_hole_point_inner_boundary;
 ➤ covers_polygon_hole_point_inner_boundary[-7,1,0]  𝄀
 1
+select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)')) as covers_polygon_hole_line_inside_shell;
+➤ covers_polygon_hole_line_inside_shell[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(-1 1.5,5 1.5)')) as covers_polygon_hole_line_crossing;
+➤ covers_polygon_hole_line_crossing[-7,1,0]  𝄀
+0
+select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1,2 1)')) as covers_polygon_hole_line_boundary;
+➤ covers_polygon_hole_line_boundary[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1.5,2 1.5)')) as covers_polygon_hole_line_chord;
+➤ covers_polygon_hole_line_chord[-7,1,0]  𝄀
+0

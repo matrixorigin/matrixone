@@ -18,3 +18,7 @@ select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext(
 select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_shell;
 select st_coveredby(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_hole;
 select st_coveredby(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inner_boundary;
+select st_coveredby(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_inside_shell;
+select st_coveredby(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_crossing;
+select st_coveredby(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_boundary;
+select st_coveredby(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_chord;

@@ -49,6 +49,15 @@ null
 select st_crosses(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
 -- @regex("ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs", true)
 invalid input: ST_CROSSES only supports POINT, LINESTRING, or POLYGON inputs
-select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'));
--- @regex("polygons with holes are not supported", true)
-invalid input: polygons with holes are not supported
+select st_crosses(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_crossing;
+➤ crosses_line_polygon_hole_crossing[-7,1,0]  𝄀
+1
+select st_crosses(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_inside_shell;
+➤ crosses_line_polygon_hole_inside_shell[-7,1,0]  𝄀
+0
+select st_crosses(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_boundary;
+➤ crosses_line_polygon_hole_boundary[-7,1,0]  𝄀
+0
+select st_crosses(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_chord;
+➤ crosses_line_polygon_hole_chord[-7,1,0]  𝄀
+0
