@@ -272,6 +272,21 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 	// (e.g., value.Release under GC pressure) don't block other Set() callers.
 	var pendingPostEvicts []_PendingPostEvict[K, V]
 	var target int64
+	defer func() {
+		// Unlock first so other Set() callers can proceed while callbacks run.
+		c.queueLock.Unlock()
+		// Execute postEvict callbacks outside the queueLock.
+		if c.postEvict != nil {
+			for i := range pendingPostEvicts {
+				c.postEvict(ctx, pendingPostEvicts[i].key, pendingPostEvicts[i].value, pendingPostEvicts[i].size)
+			}
+		}
+		// Signal done after callbacks complete so callers can rely on
+		// "eviction finished" semantics (see IOVectorCache.Evict doc).
+		if done != nil {
+			done <- target
+		}
+	}()
 	for {
 		globalCapacityCut := c.capacityCut.Swap(0)
 		target = c.capacity() - capacityCut - globalCapacityCut
@@ -293,17 +308,6 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 			if pe, ok := c.evict2(); ok {
 				pendingPostEvicts = append(pendingPostEvicts, pe)
 			}
-		}
-	}
-	if done != nil {
-		done <- target
-	}
-	c.queueLock.Unlock()
-
-	// Execute postEvict callbacks outside the queueLock.
-	if c.postEvict != nil {
-		for i := range pendingPostEvicts {
-			c.postEvict(ctx, pendingPostEvicts[i].key, pendingPostEvicts[i].value, pendingPostEvicts[i].size)
 		}
 	}
 }
