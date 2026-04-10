@@ -180,6 +180,7 @@ FROM qn;
 (WITH qn AS (SELECT "inner" as a) SELECT a from qn)	a
 inner	outer
 drop table if exists t1;
+
 drop table if exists t2;
 create table t1(a int, b int, c int);
 create table t2(a int);

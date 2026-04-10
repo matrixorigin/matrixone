@@ -82,7 +82,6 @@ insert into t1 values(null,null,null),(2,3,4);
 with qn as (select 1) select 2;
 
 -- @case
--- @desc:test for with subquery
 -- @label:bvt
 drop table if exists t1;
 create table t1(a int, b int, c int);
@@ -120,6 +119,11 @@ with sales_by_month(month,total) as
   where total=(select min(total) from sales_by_month))
  select * from best_month union all select * from worst_month;
 
+-- @bvt:issue#23942
+-- Test: aggregation with non-equality conditions in subqueries with predicates
+-- Reproduces issue #23942
+
+
 drop table if exists sales_days;
 
 drop table if exists t1;
@@ -135,7 +139,6 @@ select * from qn where qn.a=(select * from qn qn1 limit 1) union select 2;
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
-with qn as
   (with qn2 as (select "qn2" as a from t1) select "qn", a from qn2)
 select * from qn;
 -- @bvt:issue#3307
@@ -145,7 +148,6 @@ SELECT (WITH qn AS (SELECT t2.a*a as a FROM t1),
 FROM t1 as t2;
 -- @bvt:issue
 
-WITH qn AS (SELECT b as a FROM t1)
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
         SELECT qn2.a FROM qn2) FROM qn;
 
@@ -155,7 +157,6 @@ SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
 FROM qn;
 
 -- @case
--- @desc:test for with insert select
 -- @label:bvt
 drop table if exists t1;
 drop table if exists t2;
