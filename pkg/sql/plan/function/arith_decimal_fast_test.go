@@ -74,6 +74,66 @@ func makeNulls(n int) *nulls.Nulls {
 	return nul
 }
 
+// d256SubRef is a test-only reference implementation for Decimal256 subtraction
+// with scale alignment (mirrors the deleted Decimal256.Sub method).
+func d256SubRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
+	var err error
+	var scale int32
+	if scale1 > scale2 {
+		scale = scale1
+		y, err = y.Scale(scale - scale2)
+	} else if scale1 < scale2 {
+		scale = scale2
+		x, err = x.Scale(scale - scale1)
+	} else {
+		scale = scale1
+	}
+	if err != nil {
+		return types.Decimal256{}, scale, err
+	}
+	z, err := x.Sub256(y)
+	return z, scale, err
+}
+
+// d256MulRef is a test-only reference implementation for Decimal256 multiplication
+// with scale (mirrors the deleted Decimal256.Mul method).
+func d256MulRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
+	scale := int32(12)
+	if scale1 > scale {
+		scale = scale1
+	}
+	if scale2 > scale {
+		scale = scale2
+	}
+	if scale1+scale2 < scale {
+		scale = scale1 + scale2
+	}
+	signx := x.Sign()
+	x1 := x
+	signy := y.Sign()
+	y1 := y
+	if signx {
+		x1 = x1.Minus()
+	}
+	if signy {
+		y1 = y1.Minus()
+	}
+	z, err := x1.Mul256(y1)
+	if err != nil {
+		return z, scale, err
+	}
+	if scale-scale1-scale2 != 0 {
+		z, err = z.Scale(scale - scale1 - scale2)
+		if err != nil {
+			return z, scale, err
+		}
+	}
+	if signx != signy {
+		z = z.Minus()
+	}
+	return z, scale, nil
+}
+
 // ---- D64 ----
 
 func TestD64Add(t *testing.T) {
@@ -1222,7 +1282,7 @@ func TestD256Sub(t *testing.T) {
 		nul := nulls.NewWithSize(testBatchSize)
 		require.NoError(t, d256Sub(v1, v2, rs, 2, 2, nul))
 		for i := range v1 {
-			wantSub, _, err := v1[i].Sub(v2[i], 2, 2)
+			wantSub, _, err := d256SubRef(v1[i], v2[i], 2, 2)
 			require.NoError(t, err)
 			require.Equal(t, wantSub, rs[i], "d256Sub[%d]", i)
 		}
@@ -1276,7 +1336,7 @@ func TestD256Sub(t *testing.T) {
 		nul := nulls.NewWithSize(testBatchSize)
 		require.NoError(t, d256Sub(v1, v2, rs, 1, 4, nul))
 		for i := range v1 {
-			wantSub, _, err := v1[i].Sub(v2[i], 1, 4)
+			wantSub, _, err := d256SubRef(v1[i], v2[i], 1, 4)
 			require.NoError(t, err)
 			require.Equal(t, wantSub, rs[i], "d256Sub DiffScale[%d]", i)
 		}
@@ -1292,7 +1352,7 @@ func TestD256Sub(t *testing.T) {
 		nul2 := nulls.NewWithSize(testBatchSize)
 		require.NoError(t, d256Sub(vec, scalar, rs2, 1, 3, nul2))
 		for i := range vec {
-			want, _, err := vec[i].Sub(scalar[0], 1, 3)
+			want, _, err := d256SubRef(vec[i], scalar[0], 1, 3)
 			require.NoError(t, err)
 			require.Equal(t, want, rs2[i], "d256 diffscale vec-const sub[%d]", i)
 		}
@@ -1313,7 +1373,7 @@ func TestD256Mul(t *testing.T) {
 		err := d256Mul(v1, v2, rs, 2, 3, nul)
 		require.NoError(t, err)
 		for i := range v1 {
-			want, _, err := v1[i].Mul(v2[i], 2, 3)
+			want, _, err := d256MulRef(v1[i], v2[i], 2, 3)
 			require.NoError(t, err)
 			require.Equal(t, want, rs[i], "d256Mul[%d]", i)
 		}
@@ -1331,7 +1391,7 @@ func TestD256Mul(t *testing.T) {
 		nul := nulls.NewWithSize(testBatchSize)
 		require.NoError(t, d256Mul(scalar, vec, rs, 2, 2, nul))
 		for i := range vec {
-			want, _, err := scalar[0].Mul(vec[i], 2, 2)
+			want, _, err := d256MulRef(scalar[0], vec[i], 2, 2)
 			require.NoError(t, err)
 			require.Equal(t, want, rs[i], "d256 const-vec mul[%d]", i)
 		}
@@ -1349,7 +1409,7 @@ func TestD256Mul(t *testing.T) {
 		nul := nulls.NewWithSize(testBatchSize)
 		require.NoError(t, d256Mul(vec, scalar, rs, 2, 2, nul))
 		for i := range vec {
-			want, _, err := vec[i].Mul(scalar[0], 2, 2)
+			want, _, err := d256MulRef(vec[i], scalar[0], 2, 2)
 			require.NoError(t, err)
 			require.Equal(t, want, rs[i], "d256 vec-const mul[%d]", i)
 		}
@@ -1968,7 +2028,7 @@ func BenchmarkD256Mul_Generic(b *testing.B) {
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		for i := 0; i < benchN; i++ {
-			rs[i], _, _ = xs[i].Mul(ys[i], 2, 3)
+			rs[i], _, _ = d256MulRef(xs[i], ys[i], 2, 3)
 		}
 	}
 }
