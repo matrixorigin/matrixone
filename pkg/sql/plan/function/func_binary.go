@@ -7868,6 +7868,7 @@ type geometryParamInterval struct {
 
 const (
 	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stEqualsSupportedPairsError         = "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
 	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
 )
 
@@ -8767,74 +8768,76 @@ func geometryEquals(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+	if isEqualsSupportedGeometryType(leftType) && isEqualsSupportedGeometryType(rightType) {
 		if err := ensureMatchingGeometrySRID("ST_EQUALS", left, right); err != nil {
 			return false, err
 		}
 	}
 
 	switch leftType {
-	case "POINT":
-		if rightType != "POINT" {
-			if rightType == "LINESTRING" || rightType == "POLYGON" {
+	case "POINT", "MULTIPOINT":
+		if rightType != leftType {
+			if isEqualsSupportedGeometryType(rightType) {
 				return false, nil
 			}
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx(stEqualsSupportedPairsError)
 		}
-		leftX, leftY, err := parsePointXYFromPayload(left)
+		leftPoints, err := pointGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightX, rightY, err := parsePointXYFromPayload(right)
+		rightPoints, err := pointGeometryItems(right, rightType)
 		if err != nil {
 			return false, err
 		}
-		return sameGeometryPoint(geometryPoint2D{x: leftX, y: leftY}, geometryPoint2D{x: rightX, y: rightY}), nil
-	case "LINESTRING":
-		if rightType != "LINESTRING" {
-			if rightType == "POINT" || rightType == "POLYGON" {
+		return pointCollectionCoveredByPointCollection(leftPoints, rightPoints) &&
+			pointCollectionCoveredByPointCollection(rightPoints, leftPoints), nil
+	case "LINESTRING", "MULTILINESTRING":
+		if rightType != leftType {
+			if isEqualsSupportedGeometryType(rightType) {
 				return false, nil
 			}
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx(stEqualsSupportedPairsError)
 		}
-		leftLine, err := lineStringGeometryPointsFromPayload(left)
+		leftLines, err := lineGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightLine, err := lineStringGeometryPointsFromPayload(right)
+		rightLines, err := lineGeometryItems(right, rightType)
 		if err != nil {
 			return false, err
 		}
-		return lineStringCoveredByLineString(leftLine, rightLine) && lineStringCoveredByLineString(rightLine, leftLine), nil
-	case "POLYGON":
-		if rightType != "POLYGON" {
-			if rightType == "POINT" || rightType == "LINESTRING" {
+		return lineCollectionCoveredByLineCollection(leftLines, rightLines) &&
+			lineCollectionCoveredByLineCollection(rightLines, leftLines), nil
+	case "POLYGON", "MULTIPOLYGON":
+		if rightType != leftType {
+			if isEqualsSupportedGeometryType(rightType) {
 				return false, nil
 			}
-			return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx(stEqualsSupportedPairsError)
 		}
-		leftPolygon, err := polygonGeometryFromPayload(left)
+		leftPolygons, err := polygonGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightPolygon, err := polygonGeometryFromPayload(right)
+		rightPolygons, err := polygonGeometryItems(right, rightType)
 		if err != nil {
 			return false, err
 		}
-		leftCovered, err := polygonCoveredByPolygonGeometry(left, leftPolygon, rightPolygon)
+		leftCovered, err := polygonCollectionCoveredByPolygonCollection(leftPolygons, rightPolygons)
 		if err != nil {
 			return false, err
 		}
 		if !leftCovered {
 			return false, nil
 		}
-		rightCovered, err := polygonCoveredByPolygonGeometry(right, rightPolygon, leftPolygon)
+		rightCovered, err := polygonCollectionCoveredByPolygonCollection(rightPolygons, leftPolygons)
 		if err != nil {
 			return false, err
 		}
 		return rightCovered, nil
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx(stEqualsSupportedPairsError)
 	}
 }
 
@@ -10030,6 +10033,10 @@ func isOverlapsSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
+func isEqualsSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
 func isLinearGeometryType(typeName string) bool {
 	return typeName == "LINESTRING" || typeName == "MULTILINESTRING"
 }
@@ -10063,6 +10070,38 @@ func geometryPayloadItems(payload []byte, typeName string) ([][]byte, error) {
 		items = append(items, []byte(item))
 	}
 	return items, nil
+}
+
+func pointGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, error) {
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, err := parsePointXYFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, geometryPoint2D{x: x, y: y})
+	}
+	return points, nil
+}
+
+func pointCollectionCoveredByPointCollection(candidate, container []geometryPoint2D) bool {
+	for _, candidatePoint := range candidate {
+		covered := false
+		for _, containerPoint := range container {
+			if sameGeometryPoint(candidatePoint, containerPoint) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
 }
 
 func multiGeometryTouches(left, right []byte, leftType, rightType string) (bool, error) {

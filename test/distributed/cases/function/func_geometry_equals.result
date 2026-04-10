@@ -43,9 +43,39 @@ select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geo
 select st_equals(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as equals_null;
 ➤ equals_null[-7,1,0]  𝄀
 null
-select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
--- @regex("ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_EQUALS only supports POINT, LINESTRING, or POLYGON inputs
+select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((1 1),(0 0))')) as equals_multipoint_same;
+➤ equals_multipoint_same[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((0 0),(2 2))')) as equals_multipoint_diff;
+➤ equals_multipoint_diff[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTIPOINT((0 0))')) as equals_point_multipoint_cross_type;
+➤ equals_point_multipoint_cross_type[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('MULTILINESTRING((0 0,2 0))'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as equals_multiline_same;
+➤ equals_multiline_same[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 0,4 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 1,4 1))')) as equals_multiline_diff;
+➤ equals_multiline_diff[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0))')) as equals_line_multiline_cross_type;
+➤ equals_line_multiline_cross_type[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((4 0,6 0,6 2,4 2,4 0)),((0 0,2 0,2 2,0 2,0 0)))')) as equals_multipolygon_same;
+➤ equals_multipolygon_same[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 1,6 1,6 3,4 3,4 1)))')) as equals_multipolygon_diff;
+➤ equals_multipolygon_diff[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))')) as equals_polygon_multipolygon_cross_type;
+➤ equals_polygon_multipolygon_cross_type[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 4326)) as equals_multipoint_srid;
+➤ equals_multipoint_srid[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+-- @regex("ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as equals_polygon_hole_polygon_same;
 ➤ equals_polygon_hole_polygon_same[-7,1,0]  𝄀
 1
