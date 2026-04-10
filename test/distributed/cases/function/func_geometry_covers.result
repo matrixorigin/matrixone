@@ -70,3 +70,12 @@ select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1.5,2 1.5)')) as covers_polygon_hole_line_chord;
 ➤ covers_polygon_hole_line_chord[-7,1,0]  𝄀
 0
+select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as covers_polygon_hole_polygon_inside_shell;
+➤ covers_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
+1
+select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as covers_polygon_hole_polygon_spans_hole;
+➤ covers_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
+0
+select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as covers_polygon_hole_polygon_equal;
+➤ covers_polygon_hole_polygon_equal[-7,1,0]  𝄀
+1

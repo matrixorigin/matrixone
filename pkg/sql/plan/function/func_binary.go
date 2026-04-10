@@ -8004,15 +8004,15 @@ func geometryDistance(left, right []byte) (float64, error) {
 			}
 			return lineStringDistanceToPolygonGeometry(rightLine, leftPolygonGeometry)
 		case "POLYGON":
-			leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+			leftPolygon, err := polygonGeometryFromPayload(left)
 			if err != nil {
 				return 0, err
 			}
-			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			rightPolygon, err := polygonGeometryFromPayload(right)
 			if err != nil {
 				return 0, err
 			}
-			return polygonDistanceToPolygon(leftPolygon, rightPolygon)
+			return polygonDistanceToPolygonGeometry(leftPolygon, rightPolygon)
 		default:
 			return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 		}
@@ -8070,13 +8070,8 @@ func lineStringDistanceToPolygonGeometry(line []geometryPoint2D, polygon geometr
 	if len(line) < 2 {
 		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
 	}
-	if len(polygon.outer) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	for _, hole := range polygon.holes {
-		if len(hole) < 3 {
-			return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-		}
+	if err := validatePolygonGeometry(polygon); err != nil {
+		return 0, err
 	}
 	if lineStringIntersectsPolygonGeometry(line, polygon) {
 		return 0, nil
@@ -8098,6 +8093,25 @@ func lineStringDistanceToPolygonGeometry(line []geometryPoint2D, polygon geometr
 	return minDistance, nil
 }
 
+func validatePolygonGeometry(polygon geometryPolygon2D) error {
+	if len(polygon.outer) < 3 {
+		return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	for _, hole := range polygon.holes {
+		if len(hole) < 3 {
+			return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+		}
+	}
+	return nil
+}
+
+func polygonGeometryRings(polygon geometryPolygon2D) [][]geometryPoint2D {
+	rings := make([][]geometryPoint2D, 0, 1+len(polygon.holes))
+	rings = append(rings, polygon.outer)
+	rings = append(rings, polygon.holes...)
+	return rings
+}
+
 func polygonDistanceToPolygon(left, right []geometryPoint2D) (float64, error) {
 	if len(left) < 3 || len(right) < 3 {
 		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
@@ -8112,6 +8126,34 @@ func polygonDistanceToPolygon(left, right []geometryPoint2D) (float64, error) {
 		for j := 0; j < len(right); j++ {
 			rightNext := (j + 1) % len(right)
 			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[leftNext], right[j], right[rightNext]))
+		}
+	}
+	return minDistance, nil
+}
+
+func polygonDistanceToPolygonGeometry(left, right geometryPolygon2D) (float64, error) {
+	if err := validatePolygonGeometry(left); err != nil {
+		return 0, err
+	}
+	if err := validatePolygonGeometry(right); err != nil {
+		return 0, err
+	}
+	if polygonIntersectsPolygonGeometry(left, right) {
+		return 0, nil
+	}
+
+	leftRings := polygonGeometryRings(left)
+	rightRings := polygonGeometryRings(right)
+	minDistance := lineSegmentDistance(left.outer[0], left.outer[1], right.outer[0], right.outer[1])
+	for _, leftRing := range leftRings {
+		for i := 0; i < len(leftRing); i++ {
+			leftNext := (i + 1) % len(leftRing)
+			for _, rightRing := range rightRings {
+				for j := 0; j < len(rightRing); j++ {
+					rightNext := (j + 1) % len(rightRing)
+					minDistance = math.Min(minDistance, lineSegmentDistance(leftRing[i], leftRing[leftNext], rightRing[j], rightRing[rightNext]))
+				}
+			}
 		}
 	}
 	return minDistance, nil
@@ -8278,15 +8320,15 @@ func geometryContainsImpl(container, target []byte, containerType, targetType st
 			}
 			return lineStringCoveredByPolygonGeometry(targetLine, containerPolygon) && !lineStringTouchesPolygonGeometry(targetLine, containerPolygon), nil
 		case "POLYGON":
-			containerPolygon, err := polygonSingleRingPointsFromPayload(container)
+			containerPolygon, err := polygonGeometryFromPayload(container)
 			if err != nil {
 				return false, err
 			}
-			targetPolygon, err := polygonSingleRingPointsFromPayload(target)
+			targetPolygon, err := polygonGeometryFromPayload(target)
 			if err != nil {
 				return false, err
 			}
-			return polygonCoveredByPolygon(targetPolygon, containerPolygon), nil
+			return polygonCoveredByPolygonGeometry(target, targetPolygon, containerPolygon)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -8445,15 +8487,15 @@ func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (boo
 			}
 			return lineStringIntersectsPolygonGeometry(rightPoints, leftPolygon), nil
 		case "POLYGON":
-			leftPolygon, err := polygonSingleRingPointsFromPayload(left)
+			leftPolygon, err := polygonGeometryFromPayload(left)
 			if err != nil {
 				return false, err
 			}
-			rightPolygon, err := polygonSingleRingPointsFromPayload(right)
+			rightPolygon, err := polygonGeometryFromPayload(right)
 			if err != nil {
 				return false, err
 			}
-			return polygonIntersectsPolygon(leftPolygon, rightPolygon), nil
+			return polygonIntersectsPolygonGeometry(leftPolygon, rightPolygon), nil
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
@@ -8889,15 +8931,15 @@ func geometryCoversImpl(container, target []byte, containerType, targetType stri
 			}
 			return lineStringCoveredByPolygonGeometry(targetLine, containerPolygon), nil
 		case "POLYGON":
-			containerPolygon, err := polygonSingleRingPointsFromPayload(container)
+			containerPolygon, err := polygonGeometryFromPayload(container)
 			if err != nil {
 				return false, err
 			}
-			targetPolygon, err := polygonSingleRingPointsFromPayload(target)
+			targetPolygon, err := polygonGeometryFromPayload(target)
 			if err != nil {
 				return false, err
 			}
-			return polygonCoveredByPolygon(targetPolygon, containerPolygon), nil
+			return polygonCoveredByPolygonGeometry(target, targetPolygon, containerPolygon)
 		default:
 			return false, moerr.NewInvalidInputNoCtx("ST_COVERS only supports POINT, LINESTRING, or POLYGON inputs")
 		}
@@ -9434,6 +9476,39 @@ func polygonCoveredByPolygon(candidate, container []geometryPoint2D) bool {
 	return true
 }
 
+func polygonCoveredByPolygonGeometry(candidatePayload []byte, candidate, container geometryPolygon2D) (bool, error) {
+	if err := validatePolygonGeometry(candidate); err != nil {
+		return false, err
+	}
+	if err := validatePolygonGeometry(container); err != nil {
+		return false, err
+	}
+
+	candidateInterior, err := polygonInteriorPointFromPayload(candidatePayload)
+	if err != nil {
+		return false, err
+	}
+	if !pointIntersectsPolygonGeometry(candidateInterior, container) {
+		return false, nil
+	}
+
+	for _, ring := range polygonGeometryRings(candidate) {
+		if !lineStringCoveredByPolygonGeometry(ring, container) {
+			return false, nil
+		}
+	}
+	for _, hole := range container.holes {
+		holeInterior, err := polygonInteriorPointFromRing(hole)
+		if err != nil {
+			return false, err
+		}
+		if pointInPolygonGeometry(candidate, holeInterior.x, holeInterior.y) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func lineSegmentCoveredByLineString(start, end geometryPoint2D, line []geometryPoint2D) bool {
 	intervals := make([]geometryParamInterval, 0, len(line))
 	for i := 0; i < len(line)-1; i++ {
@@ -9630,6 +9705,33 @@ func polygonInteriorPointFromPayload(payload []byte) (geometryPoint2D, error) {
 	return geometryPoint2D{x: x, y: y}, nil
 }
 
+func polygonInteriorPointFromRing(ring []geometryPoint2D) (geometryPoint2D, error) {
+	payload := encodeGeometryPayload("POLYGON("+polygonRingText(ring)+")", 0, false)
+	return polygonInteriorPointFromPayload(payload)
+}
+
+func polygonRingText(ring []geometryPoint2D) string {
+	var builder strings.Builder
+	builder.WriteByte('(')
+	writePoint := func(point geometryPoint2D) {
+		builder.WriteString(strconv.FormatFloat(point.x, 'g', -1, 64))
+		builder.WriteByte(' ')
+		builder.WriteString(strconv.FormatFloat(point.y, 'g', -1, 64))
+	}
+	for i, point := range ring {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		writePoint(point)
+	}
+	if len(ring) > 0 && !sameGeometryPoint(ring[0], ring[len(ring)-1]) {
+		builder.WriteByte(',')
+		writePoint(ring[0])
+	}
+	builder.WriteByte(')')
+	return builder.String()
+}
+
 func polygonEdgesInteriorSameSide(leftStart, leftEnd geometryPoint2D, leftArea float64, rightStart, rightEnd geometryPoint2D, rightArea float64) bool {
 	leftNormal := polygonEdgeInteriorNormal(leftStart, leftEnd, leftArea)
 	rightNormal := polygonEdgeInteriorNormal(rightStart, rightEnd, rightArea)
@@ -9782,6 +9884,20 @@ func polygonIntersectsPolygon(left, right []geometryPoint2D) bool {
 	}
 	for _, point := range right {
 		if pointIntersectsPolygon(point, left) {
+			return true
+		}
+	}
+	return false
+}
+
+func polygonIntersectsPolygonGeometry(left, right geometryPolygon2D) bool {
+	for _, ring := range polygonGeometryRings(left) {
+		if lineStringIntersectsPolygonGeometry(ring, right) {
+			return true
+		}
+	}
+	for _, ring := range polygonGeometryRings(right) {
+		if lineStringIntersectsPolygonGeometry(ring, left) {
 			return true
 		}
 	}

@@ -61,6 +61,15 @@ select st_distance(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLY
 select st_distance(st_geomfromtext('LINESTRING(1.25 1.5,1.75 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d20;
 ➤ d20[8,54,0]  𝄀
 0.25
+select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as d21;
+➤ d21[8,54,0]  𝄀
+0.0
+select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as d22;
+➤ d22[8,54,0]  𝄀
+0.0
+select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as d23;
+➤ d23[8,54,0]  𝄀
+0.25
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(0 0)'));
 -- @regex("ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs", true)
 invalid input: ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs

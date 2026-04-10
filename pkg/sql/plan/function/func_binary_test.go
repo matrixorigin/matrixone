@@ -5309,6 +5309,31 @@ func TestStDistanceWithPolygonHoleLines(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStDistanceWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0.25}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStContainsTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5438,6 +5463,27 @@ func TestStContainsWithPolygonHoleLines(t *testing.T) {
 			[]bool{false, false, false, false}),
 	}
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
 	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
@@ -5577,6 +5623,27 @@ func TestStWithinWithPolygonHoleLines(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStWithinWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStIntersectsTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5705,6 +5772,31 @@ func TestStIntersectsWithPolygonHoleLines(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStIntersectsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StIntersects)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStDisjointTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5822,6 +5914,31 @@ func TestStDisjointWithPolygonHoleLines(t *testing.T) {
 			[]bool{false, false, false, false}),
 	}
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, true}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDisjoint)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDisjointWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, true}, []bool{false, false, false})
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDisjoint)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
@@ -6436,6 +6553,27 @@ func TestStCoversWithPolygonHoleLines(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStCoversWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCovers)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
 func initStCoveredByTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -6562,6 +6700,27 @@ func TestStCoveredByWithPolygonHoleLines(t *testing.T) {
 			[]bool{false, false, false, false}),
 	}
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCoveredBy)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoveredByWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
 	tcc := NewFunctionTestCase(proc, inputs, expect, StCoveredBy)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)

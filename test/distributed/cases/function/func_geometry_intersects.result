@@ -58,3 +58,12 @@ select st_intersects(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('PO
 select st_intersects(st_geomfromtext('LINESTRING(1.25 1.5,1.75 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_line_polygon_hole_inside_hole;
 ➤ intersects_line_polygon_hole_inside_hole[-7,1,0]  𝄀
 0
+select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as intersects_polygon_hole_polygon_inside_shell;
+➤ intersects_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as intersects_polygon_hole_polygon_spans_hole;
+➤ intersects_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as intersects_polygon_hole_polygon_inside_hole;
+➤ intersects_polygon_hole_polygon_inside_hole[-7,1,0]  𝄀
+0
