@@ -299,6 +299,46 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 	}
 }
 
+func TestCalculateAutoModeOverFetchFactor_UsesSelectivityFallbackForPostfilter(t *testing.T) {
+	testCases := []struct {
+		name     string
+		limit    uint64
+		stats    *planpb.Stats
+		expected float64
+	}{
+		{
+			name:     "falls back without stats",
+			limit:    10,
+			stats:    nil,
+			expected: 2.0,
+		},
+		{
+			name:     "falls back with invalid selectivity",
+			limit:    10,
+			stats:    &planpb.Stats{Selectivity: 0},
+			expected: 2.0,
+		},
+		{
+			name:     "uses selectivity when available",
+			limit:    10,
+			stats:    &planpb.Stats{Selectivity: 0.01},
+			expected: 100.0,
+		},
+		{
+			name:     "caps excessive amplification",
+			limit:    10,
+			stats:    &planpb.Stats{Selectivity: 0.0001},
+			expected: MaxOverFetchFactor,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, calculateAutoModeOverFetchFactor(tc.limit, tc.stats))
+		})
+	}
+}
+
 func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
 	t.Helper()
 	args := make([]*planpb.Expr, 0, numArgs)

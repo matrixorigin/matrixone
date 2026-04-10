@@ -513,32 +513,30 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 
-			// Choose over-fetch strategy based on mode
-			var overFetchFactor float64
-			if ivfCtx.isAutoMode {
-				// Auto mode: use enhanced over-fetch strategy
-				overFetchFactor = calculateAutoModeOverFetchFactor(
-					originalLimit,
-					scanNode.Stats,
-				)
+			// Even in explicit post mode, fixed multipliers are often insufficient for
+			// highly selective filters. Reuse the selectivity-aware factor when stats
+			// are available; the helper falls back to the historical fixed multiplier
+			// when stats are missing or invalid.
+			overFetchFactor := calculateAutoModeOverFetchFactor(
+				originalLimit,
+				scanNode.Stats,
+			)
 
-				// Log auto mode over-fetch calculation
+			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+
+			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
 					originalLimit, overFetchFactor, len(scanNode.FilterList),
 				)
-			} else {
-				// Non-auto mode: use conservative default strategy
-				overFetchFactor = calculatePostFilterOverFetchFactor(originalLimit)
-			}
-
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
-
-			// Log final over-fetch result for auto mode
-			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
 					originalLimit, newLimit,
+				)
+			} else if scanNode.Stats != nil && scanNode.Stats.Selectivity > 0 && scanNode.Stats.Selectivity < 1 {
+				logutil.Debugf(
+					"Post mode over-fetch: original_limit=%d, factor=%.2f, selectivity=%.4f, filter_count=%d, new_limit=%d",
+					originalLimit, overFetchFactor, scanNode.Stats.Selectivity, len(scanNode.FilterList), newLimit,
 				)
 			}
 
