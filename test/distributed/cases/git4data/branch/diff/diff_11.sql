@@ -7,11 +7,11 @@ use test_diff_columns;
 -- Covers: INT, VARCHAR, DECIMAL, TIMESTAMP, DATE
 -- ============================================================
 create table c1(
-    id int primary key,
-    name varchar(30),
-    balance decimal(12,2),
-    created_at timestamp,
-    birthday date
+id int primary key,
+name varchar(30),
+balance decimal(12,2),
+created_at timestamp,
+birthday date
 );
 
 insert into c1 values
@@ -54,13 +54,13 @@ drop table c1_br;
 -- Covers: BIGINT, CHAR, VARCHAR, DOUBLE, DECIMAL, FLOAT
 -- ============================================================
 create table c2(
-    account_id bigint,
-    instrument char(5),
-    bucket varchar(6),
-    exposure double,
-    delta decimal(10,4),
-    margin float,
-    primary key (account_id, instrument, bucket)
+account_id bigint,
+instrument char(5),
+bucket varchar(6),
+exposure double,
+delta decimal(10,4),
+margin float,
+primary key (account_id, instrument, bucket)
 );
 
 insert into c2 values
@@ -98,9 +98,9 @@ drop table c2_br;
 -- Covers: INT, VARCHAR, JSON
 -- ============================================================
 create table c3(
-    a int,
-    b varchar(20),
-    c json
+a int,
+b varchar(20),
+c json
 );
 
 insert into c3 values
@@ -137,11 +137,11 @@ drop table c3_br;
 -- Covers: columns toggling between NULL and non-NULL
 -- ============================================================
 create table c4(
-    id int primary key,
-    name varchar(20),
-    score int,
-    memo varchar(40),
-    ts timestamp
+id int primary key,
+name varchar(20),
+score int,
+memo varchar(40),
+ts timestamp
 );
 
 insert into c4 values
@@ -211,13 +211,13 @@ drop table c5_br;
 -- Covers: composite PK where some PK parts are projected and some not
 -- ============================================================
 create table c6(
-    region varchar(10),
-    dept int,
-    emp_id int,
-    salary decimal(10,2),
-    hire_date date,
-    notes varchar(40),
-    primary key (region, dept, emp_id)
+region varchar(10),
+dept int,
+emp_id int,
+salary decimal(10,2),
+hire_date date,
+notes varchar(40),
+primary key (region, dept, emp_id)
 );
 
 insert into c6 values
@@ -256,10 +256,10 @@ drop table c6_br;
 -- Covers: all-NULL row, vecf32 type
 -- ============================================================
 create table c7(
-    x int,
-    y float,
-    z varchar(20),
-    v vecf32(3)
+x int,
+y float,
+z varchar(20),
+v vecf32(3)
 );
 
 insert into c7 values

@@ -2,11 +2,11 @@ drop database if exists test_diff_columns;
 create database test_diff_columns;
 use test_diff_columns;
 create table c1(
-    id int primary key,
-    name varchar(30),
-    balance decimal(12,2),
-    created_at timestamp,
-    birthday date
+id int primary key,
+name varchar(30),
+balance decimal(12,2),
+created_at timestamp,
+birthday date
 );
 insert into c1 values
 (1, 'alice', 1000.50, '2024-01-01 10:00:00', '1990-03-15'),
@@ -52,13 +52,13 @@ drop snapshot c1_sp0;
 drop table c1;
 drop table c1_br;
 create table c2(
-    account_id bigint,
-    instrument char(5),
-    bucket varchar(6),
-    exposure double,
-    delta decimal(10,4),
-    margin float,
-    primary key (account_id, instrument, bucket)
+account_id bigint,
+instrument char(5),
+bucket varchar(6),
+exposure double,
+delta decimal(10,4),
+margin float,
+primary key (account_id, instrument, bucket)
 );
 insert into c2 values
 (5001, 'FX001', 'spot', 120000.25, 0.4321, 0.12),
@@ -95,9 +95,9 @@ drop snapshot c2_sp0;
 drop table c2;
 drop table c2_br;
 create table c3(
-    a int,
-    b varchar(20),
-    c json
+a int,
+b varchar(20),
+c json
 );
 insert into c3 values
 (1, 'hello', '{"k":"v1"}'),
@@ -133,11 +133,11 @@ drop snapshot c3_sp0;
 drop table c3;
 drop table c3_br;
 create table c4(
-    id int primary key,
-    name varchar(20),
-    score int,
-    memo varchar(40),
-    ts timestamp
+id int primary key,
+name varchar(20),
+score int,
+memo varchar(40),
+ts timestamp
 );
 insert into c4 values
 (1, 'alice', 100, 'good',  '2024-01-01 00:00:00'),
@@ -207,13 +207,13 @@ drop snapshot c5_sp0;
 drop table c5;
 drop table c5_br;
 create table c6(
-    region varchar(10),
-    dept int,
-    emp_id int,
-    salary decimal(10,2),
-    hire_date date,
-    notes varchar(40),
-    primary key (region, dept, emp_id)
+region varchar(10),
+dept int,
+emp_id int,
+salary decimal(10,2),
+hire_date date,
+notes varchar(40),
+primary key (region, dept, emp_id)
 );
 insert into c6 values
 ('east', 1, 101, 5000.00, '2020-01-15', 'senior'),
@@ -255,10 +255,10 @@ drop snapshot c6_sp0;
 drop table c6;
 drop table c6_br;
 create table c7(
-    x int,
-    y float,
-    z varchar(20),
-    v vecf32(3)
+x int,
+y float,
+z varchar(20),
+v vecf32(3)
 );
 insert into c7 values
 (1, 1.5,  'aaa', '[0.1,0.2,0.3]'),
