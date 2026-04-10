@@ -843,7 +843,9 @@ func materializeSubqueryUnified(
 	subqueryCtx = compile.AttachInternalExecutorPrivilegeCheck(subqueryCtx)
 
 	// Launch the streaming SQL in a goroutine.
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer close(streamChan)
 		defer close(errChan)
 		if _, err2 := runSql(subqueryCtx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
@@ -852,6 +854,16 @@ func materializeSubqueryUnified(
 			default:
 			}
 		}
+	}()
+
+	// Ensure the goroutine finishes before we return so that
+	// callers can safely close bh without a data race on the
+	// underlying session.
+	defer func() {
+		for res := range streamChan {
+			res.Close()
+		}
+		<-done
 	}()
 
 	mp := ses.proc.Mp()
