@@ -49,9 +49,27 @@ select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((
 select st_within(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as within_null;
 ➤ within_null[-7,1,0]  𝄀
 null
+select st_within(st_geomfromtext('POINT(5 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_point_multiline_interior;
+➤ within_point_multiline_interior[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as within_line_multiline_union;
+➤ within_line_multiline_union[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multiline_multipolygon;
+➤ within_multiline_multipolygon[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multipolygon_multipolygon;
+➤ within_multipolygon_multipolygon[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_point_multiline_endpoint;
+➤ within_point_multiline_endpoint[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_line_multipolygon_boundary;
+➤ within_line_multipolygon_boundary[-7,1,0]  𝄀
+0
 select st_within(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(0 0)'));
--- @regex("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs
+-- @regex("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_shell;
 ➤ within_point_polygon_hole_inside_shell[-7,1,0]  𝄀
 1

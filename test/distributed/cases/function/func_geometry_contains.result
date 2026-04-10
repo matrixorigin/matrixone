@@ -49,9 +49,27 @@ select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_g
 select st_contains(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as contains_null;
 ➤ contains_null[-7,1,0]  𝄀
 null
+select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(5 0)')) as contains_multiline_point_interior;
+➤ contains_multiline_point_interior[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_multiline_line_union;
+➤ contains_multiline_line_union[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))')) as contains_multipolygon_multiline;
+➤ contains_multipolygon_multiline[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))')) as contains_multipolygon_multipolygon;
+➤ contains_multipolygon_multipolygon[-7,1,0]  𝄀
+1
+select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(0 0)')) as contains_multiline_point_endpoint;
+➤ contains_multiline_point_endpoint[-7,1,0]  𝄀
+0
+select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_multipolygon_line_boundary;
+➤ contains_multipolygon_line_boundary[-7,1,0]  𝄀
+0
 select st_contains(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('LINESTRING(0 0,2 0)'));
--- @regex("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs
+-- @regex("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)')) as contains_polygon_hole_point_inside_shell;
 ➤ contains_polygon_hole_point_inside_shell[-7,1,0]  𝄀
 1

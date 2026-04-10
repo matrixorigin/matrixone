@@ -8255,7 +8255,7 @@ func geometryContains(container, target []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(containerType) && isSimpleGeometryType(targetType) {
+	if isContainsSupportedGeometryType(containerType) && isContainsSupportedGeometryType(targetType) {
 		if err := ensureMatchingGeometrySRID("ST_CONTAINS", container, target); err != nil {
 			return false, err
 		}
@@ -8267,10 +8267,10 @@ func geometryContainsImpl(container, target []byte, containerType, targetType st
 	switch containerType {
 	case "POINT":
 		if targetType != "POINT" {
-			if targetType == "LINESTRING" || targetType == "POLYGON" {
+			if targetType == "LINESTRING" || targetType == "POLYGON" || targetType == "MULTILINESTRING" || targetType == "MULTIPOLYGON" {
 				return false, nil
 			}
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 		containerX, containerY, err := parsePointXYFromPayload(container)
 		if err != nil {
@@ -8284,8 +8284,8 @@ func geometryContainsImpl(container, target []byte, containerType, targetType st
 			geometryPoint2D{x: containerX, y: containerY},
 			geometryPoint2D{x: targetX, y: targetY},
 		), nil
-	case "LINESTRING":
-		containerLine, err := lineStringGeometryPointsFromPayload(container)
+	case "LINESTRING", "MULTILINESTRING":
+		containerLines, err := lineGeometryItems(container, containerType)
 		if err != nil {
 			return false, err
 		}
@@ -8295,55 +8295,47 @@ func geometryContainsImpl(container, target []byte, containerType, targetType st
 			if err != nil {
 				return false, err
 			}
-			return pointCrossesLineString(geometryPoint2D{x: targetX, y: targetY}, containerLine), nil
-		case "LINESTRING":
-			targetLine, err := lineStringGeometryPointsFromPayload(target)
+			return pointCrossesLineCollection(geometryPoint2D{x: targetX, y: targetY}, containerLines), nil
+		case "LINESTRING", "MULTILINESTRING":
+			targetLines, err := lineGeometryItems(target, targetType)
 			if err != nil {
 				return false, err
 			}
-			return lineStringCoveredByLineString(targetLine, containerLine), nil
-		case "POLYGON":
+			return lineCollectionCoveredByLineCollection(targetLines, containerLines), nil
+		case "POLYGON", "MULTIPOLYGON":
 			return false, nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
-	case "POLYGON":
+	case "POLYGON", "MULTIPOLYGON":
+		containerPolygons, err := polygonGeometryItems(container, containerType)
+		if err != nil {
+			return false, err
+		}
 		switch targetType {
 		case "POINT":
 			targetX, targetY, err := parsePointXYFromPayload(target)
 			if err != nil {
 				return false, err
 			}
-			containerPolygon, err := polygonGeometryFromPayload(container)
+			return pointInPolygonCollection(geometryPoint2D{x: targetX, y: targetY}, containerPolygons), nil
+		case "LINESTRING", "MULTILINESTRING":
+			targetLines, err := lineGeometryItems(target, targetType)
 			if err != nil {
 				return false, err
 			}
-			return pointInPolygonGeometry(containerPolygon, targetX, targetY), nil
-		case "LINESTRING":
-			containerPolygon, err := polygonGeometryFromPayload(container)
+			return lineCollectionContainedByPolygonCollection(targetLines, containerPolygons), nil
+		case "POLYGON", "MULTIPOLYGON":
+			targetPolygons, err := polygonGeometryItems(target, targetType)
 			if err != nil {
 				return false, err
 			}
-			targetLine, err := lineStringGeometryPointsFromPayload(target)
-			if err != nil {
-				return false, err
-			}
-			return lineStringCoveredByPolygonGeometry(targetLine, containerPolygon) && !lineStringTouchesPolygonGeometry(targetLine, containerPolygon), nil
-		case "POLYGON":
-			containerPolygon, err := polygonGeometryFromPayload(container)
-			if err != nil {
-				return false, err
-			}
-			targetPolygon, err := polygonGeometryFromPayload(target)
-			if err != nil {
-				return false, err
-			}
-			return polygonCoveredByPolygonGeometry(target, targetPolygon, containerPolygon)
+			return polygonCollectionCoveredByPolygonCollection(targetPolygons, containerPolygons)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 }
 
@@ -8356,40 +8348,43 @@ func geometryWithin(candidate, container []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(candidateType) && isSimpleGeometryType(containerType) {
+	if isContainsSupportedGeometryType(candidateType) && isContainsSupportedGeometryType(containerType) {
 		if err := ensureMatchingGeometrySRID("ST_WITHIN", candidate, container); err != nil {
 			return false, err
 		}
+	}
+	if !isContainsSupportedGeometryType(candidateType) || !isContainsSupportedGeometryType(containerType) {
+		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 
 	switch candidateType {
 	case "POINT":
 		switch containerType {
-		case "POINT", "LINESTRING", "POLYGON":
+		case "POINT", "LINESTRING", "POLYGON", "MULTILINESTRING", "MULTIPOLYGON":
 			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
-	case "LINESTRING":
+	case "LINESTRING", "MULTILINESTRING":
 		switch containerType {
 		case "POINT":
 			return false, nil
-		case "LINESTRING", "POLYGON":
+		case "LINESTRING", "POLYGON", "MULTILINESTRING", "MULTIPOLYGON":
 			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
-	case "POLYGON":
+	case "POLYGON", "MULTIPOLYGON":
 		switch containerType {
-		case "POINT", "LINESTRING":
+		case "POINT", "LINESTRING", "MULTILINESTRING":
 			return false, nil
-		case "POLYGON":
+		case "POLYGON", "MULTIPOLYGON":
 			return geometryContainsImpl(container, candidate, containerType, candidateType)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 }
 
@@ -10047,6 +10042,10 @@ func isCoversSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
+func isContainsSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
 func geometryPayloadItems(payload []byte, typeName string) ([][]byte, error) {
 	if typeName != "MULTIPOINT" && typeName != "MULTILINESTRING" && typeName != "MULTIPOLYGON" && typeName != "GEOMETRYCOLLECTION" {
 		return [][]byte{payload}, nil
@@ -10158,6 +10157,15 @@ func pointIntersectsLineCollection(point geometryPoint2D, lines [][]geometryPoin
 	return false
 }
 
+func pointCrossesLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) bool {
+	for _, line := range lines {
+		if pointCrossesLineString(point, line) {
+			return true
+		}
+	}
+	return false
+}
+
 func lineSegmentCoveredByLineCollection(start, end geometryPoint2D, lines [][]geometryPoint2D) bool {
 	intervals := make([]geometryParamInterval, 0, len(lines))
 	for _, line := range lines {
@@ -10195,6 +10203,15 @@ func pointIntersectsPolygonCollection(point geometryPoint2D, polygons []polygonG
 	return false
 }
 
+func pointInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
+	for _, polygon := range polygons {
+		if pointInPolygonGeometry(polygon.shape, point.x, point.y) {
+			return true
+		}
+	}
+	return false
+}
+
 func lineCollectionCoveredByPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
 	for _, line := range lines {
 		covered := false
@@ -10205,6 +10222,22 @@ func lineCollectionCoveredByPolygonCollection(lines [][]geometryPoint2D, polygon
 			}
 		}
 		if !covered {
+			return false
+		}
+	}
+	return true
+}
+
+func lineCollectionContainedByPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
+	for _, line := range lines {
+		contained := false
+		for _, polygon := range polygons {
+			if lineStringCoveredByPolygonGeometry(line, polygon.shape) && !lineStringTouchesPolygonGeometry(line, polygon.shape) {
+				contained = true
+				break
+			}
+		}
+		if !contained {
 			return false
 		}
 	}

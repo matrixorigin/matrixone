@@ -5459,7 +5459,7 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StContains)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_CONTAINS only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_CONTAINS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5474,6 +5474,53 @@ func TestStContainsRejectInvalidInput(t *testing.T) {
 	}
 	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
 	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StContains)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(5 0)",
+				"LINESTRING(0 0,2 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(0 0)",
+				"LINESTRING(0 0,2 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+			},
+			[]bool{false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StContains)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
 }
@@ -5614,7 +5661,7 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StWithin)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_WITHIN only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5629,6 +5676,53 @@ func TestStWithinRejectInvalidInput(t *testing.T) {
 	}
 	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
 	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StWithin)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStWithinWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(5 0)",
+				"LINESTRING(0 0,2 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(0 0)",
+				"LINESTRING(0 0,2 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StWithin)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
 }
@@ -7009,15 +7103,15 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "contains",
 			fn:    StContains,
 			label: "ST_CONTAINS",
-			left:  "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-			right: "SRID=3857;POINT(1 1)",
+			left:  "SRID=4326;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			right: "SRID=3857;MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
 		},
 		{
 			name:  "within",
 			fn:    StWithin,
 			label: "ST_WITHIN",
-			left:  "SRID=4326;POINT(1 1)",
-			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			left:  "SRID=4326;MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+			right: "SRID=3857;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 		},
 		{
 			name:  "intersects",

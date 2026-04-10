@@ -33,9 +33,9 @@ select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3
 -- @regex("different srids",true)
 select st_distance(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
 -- @regex("different srids",true)
-select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 3857));
+select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))', 3857));
 -- @regex("different srids",true)
-select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
+select st_within(st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))', 4326), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 3857));
 -- @regex("different srids",true)
 select st_intersects(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
 -- @regex("different srids",true)
