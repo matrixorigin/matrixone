@@ -909,12 +909,12 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				}
 				return false
 			}
-				completed := tn()
-				if completed {
-					store.taskScheduler.StopScheduleCronTask()
-					store.taskScheduler.StopScheduleSQLTask()
-					return
-				}
+			completed := tn()
+			if completed {
+				store.taskScheduler.StopScheduleCronTask()
+				store.taskScheduler.StopScheduleSQLTask()
+				return
+			}
 			time.Sleep(100 * time.Millisecond)
 		}
 		t.Fatalf("failed to reschedule expired tasks")
