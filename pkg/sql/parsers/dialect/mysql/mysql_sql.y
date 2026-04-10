@@ -234,6 +234,7 @@ import (
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
+    pickKeys *tree.PickKeys
     diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
@@ -364,7 +365,7 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE BRANCH LOG REVERT REBASE DIFF
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF PICK
 %token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
@@ -579,6 +580,7 @@ import (
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
+%type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
@@ -8279,6 +8281,57 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
+|   DATA BRANCH PICK table_name INTO table_name pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.Keys = $7
+    	t.ConflictOpt = $8
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
 
 diff_output_opt:
     {
@@ -8337,6 +8390,22 @@ conflict_opt:
     {
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
+    	}
+    }
+
+pick_keys_clause:
+    KEYS '(' expression_list ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:     tree.PickKeysValues,
+    	    KeyExprs: $3,
+    	}
+    }
+|   KEYS '(' select_no_parens ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:   tree.PickKeysSubquery,
+    	    Select: $3,
     	}
     }
 
@@ -13341,6 +13410,7 @@ non_reserved_keyword:
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
+|   PICK
 |   POINT
 |   POLYGON
 |   PROCEDURE

@@ -77,6 +77,12 @@ func TestNewEmitter(t *testing.T) {
 	require.Equal(t, wrapped, <-retCh)
 }
 
+func TestContainsDataBranchTempTableName(t *testing.T) {
+	require.True(t, containsDataBranchTempTableName("delete from test.__mo_diff_del_merge_1"))
+	require.True(t, containsDataBranchTempTableName("insert into __mo_diff_ins_merge_1 values (1)"))
+	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
+}
+
 func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
@@ -110,6 +116,25 @@ func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected result set type")
 	})
+}
+
+func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
+	ses := newValidateSession(t)
+	spyExec := &pickStreamingExecutor{err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()}
+	_ = newPickStreamingBackExecForTest(t, ses, spyExec)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stmt := "delete from test.__mo_diff_ins_merge_1"
+	bh.EXPECT().Exec(gomock.Any(), stmt).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return(nil).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	_, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, spyExec.sql)
 }
 
 func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
