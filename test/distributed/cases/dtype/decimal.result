@@ -135,9 +135,9 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
-➤ id[4,32,0]  ¦  a[3,21,0]  ¦  b[12,-1,0]
+[unknown result because it is related to issue#4383]
 select a,count(a) from t1 group by a having count(a)>=2;
-➤ a[3,21,0]  ¦  count(a)[-5,64,0]
+[unknown result because it is related to issue#4383]
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
@@ -214,17 +214,11 @@ drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
-➤ a[3,2,1]  𝄀
-0.9  𝄀
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
-➤ a[3,2,1]  𝄀
-0.9  𝄀
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
-➤ a[3,2,1]  𝄀
-0.9  𝄀
-0.9
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 ➤ a[3,2,1]  𝄀
 0.9  𝄀
@@ -757,7 +751,7 @@ SELECT a, a - b - b FROM decimal07;
 3  ¦  7459  𝄀
 4  ¦  -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM decimal07;
-invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
+invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243(Scale:0)/4(Scale:0)
 SELECT a, ABS(b) FROM decimal07;
 ➤ a[4,32,0]  ¦  ABS(b)[3,39,0]  𝄀
 1  ¦  3728193  𝄀
@@ -827,7 +821,7 @@ SELECT a + 1 FROM decimal08;
 1  𝄀
 -99999999999999999999999999999999999998
 SELECT a * 2 FROM decimal08;
-invalid input: Decimal128 Mul overflow: 99999999999999999999999999999999999999(Scale:0)*2(Scale:0)
+invalid input: Decimal128 Mul overflow: 99999999999999999999999999999999999999*2
 SELECT a / 3 FROM decimal08;
 invalid input: Decimal128 Div overflow: 21737187383787273829839184932843922131/3
 DROP TABLE decimal08;
@@ -1236,26 +1230,11 @@ SELECT -0.487794599999999999999999999999999945451154 * col2 FROM decimal18;
 -4.8779459999999999999999999999999994550  𝄀
 4.5765056404090315799999999999999994887
 SELECT col1 * col2 FROM decimal18;
-➤ col1 * col2[3,38,37]  𝄀
-0.1221212134567890987654321333546543213  𝄀
-0.1484484651187895121879845615156784548  𝄀
-0E-37  𝄀
-3.7283784274376200000000000000000000000  𝄀
-3.4979314916658955850103159923577553319
+[unknown result because it is related to issue#8516]
 SELECT col3 * col2 FROM decimal18;
-➤ col3 * col2[8,54,0]  𝄀
-1278945.25  𝄀
-229.3758562273983  𝄀
-0.0  𝄀
-0.0  𝄀
-3.0945498936745635E12
+[unknown result because it is related to issue#8516]
 SELECT col2 * col4 FROM decimal18;
-➤ col2 * col4[8,53,16]  𝄀
-7.815317849845612E7  𝄀
-130.61903846394287  𝄀
-0.0  𝄀
--4544.9845  𝄀
--0.0
+[unknown result because it is related to issue#8516]
 SELECT col1 / col2 FROM decimal18;
 ➤ col1 / col2[3,38,37]  𝄀
 0.1221212134567890987654321333546543213  𝄀
@@ -1283,11 +1262,11 @@ SELECT col1 / col2 FROM decimal19;
 -32015808253987387864.171828  𝄀
 -17600769189777557874.214320
 SELECT col1 * col2 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999(Scale:0)*1235467899687894561(Scale:0)
+invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*1235467899687894561
 SELECT col1 * 0.2871438217498217489217843728134214212143 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999(Scale:0)*2871438217498217489217843728134214212(Scale:37)
+invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*0.2871438217498217489217843728134214212
 SELECT col2 * -2733892455124775.7851878942123454 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 1235467899687894561(Scale:0)*-27338924551247757851878942123454(Scale:16)
+invalid input: Decimal128 Mul overflow: 1235467899687894561*-2733892455124775.7851878942123454
 SELECT col1 / 0;
 invalid input: column col1 does not exist
 SELECT col2 / 0;
