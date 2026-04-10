@@ -41,7 +41,7 @@ select st_intersects(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geo
 -- @regex("different srids",true)
 select st_disjoint(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 1)', 3857));
 -- @regex("different srids",true)
-select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))', 4326), st_geomfromtext('POINT(2 1)', 3857));
+select st_touches(st_geomfromtext('MULTIPOINT((0 0),(3 3))', 4326), st_geomfromtext('LINESTRING(0 0,2 0)', 3857));
 -- @regex("different srids",true)
 select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 2),(3 0,4 0))', 4326), st_geomfromtext('MULTILINESTRING((0 2,2 0),(5 0,6 0))', 3857));
 -- @regex("different srids",true)

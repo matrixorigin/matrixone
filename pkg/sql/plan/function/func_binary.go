@@ -8544,9 +8544,10 @@ func geometryTouches(left, right []byte) (bool, error) {
 		}
 	}
 	if !isTouchesSupportedGeometryType(leftType) || !isTouchesSupportedGeometryType(rightType) {
-		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
-	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+	if leftType == "MULTIPOINT" || leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" ||
+		rightType == "MULTIPOINT" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
 		return multiGeometryTouches(left, right, leftType, rightType)
 	}
 
@@ -8576,7 +8577,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return pointOnPolygonBoundaryGeometry(rightPolygon, leftPoint.x, leftPoint.y), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "LINESTRING":
 		leftPoints, err := lineStringGeometryPointsFromPayload(left)
@@ -8603,7 +8604,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return lineStringTouchesPolygonGeometry(leftPoints, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "POLYGON":
 		switch rightType {
@@ -8638,10 +8639,10 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return polygonTouchesPolygonGeometry(left, right, leftPolygon, rightPolygon)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 }
 
@@ -10015,7 +10016,7 @@ func multiGeometryIntersects(collection, other []byte) (bool, error) {
 }
 
 func isTouchesSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
 func isCrossesSupportedGeometryType(typeName string) bool {

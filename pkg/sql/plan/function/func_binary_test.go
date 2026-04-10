@@ -6041,7 +6041,7 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(1 1)"},
@@ -6050,7 +6050,7 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StDisjoint)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -6195,21 +6195,14 @@ func TestStTouches(t *testing.T) {
 }
 
 func TestStTouchesRejectInvalidInput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))", 0, false)
+	validRight := encodeGeometryPayload("POINT(1 1)", 0, false)
+	touched, err := geometryTouches(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, touched)
+	require.Contains(t, err.Error(), "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
 
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
-			[]bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(1 1)"},
-			[]bool{false}),
-	}
-	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+	proc := testutil.NewProcess(t)
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -6224,8 +6217,8 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 			[]bool{false, false, false}),
 	}
 	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
-	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StTouches)
-	succeed, info = tcc.Run()
+	tcc := NewFunctionTestCase(proc, holeInputs, holeExpect, StTouches)
+	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
 }
 
@@ -6238,18 +6231,24 @@ func TestStTouchesWithMultiGeometries(t *testing.T) {
 				"LINESTRING(1 0,3 0)",
 				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(3 3))",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOINT((2 1),(7 7))",
 			},
-			[]bool{false, false, false, false}),
+			[]bool{false, false, false, false, false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{
 				"LINESTRING(2 0,2 2)",
 				"MULTILINESTRING((0 0,1 0),(3 0,4 0))",
 				"POINT(2 1)",
 				"LINESTRING(2 2,3 2)",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOINT((0 0),(3 3))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 			},
-			[]bool{false, false, false, false}),
+			[]bool{false, false, false, false, false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true}, []bool{false, false, false, false})
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
 	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
@@ -6259,16 +6258,20 @@ func TestStTouchesWithMultiGeometries(t *testing.T) {
 			[]string{
 				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
 				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((1 0),(3 3))",
+				"MULTIPOINT((1 1),(7 7))",
 			},
-			[]bool{false, false}),
+			[]bool{false, false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{
 				"LINESTRING(1 -1,1 1)",
 				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
 			},
-			[]bool{false, false}),
+			[]bool{false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false}, []bool{false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StTouches)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -7225,8 +7228,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "touches",
 			fn:    StTouches,
 			label: "ST_TOUCHES",
-			left:  "SRID=4326;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))",
-			right: "SRID=3857;POINT(2 1)",
+			left:  "SRID=4326;MULTIPOINT((0 0),(3 3))",
+			right: "SRID=3857;LINESTRING(0 0,2 0)",
 		},
 		{
 			name:  "crosses",

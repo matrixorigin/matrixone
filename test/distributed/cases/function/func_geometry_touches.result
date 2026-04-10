@@ -64,9 +64,21 @@ select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 
 select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(2 2,3 2)')) as touches_multipolygon_line;
 ➤ touches_multipolygon_line[-7,1,0]  𝄀
 1
-select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
--- @regex("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
-invalid input: ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_touches(st_geomfromtext('MULTIPOINT((0 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line;
+➤ touches_multipoint_line[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOINT((0 0),(3 3))')) as touches_line_multipoint;
+➤ touches_line_multipoint[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('MULTIPOINT((2 1),(7 7))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as touches_multipoint_multipolygon;
+➤ touches_multipoint_multipolygon[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('MULTIPOINT((1 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line_interior;
+➤ touches_multipoint_line_interior[-7,1,0]  𝄀
+0
+select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))'), st_geomfromtext('POINT(1 1)'));
+-- @regex("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
 ➤ touches_point_polygon_hole_outer_boundary[-7,1,0]  𝄀
 1

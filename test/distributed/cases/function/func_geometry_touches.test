@@ -20,8 +20,12 @@ select st_touches(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_ge
 select st_touches(st_geomfromtext('LINESTRING(1 0,3 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(3 0,4 0))')) as touches_line_multiline;
 select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POINT(2 1)')) as touches_multipolygon_point;
 select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(2 2,3 2)')) as touches_multipolygon_line;
--- @regex("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs",true)
-select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
+select st_touches(st_geomfromtext('MULTIPOINT((0 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line;
+select st_touches(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOINT((0 0),(3 3))')) as touches_line_multipoint;
+select st_touches(st_geomfromtext('MULTIPOINT((2 1),(7 7))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as touches_multipoint_multipolygon;
+select st_touches(st_geomfromtext('MULTIPOINT((1 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line_interior;
+-- @regex("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs",true)
+select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))'), st_geomfromtext('POINT(1 1)'));
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
 select st_touches(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inner_boundary;
 select st_touches(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inside_shell;
