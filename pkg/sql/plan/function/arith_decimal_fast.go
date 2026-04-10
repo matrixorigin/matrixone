@@ -771,17 +771,18 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 			return nil
 		}
 		// D64 values always fit in 64 bits of D128, so use fully-inlined path.
-		signy := y.Sign()
-		absY := y
-		if signy {
-			absY = absY.Minus()
-		}
+		signyU := y.B64_127 >> 63
+		negMaskY := -signyU
+		absY := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
+		var cY uint64
+		absY.B0_63, cY = bits.Add64(absY.B0_63, signyU, 0)
+		absY.B64_127, _ = bits.Add64(absY.B64_127, 0, cY)
 		if canInline && absY.B64_127 == 0 {
 			absY64 := absY.B0_63
 			if rsnull.IsEmpty() {
 				for i := 0; i < len1; i++ {
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signy, scaleFactor, &rs[i]) {
+					if !d128DivInline(x, absY64, signyU, scaleFactor, &rs[i]) {
 						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
@@ -793,7 +794,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 						continue
 					}
 					x := d64toD128(v1[i])
-					if !d128DivInline(x, absY64, signy, scaleFactor, &rs[i]) {
+					if !d128DivInline(x, absY64, signyU, scaleFactor, &rs[i]) {
 						if err := d128DivOne(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
@@ -1406,14 +1407,16 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 	signy := y.B64_127 >> 63
 	neg := signx ^ signy
 
-	// Absolute values.
-	ax, ay := *x, *y
-	if signx != 0 {
-		ax = ax.Minus()
-	}
-	if signy != 0 {
-		ay = ay.Minus()
-	}
+	// Branchless absolute values.
+	negMaskX := -signx
+	ax := types.Decimal128{B0_63: x.B0_63 ^ negMaskX, B64_127: x.B64_127 ^ negMaskX}
+	var c uint64
+	ax.B0_63, c = bits.Add64(ax.B0_63, signx, 0)
+	ax.B64_127, _ = bits.Add64(ax.B64_127, 0, c)
+	negMaskY := -signy
+	ay := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
+	ay.B0_63, c = bits.Add64(ay.B0_63, signy, 0)
+	ay.B64_127, _ = bits.Add64(ay.B64_127, 0, c)
 
 	// Try 128×128→128 unsigned multiply (inline Mul128InPlace).
 	// result = ax.lo*ay.lo + cross*2^64 where cross = ax.lo*ay.hi or ax.hi*ay.lo.
@@ -1452,9 +1455,11 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 	}
 	dst.B0_63 = x2.B0_63
 	dst.B64_127 = x2.B64_127
-	if neg != 0 {
-		*dst = dst.Minus()
-	}
+	negMask := -neg
+	dst.B0_63 ^= negMask
+	dst.B64_127 ^= negMask
+	dst.B0_63, c = bits.Add64(dst.B0_63, neg, 0)
+	dst.B64_127, _ = bits.Add64(dst.B64_127, 0, c)
 	return nil
 }
 
@@ -1540,17 +1545,18 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 			nulls.AddRange(rsnull, 0, uint64(len1))
 			return nil
 		}
-		signy := b.Sign()
-		absY := b
-		if signy {
-			absY = absY.Minus()
-		}
+		signyU := b.B64_127 >> 63
+		negMaskY := -signyU
+		absY := types.Decimal128{B0_63: b.B0_63 ^ negMaskY, B64_127: b.B64_127 ^ negMaskY}
+		var cY uint64
+		absY.B0_63, cY = bits.Add64(absY.B0_63, signyU, 0)
+		absY.B64_127, _ = bits.Add64(absY.B64_127, 0, cY)
 		// Use fully-inlined path if divisor fits in 64 bits and scale is small.
 		if canInline && absY.B64_127 == 0 {
 			absY64 := absY.B0_63
 			if rsnull.IsEmpty() {
 				for i := 0; i < len1; i++ {
-					if !d128DivInline(v1[i], absY64, signy, scaleFactor, &rs[i]) {
+					if !d128DivInline(v1[i], absY64, signyU, scaleFactor, &rs[i]) {
 						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
@@ -1561,7 +1567,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 					if bmp.Contains(uint64(i)) {
 						continue
 					}
-					if !d128DivInline(v1[i], absY64, signy, scaleFactor, &rs[i]) {
+					if !d128DivInline(v1[i], absY64, signyU, scaleFactor, &rs[i]) {
 						if err := d128DivOne(v1[i], b, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
@@ -1603,13 +1609,14 @@ func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj i
 	}
 	// Try fast path: small scale, 64-bit divisor.
 	if canInline {
-		signy := y.B64_127>>63 != 0
-		absY := y
-		if signy {
-			absY = absY.Minus()
-		}
+		signyU := y.B64_127 >> 63
+		negMaskY := -signyU
+		absY := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
+		var cY uint64
+		absY.B0_63, cY = bits.Add64(absY.B0_63, signyU, 0)
+		absY.B64_127, _ = bits.Add64(absY.B64_127, 0, cY)
 		if absY.B64_127 == 0 {
-			if d128DivInline(x, absY.B0_63, signy, scaleFactor, dst) {
+			if d128DivInline(x, absY.B0_63, signyU, scaleFactor, dst) {
 				return nil
 			}
 		}
@@ -1629,14 +1636,21 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		return nil
 	}
 
-	signx := x.Sign()
-	signy := y.Sign()
-	if signx {
-		x = x.Minus()
-	}
-	if signy {
-		y = y.Minus()
-	}
+	signxU := x.B64_127 >> 63
+	signyU := y.B64_127 >> 63
+	neg := signxU ^ signyU
+	// Branchless absolute values.
+	negMaskX := -signxU
+	x.B0_63 ^= negMaskX
+	x.B64_127 ^= negMaskX
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, signxU, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	negMaskY := -signyU
+	y.B0_63 ^= negMaskY
+	y.B64_127 ^= negMaskY
+	y.B0_63, c = bits.Add64(y.B0_63, signyU, 0)
+	y.B64_127, _ = bits.Add64(y.B64_127, 0, c)
 
 	// Inline scale-up: multiply unsigned x by 10^scaleAdj.
 	z := x
@@ -1654,9 +1668,11 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 		}
 		z = types.Decimal128{B0_63: x2.B0_63, B64_127: x2.B64_127}
-		if signx != signy {
-			z = z.Minus()
-		}
+		negMask := -neg
+		z.B0_63 ^= negMask
+		z.B64_127 ^= negMask
+		z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
+		z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
 		*dst = z
 		return nil
 	}
@@ -1667,9 +1683,11 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 	if err != nil {
 		return err
 	}
-	if signx != signy {
-		z = z.Minus()
-	}
+	negMask := -neg
+	z.B0_63 ^= negMask
+	z.B64_127 ^= negMask
+	z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
+	z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
 	*dst = z
 	return nil
 }
@@ -1678,19 +1696,17 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 // Pre-conditions: absY > 0, absY fits in 64 bits (absY64 > 0),
 // scaleAdj ≤ 19. x is a signed D128. signy is the sign of the divisor.
 // Returns false if the fast path overflows and the caller should fall back.
-func d128DivInline(x types.Decimal128, absY64 uint64, signy bool,
+func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	scaleFactor uint64, dst *types.Decimal128) bool {
 
-	// Extract sign and absolute value of x.
-	signx := x.B64_127>>63 != 0
-	if signx {
-		if x.B0_63 == 0 {
-			x.B64_127 = ^x.B64_127 + 1
-		} else {
-			x.B64_127 = ^x.B64_127
-			x.B0_63 = ^x.B0_63 + 1
-		}
-	}
+	// Branchless absolute value of x.
+	signx := x.B64_127 >> 63
+	negMask := -signx
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, signx, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
 
 	// Inline Scale: multiply |x| by scaleFactor (a uint64 power of 10).
 	// This is Mul128 with y = {scaleFactor, 0}, but without error allocation.
@@ -1719,11 +1735,12 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy bool,
 		}
 	}
 
-	// Restore sign.
-	z := types.Decimal128{B0_63: zLo, B64_127: zHi}
-	if signx != signy {
-		z = z.Minus()
-	}
+	// Branchless sign restore.
+	neg := signx ^ signy
+	negMaskR := -neg
+	z := types.Decimal128{B0_63: zLo ^ negMaskR, B64_127: zHi ^ negMaskR}
+	z.B0_63, c = bits.Add64(z.B0_63, neg, 0)
+	z.B64_127, _ = bits.Add64(z.B64_127, 0, c)
 	*dst = z
 	return true
 }
@@ -2229,21 +2246,29 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 // d256MulInline performs a single D256 multiply with inlined schoolbook 4×4 cross-product.
 // Uses a single overflow flag instead of per-branch error returns.
 func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scaleAdj, scale1, scale2 int32) error {
-	signx := x.B192_255>>63 != 0
-	signy := y.B192_255>>63 != 0
-	var x0, x1, x2, x3, y0, y1, y2, y3 uint64
-	if signx {
-		ax := x.Minus()
-		x0, x1, x2, x3 = ax.B0_63, ax.B64_127, ax.B128_191, ax.B192_255
-	} else {
-		x0, x1, x2, x3 = x.B0_63, x.B64_127, x.B128_191, x.B192_255
-	}
-	if signy {
-		ay := y.Minus()
-		y0, y1, y2, y3 = ay.B0_63, ay.B64_127, ay.B128_191, ay.B192_255
-	} else {
-		y0, y1, y2, y3 = y.B0_63, y.B64_127, y.B128_191, y.B192_255
-	}
+	signxU := x.B192_255 >> 63
+	signyU := y.B192_255 >> 63
+	// Branchless absolute value for x.
+	negMaskX := -signxU
+	x0 := x.B0_63 ^ negMaskX
+	x1 := x.B64_127 ^ negMaskX
+	x2 := x.B128_191 ^ negMaskX
+	x3 := x.B192_255 ^ negMaskX
+	var cn uint64
+	x0, cn = bits.Add64(x0, signxU, 0)
+	x1, cn = bits.Add64(x1, 0, cn)
+	x2, cn = bits.Add64(x2, 0, cn)
+	x3, _ = bits.Add64(x3, 0, cn)
+	// Branchless absolute value for y.
+	negMaskY := -signyU
+	y0 := y.B0_63 ^ negMaskY
+	y1 := y.B64_127 ^ negMaskY
+	y2 := y.B128_191 ^ negMaskY
+	y3 := y.B192_255 ^ negMaskY
+	y0, cn = bits.Add64(y0, signyU, 0)
+	y1, cn = bits.Add64(y1, 0, cn)
+	y2, cn = bits.Add64(y2, 0, cn)
+	y3, _ = bits.Add64(y3, 0, cn)
 
 	// Early overflow: if both operands have high limbs set, product can't fit.
 	if (x3 != 0 && (y3|y2|y1) != 0) || (x2 != 0 && (y3|y2) != 0) || (x1 != 0 && y3 != 0) {
@@ -2309,9 +2334,16 @@ func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scaleAdj, scal
 			return err
 		}
 	}
-	if signx != signy {
-		z = z.Minus()
-	}
+	neg := signxU ^ signyU
+	negMask := -neg
+	z.B0_63 ^= negMask
+	z.B64_127 ^= negMask
+	z.B128_191 ^= negMask
+	z.B192_255 ^= negMask
+	z.B0_63, cn = bits.Add64(z.B0_63, neg, 0)
+	z.B64_127, cn = bits.Add64(z.B64_127, 0, cn)
+	z.B128_191, cn = bits.Add64(z.B128_191, 0, cn)
+	z.B192_255, _ = bits.Add64(z.B192_255, 0, cn)
 	*dst = z
 	return nil
 }
