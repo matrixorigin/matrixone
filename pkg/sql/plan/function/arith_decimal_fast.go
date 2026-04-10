@@ -2860,7 +2860,7 @@ func d256ModKernel(shouldError bool) func(v1, v2, rs []types.Decimal256, scale1,
 }
 
 func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	isZero := func(d types.Decimal256) bool {
+	isZero256 := func(d types.Decimal256) bool {
 		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
 	}
 	len1, len2 := len(v1), len(v2)
@@ -2869,12 +2869,19 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
+
+	// Pre-scan: if all elements fit in D128, use fast D128 mod path.
+	if d256AllFitD128(v1) && d256AllFitD128(v2) {
+		return d256ModViaD128(v1, v2, rs, scale1, scale2, rsnull, shouldError, len1, len2, hasNull, bmp)
+	}
+
+	// Slow path: generic D256 mod.
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if isZero256(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2892,7 +2899,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if isZero256(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2906,7 +2913,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			rs[i] = r
 		}
 	} else {
-		if isZero(v2[0]) {
+		if isZero256(v2[0]) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2924,6 +2931,107 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 				return err
 			}
 			rs[i] = r
+		}
+	}
+	return nil
+}
+
+// d256ModViaD128 handles D256 mod via D128 narrowing.
+// Unified path for both same-scale and diff-scale: when scales match,
+// scaleAx=scaleAy=0 makes d128MulPow10 a no-op, eliminating the branch.
+func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
+	rsnull *nulls.Nulls, shouldError bool, len1, len2 int, hasNull bool, bmp *bitmap.Bitmap) error {
+
+	d256toD128 := func(d types.Decimal256) types.Decimal128 {
+		return types.Decimal128{B0_63: d.B0_63, B64_127: d.B64_127}
+	}
+	d128toD256 := func(d types.Decimal128) types.Decimal256 {
+		signExt := ^uint64(0) * (d.B64_127 >> 63)
+		return types.Decimal256{B0_63: d.B0_63, B64_127: d.B64_127, B128_191: signExt, B192_255: signExt}
+	}
+	isZero := func(d types.Decimal128) bool {
+		return d.B0_63 == 0 && d.B64_127 == 0
+	}
+
+	diff := scale2 - scale1
+	mask := diff >> 31
+	scaleAx := diff &^ mask
+	scaleAy := (-diff) & mask
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if isZero(y) {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			r, ok := d128ModDiffScaleOne(d256toD128(v1[i]), y, scaleAx, scaleAy)
+			if !ok {
+				var err error
+				rs[i], _, err = v1[i].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			rs[i] = d128toD256(r)
+		}
+	} else if len1 == 1 {
+		x := d256toD128(v1[0])
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			y := d256toD128(v2[i])
+			if isZero(y) {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			r, ok := d128ModDiffScaleOne(x, y, scaleAx, scaleAy)
+			if !ok {
+				var err error
+				rs[i], _, err = v1[0].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			rs[i] = d128toD256(r)
+		}
+	} else {
+		y := d256toD128(v2[0])
+		if isZero(y) {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			for i := 0; i < len1; i++ {
+				rsnull.Add(uint64(i))
+			}
+			return nil
+		}
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			r, ok := d128ModDiffScaleOne(d256toD128(v1[i]), y, scaleAx, scaleAy)
+			if !ok {
+				var err error
+				rs[i], _, err = v1[i].Mod(v2[0], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			rs[i] = d128toD256(r)
 		}
 	}
 	return nil
