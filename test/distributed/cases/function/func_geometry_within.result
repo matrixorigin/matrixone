@@ -67,9 +67,21 @@ select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTILINESTRING
 select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_line_multipolygon_boundary;
 ➤ within_line_multipolygon_boundary[-7,1,0]  𝄀
 0
-select st_within(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(0 0)'));
--- @regex("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
-invalid input: ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as within_point_multipoint;
+➤ within_point_multipoint[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('MULTIPOINT((0.5 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_multipoint_multiline;
+➤ within_multipoint_multiline[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multipoint_multipolygon;
+➤ within_multipoint_multipolygon[-7,1,0]  𝄀
+1
+select st_within(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_multipoint_multiline_boundary;
+➤ within_multipoint_multiline_boundary[-7,1,0]  𝄀
+0
+select st_within(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)'));
+-- @regex("ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_WITHIN only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_shell;
 ➤ within_point_polygon_hole_inside_shell[-7,1,0]  𝄀
 1

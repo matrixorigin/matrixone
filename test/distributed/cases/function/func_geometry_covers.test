@@ -20,8 +20,12 @@ select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))')) as covers_multipolygon_multipolygon;
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,1 0),(2 0,3 0))'), st_geomfromtext('LINESTRING(0 0,3 0)')) as covers_multiline_line_gap;
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))')) as covers_multipolygon_polygon_span;
--- @regex("ST_COVERS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs",true)
-select st_covers(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('LINESTRING(0 0,2 0)'));
+select st_covers(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as covers_multipoint_point;
+select st_covers(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(5 0))')) as covers_multiline_multipoint;
+select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOINT((0 0),(4.5 1))')) as covers_multipolygon_multipoint;
+select st_covers(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(3 0))')) as covers_multiline_multipoint_gap;
+-- @regex("ST_COVERS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs",true)
+select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)'));
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)')) as covers_polygon_hole_point_inside_shell;
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1.5 1.5)')) as covers_polygon_hole_point_inside_hole;
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1 1.5)')) as covers_polygon_hole_point_inner_boundary;
