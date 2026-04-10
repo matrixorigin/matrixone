@@ -299,42 +299,40 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 	}
 }
 
-func TestCalculateAutoModeOverFetchFactor_UsesSelectivityFallbackForPostfilter(t *testing.T) {
+func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
 	testCases := []struct {
-		name     string
 		limit    uint64
-		stats    *planpb.Stats
 		expected float64
 	}{
 		{
-			name:     "falls back without stats",
+			limit:    3,
+			expected: 5.0,
+		},
+		{
 			limit:    10,
-			stats:    nil,
+			expected: 5.0,
+		},
+		{
+			limit:    49,
+			expected: 5.0,
+		},
+		{
+			limit:    50,
 			expected: 2.0,
 		},
 		{
-			name:     "falls back with invalid selectivity",
-			limit:    10,
-			stats:    &planpb.Stats{Selectivity: 0},
-			expected: 2.0,
+			limit:    100,
+			expected: 1.5,
 		},
 		{
-			name:     "uses selectivity when available",
-			limit:    10,
-			stats:    &planpb.Stats{Selectivity: 0.01},
-			expected: 100.0,
-		},
-		{
-			name:     "caps excessive amplification",
-			limit:    10,
-			stats:    &planpb.Stats{Selectivity: 0.0001},
-			expected: MaxOverFetchFactor,
+			limit:    200,
+			expected: 1.3,
 		},
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, calculateAutoModeOverFetchFactor(tc.limit, tc.stats))
+		t.Run("", func(t *testing.T) {
+			assert.Equal(t, tc.expected, calculateFilteredPostModeOverFetchFactor(tc.limit))
 		})
 	}
 }

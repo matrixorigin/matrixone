@@ -513,14 +513,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 
-			// Even in explicit post mode, fixed multipliers are often insufficient for
-			// highly selective filters. Reuse the selectivity-aware factor when stats
-			// are available; the helper falls back to the historical fixed multiplier
-			// when stats are missing or invalid.
-			overFetchFactor := calculateAutoModeOverFetchFactor(
-				originalLimit,
-				scanNode.Stats,
-			)
+			// Filtered post mode needs a larger candidate budget than the historical
+			// default, but we keep it as fixed buckets so the plan is predictable.
+			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 
 			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
 
@@ -533,10 +528,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
 					originalLimit, newLimit,
 				)
-			} else if scanNode.Stats != nil && scanNode.Stats.Selectivity > 0 && scanNode.Stats.Selectivity < 1 {
+			} else {
 				logutil.Debugf(
-					"Post mode over-fetch: original_limit=%d, factor=%.2f, selectivity=%.4f, filter_count=%d, new_limit=%d",
-					originalLimit, overFetchFactor, scanNode.Stats.Selectivity, len(scanNode.FilterList), newLimit,
+					"Post mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
+					originalLimit, overFetchFactor, len(scanNode.FilterList), newLimit,
 				)
 			}
 
