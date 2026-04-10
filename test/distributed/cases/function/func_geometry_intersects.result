@@ -46,9 +46,15 @@ select st_intersects(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0
 select st_intersects(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as intersects_null;
 ➤ intersects_null[-7,1,0]  𝄀
 null
-select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(1 1)'));
--- @regex("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
-invalid input: ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as intersects_geometrycollection_point;
+➤ intersects_geometrycollection_point[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as intersects_point_geometrycollection;
+➤ intersects_point_geometrycollection[-7,1,0]  𝄀
+1
+select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(0 0)')) as intersects_nested_geometrycollection;
+➤ intersects_nested_geometrycollection[-7,1,0]  𝄀
+1
 select st_intersects(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_point_polygon_hole_inside_shell;
 ➤ intersects_point_polygon_hole_inside_shell[-7,1,0]  𝄀
 1

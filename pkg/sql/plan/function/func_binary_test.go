@@ -5888,7 +5888,7 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(1 1)"},
@@ -5897,7 +5897,7 @@ func TestStIntersectsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StIntersects)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -5961,6 +5961,41 @@ func TestStIntersectsWithPolygonHolePolygons(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StIntersects)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestStIntersectsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection intersects point on member line",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "point intersects collection",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "nested collection intersects point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(0 0)",
+			want:  true,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryIntersects(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func initStDisjointTestCase() []tcTemp {
@@ -6041,7 +6076,7 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 
 	unsupportedInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]string{"GEOMETRYCOLLECTION("},
 			[]bool{false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"POINT(1 1)"},
@@ -6050,7 +6085,7 @@ func TestStDisjointRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StDisjoint)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, info, "invalid geometry payload")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -6114,6 +6149,41 @@ func TestStDisjointWithPolygonHolePolygons(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDisjoint)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestStDisjointWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection disjoint from outside point",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(1 1)",
+			want:  true,
+		},
+		{
+			name:  "point not disjoint from collection",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+		{
+			name:  "nested collection not disjoint from point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(0 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryDisjoint(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func initStTouchesTestCase() []tcTemp {
@@ -7226,14 +7296,14 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "intersects",
 			fn:    StIntersects,
 			label: "ST_INTERSECTS",
-			left:  "SRID=4326;MULTILINESTRING((0 0,2 0))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))",
 			right: "SRID=3857;POINT(1 0)",
 		},
 		{
 			name:  "disjoint",
 			fn:    StDisjoint,
 			label: "ST_DISJOINT",
-			left:  "SRID=4326;POINT(0 0)",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
 			right: "SRID=3857;POINT(1 1)",
 		},
 		{

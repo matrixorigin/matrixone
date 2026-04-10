@@ -7883,7 +7883,7 @@ func isSimpleGeometryType(typeName string) bool {
 }
 
 func isIntersectsSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func isDistanceSupportedGeometryType(typeName string) bool {
@@ -8405,6 +8405,12 @@ func geometryIntersects(left, right []byte) (bool, error) {
 }
 
 func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (bool, error) {
+	if leftType == "GEOMETRYCOLLECTION" {
+		return geometryCollectionIntersects(left, right, leftType, rightType)
+	}
+	if rightType == "GEOMETRYCOLLECTION" {
+		return geometryCollectionIntersects(right, left, rightType, leftType)
+	}
 	if leftType == "MULTIPOINT" || leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
 		return multiGeometryIntersects(left, right)
 	}
@@ -8439,7 +8445,7 @@ func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (boo
 			}
 			return pointIntersectsPolygonGeometry(leftPoint, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs")
 		}
 	case "LINESTRING":
 		leftPoints, err := lineStringGeometryPointsFromPayload(left)
@@ -8466,7 +8472,7 @@ func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (boo
 			}
 			return lineStringIntersectsPolygonGeometry(leftPoints, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs")
 		}
 	case "POLYGON":
 		switch rightType {
@@ -8501,10 +8507,10 @@ func geometryIntersectsImpl(left, right []byte, leftType, rightType string) (boo
 			}
 			return polygonIntersectsPolygonGeometry(leftPolygon, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_INTERSECTS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs")
 	}
 }
 
@@ -10016,6 +10022,27 @@ func multiGeometryIntersects(collection, other []byte) (bool, error) {
 			return false, err
 		}
 		intersects, err := geometryIntersects([]byte(item), other)
+		if err != nil {
+			return false, err
+		}
+		if intersects {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func geometryCollectionIntersects(collection, other []byte, collectionType, otherType string) (bool, error) {
+	items, err := geometryPayloadItems(collection, collectionType)
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		itemType, err := geometryTypeNameFromPayload(item)
+		if err != nil {
+			return false, err
+		}
+		intersects, err := geometryIntersectsImpl(item, other, itemType, otherType)
 		if err != nil {
 			return false, err
 		}
