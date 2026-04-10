@@ -100,12 +100,19 @@ func d256Negate(x *types.Decimal256, sign uint64) {
 
 // ---- Inline Scale helpers ----
 //
-// These replace calls to D128.ScaleInplace / D128.Scale for hot paths,
-// avoiding sign handling, method dispatch, error allocation, and loops.
-// All operate on unsigned (non-negative) D128 values.
+// d64MulPow10 multiplies signed D64 x by 10^n. n must be in [1, 18].
+// Returns (result, true) on success, (x, false) on overflow.
+func d64MulPow10(x types.Decimal64, n int32) (types.Decimal64, bool) {
+	signBit := uint64(x) >> 63
+	mask := -signBit
+	abs := (uint64(x) ^ mask) + signBit
+	hi, lo := bits.Mul64(abs, types.Pow10[n])
+	if hi != 0 || lo>>63 != 0 {
+		return x, false
+	}
+	return types.Decimal64((lo ^ mask) + signBit), true
+}
 
-// d128MulPow10 multiplies unsigned D128 x by 10^n in-place.
-// Returns false on overflow. n must be in [1, 38].
 func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
 	scaleFactor := types.Decimal64(types.Pow10[scaleDiff])
@@ -240,9 +247,9 @@ func d64AddDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 
 	if len1 == 1 {
 		if scale1 < scale2 {
-			a, err := v1[0].Scale(scale2 - scale1)
-			if err != nil {
-				return -1, err
+			a, ok := d64MulPow10(v1[0], scale2-scale1)
+			if !ok {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", v1[0].Format(scale2-scale1))
 			}
 			return d64AddSameScale([]types.Decimal64{a}, v2, rs, rsnull), nil
 		}
@@ -254,9 +261,9 @@ func d64AddDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 
 	if len2 == 1 {
 		if scale2 < scale1 {
-			b, err := v2[0].Scale(scale1 - scale2)
-			if err != nil {
-				return -1, err
+			b, ok := d64MulPow10(v2[0], scale1-scale2)
+			if !ok {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", v2[0].Format(scale1-scale2))
 			}
 			return d64AddSameScale(v1, []types.Decimal64{b}, rs, rsnull), nil
 		}
@@ -380,9 +387,9 @@ func d64SubDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 	if len1 == 1 {
 		// const - vector
 		if scale1 < scale2 {
-			a, err := v1[0].Scale(scale2 - scale1)
-			if err != nil {
-				return -1, err
+			a, ok := d64MulPow10(v1[0], scale2-scale1)
+			if !ok {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", v1[0].Format(scale2-scale1))
 			}
 			return d64SubSameScale([]types.Decimal64{a}, v2, rs, rsnull), nil
 		}
@@ -395,9 +402,9 @@ func d64SubDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 	if len2 == 1 {
 		// vector - const
 		if scale2 < scale1 {
-			b, err := v2[0].Scale(scale1 - scale2)
-			if err != nil {
-				return -1, err
+			b, ok := d64MulPow10(v2[0], scale1-scale2)
+			if !ok {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", v2[0].Format(scale1-scale2))
 			}
 			return d64SubSameScale(v1, []types.Decimal64{b}, rs, rsnull), nil
 		}
@@ -927,50 +934,11 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 	return nil
 }
 
-func d128MulPow10(x *types.Decimal128, n int32) bool {
-	var hi, lo uint64
-	if n <= 19 {
-		f := types.Pow10[n]
-		hi, lo = bits.Mul64(x.B0_63, f)
-		if x.B64_127 != 0 {
-			crossHi, crossLo := bits.Mul64(x.B64_127, f)
-			if crossHi != 0 {
-				return false
-			}
-			var c uint64
-			hi, c = bits.Add64(hi, crossLo, 0)
-			if c != 0 || hi>>63 != 0 {
-				return false
-			}
-		}
-		x.B0_63 = lo
-		x.B64_127 = hi
-		return true
-	}
-	if n > 38 {
-		return false // 10^39 exceeds D128 range
-	}
-	// n in (19, 38]: two stages.
-	f1 := types.Pow10[19]
-	hi, lo = bits.Mul64(x.B0_63, f1)
+// d128Mul1Limb multiplies unsigned D128 x by f in-place. Returns false on overflow.
+func d128Mul1Limb(x *types.Decimal128, f uint64) bool {
+	hi, lo := bits.Mul64(x.B0_63, f)
 	if x.B64_127 != 0 {
-		crossHi, crossLo := bits.Mul64(x.B64_127, f1)
-		if crossHi != 0 {
-			return false
-		}
-		var c uint64
-		hi, c = bits.Add64(hi, crossLo, 0)
-		if c != 0 || hi>>63 != 0 {
-			return false
-		}
-	}
-	x.B0_63 = lo
-	x.B64_127 = hi
-
-	f2 := types.Pow10[n-19]
-	hi, lo = bits.Mul64(x.B0_63, f2)
-	if x.B64_127 != 0 {
-		crossHi, crossLo := bits.Mul64(x.B64_127, f2)
+		crossHi, crossLo := bits.Mul64(x.B64_127, f)
 		if crossHi != 0 {
 			return false
 		}
@@ -985,43 +953,40 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 	return true
 }
 
+// d128MulPow10 multiplies unsigned D128 x by 10^n in-place.
+// Returns false on overflow. n must be >= 1.
+func d128MulPow10(x *types.Decimal128, n int32) bool {
+	if n <= 19 {
+		return d128Mul1Limb(x, types.Pow10[n])
+	}
+	if n > 38 {
+		return false
+	}
+	return d128Mul1Limb(x, types.Pow10[19]) && d128Mul1Limb(x, types.Pow10[n-19])
+}
+
+// d128DivPow10Once divides unsigned D128 x by d in-place with round-half-up.
+func d128DivPow10Once(x *types.Decimal128, d uint64) {
+	var rem uint64
+	x.B64_127, rem = bits.Div64(0, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	if rem*2 >= d || rem>>63 != 0 {
+		x.B0_63++
+		if x.B0_63 == 0 {
+			x.B64_127++
+		}
+	}
+}
+
 // d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
 // n must be in [1, 38].
 func d128DivPow10(x *types.Decimal128, n int32) {
 	if n <= 19 {
-		d := types.Pow10[n]
-		var rem uint64
-		x.B64_127, rem = bits.Div64(0, x.B64_127, d)
-		x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-		if rem*2 >= d || rem>>63 != 0 {
-			x.B0_63++
-			if x.B0_63 == 0 {
-				x.B64_127++
-			}
-		}
+		d128DivPow10Once(x, types.Pow10[n])
 		return
 	}
-	// n in (19, 38]: two stages.
-	d1 := types.Pow10[19]
-	var rem uint64
-	x.B64_127, rem = bits.Div64(0, x.B64_127, d1)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d1)
-	if rem*2 >= d1 || rem>>63 != 0 {
-		x.B0_63++
-		if x.B0_63 == 0 {
-			x.B64_127++
-		}
-	}
-
-	d2 := types.Pow10[n-19]
-	x.B64_127, rem = bits.Div64(0, x.B64_127, d2)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d2)
-	if rem*2 >= d2 || rem>>63 != 0 {
-		x.B0_63++
-		if x.B0_63 == 0 {
-			x.B64_127++
-		}
-	}
+	d128DivPow10Once(x, types.Pow10[19])
+	d128DivPow10Once(x, types.Pow10[n-19])
 }
 
 // d128ScaleUp scales a signed D128 up by 10^n. Branchless sign handling, in-place.
