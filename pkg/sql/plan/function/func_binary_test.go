@@ -6081,7 +6081,7 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StTouches)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 
 	holeInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
@@ -6097,6 +6097,51 @@ func TestStTouchesRejectInvalidInput(t *testing.T) {
 	}
 	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
 	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StTouches)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStTouchesWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"LINESTRING(1 0,3 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2 0,2 2)",
+				"MULTILINESTRING((0 0,1 0),(3 0,4 0))",
+				"POINT(2 1)",
+				"LINESTRING(2 2,3 2)",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(1 -1,1 1)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+			},
+			[]bool{false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StTouches)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
 }
@@ -6366,7 +6411,50 @@ func TestStOverlapsRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StOverlaps)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+}
+
+func TestStOverlapsWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,3 0),(4 0,5 0))",
+				"LINESTRING(0 0,5 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(1 0,4 0)",
+				"MULTILINESTRING((1 0,3 0),(6 0,7 0))",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StOverlaps)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((2 0,4 0),(6 0,8 0))",
+				"POLYGON((-1 -1,7 -1,7 3,-1 3,-1 -1))",
+			},
+			[]bool{false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StOverlaps)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
 }
 
 func TestStOverlapsWithPolygonHolePolygons(t *testing.T) {
@@ -6859,8 +6947,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "touches",
 			fn:    StTouches,
 			label: "ST_TOUCHES",
-			left:  "SRID=4326;POINT(0 1)",
-			right: "SRID=3857;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			left:  "SRID=4326;MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))",
+			right: "SRID=3857;POINT(2 1)",
 		},
 		{
 			name:  "crosses",
@@ -6873,8 +6961,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "overlaps",
 			fn:    StOverlaps,
 			label: "ST_OVERLAPS",
-			left:  "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-			right: "SRID=3857;POLYGON((1 0,3 0,3 2,1 2,1 0))",
+			left:  "SRID=4326;MULTILINESTRING((0 0,3 0),(4 0,5 0))",
+			right: "SRID=3857;LINESTRING(1 0,4 0)",
 		},
 		{
 			name:  "equals",

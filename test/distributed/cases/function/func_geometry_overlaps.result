@@ -64,9 +64,18 @@ select st_overlaps(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POINT(1
 select st_overlaps(st_geomfromtext(null), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_null;
 ➤ overlaps_null[-7,1,0]  𝄀
 null
+select st_overlaps(st_geomfromtext('MULTILINESTRING((0 0,3 0),(4 0,5 0))'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_multiline_line;
+➤ overlaps_multiline_line[-7,1,0]  𝄀
+1
+select st_overlaps(st_geomfromtext('LINESTRING(0 0,5 0)'), st_geomfromtext('MULTILINESTRING((1 0,3 0),(6 0,7 0))')) as overlaps_line_multiline;
+➤ overlaps_line_multiline[-7,1,0]  𝄀
+1
+select st_overlaps(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))')) as overlaps_multipolygon_polygon;
+➤ overlaps_multipolygon_polygon[-7,1,0]  𝄀
+1
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
--- @regex("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs
+-- @regex("ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((3 1,5 1,5 5,3 5,3 1))')) as overlaps_polygon_hole_polygon_partial;
 ➤ overlaps_polygon_hole_polygon_partial[-7,1,0]  𝄀
 1

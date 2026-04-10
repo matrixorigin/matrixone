@@ -8544,10 +8544,16 @@ func geometryTouches(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+	if isTouchesSupportedGeometryType(leftType) && isTouchesSupportedGeometryType(rightType) {
 		if err := ensureMatchingGeometrySRID("ST_TOUCHES", left, right); err != nil {
 			return false, err
 		}
+	}
+	if !isTouchesSupportedGeometryType(leftType) || !isTouchesSupportedGeometryType(rightType) {
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
+	}
+	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+		return multiGeometryTouches(left, right, leftType, rightType)
 	}
 
 	switch leftType {
@@ -8576,7 +8582,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return pointOnPolygonBoundaryGeometry(rightPolygon, leftPoint.x, leftPoint.y), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "LINESTRING":
 		leftPoints, err := lineStringGeometryPointsFromPayload(left)
@@ -8603,7 +8609,7 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return lineStringTouchesPolygonGeometry(leftPoints, rightPolygon), nil
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	case "POLYGON":
 		switch rightType {
@@ -8638,10 +8644,10 @@ func geometryTouches(left, right []byte) (bool, error) {
 			}
 			return polygonTouchesPolygonGeometry(left, right, leftPolygon, rightPolygon)
 		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
+			return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 		}
 	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs")
+		return false, moerr.NewInvalidInputNoCtx("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
 }
 
@@ -8737,55 +8743,24 @@ func geometryOverlaps(left, right []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+	if isOverlapsSupportedGeometryType(leftType) && isOverlapsSupportedGeometryType(rightType) {
 		if err := ensureMatchingGeometrySRID("ST_OVERLAPS", left, right); err != nil {
 			return false, err
 		}
 	}
-
-	switch leftType {
-	case "POINT":
-		switch rightType {
-		case "POINT", "LINESTRING", "POLYGON":
-			return false, nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
-		}
-	case "LINESTRING":
-		if rightType == "POINT" || rightType == "POLYGON" {
-			return false, nil
-		}
-		if rightType != "LINESTRING" {
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
-		}
-		leftLine, err := lineStringGeometryPointsFromPayload(left)
-		if err != nil {
-			return false, err
-		}
-		rightLine, err := lineStringGeometryPointsFromPayload(right)
-		if err != nil {
-			return false, err
-		}
-		return lineStringOverlapsLineString(leftLine, rightLine), nil
-	case "POLYGON":
-		if rightType == "POINT" || rightType == "LINESTRING" {
-			return false, nil
-		}
-		if rightType != "POLYGON" {
-			return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
-		}
-		leftPolygon, err := polygonGeometryFromPayload(left)
-		if err != nil {
-			return false, err
-		}
-		rightPolygon, err := polygonGeometryFromPayload(right)
-		if err != nil {
-			return false, err
-		}
-		return polygonOverlapsPolygonGeometry(left, right, leftPolygon, rightPolygon)
-	default:
-		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, or POLYGON inputs")
+	if !isOverlapsSupportedGeometryType(leftType) || !isOverlapsSupportedGeometryType(rightType) {
+		return false, moerr.NewInvalidInputNoCtx("ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 	}
+	if leftType == "POINT" || rightType == "POINT" {
+		return false, nil
+	}
+	if isLinearGeometryType(leftType) && isLinearGeometryType(rightType) {
+		return linearGeometryOverlaps(left, right, leftType, rightType)
+	}
+	if isPolygonGeometryType(leftType) && isPolygonGeometryType(rightType) {
+		return polygonGeometryOverlaps(left, right, leftType, rightType)
+	}
+	return false, nil
 }
 
 func geometryEquals(left, right []byte) (bool, error) {
@@ -10052,6 +10027,235 @@ func multiGeometryIntersects(collection, other []byte) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func isTouchesSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
+func isOverlapsSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
+func isLinearGeometryType(typeName string) bool {
+	return typeName == "LINESTRING" || typeName == "MULTILINESTRING"
+}
+
+func isPolygonGeometryType(typeName string) bool {
+	return typeName == "POLYGON" || typeName == "MULTIPOLYGON"
+}
+
+func geometryPayloadItems(payload []byte, typeName string) ([][]byte, error) {
+	if typeName != "MULTIPOINT" && typeName != "MULTILINESTRING" && typeName != "MULTIPOLYGON" && typeName != "GEOMETRYCOLLECTION" {
+		return [][]byte{payload}, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	items := make([][]byte, 0, int(count))
+	for i := int64(1); i <= count; i++ {
+		item, err := geometryNFromPayload(payload, i)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, []byte(item))
+	}
+	return items, nil
+}
+
+func multiGeometryTouches(left, right []byte, leftType, rightType string) (bool, error) {
+	leftItems, err := geometryPayloadItems(left, leftType)
+	if err != nil {
+		return false, err
+	}
+	rightItems, err := geometryPayloadItems(right, rightType)
+	if err != nil {
+		return false, err
+	}
+	touched := false
+	for _, leftItem := range leftItems {
+		for _, rightItem := range rightItems {
+			intersects, err := geometryIntersects(leftItem, rightItem)
+			if err != nil {
+				return false, err
+			}
+			if !intersects {
+				continue
+			}
+			itemTouches, err := geometryTouches(leftItem, rightItem)
+			if err != nil {
+				return false, err
+			}
+			if !itemTouches {
+				return false, nil
+			}
+			touched = true
+		}
+	}
+	return touched, nil
+}
+
+func lineGeometryItems(payload []byte, typeName string) ([][]geometryPoint2D, error) {
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([][]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		line, err := lineStringGeometryPointsFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, line)
+	}
+	return lines, nil
+}
+
+type polygonGeometryItem struct {
+	payload []byte
+	shape   geometryPolygon2D
+}
+
+func polygonGeometryItems(payload []byte, typeName string) ([]polygonGeometryItem, error) {
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	polygons := make([]polygonGeometryItem, 0, len(items))
+	for _, item := range items {
+		polygon, err := polygonGeometryFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		polygons = append(polygons, polygonGeometryItem{
+			payload: item,
+			shape:   polygon,
+		})
+	}
+	return polygons, nil
+}
+
+func lineCollectionHasLinearOverlap(left, right [][]geometryPoint2D) bool {
+	for _, leftLine := range left {
+		for _, rightLine := range right {
+			if hasLineStringLinearOverlap(leftLine, rightLine) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func lineSegmentCoveredByLineCollection(start, end geometryPoint2D, lines [][]geometryPoint2D) bool {
+	intervals := make([]geometryParamInterval, 0, len(lines))
+	for _, line := range lines {
+		for i := 0; i < len(line)-1; i++ {
+			interval, ok := segmentOverlapParameterInterval(start, end, line[i], line[i+1])
+			if !ok {
+				continue
+			}
+			intervals = append(intervals, interval)
+		}
+	}
+	return parameterIntervalsCoverSegment(intervals)
+}
+
+func lineCollectionCoveredByLineCollection(candidate, container [][]geometryPoint2D) bool {
+	for _, line := range candidate {
+		for i := 0; i < len(line)-1; i++ {
+			if sameGeometryPoint(line[i], line[i+1]) {
+				continue
+			}
+			if !lineSegmentCoveredByLineCollection(line[i], line[i+1], container) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func linearGeometryOverlaps(left, right []byte, leftType, rightType string) (bool, error) {
+	leftLines, err := lineGeometryItems(left, leftType)
+	if err != nil {
+		return false, err
+	}
+	rightLines, err := lineGeometryItems(right, rightType)
+	if err != nil {
+		return false, err
+	}
+	if !lineCollectionHasLinearOverlap(leftLines, rightLines) {
+		return false, nil
+	}
+	if lineCollectionCoveredByLineCollection(leftLines, rightLines) || lineCollectionCoveredByLineCollection(rightLines, leftLines) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func polygonCollectionCoveredByPolygonCollection(candidate, container []polygonGeometryItem) (bool, error) {
+	for _, candidatePolygon := range candidate {
+		covered := false
+		for _, containerPolygon := range container {
+			itemCovered, err := polygonCoveredByPolygonGeometry(candidatePolygon.payload, candidatePolygon.shape, containerPolygon.shape)
+			if err != nil {
+				return false, err
+			}
+			if itemCovered {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func polygonGeometryOverlaps(left, right []byte, leftType, rightType string) (bool, error) {
+	leftPolygons, err := polygonGeometryItems(left, leftType)
+	if err != nil {
+		return false, err
+	}
+	rightPolygons, err := polygonGeometryItems(right, rightType)
+	if err != nil {
+		return false, err
+	}
+	hasOverlap := false
+	for _, leftPolygon := range leftPolygons {
+		for _, rightPolygon := range rightPolygons {
+			overlaps, err := polygonOverlapsPolygonGeometry(leftPolygon.payload, rightPolygon.payload, leftPolygon.shape, rightPolygon.shape)
+			if err != nil {
+				return false, err
+			}
+			if overlaps {
+				hasOverlap = true
+				break
+			}
+		}
+		if hasOverlap {
+			break
+		}
+	}
+	if !hasOverlap {
+		return false, nil
+	}
+	leftCovered, err := polygonCollectionCoveredByPolygonCollection(leftPolygons, rightPolygons)
+	if err != nil {
+		return false, err
+	}
+	if leftCovered {
+		return false, nil
+	}
+	rightCovered, err := polygonCollectionCoveredByPolygonCollection(rightPolygons, leftPolygons)
+	if err != nil {
+		return false, err
+	}
+	if rightCovered {
+		return false, nil
+	}
+	return true, nil
 }
 
 func multiGeometryDistance(collection, other []byte) (float64, error) {

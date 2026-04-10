@@ -52,9 +52,21 @@ null
 select st_touches(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 0)', 4326)) as touches_point_point_srid;
 ➤ touches_point_point_srid[-7,1,0]  𝄀
 0
+select st_touches(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('LINESTRING(2 0,2 2)')) as touches_multiline_line;
+➤ touches_multiline_line[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('LINESTRING(1 0,3 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(3 0,4 0))')) as touches_line_multiline;
+➤ touches_line_multiline[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POINT(2 1)')) as touches_multipolygon_point;
+➤ touches_multipolygon_point[-7,1,0]  𝄀
+1
+select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(2 2,3 2)')) as touches_multipolygon_line;
+➤ touches_multipolygon_line[-7,1,0]  𝄀
+1
 select st_touches(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)'));
--- @regex("ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs", true)
-invalid input: ST_TOUCHES only supports POINT, LINESTRING, or POLYGON inputs
+-- @regex("ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs", true)
+invalid input: ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
 ➤ touches_point_polygon_hole_outer_boundary[-7,1,0]  𝄀
 1
