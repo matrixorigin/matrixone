@@ -5903,12 +5903,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case
-		*tree.CloneTable,
+	case *tree.CloneTable,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
+		*tree.DataBranchMerge,
 		*tree.DataBranchDiff,
-		*tree.DataBranchMerge:
+		*tree.DataBranchPick:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
@@ -6912,7 +6912,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
 		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge,
+			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil

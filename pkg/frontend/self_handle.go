@@ -568,6 +568,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 
 	case *tree.DataBranchDiff,
 		*tree.DataBranchMerge,
+		*tree.DataBranchPick,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase,
