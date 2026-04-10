@@ -38,16 +38,24 @@ const (
 )
 
 var spatialIndexPredicateNames = map[string]struct{}{
-	"st_contains":  {},
-	"st_coveredby": {},
-	"st_covers":    {},
-	"st_crosses":   {},
-	"st_disjoint":  {},
-	"st_equals":    {},
+	"st_contains":   {},
+	"st_coveredby":  {},
+	"st_covers":     {},
+	"st_crosses":    {},
+	"st_disjoint":   {},
+	"st_equals":     {},
 	"st_intersects": {},
-	"st_overlaps":  {},
-	"st_touches":   {},
-	"st_within":    {},
+	"st_overlaps":   {},
+	"st_touches":    {},
+	"st_within":     {},
+}
+
+var spatialIndexDistanceComparisonNames = map[string]struct{}{
+	"<":  {},
+	"<=": {},
+	"=":  {},
+	">=": {},
+	">":  {},
 }
 
 type specialIndexKind uint8
@@ -157,11 +165,22 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 	}
 }
 
-func checkSpatialIndexFilter(fn *plan.Function) *plan.ColRef {
+func checkSpatialIndexFilter(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 {
 		return nil
 	}
 	if _, ok := spatialIndexPredicateNames[catalog.ToLower(fn.Func.ObjName)]; !ok {
+		return checkSpatialIndexDistanceFilter(fn)
+	}
+	return checkSpatialIndexPredicateFilter(fn)
+}
+
+func checkSpatialIndexPredicateFilter(fn *plan.Function) *plan.ColRef {
+	if fn == nil || len(fn.Args) != 2 {
 		return nil
 	}
 	if col := fn.Args[0].GetCol(); col != nil && isRuntimeConstExpr(fn.Args[1]) {
@@ -173,13 +192,41 @@ func checkSpatialIndexFilter(fn *plan.Function) *plan.ColRef {
 	return nil
 }
 
+func checkSpatialIndexDistanceFilter(fn *plan.Function) *plan.ColRef {
+	if fn == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	if _, ok := spatialIndexDistanceComparisonNames[fn.Func.ObjName]; !ok {
+		return nil
+	}
+	if isRuntimeConstExpr(fn.Args[1]) {
+		if col := checkSpatialDistanceExpr(fn.Args[0]); col != nil {
+			return col
+		}
+	}
+	if isRuntimeConstExpr(fn.Args[0]) {
+		if col := checkSpatialDistanceExpr(fn.Args[1]); col != nil {
+			return col
+		}
+	}
+	return nil
+}
+
+func checkSpatialDistanceExpr(expr *plan.Expr) *plan.ColRef {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 || catalog.ToLower(fn.Func.ObjName) != "st_distance" {
+		return nil
+	}
+	return checkSpatialIndexPredicateFilter(fn)
+}
+
 func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 	targetColPos, ok := node.TableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
 	if !ok {
 		return -1
 	}
 	for i := range node.FilterList {
-		col := checkSpatialIndexFilter(node.FilterList[i].GetF())
+		col := checkSpatialIndexFilter(node.FilterList[i])
 		if col != nil && col.ColPos == targetColPos {
 			return int32(i)
 		}

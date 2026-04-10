@@ -72,7 +72,27 @@ Project  𝄀
               Runtime Filter Probe: spatial_idx_path.id  𝄀
         ->  Index Table Scan on spatial_idx_path.idx_g [ForceOneCN]  𝄀
               Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
+explain select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on spatial_idx_path.idx_g  𝄀
+        Filter Cond: (st_distance(__mo_index_idx_col, 'POINT(1 1)') <= 0)
+explain select payload from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (spatial_idx_path.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on func_geometry_spatial_index.spatial_idx_path [ForceOneCN]  𝄀
+              Filter Cond: (st_distance(spatial_idx_path.g, 'POINT(1 1)') <= 0)  𝄀
+              Runtime Filter Probe: spatial_idx_path.id  𝄀
+        ->  Index Table Scan on spatial_idx_path.idx_g [ForceOneCN]  𝄀
+              Filter Cond: (st_distance(__mo_index_idx_col, 'POINT(1 1)') <= 0)
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0 order by id;
 ➤ id[4,32,0]  𝄀
 1
 update spatial_idx_path set g = st_geomfromtext('POINT(3 3)') where id = 2;

@@ -37,7 +37,10 @@ insert into spatial_idx_path values
     (3, st_geomfromtext('POINT(5 5)'), 30);
 explain select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
 explain select payload from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
+explain select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
+explain select payload from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
+select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0 order by id;
 update spatial_idx_path set g = st_geomfromtext('POINT(3 3)') where id = 2;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(2 2)')) order by id;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
