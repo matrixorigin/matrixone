@@ -7867,7 +7867,7 @@ type geometryParamInterval struct {
 }
 
 const (
-	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
 	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
 )
 
@@ -7885,7 +7885,7 @@ func isIntersectsSupportedGeometryType(typeName string) bool {
 }
 
 func isDistanceSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
 func geometrySRIDFromPayload(payload []byte) (uint32, error) {
@@ -7928,10 +7928,10 @@ func geometryDistance(left, right []byte) (float64, error) {
 			return 0, err
 		}
 	}
-	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
+	if leftType == "MULTIPOINT" || leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
 		return multiGeometryDistance(left, right)
 	}
-	if rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+	if rightType == "MULTIPOINT" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
 		return multiGeometryDistance(right, left)
 	}
 

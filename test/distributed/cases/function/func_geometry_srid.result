@@ -46,7 +46,7 @@ drop table geo_srid_value_bad;
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
-select st_distance(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
+select st_distance(st_geomfromtext('MULTIPOINT((0 0),(3 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
 -- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))', 4326), st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))', 3857));
