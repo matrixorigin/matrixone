@@ -615,6 +615,26 @@ func TestD64Mod(t *testing.T) {
 
 // ---- D128 ----
 
+// TestD128MulPow10Carry verifies that d128MulPow10 correctly detects overflow
+// when the cross-product carry overflows uint64 (hi + crossLo > 2^64).
+func TestD128MulPow10Carry(t *testing.T) {
+	// x = {B0_63: MaxUint64, B64_127: 1} = 2^65 - 1 ≈ 3.69e19.
+	// x * 10^19 ≈ 3.69e38 > 2^127 ≈ 1.70e38 → must overflow.
+	x := types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
+	require.False(t, d128MulPow10(&x, 19), "d128MulPow10 should detect carry overflow")
+
+	// x = {B0_63: MaxUint64, B64_127: 1}, n=1: x * 10 = 10*(2^65-1) ≈ 3.69e20.
+	// Fits in 128-bit unsigned (< 2^127), should succeed.
+	x = types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
+	require.True(t, d128MulPow10(&x, 1), "d128MulPow10 should succeed for small factor")
+	// Verify: 10 * (2^65-1) = 10*2^65 - 10 = 20*2^64 - 10.
+	// B0_63 = lo64(MaxUint64 * 10), B64_127 = hi64(MaxUint64 * 10) + 10.
+	hi, lo := bits.Mul64(^uint64(0), 10)
+	hi += 10 // cross product: 1 * 10
+	require.Equal(t, lo, x.B0_63)
+	require.Equal(t, hi, x.B64_127)
+}
+
 func TestD128Add(t *testing.T) {
 	t.Run("VecVec", func(t *testing.T) {
 		rng := rand.New(rand.NewSource(4))

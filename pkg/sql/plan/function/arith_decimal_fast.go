@@ -66,8 +66,9 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 			if crossHi != 0 {
 				return false
 			}
-			hi += crossLo
-			if hi>>63 != 0 {
+			var c uint64
+			hi, c = bits.Add64(hi, crossLo, 0)
+			if c != 0 || hi>>63 != 0 {
 				return false
 			}
 		}
@@ -83,8 +84,9 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 		if crossHi != 0 {
 			return false
 		}
-		hi += crossLo
-		if hi>>63 != 0 {
+		var c uint64
+		hi, c = bits.Add64(hi, crossLo, 0)
+		if c != 0 || hi>>63 != 0 {
 			return false
 		}
 	}
@@ -98,8 +100,9 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 		if crossHi != 0 {
 			return false
 		}
-		hi += crossLo
-		if hi>>63 != 0 {
+		var c uint64
+		hi, c = bits.Add64(hi, crossLo, 0)
+		if c != 0 || hi>>63 != 0 {
 			return false
 		}
 	}
