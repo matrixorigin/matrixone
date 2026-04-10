@@ -167,9 +167,11 @@ func (builder *QueryBuilder) stabilizeExactVectorSort(vecCtx *vectorSortContext)
 	if !ok || int(pkPos) >= len(tableDef.Cols) {
 		return
 	}
-	pkExpr := builder.buildPkExprFromNode(sortNode.Children[0], tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
-	if pkExpr == nil {
-		pkExpr = builder.projectVectorSortTiebreak(vecCtx.childNode, tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
+	var pkExpr *plan.Expr
+	if vecCtx.childNode != nil && vecCtx.childNode.NodeType == plan.Node_PROJECT {
+		pkExpr = builder.resolveProjectedVectorSortTiebreak(vecCtx.childNode, tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
+	} else {
+		pkExpr = builder.buildPkExprFromNode(sortNode.Children[0], tableDef.Cols[pkPos].Typ, tableDef.Pkey.PkeyColName)
 	}
 	if pkExpr == nil {
 		return
@@ -181,10 +183,26 @@ func (builder *QueryBuilder) stabilizeExactVectorSort(vecCtx *vectorSortContext)
 	sortNode.OrderBy = append(sortNode.OrderBy, &plan.OrderBySpec{Expr: pkExpr})
 }
 
-func (builder *QueryBuilder) projectVectorSortTiebreak(projectNode *plan.Node, pkType plan.Type, pkName string) *plan.Expr {
+func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *plan.Node, pkType plan.Type, pkName string) *plan.Expr {
 	if builder == nil || projectNode == nil || projectNode.NodeType != plan.Node_PROJECT || len(projectNode.Children) != 1 || len(projectNode.BindingTags) == 0 {
 		return nil
 	}
+
+	for idx, expr := range projectNode.ProjectList {
+		col := expr.GetCol()
+		if col == nil || builder.getColName(col) != pkName {
+			continue
+		}
+		return &plan.Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: projectNode.BindingTags[0],
+				ColPos: int32(idx),
+				Name:   pkName,
+			}},
+		}
+	}
+
 	pkExpr := builder.buildPkExprFromNode(projectNode.Children[0], pkType, pkName)
 	if pkExpr == nil {
 		return nil

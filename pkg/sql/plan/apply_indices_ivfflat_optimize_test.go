@@ -570,7 +570,7 @@ func TestApplyIndicesForProject_DescendingVectorFallbackGetsStablePkTiebreak(t *
 }
 
 func TestApplyIndicesForProject_ForceVectorSortProjectChildUsesExposedPkTiebreak(t *testing.T) {
-	builder, projNodeID, sortNodeID, scanTag := newProjectedExactVectorFallbackApplyIndicesCase(t)
+	builder, projNodeID, sortNodeID, childTag := newProjectedExactVectorFallbackApplyIndicesCase(t)
 
 	newNodeID, err := builder.applyIndices(projNodeID, nil, nil)
 	require.NoError(t, err)
@@ -580,7 +580,7 @@ func TestApplyIndicesForProject_ForceVectorSortProjectChildUsesExposedPkTiebreak
 	require.Len(t, sortNode.OrderBy, 2)
 	pkCol := sortNode.OrderBy[1].Expr.GetCol()
 	require.NotNil(t, pkCol)
-	assert.Equal(t, scanTag, pkCol.RelPos)
+	assert.Equal(t, childTag, pkCol.RelPos)
 	assert.Equal(t, int32(0), pkCol.ColPos)
 }
 
@@ -807,17 +807,17 @@ func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilde
 		Children: []int32{sortNodeID},
 		ProjectList: []*plan.Expr{
 			{
-				Typ: tableDef.Cols[0].Typ,
+				Typ: distExpr.Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: childTag,
-					ColPos: 0,
-					Name:   "id",
+					ColPos: 1,
+					Name:   "dist",
 				}},
 			},
 		},
 	}, ctx)
 
-	return builder, projNodeID, sortNodeID, scanTag
+	return builder, projNodeID, sortNodeID, childTag
 }
 
 func newProjectedHiddenPkExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilder, int32, int32, int32, int32, int32) {
