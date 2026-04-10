@@ -903,6 +903,9 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 		x.B64_127 = hi
 		return true
 	}
+	if n > 38 {
+		return false // 10^39 exceeds D128 range
+	}
 	// n in (19, 38]: two stages.
 	f1 := types.Pow10[19]
 	hi, lo = bits.Mul64(x.B0_63, f1)
@@ -2108,12 +2111,15 @@ func d256Mul1Limb(x *types.Decimal256, p uint64) bool {
 }
 
 // d256MulPow10 multiplies unsigned D256 x by 10^n in-place.
-// Returns false on overflow. n must be in [1, 38].
+// Returns false on overflow. n must be >= 1.
 func d256MulPow10(x *types.Decimal256, n int32) bool {
-	if n <= 19 {
-		return d256Mul1Limb(x, types.Pow10[n])
+	for n > 19 {
+		if !d256Mul1Limb(x, types.Pow10[19]) {
+			return false
+		}
+		n -= 19
 	}
-	return d256Mul1Limb(x, types.Pow10[19]) && d256Mul1Limb(x, types.Pow10[n-19])
+	return d256Mul1Limb(x, types.Pow10[n])
 }
 
 // d256ScaleUp scales a signed D256 up by 10^n. Branchless sign handling, in-place.

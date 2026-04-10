@@ -1512,6 +1512,17 @@ func TestD128Div_DiffScale(t *testing.T) {
 			require.Equal(t, want, rs[i], "d128Div diffscale vec-const[%d]", i)
 		}
 	})
+
+	t.Run("HighScaleAdj", func(t *testing.T) {
+		// scale1=0, scale2=37 → scaleAdj=43, previously panicked with Pow10 index out of bounds.
+		// The result overflows D128 but should return an error, not panic.
+		v1 := []types.Decimal128{{B0_63: 12345678}}
+		v2 := []types.Decimal128{{B0_63: 1000000}}
+		rs := make([]types.Decimal128, 1)
+		nul := nulls.NewWithSize(1)
+		err := d128Div(v1, v2, rs, 0, 37, nul, true)
+		require.Error(t, err, "expected overflow error for extreme scaleAdj")
+	})
 }
 
 func TestD128Mod(t *testing.T) {

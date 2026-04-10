@@ -854,5 +854,3 @@ func decimal256ToInt64(v types.Decimal256) (int64, error) {
 	}
 	return int64(v.B0_63), nil
 }
-
-

@@ -718,7 +718,6 @@ func (x Decimal256) Add(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	return
 }
 
-
 func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
 	scale = 12
 	if scale > scale1+6 {
