@@ -13,7 +13,13 @@ select st_coveredby(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfr
 select st_coveredby(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_polygon_polygon_equal;
 select st_coveredby(st_geomfromtext('POINT(0 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as coveredby_point_polygon_srid;
 select st_coveredby(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as coveredby_null;
--- @regex("ST_COVEREDBY only supports POINT, LINESTRING, or POLYGON inputs",true)
+select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as coveredby_line_multiline_union;
+select st_coveredby(st_geomfromtext('POINT(5 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as coveredby_point_multiline;
+select st_coveredby(st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_multiline_multipolygon;
+select st_coveredby(st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_multipolygon_multipolygon;
+select st_coveredby(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(2 0,3 0))')) as coveredby_line_multiline_gap;
+select st_coveredby(st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_polygon_multipolygon_span;
+-- @regex("ST_COVEREDBY only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs",true)
 select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(0 0)'));
 select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_shell;
 select st_coveredby(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_hole;
