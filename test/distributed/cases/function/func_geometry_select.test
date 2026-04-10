@@ -5,9 +5,10 @@ create table t1(
     p point srid 4326
 );
 insert into t1 values
-    (1, st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(10 10)', 4326)),
-    (2, st_geomfromtext('POINT(3 4)'), st_geomfromtext('POINT(20 20)', 4326)),
-    (3, null, null);
+(1, st_geomfromtext('LINESTRING(0 0,1 1)'), st_geomfromtext('POINT(10 10)', 4326)),
+(2, st_geomfromtext('POINT(3 4)'), st_geomfromtext('POINT(20 20)', 4326)),
+(3, null, null);
+select id, g, p from t1 order by id;
 select g from t1 order by id;
 select p from t1 order by id;
 drop table t1;
