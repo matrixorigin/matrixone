@@ -187,6 +187,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	}
 
 	var f *morpc.Future
+	var lastBackendErr error
 	reqFn := func() error {
 		var err error
 		start := time.Now()
@@ -203,13 +204,14 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	retryState := backendRetryState{}
 	for {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return txn.TxnResponse{}, ctxErr
+			return txn.TxnResponse{}, getBackendRetryExitError(ctxErr, lastBackendErr)
 		}
 
 		err := reqFn()
 		if err != nil {
 			// These errors are retriable error. Retry to send request to TN.
 			if isBackendConnectRetryError(err) {
+				lastBackendErr = err
 				wait, ok := getBackendRetryWaitDuration(&retryState)
 				if !ok {
 					s.logBackendRetryStop(err, tn, request, retryState)
@@ -225,7 +227,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 				}
 				continue
 			}
-			return txn.TxnResponse{}, err
+			return txn.TxnResponse{}, getBackendRetryExitError(err, lastBackendErr)
 		}
 		break
 	}
@@ -342,7 +344,66 @@ func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(ctx, tn.Address, false)
+
+	retryState := backendRetryState{}
+	var lastBackendErr error
+	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, getBackendRetryExitError(ctxErr, lastBackendErr)
+		}
+
+		st, err := s.client.NewStream(ctx, tn.Address, false)
+		if err == nil {
+			return st, nil
+		}
+		if isBackendConnectRetryError(err) {
+			lastBackendErr = err
+		}
+		if !isBackendConnectRetryError(err) {
+			return nil, getBackendRetryExitError(err, lastBackendErr)
+		}
+
+		wait, ok := getBackendRetryWaitDuration(&retryState)
+		if !ok {
+			s.logBackendStreamRetryStop(err, tn, size, retryState)
+			return nil, err
+		}
+		if !waitToRetrySend(ctx, wait) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, err
+			}
+			return nil, err
+		}
+	}
+}
+
+func getBackendRetryExitError(err error, lastBackendErr error) error {
+	if lastBackendErr != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return lastBackendErr
+	}
+	return err
+}
+
+func (s *sender) logBackendStreamRetryStop(
+	err error,
+	tn metadata.TNShard,
+	size int,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.Uint64("shard-id", tn.ShardID),
+		zap.Int("batch-size", size),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender stream backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender stream backend retry budget exhausted", fields...)
 }
 
 func (s *sender) acquireLocalStream() *localStream {
