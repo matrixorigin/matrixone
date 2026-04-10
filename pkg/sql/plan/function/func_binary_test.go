@@ -5260,7 +5260,7 @@ func TestStDistanceRejectInvalidInput(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
 	require.False(t, succeed)
-	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs")
+	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs")
 }
 
 func TestStDistanceWithPolygonHoles(t *testing.T) {
@@ -5329,6 +5329,38 @@ func TestStDistanceWithPolygonHolePolygons(t *testing.T) {
 			[]bool{false, false, false}),
 	}
 	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0.25}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"POINT(1 1)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"LINESTRING(5 3,6 3)",
+				"MULTILINESTRING((0 0,2 0),(5 0,7 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 0,7 0,7 2,5 2,5 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(3 0)",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"POINT(5 1)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTILINESTRING((3 0,4 0),(8 0,9 0))",
+				"MULTIPOLYGON(((3 0,4 0,4 1,3 1,3 0)),((8 0,9 0,9 1,8 1,8 0)))",
+				"POLYGON((5 0,7 0,7 2,5 2,5 0))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1, 0, 1, 1, 1, 0}, []bool{false, false, false, false, false, false, false})
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
@@ -6874,8 +6906,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	t.Run("distance", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		inputs := []FunctionTestInput{
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;POINT(0 0)"}, []bool{false}),
-			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(3 4)"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;MULTILINESTRING((0 0,2 0))"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(1 0)"}, []bool{false}),
 		}
 		expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
 		tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)

@@ -7867,7 +7867,7 @@ type geometryParamInterval struct {
 }
 
 const (
-	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, or POLYGON inputs"
+	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTILINESTRING, or MULTIPOLYGON inputs"
 	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
 )
 
@@ -7881,6 +7881,10 @@ func isSimpleGeometryType(typeName string) bool {
 }
 
 func isIntersectsSupportedGeometryType(typeName string) bool {
+	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+}
+
+func isDistanceSupportedGeometryType(typeName string) bool {
 	return isSimpleGeometryType(typeName) || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
 }
 
@@ -7919,10 +7923,16 @@ func geometryDistance(left, right []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if isSimpleGeometryType(leftType) && isSimpleGeometryType(rightType) {
+	if isDistanceSupportedGeometryType(leftType) && isDistanceSupportedGeometryType(rightType) {
 		if err := ensureMatchingGeometrySRID("ST_DISTANCE", left, right); err != nil {
 			return 0, err
 		}
+	}
+	if leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
+		return multiGeometryDistance(left, right)
+	}
+	if rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+		return multiGeometryDistance(right, left)
 	}
 
 	switch leftType {
@@ -10042,6 +10052,26 @@ func multiGeometryIntersects(collection, other []byte) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func multiGeometryDistance(collection, other []byte) (float64, error) {
+	count, err := geometryCountFromPayload(collection)
+	if err != nil {
+		return 0, err
+	}
+	minDistance := math.MaxFloat64
+	for i := int64(1); i <= count; i++ {
+		item, err := geometryNFromPayload(collection, i)
+		if err != nil {
+			return 0, err
+		}
+		distance, err := geometryDistance([]byte(item), other)
+		if err != nil {
+			return 0, err
+		}
+		minDistance = math.Min(minDistance, distance)
+	}
+	return minDistance, nil
 }
 
 func parsePolygonRingPoints(content string) ([]geometryPoint2D, error) {

@@ -31,6 +31,8 @@ drop table geo_srid_value_bad;
 -- @regex("different srids",true)
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 3857));
 -- @regex("different srids",true)
+select st_distance(st_geomfromtext('MULTILINESTRING((0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
+-- @regex("different srids",true)
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 3857));
 -- @regex("different srids",true)
 select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 3857));
