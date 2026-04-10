@@ -2030,59 +2030,133 @@ func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	return -1
 }
 
-// d256PrepareDiffScale normalizes v1/v2 to the same scale by scaling the lower-scale
-// operand. For vector cases, scales directly into rs (no temp allocation).
-// Returns prepared v1/v2 slices ready for same-scale arithmetic.
-func d256PrepareDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) ([]types.Decimal256, []types.Decimal256, error) {
+
+// d256AddDiffScale handles Decimal256 addition when scales differ.
+// Fuses per-element scaling and addition into a single pass to avoid
+// writing scaled values to rs and re-reading them.
+func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) (int, error) {
 	len1, len2 := len(v1), len(v2)
+	hasNull := !rsnull.IsEmpty()
+	var bmp *bitmap.Bitmap
+	if hasNull {
+		bmp = rsnull.GetBitmap()
+	}
 
 	if len1 == 1 {
 		if scale1 < scale2 {
 			a := v1[0]
 			if !d256ScaleUp(&a, scale2-scale1) {
-				return nil, nil, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[0].Format(0))
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[0].Format(0))
 			}
-			return []types.Decimal256{a}, v2, nil
+			return d256AddSameScale([]types.Decimal256{a}, v2, rs, rsnull), nil
 		}
-		if err := d256ScaleIntoRs(v2, rs, len2, scale1-scale2, rsnull); err != nil {
-			return nil, nil, err
+		a := v1[0]
+		signA := a.B192_255 >> 63
+		scaleDiff := scale1 - scale2
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			b := v2[i]
+			if !d256ScaleUp(&b, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
+			}
+			signB := b.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(a.B0_63, b.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(a.B64_127, b.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(a.B128_191, b.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(a.B192_255, b.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signA == signB && signA != signR {
+				return i, nil
+			}
 		}
-		return []types.Decimal256{v1[0]}, rs[:len2], nil
+		return -1, nil
 	}
 
 	if len2 == 1 {
 		if scale2 < scale1 {
 			b := v2[0]
 			if !d256ScaleUp(&b, scale1-scale2) {
-				return nil, nil, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[0].Format(0))
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[0].Format(0))
 			}
-			return v1, []types.Decimal256{b}, nil
+			return d256AddSameScale(v1, []types.Decimal256{b}, rs, rsnull), nil
 		}
-		if err := d256ScaleIntoRs(v1, rs, len1, scale2-scale1, rsnull); err != nil {
-			return nil, nil, err
+		b := v2[0]
+		signB := b.B192_255 >> 63
+		scaleDiff := scale2 - scale1
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			a := v1[i]
+			if !d256ScaleUp(&a, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
+			}
+			signA := a.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(a.B0_63, b.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(a.B64_127, b.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(a.B128_191, b.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(a.B192_255, b.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signA == signB && signA != signR {
+				return i, nil
+			}
 		}
-		return rs[:len1], []types.Decimal256{v2[0]}, nil
+		return -1, nil
 	}
 
+	// len1 == len2: fuse scale + add per element
 	if scale1 < scale2 {
-		if err := d256ScaleIntoRs(v1, rs, len1, scale2-scale1, rsnull); err != nil {
-			return nil, nil, err
+		scaleDiff := scale2 - scale1
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			a := v1[i]
+			if !d256ScaleUp(&a, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
+			}
+			y := v2[i]
+			signA := a.B192_255 >> 63
+			signY := y.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(a.B0_63, y.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(a.B64_127, y.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(a.B128_191, y.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(a.B192_255, y.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signA == signY && signA != signR {
+				return i, nil
+			}
 		}
-		return rs[:len1], v2, nil
+	} else {
+		scaleDiff := scale1 - scale2
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			b := v2[i]
+			if !d256ScaleUp(&b, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
+			}
+			x := v1[i]
+			signX := x.B192_255 >> 63
+			signB := b.B192_255 >> 63
+			var c uint64
+			rs[i].B0_63, c = bits.Add64(x.B0_63, b.B0_63, 0)
+			rs[i].B64_127, c = bits.Add64(x.B64_127, b.B64_127, c)
+			rs[i].B128_191, c = bits.Add64(x.B128_191, b.B128_191, c)
+			rs[i].B192_255, _ = bits.Add64(x.B192_255, b.B192_255, c)
+			signR := rs[i].B192_255 >> 63
+			if signX == signB && signX != signR {
+				return i, nil
+			}
+		}
 	}
-	if err := d256ScaleIntoRs(v2, rs, len2, scale1-scale2, rsnull); err != nil {
-		return nil, nil, err
-	}
-	return v1, rs[:len2], nil
-}
-
-// d256AddDiffScale handles Decimal256 addition when scales differ.
-func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) (int, error) {
-	pv1, pv2, err := d256PrepareDiffScale(v1, v2, rs, scale1, scale2, rsnull)
-	if err != nil {
-		return -1, err
-	}
-	return d256AddSameScale(pv1, pv2, rs, rsnull), nil
+	return -1, nil
 }
 
 // d256SubSameScale subtracts two Decimal256 vectors with the same scale, inlining
@@ -2155,38 +2229,132 @@ func d256SubSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 }
 
 // d256SubDiffScale handles Decimal256 subtraction when scales differ.
+// Fuses per-element scaling and subtraction into a single pass.
 func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) (int, error) {
-	pv1, pv2, err := d256PrepareDiffScale(v1, v2, rs, scale1, scale2, rsnull)
-	if err != nil {
-		return -1, err
+	len1, len2 := len(v1), len(v2)
+	hasNull := !rsnull.IsEmpty()
+	var bmp *bitmap.Bitmap
+	if hasNull {
+		bmp = rsnull.GetBitmap()
 	}
-	return d256SubSameScale(pv1, pv2, rs, rsnull), nil
-}
 
-// d256ScaleIntoRs scales vec[i] * 10^scaleDiff into rs[i], respecting nulls.
-// scaleDiff is always positive (multiply up). Values are signed D256.
-func d256ScaleIntoRs(vec, rs []types.Decimal256, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
-	bmp := rsnull.GetBitmap()
-	if rsnull.IsEmpty() {
-		for i := 0; i < n; i++ {
-			rs[i] = vec[i]
-			if !d256ScaleUp(&rs[i], scaleDiff) {
-				return moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", vec[i].Format(0))
+	if len1 == 1 {
+		if scale1 < scale2 {
+			a := v1[0]
+			if !d256ScaleUp(&a, scale2-scale1) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[0].Format(0))
+			}
+			return d256SubSameScale([]types.Decimal256{a}, v2, rs, rsnull), nil
+		}
+		a := v1[0]
+		signA := a.B192_255 >> 63
+		scaleDiff := scale1 - scale2
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			b := v2[i]
+			if !d256ScaleUp(&b, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
+			}
+			signB := b.B192_255 >> 63
+			var bw uint64
+			rs[i].B0_63, bw = bits.Sub64(a.B0_63, b.B0_63, 0)
+			rs[i].B64_127, bw = bits.Sub64(a.B64_127, b.B64_127, bw)
+			rs[i].B128_191, bw = bits.Sub64(a.B128_191, b.B128_191, bw)
+			rs[i].B192_255, _ = bits.Sub64(a.B192_255, b.B192_255, bw)
+			signR := rs[i].B192_255 >> 63
+			if signA != signB && signA != signR {
+				return i, nil
+			}
+		}
+		return -1, nil
+	}
+
+	if len2 == 1 {
+		if scale2 < scale1 {
+			b := v2[0]
+			if !d256ScaleUp(&b, scale1-scale2) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[0].Format(0))
+			}
+			return d256SubSameScale(v1, []types.Decimal256{b}, rs, rsnull), nil
+		}
+		b := v2[0]
+		signB := b.B192_255 >> 63
+		scaleDiff := scale2 - scale1
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			a := v1[i]
+			if !d256ScaleUp(&a, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
+			}
+			signA := a.B192_255 >> 63
+			var bw uint64
+			rs[i].B0_63, bw = bits.Sub64(a.B0_63, b.B0_63, 0)
+			rs[i].B64_127, bw = bits.Sub64(a.B64_127, b.B64_127, bw)
+			rs[i].B128_191, bw = bits.Sub64(a.B128_191, b.B128_191, bw)
+			rs[i].B192_255, _ = bits.Sub64(a.B192_255, b.B192_255, bw)
+			signR := rs[i].B192_255 >> 63
+			if signA != signB && signA != signR {
+				return i, nil
+			}
+		}
+		return -1, nil
+	}
+
+	// len1 == len2: fuse scale + sub per element
+	if scale1 < scale2 {
+		scaleDiff := scale2 - scale1
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			a := v1[i]
+			if !d256ScaleUp(&a, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
+			}
+			y := v2[i]
+			signA := a.B192_255 >> 63
+			signY := y.B192_255 >> 63
+			var bw uint64
+			rs[i].B0_63, bw = bits.Sub64(a.B0_63, y.B0_63, 0)
+			rs[i].B64_127, bw = bits.Sub64(a.B64_127, y.B64_127, bw)
+			rs[i].B128_191, bw = bits.Sub64(a.B128_191, y.B128_191, bw)
+			rs[i].B192_255, _ = bits.Sub64(a.B192_255, y.B192_255, bw)
+			signR := rs[i].B192_255 >> 63
+			if signA != signY && signA != signR {
+				return i, nil
 			}
 		}
 	} else {
-		for i := 0; i < n; i++ {
-			rs[i] = vec[i]
-			if bmp.Contains(uint64(i)) {
+		scaleDiff := scale1 - scale2
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if !d256ScaleUp(&rs[i], scaleDiff) {
-				return moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", vec[i].Format(0))
+			b := v2[i]
+			if !d256ScaleUp(&b, scaleDiff) {
+				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
+			}
+			x := v1[i]
+			signX := x.B192_255 >> 63
+			signB := b.B192_255 >> 63
+			var bw uint64
+			rs[i].B0_63, bw = bits.Sub64(x.B0_63, b.B0_63, 0)
+			rs[i].B64_127, bw = bits.Sub64(x.B64_127, b.B64_127, bw)
+			rs[i].B128_191, bw = bits.Sub64(x.B128_191, b.B128_191, bw)
+			rs[i].B192_255, _ = bits.Sub64(x.B192_255, b.B192_255, bw)
+			signR := rs[i].B192_255 >> 63
+			if signX != signB && signX != signR {
+				return i, nil
 			}
 		}
 	}
-	return nil
+	return -1, nil
 }
+
 
 // ---- Decimal256 multiply ----
 
