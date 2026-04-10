@@ -607,6 +607,90 @@ func TestApplyIndicesForProject_ForceVectorSortProjectChildMaterializesHiddenPkT
 	assert.Equal(t, catalog.CPrimaryKeyColName, pkCol.Name)
 }
 
+func TestStabilizeExactVectorSort_GuardBranches(t *testing.T) {
+	var nilBuilder *QueryBuilder
+	nilBuilder.stabilizeExactVectorSort(nil)
+
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	tableWithPk := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "vec", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "vec": 1},
+	}
+
+	builder.stabilizeExactVectorSort(&vectorSortContext{
+		sortNode: &plan.Node{OrderBy: []*plan.OrderBySpec{{}, {}}, Children: []int32{0}},
+		scanNode: &plan.Node{TableDef: tableWithPk},
+	})
+
+	builder.stabilizeExactVectorSort(&vectorSortContext{
+		sortNode: &plan.Node{OrderBy: []*plan.OrderBySpec{{}}, Children: []int32{0}},
+		scanNode: &plan.Node{},
+	})
+
+	builder.stabilizeExactVectorSort(&vectorSortContext{
+		sortNode: &plan.Node{OrderBy: []*plan.OrderBySpec{{}}, Children: []int32{0}},
+		scanNode: &plan.Node{TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		}},
+	})
+
+	projectNode := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+					Name:   "other",
+				}},
+			},
+		},
+	}
+	builder.qry.Nodes = []*plan.Node{projectNode}
+	builder.stabilizeExactVectorSort(&vectorSortContext{
+		sortNode: &plan.Node{OrderBy: []*plan.OrderBySpec{{}}, Children: []int32{0}},
+		scanNode: &plan.Node{TableDef: tableWithPk},
+	})
+}
+
+func TestResolveProjectedVectorSortTiebreak_GuardBranches(t *testing.T) {
+	var nilBuilder *QueryBuilder
+	assert.Nil(t, nilBuilder.resolveProjectedVectorSortTiebreak(nil, plan.Type{}, "id"))
+
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{{Name: "vec", Typ: plan.Type{Id: int32(types.T_array_float32)}}},
+		},
+	}
+	builder.qry.Nodes = []*plan.Node{scanNode}
+
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{0},
+		BindingTags: []int32{10},
+		ProjectList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_array_float32)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 10,
+					ColPos: 0,
+					Name:   "vec",
+				}},
+			},
+		},
+	}
+	assert.Nil(t, builder.resolveProjectedVectorSortTiebreak(projectNode, plan.Type{Id: int32(types.T_int64)}, "id"))
+}
+
 func newExactVectorFallbackApplyIndicesCase(t *testing.T, sortFlag plan.OrderBySpec_OrderByFlag, rankOption *plan.RankOption) (*QueryBuilder, int32, int32, int32) {
 	t.Helper()
 
