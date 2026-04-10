@@ -30,42 +30,6 @@ import (
 const benchN = 8192
 const testBatchSize = 256
 
-func randD64(rng *rand.Rand) types.Decimal64 {
-	return types.Decimal64(rng.Int63n(2_000_000_000) - 1_000_000_000)
-}
-
-func randD128(rng *rand.Rand) types.Decimal128 {
-	lo := rng.Uint64()
-	hi := uint64(rng.Int63n(1000))
-	if rng.Intn(2) == 0 {
-		hi = ^uint64(0) - hi
-	}
-	return types.Decimal128{B0_63: lo, B64_127: hi}
-}
-
-func randD128Small(rng *rand.Rand) types.Decimal128 {
-	v := types.Decimal128{B0_63: uint64(rng.Int63n(1_000_000_000)), B64_127: 0}
-	if rng.Intn(2) == 0 {
-		v = v.Minus()
-	}
-	return v
-}
-
-func randD256(rng *rand.Rand) types.Decimal256 {
-	return types.Decimal256{
-		B0_63:    rng.Uint64(),
-		B64_127:  uint64(rng.Int63n(1000)),
-		B128_191: 0,
-		B192_255: 0,
-	}
-}
-
-func randD256Small(rng *rand.Rand) types.Decimal256 {
-	return types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000))}
-}
-
-var sinkD128 types.Decimal128
-
 func makeNulls(n int) *nulls.Nulls {
 	nul := nulls.NewWithSize(n)
 	for i := 0; i < n; i += 4 {
@@ -76,65 +40,144 @@ func makeNulls(n int) *nulls.Nulls {
 
 // d256SubRef is a test-only reference implementation for Decimal256 subtraction
 // with scale alignment (mirrors the deleted Decimal256.Sub method).
-func d256SubRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
-	var err error
-	var scale int32
-	if scale1 > scale2 {
-		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else if scale1 < scale2 {
-		scale = scale2
-		x, err = x.Scale(scale - scale1)
-	} else {
-		scale = scale1
-	}
-	if err != nil {
-		return types.Decimal256{}, scale, err
-	}
-	z, err := x.Sub256(y)
-	return z, scale, err
+func TestDivByZero_NullBehavior(t *testing.T) {
+	v1 := []types.Decimal128{{B0_63: 100, B64_127: 0}}
+	v2 := []types.Decimal128{{B0_63: 0, B64_127: 0}}
+	rs := make([]types.Decimal128, 1)
+	nul := nulls.NewWithSize(1)
+
+	err := d128Div(v1, v2, rs, 2, 2, nul, false)
+	require.NoError(t, err)
+	require.True(t, nul.Contains(0), "div by zero should set null")
 }
 
-// d256MulRef is a test-only reference implementation for Decimal256 multiplication
-// with scale (mirrors the deleted Decimal256.Mul method).
-func d256MulRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
-	scale := int32(12)
-	if scale1 > scale {
-		scale = scale1
-	}
-	if scale2 > scale {
-		scale = scale2
-	}
-	if scale1+scale2 < scale {
-		scale = scale1 + scale2
-	}
-	signx := x.Sign()
-	x1 := x
-	signy := y.Sign()
-	y1 := y
-	if signx {
-		x1 = x1.Minus()
-	}
-	if signy {
-		y1 = y1.Minus()
-	}
-	z, err := x1.Mul256(y1)
-	if err != nil {
-		return z, scale, err
-	}
-	if scale-scale1-scale2 != 0 {
-		z, err = z.Scale(scale - scale1 - scale2)
-		if err != nil {
-			return z, scale, err
+func TestModByZero_NullBehavior(t *testing.T) {
+	// d64Mod: shouldError=false should set null
+	v1d64 := []types.Decimal64{types.Decimal64(100)}
+	v2d64 := []types.Decimal64{types.Decimal64(0)}
+	rsd64 := make([]types.Decimal64, 1)
+	nul := nulls.NewWithSize(1)
+	err := d64Mod(v1d64, v2d64, rsd64, 2, 2, nul, false)
+	require.NoError(t, err)
+	require.True(t, nul.Contains(0), "d64Mod: mod by zero should set null")
+
+	// d128Mod: shouldError=false should set null
+	v1d128 := []types.Decimal128{{B0_63: 100}}
+	v2d128 := []types.Decimal128{{B0_63: 0}}
+	rsd128 := make([]types.Decimal128, 1)
+	nul2 := nulls.NewWithSize(1)
+	err = d128Mod(v1d128, v2d128, rsd128, 2, 2, nul2, false)
+	require.NoError(t, err)
+	require.True(t, nul2.Contains(0), "d128Mod: mod by zero should set null")
+}
+
+// TestD256Mul_HighScale exercises the batch-level d256ScaleDown/d256DivPow10 path.
+func TestNullHandling(t *testing.T) {
+	t.Run("D64Add_WithNulls", func(t *testing.T) {
+		v1 := make([]types.Decimal64, 8)
+		v2 := make([]types.Decimal64, 8)
+		rs := make([]types.Decimal64, 8)
+		for i := range v1 {
+			v1[i] = types.Decimal64(int64(i*100 + 1))
+			v2[i] = types.Decimal64(int64(i*10 + 1))
 		}
-	}
-	if signx != signy {
-		z = z.Minus()
-	}
-	return z, scale, nil
+		nul := nulls.NewWithSize(8)
+		nul.Add(1)
+		nul.Add(3)
+		nul.Add(5)
+		require.NoError(t, d64Add(v1, v2, rs, 2, 2, nul))
+		for i := range v1 {
+			if nul.Contains(uint64(i)) {
+				continue
+			}
+			want, err := v1[i].Add64(v2[i])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d64Add null[%d]", i)
+		}
+	})
+
+	t.Run("D128Mod_WithNulls", func(t *testing.T) {
+		v1 := make([]types.Decimal128, 8)
+		v2 := make([]types.Decimal128, 8)
+		rs := make([]types.Decimal128, 8)
+		for i := range v1 {
+			v1[i] = types.Decimal128{B0_63: uint64(i*100 + 1)}
+			v2[i] = types.Decimal128{B0_63: uint64(i*10 + 1)}
+		}
+		nul := nulls.NewWithSize(8)
+		nul.Add(0)
+		nul.Add(4)
+		nul.Add(7)
+		require.NoError(t, d128Mod(v1, v2, rs, 2, 5, nul, true))
+		for i := range v1 {
+			if nul.Contains(uint64(i)) {
+				continue
+			}
+			want, _, err := v1[i].Mod(v2[i], 2, 5)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d128Mod null[%d]", i)
+		}
+	})
+
+	t.Run("D256Div_WithNulls", func(t *testing.T) {
+		v1 := make([]types.Decimal256, 8)
+		v2 := make([]types.Decimal256, 8)
+		rs := make([]types.Decimal256, 8)
+		for i := range v1 {
+			v1[i] = randD256Small(rand.New(rand.NewSource(int64(i))))
+			v2[i] = types.Decimal256{B0_63: uint64(i + 1)}
+		}
+		nul := nulls.NewWithSize(8)
+		nul.Add(2)
+		nul.Add(6)
+		require.NoError(t, d256Div(v1, v2, rs, 2, 2, nul, true))
+		for i := range v1 {
+			if nul.Contains(uint64(i)) {
+				continue
+			}
+			want, _, err := v1[i].Div(v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256Div null[%d]", i)
+		}
+	})
+
+	t.Run("D64Sub_DiffScale_WithNulls", func(t *testing.T) {
+		v1 := make([]types.Decimal64, 8)
+		v2 := make([]types.Decimal64, 8)
+		rs := make([]types.Decimal64, 8)
+		for i := range v1 {
+			v1[i] = types.Decimal64(int64(i*100 + 1))
+			v2[i] = types.Decimal64(int64(i*10 + 1))
+		}
+		nul := nulls.NewWithSize(8)
+		nul.Add(0)
+		nul.Add(3)
+		require.NoError(t, d64Sub(v1, v2, rs, 2, 5, nul))
+		for i := range v1 {
+			if nul.Contains(uint64(i)) {
+				continue
+			}
+			want, _, err := v1[i].Sub(v2[i], 2, 5)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d64Sub diffscale null[%d]", i)
+		}
+	})
 }
 
-// ---- D64 ----
+// TestD128Div_DiffScale tests D128 division with different scales (ScalarVec and VecScalar).
+func BenchmarkBitsMul64(b *testing.B) {
+	x := uint64(123456789)
+	y := uint64(98)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hi, lo := bits.Mul64(x, y)
+		sinkD128 = types.Decimal128{B0_63: lo, B64_127: hi}
+	}
+}
+
+func randD64(rng *rand.Rand) types.Decimal64 {
+	return types.Decimal64(rng.Int63n(2_000_000_000) - 1_000_000_000)
+}
 
 func TestD64Add(t *testing.T) {
 	t.Run("VecVec", func(t *testing.T) {
@@ -282,6 +325,36 @@ func TestD64Add(t *testing.T) {
 			require.Equal(t, types.Decimal64(want.B0_63), rs2[i], "diffscale vec-const[%d]", i)
 		}
 	})
+}
+
+func TestD64AddSub_SameScale(t *testing.T) {
+	tests := []struct {
+		name  string
+		x, y  types.Decimal64
+		isSub bool
+		want  types.Decimal64
+	}{
+		{"simple add", types.Decimal64(100), types.Decimal64(200), false, types.Decimal64(300)},
+		{"simple sub", types.Decimal64(300), types.Decimal64(100), true, types.Decimal64(200)},
+		{"add negative", types.Decimal64(100), types.Decimal64(^uint64(100) + 1), false, types.Decimal64(0)},
+		{"sub negative (add)", types.Decimal64(100), types.Decimal64(^uint64(100) + 1), true, types.Decimal64(200)},
+		{"zero + zero", types.Decimal64(0), types.Decimal64(0), false, types.Decimal64(0)},
+		{"large values", types.Decimal64(999999999999999), types.Decimal64(1), false, types.Decimal64(1000000000000000)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got types.Decimal64
+			var err error
+			if tt.isSub {
+				got, err = tt.x.Sub64(tt.y)
+			} else {
+				got, err = tt.x.Add64(tt.y)
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got, "d64 op(%d, %d, sub=%v)", tt.x, tt.y, tt.isSub)
+		})
+	}
 }
 
 func TestD64Sub(t *testing.T) {
@@ -699,22 +772,225 @@ func TestD64Mod(t *testing.T) {
 
 // TestD128MulPow10Carry verifies that d128MulPow10 correctly detects overflow
 // when the cross-product carry overflows uint64 (hi + crossLo > 2^64).
-func TestD128MulPow10Carry(t *testing.T) {
-	// x = {B0_63: MaxUint64, B64_127: 1} = 2^65 - 1 ≈ 3.69e19.
-	// x * 10^19 ≈ 3.69e38 > 2^127 ≈ 1.70e38 → must overflow.
-	x := types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
-	require.False(t, d128MulPow10(&x, 19), "d128MulPow10 should detect carry overflow")
+func BenchmarkD64Add_Fast(b *testing.B) {
+	x := types.Decimal64(123456789)
+	y := types.Decimal64(987654321)
+	var r types.Decimal64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, _ = x.Add64(y)
+	}
+	_ = r
+}
 
-	// x = {B0_63: MaxUint64, B64_127: 1}, n=1: x * 10 = 10*(2^65-1) ≈ 3.69e20.
-	// Fits in 128-bit unsigned (< 2^127), should succeed.
-	x = types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
-	require.True(t, d128MulPow10(&x, 1), "d128MulPow10 should succeed for small factor")
-	// Verify: 10 * (2^65-1) = 10*2^65 - 10 = 20*2^64 - 10.
-	// B0_63 = lo64(MaxUint64 * 10), B64_127 = hi64(MaxUint64 * 10) + 10.
-	hi, lo := bits.Mul64(^uint64(0), 10)
-	hi += 10 // cross product: 1 * 10
-	require.Equal(t, lo, x.B0_63)
-	require.Equal(t, hi, x.B64_127)
+func BenchmarkD64Add_Generic(b *testing.B) {
+	x := types.Decimal64(123456789)
+	y := types.Decimal64(987654321)
+	var r types.Decimal64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, _, _ = x.Add(y, 2, 2)
+	}
+	_ = r
+}
+
+func BenchmarkD64Sub_Fast(b *testing.B) {
+	x := types.Decimal64(987654321)
+	y := types.Decimal64(123456789)
+	var r types.Decimal64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, _ = x.Sub64(y)
+	}
+	_ = r
+}
+
+func BenchmarkD64Sub_Generic(b *testing.B) {
+	x := types.Decimal64(987654321)
+	y := types.Decimal64(123456789)
+	var r types.Decimal64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r, _, _ = x.Sub(y, 2, 2)
+	}
+	_ = r
+}
+
+func BenchmarkD64Mul_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			rs[i] = d64MulInline(xs[i], ys[i])
+		}
+	}
+	_ = rs
+}
+
+func BenchmarkD64Mul_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			x128 := functionUtil.ConvertD64ToD128(xs[i])
+			y128 := functionUtil.ConvertD64ToD128(ys[i])
+			rs[i], _, _ = x128.Mul(y128, 2, 2)
+		}
+	}
+	_ = rs
+}
+
+func BenchmarkD64Mul_Inline(b *testing.B) {
+	x := types.Decimal64(123456789)
+	y := types.Decimal64(98)
+	var r types.Decimal128
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r = d64MulInline(x, y)
+	}
+	_ = r
+}
+
+func BenchmarkD64Div_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD64(rng)
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Div(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD64Div_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD64(rng)
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			x128 := functionUtil.ConvertD64ToD128(xs[i])
+			y128 := functionUtil.ConvertD64ToD128(ys[i])
+			rs[i], _, _ = x128.Div(y128, 2, 2)
+		}
+	}
+}
+
+func BenchmarkD64Mod_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Mod(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD64ModDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Mod(xs, ys, rs, 2, 4, nul, true)
+	}
+}
+
+func BenchmarkD64IntDiv_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64IntDiv(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD64IntDiv_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]int64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			d1 := types.Decimal128{B0_63: uint64(xs[i])}
+			if xs[i]>>63 != 0 {
+				d1.B64_127 = ^uint64(0)
+			}
+			d2 := types.Decimal128{B0_63: uint64(ys[i])}
+			r, rScale, _ := d1.Div(d2, 2, 2)
+			if rScale > 0 {
+				r, _ = r.Scale(-rScale)
+			}
+			rs[i], _ = decimal128ToInt64(r)
+		}
+	}
+}
+
+func randD128(rng *rand.Rand) types.Decimal128 {
+	lo := rng.Uint64()
+	hi := uint64(rng.Int63n(1000))
+	if rng.Intn(2) == 0 {
+		hi = ^uint64(0) - hi
+	}
+	return types.Decimal128{B0_63: lo, B64_127: hi}
+}
+
+func randD128Small(rng *rand.Rand) types.Decimal128 {
+	v := types.Decimal128{B0_63: uint64(rng.Int63n(1_000_000_000)), B64_127: 0}
+	if rng.Intn(2) == 0 {
+		v = v.Minus()
+	}
+	return v
 }
 
 func TestD128Add(t *testing.T) {
@@ -942,6 +1218,24 @@ func TestD128Sub(t *testing.T) {
 			require.Equal(t, want, rs2[i], "d128 diffscale vec-const sub[%d]", i)
 		}
 	})
+}
+
+func TestD128MulPow10Carry(t *testing.T) {
+	// x = {B0_63: MaxUint64, B64_127: 1} = 2^65 - 1 ≈ 3.69e19.
+	// x * 10^19 ≈ 3.69e38 > 2^127 ≈ 1.70e38 → must overflow.
+	x := types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
+	require.False(t, d128MulPow10(&x, 19), "d128MulPow10 should detect carry overflow")
+
+	// x = {B0_63: MaxUint64, B64_127: 1}, n=1: x * 10 = 10*(2^65-1) ≈ 3.69e20.
+	// Fits in 128-bit unsigned (< 2^127), should succeed.
+	x = types.Decimal128{B0_63: ^uint64(0), B64_127: 1}
+	require.True(t, d128MulPow10(&x, 1), "d128MulPow10 should succeed for small factor")
+	// Verify: 10 * (2^65-1) = 10*2^65 - 10 = 20*2^64 - 10.
+	// B0_63 = lo64(MaxUint64 * 10), B64_127 = hi64(MaxUint64 * 10) + 10.
+	hi, lo := bits.Mul64(^uint64(0), 10)
+	hi += 10 // cross product: 1 * 10
+	require.Equal(t, lo, x.B0_63)
+	require.Equal(t, hi, x.B64_127)
 }
 
 func TestD128Mul(t *testing.T) {
@@ -1184,6 +1478,42 @@ func TestD128Div(t *testing.T) {
 	})
 }
 
+func TestD128Div_DiffScale(t *testing.T) {
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(95))
+		vec := make([]types.Decimal128, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal128{randD128Small(rng)}
+		rs := make([]types.Decimal128, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d128Div(scalar, vec, rs, 3, 6, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Div(vec[i], 3, 6)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d128Div diffscale const-vec[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(96))
+		vec := make([]types.Decimal128, testBatchSize)
+		for i := range vec {
+			vec[i] = randD128Small(rng)
+		}
+		scalar := []types.Decimal128{{B0_63: uint64(rng.Int63n(999) + 1)}}
+		rs := make([]types.Decimal128, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d128Div(vec, scalar, rs, 6, 3, nul, true))
+		for i := range vec {
+			want, _, err := vec[i].Div(scalar[0], 6, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d128Div diffscale vec-const[%d]", i)
+		}
+	})
+}
+
 func TestD128Mod(t *testing.T) {
 	t.Run("VecVec", func(t *testing.T) {
 		rng := rand.New(rand.NewSource(14))
@@ -1306,939 +1636,6 @@ func TestD128Mod(t *testing.T) {
 			require.Equal(t, want, rs[i], "d128 diffscale vec-const[%d]", i)
 		}
 	})
-}
-
-func TestD256Add(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(7))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256(rng)
-			v2[i] = randD256(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(v1, v2, rs, 2, 2, nul))
-		for i := range v1 {
-			wantAdd, _, err := v1[i].Add(v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, wantAdd, rs[i], "d256Add[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(53))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(scalar, vec, rs, 2, 2, nul))
-		for i := range vec {
-			want, err := scalar[0].Add256(vec[i])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec add[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(53))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(vec, scalar, rs, 2, 2, nul))
-		for i := range vec {
-			want, err := vec[i].Add256(scalar[0])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const add[%d]", i)
-		}
-	})
-
-	t.Run("Nulls", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(53))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := makeNulls(testBatchSize)
-		require.NoError(t, d256Add(vec, scalar, rs, 2, 2, nul))
-		for i := range vec {
-			if i%4 == 0 {
-				continue
-			}
-			want, err := vec[i].Add256(scalar[0])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const add null[%d]", i)
-		}
-	})
-
-	t.Run("DiffScale", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(12))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = randD256Small(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(v1, v2, rs, 1, 4, nul))
-		for i := range v1 {
-			wantAdd, _, err := v1[i].Add(v2[i], 1, 4)
-			require.NoError(t, err)
-			require.Equal(t, wantAdd, rs[i], "d256Add DiffScale[%d]", i)
-		}
-	})
-
-	t.Run("DiffScaleScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(57))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		// scalar(scale1) + vec(scale3)
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(scalar, vec, rs, 1, 3, nul))
-		for i := range vec {
-			want, _, err := scalar[0].Add(vec[i], 1, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 diffscale const-vec add[%d]", i)
-		}
-
-		// vec(scale3) + scalar(scale1)
-		rs2 := make([]types.Decimal256, testBatchSize)
-		nul2 := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Add(vec, scalar, rs2, 3, 1, nul2))
-		for i := range vec {
-			want, _, err := vec[i].Add(scalar[0], 3, 1)
-			require.NoError(t, err)
-			require.Equal(t, want, rs2[i], "d256 diffscale vec-const add[%d]", i)
-		}
-	})
-}
-
-func TestD256Sub(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(7))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256(rng)
-			v2[i] = randD256(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Sub(v1, v2, rs, 2, 2, nul))
-		for i := range v1 {
-			wantSub, _, err := d256SubRef(v1[i], v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, wantSub, rs[i], "d256Sub[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(54))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Sub(scalar, vec, rs, 2, 2, nul))
-		for i := range vec {
-			want, err := scalar[0].Sub256(vec[i])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec sub[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(54))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Sub(vec, scalar, rs, 2, 2, nul))
-		for i := range vec {
-			want, err := vec[i].Sub256(scalar[0])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const sub[%d]", i)
-		}
-	})
-
-	t.Run("DiffScale", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(12))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = randD256Small(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Sub(v1, v2, rs, 1, 4, nul))
-		for i := range v1 {
-			wantSub, _, err := d256SubRef(v1[i], v2[i], 1, 4)
-			require.NoError(t, err)
-			require.Equal(t, wantSub, rs[i], "d256Sub DiffScale[%d]", i)
-		}
-
-		// scalar-vec diff scale sub
-		rng2 := rand.New(rand.NewSource(57))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng2)
-		}
-		scalar := []types.Decimal256{randD256Small(rng2)}
-		rs2 := make([]types.Decimal256, testBatchSize)
-		nul2 := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Sub(vec, scalar, rs2, 1, 3, nul2))
-		for i := range vec {
-			want, _, err := d256SubRef(vec[i], scalar[0], 1, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs2[i], "d256 diffscale vec-const sub[%d]", i)
-		}
-	})
-}
-
-func TestD256Mul(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(8))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = randD256Small(rng)
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256Mul(v1, v2, rs, 2, 3, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, _, err := d256MulRef(v1[i], v2[i], 2, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256Mul[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(50))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mul(scalar, vec, rs, 2, 2, nul))
-		for i := range vec {
-			want, _, err := d256MulRef(scalar[0], vec[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec mul[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(50))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = randD256Small(rng)
-		}
-		scalar := []types.Decimal256{randD256Small(rng)}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mul(vec, scalar, rs, 2, 2, nul))
-		for i := range vec {
-			want, _, err := d256MulRef(vec[i], scalar[0], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const mul[%d]", i)
-		}
-	})
-}
-
-func TestD256Div(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(9))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256(rng)
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256Div(v1, v2, rs, 2, 2, nul, true)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, _, err := v1[i].Div(v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256Div[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(51))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(scalar, vec, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Div(vec[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec div[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(51))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(vec, scalar, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, _, err := vec[i].Div(scalar[0], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const div[%d]", i)
-		}
-	})
-
-	t.Run("DiffScale", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(58))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		// const-vec div
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(scalar, vec, rs, 2, 5, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Div(vec[i], 2, 5)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 diffscale const-vec div[%d]", i)
-		}
-
-		// vec-const div
-		rs2 := make([]types.Decimal256, testBatchSize)
-		nul2 := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(vec, scalar, rs2, 5, 2, nul2, true))
-		for i := range vec {
-			want, _, err := vec[i].Div(scalar[0], 5, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs2[i], "d256 diffscale vec-const div[%d]", i)
-		}
-	})
-
-	t.Run("DiffScaleScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(58))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		// const-vec div
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(scalar, vec, rs, 2, 5, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Div(vec[i], 2, 5)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 diffscale const-vec div[%d]", i)
-		}
-
-		// vec-const div
-		rs2 := make([]types.Decimal256, testBatchSize)
-		nul2 := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Div(vec, scalar, rs2, 5, 2, nul2, true))
-		for i := range vec {
-			want, _, err := vec[i].Div(scalar[0], 5, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs2[i], "d256 diffscale vec-const div[%d]", i)
-		}
-	})
-
-	t.Run("Kernel", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(22))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256(rng)
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		kernel := d256DivKernel(true)
-		err := kernel(v1, v2, rs, 2, 2, nul)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, _, err := v1[i].Div(v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256DivKernel[%d]", i)
-		}
-	})
-}
-
-func TestD256Mod(t *testing.T) {
-	t.Run("VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(15))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256Mod(v1, v2, rs, 2, 2, nul, true)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, _, err := v1[i].Mod(v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256Mod[%d]", i)
-		}
-	})
-
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(52))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mod(scalar, vec, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Mod(vec[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 const-vec mod[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(52))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mod(vec, scalar, rs, 2, 2, nul, true))
-		for i := range vec {
-			want, _, err := vec[i].Mod(scalar[0], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 vec-const mod[%d]", i)
-		}
-	})
-
-	t.Run("Kernel", func(t *testing.T) {
-		v1 := []types.Decimal256{{B0_63: 100}}
-		v2 := []types.Decimal256{{B0_63: 3}}
-		rs := make([]types.Decimal256, 1)
-		nul := nulls.NewWithSize(1)
-
-		kernel := d256ModKernel(true)
-		err := kernel(v1, v2, rs, 2, 2, nul)
-		require.NoError(t, err)
-
-		want, _, _ := v1[0].Mod(v2[0], 2, 2)
-		require.Equal(t, want, rs[0])
-	})
-
-	t.Run("DiffScale_VecVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(83))
-		v1 := make([]types.Decimal256, testBatchSize)
-		v2 := make([]types.Decimal256, testBatchSize)
-		rs := make([]types.Decimal256, testBatchSize)
-		for i := range v1 {
-			v1[i] = randD256Small(rng)
-			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		nul := nulls.NewWithSize(testBatchSize)
-		err := d256Mod(v1, v2, rs, 2, 5, nul, true)
-		require.NoError(t, err)
-		for i := range v1 {
-			want, _, err := v1[i].Mod(v2[i], 2, 5)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256Mod diffscale[%d]", i)
-		}
-	})
-
-	t.Run("DiffScale_ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(84))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mod(scalar, vec, rs, 3, 6, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Mod(vec[i], 3, 6)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 diffscale const-vec[%d]", i)
-		}
-	})
-
-	t.Run("DiffScale_VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(85))
-		vec := make([]types.Decimal256, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
-		rs := make([]types.Decimal256, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d256Mod(vec, scalar, rs, 6, 3, nul, true))
-		for i := range vec {
-			want, _, err := vec[i].Mod(scalar[0], 6, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256 diffscale vec-const[%d]", i)
-		}
-	})
-}
-
-func TestD64AddSub_SameScale(t *testing.T) {
-	tests := []struct {
-		name  string
-		x, y  types.Decimal64
-		isSub bool
-		want  types.Decimal64
-	}{
-		{"simple add", types.Decimal64(100), types.Decimal64(200), false, types.Decimal64(300)},
-		{"simple sub", types.Decimal64(300), types.Decimal64(100), true, types.Decimal64(200)},
-		{"add negative", types.Decimal64(100), types.Decimal64(^uint64(100) + 1), false, types.Decimal64(0)},
-		{"sub negative (add)", types.Decimal64(100), types.Decimal64(^uint64(100) + 1), true, types.Decimal64(200)},
-		{"zero + zero", types.Decimal64(0), types.Decimal64(0), false, types.Decimal64(0)},
-		{"large values", types.Decimal64(999999999999999), types.Decimal64(1), false, types.Decimal64(1000000000000000)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var got types.Decimal64
-			var err error
-			if tt.isSub {
-				got, err = tt.x.Sub64(tt.y)
-			} else {
-				got, err = tt.x.Add64(tt.y)
-			}
-			require.NoError(t, err)
-			require.Equal(t, tt.want, got, "d64 op(%d, %d, sub=%v)", tt.x, tt.y, tt.isSub)
-		})
-	}
-}
-
-func TestDivByZero_NullBehavior(t *testing.T) {
-	v1 := []types.Decimal128{{B0_63: 100, B64_127: 0}}
-	v2 := []types.Decimal128{{B0_63: 0, B64_127: 0}}
-	rs := make([]types.Decimal128, 1)
-	nul := nulls.NewWithSize(1)
-
-	err := d128Div(v1, v2, rs, 2, 2, nul, false)
-	require.NoError(t, err)
-	require.True(t, nul.Contains(0), "div by zero should set null")
-}
-
-func TestModByZero_NullBehavior(t *testing.T) {
-	// d64Mod: shouldError=false should set null
-	v1d64 := []types.Decimal64{types.Decimal64(100)}
-	v2d64 := []types.Decimal64{types.Decimal64(0)}
-	rsd64 := make([]types.Decimal64, 1)
-	nul := nulls.NewWithSize(1)
-	err := d64Mod(v1d64, v2d64, rsd64, 2, 2, nul, false)
-	require.NoError(t, err)
-	require.True(t, nul.Contains(0), "d64Mod: mod by zero should set null")
-
-	// d128Mod: shouldError=false should set null
-	v1d128 := []types.Decimal128{{B0_63: 100}}
-	v2d128 := []types.Decimal128{{B0_63: 0}}
-	rsd128 := make([]types.Decimal128, 1)
-	nul2 := nulls.NewWithSize(1)
-	err = d128Mod(v1d128, v2d128, rsd128, 2, 2, nul2, false)
-	require.NoError(t, err)
-	require.True(t, nul2.Contains(0), "d128Mod: mod by zero should set null")
-}
-
-// TestD256Mul_HighScale exercises the batch-level d256ScaleDown/d256DivPow10 path.
-func TestD256Mul_HighScale(t *testing.T) {
-	rng := rand.New(rand.NewSource(94))
-	v1 := make([]types.Decimal256, testBatchSize)
-	v2 := make([]types.Decimal256, testBatchSize)
-	rs := make([]types.Decimal256, testBatchSize)
-	for i := range v1 {
-		v1[i] = randD256Small(rng)
-		v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
-	}
-	nul := nulls.NewWithSize(testBatchSize)
-	// scale1=10, scale2=10 → desiredScale=12, scaleAdj=-8, triggers d256ScaleDown
-	err := d256Mul(v1, v2, rs, 10, 10, nul)
-	require.NoError(t, err)
-	for i := range v1 {
-		// Reference: raw Mul256 then scale down by 8 (= 10+10 - 12).
-		raw, err2 := v1[i].Mul256(v2[i])
-		require.NoError(t, err2)
-		d256ScaleDown(&raw, 8)
-		require.Equal(t, raw, rs[i], "d256Mul HighScale[%d]", i)
-	}
-}
-
-// TestD256Mod_LargeValues tests D256 Mod with values outside D128 range (generic slow path).
-func TestD256Mod_LargeValues(t *testing.T) {
-	// Values with B128_191 != 0 so d256AllFitD128 returns false.
-	v1 := make([]types.Decimal256, 4)
-	v2 := make([]types.Decimal256, 4)
-	rs := make([]types.Decimal256, 4)
-	v1[0] = types.Decimal256{B0_63: 0xabcdef1234567890, B64_127: 0x1234, B128_191: 1}
-	v1[1] = types.Decimal256{B0_63: 0x9876543210fedcba, B64_127: 0x5678, B128_191: 2}
-	v1[2] = types.Decimal256{B0_63: 0x1111111111111111, B64_127: 0x2222, B128_191: 3}
-	v1[3] = types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0x3333, B128_191: 0}
-	v2[0] = types.Decimal256{B0_63: 17}
-	v2[1] = types.Decimal256{B0_63: 31}
-	v2[2] = types.Decimal256{B0_63: 97}
-	v2[3] = types.Decimal256{B0_63: 1000003}
-
-	nul := nulls.NewWithSize(4)
-	err := d256Mod(v1, v2, rs, 2, 2, nul, true)
-	require.NoError(t, err)
-	for i := range v1 {
-		want, _, err := v1[i].Mod(v2[i], 2, 2)
-		require.NoError(t, err)
-		require.Equal(t, want, rs[i], "d256Mod large[%d]", i)
-	}
-}
-
-// TestD256Div_LargeValues tests D256 Div with values outside D128 range (generic slow path).
-func TestD256Div_LargeValues(t *testing.T) {
-	v1 := make([]types.Decimal256, 4)
-	v2 := make([]types.Decimal256, 4)
-	rs := make([]types.Decimal256, 4)
-	v1[0] = types.Decimal256{B0_63: 0xabcdef1234567890, B64_127: 0x1234, B128_191: 1}
-	v1[1] = types.Decimal256{B0_63: 0x9876543210fedcba, B64_127: 0x5678, B128_191: 2}
-	v1[2] = types.Decimal256{B0_63: 0x1111111111111111, B64_127: 0x2222, B128_191: 3}
-	v1[3] = types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0x3333, B128_191: 0}
-	v2[0] = types.Decimal256{B0_63: 17}
-	v2[1] = types.Decimal256{B0_63: 31}
-	v2[2] = types.Decimal256{B0_63: 97}
-	v2[3] = types.Decimal256{B0_63: 1000003}
-
-	nul := nulls.NewWithSize(4)
-	err := d256Div(v1, v2, rs, 2, 2, nul, true)
-	require.NoError(t, err)
-	for i := range v1 {
-		want, _, err := v1[i].Div(v2[i], 2, 2)
-		require.NoError(t, err)
-		require.Equal(t, want, rs[i], "d256Div large[%d]", i)
-	}
-}
-
-// TestNullHandling tests that null entries are properly skipped in batch operations.
-func TestNullHandling(t *testing.T) {
-	t.Run("D64Add_WithNulls", func(t *testing.T) {
-		v1 := make([]types.Decimal64, 8)
-		v2 := make([]types.Decimal64, 8)
-		rs := make([]types.Decimal64, 8)
-		for i := range v1 {
-			v1[i] = types.Decimal64(int64(i*100 + 1))
-			v2[i] = types.Decimal64(int64(i*10 + 1))
-		}
-		nul := nulls.NewWithSize(8)
-		nul.Add(1)
-		nul.Add(3)
-		nul.Add(5)
-		require.NoError(t, d64Add(v1, v2, rs, 2, 2, nul))
-		for i := range v1 {
-			if nul.Contains(uint64(i)) {
-				continue
-			}
-			want, err := v1[i].Add64(v2[i])
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64Add null[%d]", i)
-		}
-	})
-
-	t.Run("D128Mod_WithNulls", func(t *testing.T) {
-		v1 := make([]types.Decimal128, 8)
-		v2 := make([]types.Decimal128, 8)
-		rs := make([]types.Decimal128, 8)
-		for i := range v1 {
-			v1[i] = types.Decimal128{B0_63: uint64(i*100 + 1)}
-			v2[i] = types.Decimal128{B0_63: uint64(i*10 + 1)}
-		}
-		nul := nulls.NewWithSize(8)
-		nul.Add(0)
-		nul.Add(4)
-		nul.Add(7)
-		require.NoError(t, d128Mod(v1, v2, rs, 2, 5, nul, true))
-		for i := range v1 {
-			if nul.Contains(uint64(i)) {
-				continue
-			}
-			want, _, err := v1[i].Mod(v2[i], 2, 5)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d128Mod null[%d]", i)
-		}
-	})
-
-	t.Run("D256Div_WithNulls", func(t *testing.T) {
-		v1 := make([]types.Decimal256, 8)
-		v2 := make([]types.Decimal256, 8)
-		rs := make([]types.Decimal256, 8)
-		for i := range v1 {
-			v1[i] = randD256Small(rand.New(rand.NewSource(int64(i))))
-			v2[i] = types.Decimal256{B0_63: uint64(i + 1)}
-		}
-		nul := nulls.NewWithSize(8)
-		nul.Add(2)
-		nul.Add(6)
-		require.NoError(t, d256Div(v1, v2, rs, 2, 2, nul, true))
-		for i := range v1 {
-			if nul.Contains(uint64(i)) {
-				continue
-			}
-			want, _, err := v1[i].Div(v2[i], 2, 2)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d256Div null[%d]", i)
-		}
-	})
-
-	t.Run("D64Sub_DiffScale_WithNulls", func(t *testing.T) {
-		v1 := make([]types.Decimal64, 8)
-		v2 := make([]types.Decimal64, 8)
-		rs := make([]types.Decimal64, 8)
-		for i := range v1 {
-			v1[i] = types.Decimal64(int64(i*100 + 1))
-			v2[i] = types.Decimal64(int64(i*10 + 1))
-		}
-		nul := nulls.NewWithSize(8)
-		nul.Add(0)
-		nul.Add(3)
-		require.NoError(t, d64Sub(v1, v2, rs, 2, 5, nul))
-		for i := range v1 {
-			if nul.Contains(uint64(i)) {
-				continue
-			}
-			want, _, err := v1[i].Sub(v2[i], 2, 5)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d64Sub diffscale null[%d]", i)
-		}
-	})
-}
-
-// TestD128Div_DiffScale tests D128 division with different scales (ScalarVec and VecScalar).
-func TestD128Div_DiffScale(t *testing.T) {
-	t.Run("ScalarVec", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(95))
-		vec := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1)}
-		}
-		scalar := []types.Decimal128{randD128Small(rng)}
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d128Div(scalar, vec, rs, 3, 6, nul, true))
-		for i := range vec {
-			want, _, err := scalar[0].Div(vec[i], 3, 6)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d128Div diffscale const-vec[%d]", i)
-		}
-	})
-
-	t.Run("VecScalar", func(t *testing.T) {
-		rng := rand.New(rand.NewSource(96))
-		vec := make([]types.Decimal128, testBatchSize)
-		for i := range vec {
-			vec[i] = randD128Small(rng)
-		}
-		scalar := []types.Decimal128{{B0_63: uint64(rng.Int63n(999) + 1)}}
-		rs := make([]types.Decimal128, testBatchSize)
-		nul := nulls.NewWithSize(testBatchSize)
-		require.NoError(t, d128Div(vec, scalar, rs, 6, 3, nul, true))
-		for i := range vec {
-			want, _, err := vec[i].Div(scalar[0], 6, 3)
-			require.NoError(t, err)
-			require.Equal(t, want, rs[i], "d128Div diffscale vec-const[%d]", i)
-		}
-	})
-}
-
-func BenchmarkD64Add_Fast(b *testing.B) {
-	x := types.Decimal64(123456789)
-	y := types.Decimal64(987654321)
-	var r types.Decimal64
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		r, _ = x.Add64(y)
-	}
-	_ = r
-}
-
-func BenchmarkD64Add_Generic(b *testing.B) {
-	x := types.Decimal64(123456789)
-	y := types.Decimal64(987654321)
-	var r types.Decimal64
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		r, _, _ = x.Add(y, 2, 2)
-	}
-	_ = r
-}
-
-func BenchmarkD64Sub_Fast(b *testing.B) {
-	x := types.Decimal64(987654321)
-	y := types.Decimal64(123456789)
-	var r types.Decimal64
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		r, _ = x.Sub64(y)
-	}
-	_ = r
-}
-
-func BenchmarkD64Sub_Generic(b *testing.B) {
-	x := types.Decimal64(987654321)
-	y := types.Decimal64(123456789)
-	var r types.Decimal64
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		r, _, _ = x.Sub(y, 2, 2)
-	}
-	_ = r
-}
-
-func BenchmarkD64Mul_Fast(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal128, benchN)
-	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
-		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
-	}
-	b.ResetTimer()
-	b.ReportAllocs()
-	for iter := 0; iter < b.N; iter++ {
-		for i := 0; i < benchN; i++ {
-			rs[i] = d64MulInline(xs[i], ys[i])
-		}
-	}
-	_ = rs
-}
-
-func BenchmarkD64Mul_Generic(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal128, benchN)
-	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
-		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
-	}
-	b.ResetTimer()
-	b.ReportAllocs()
-	for iter := 0; iter < b.N; iter++ {
-		for i := 0; i < benchN; i++ {
-			x128 := functionUtil.ConvertD64ToD128(xs[i])
-			y128 := functionUtil.ConvertD64ToD128(ys[i])
-			rs[i], _, _ = x128.Mul(y128, 2, 2)
-		}
-	}
-	_ = rs
-}
-
-func BenchmarkD64Mul_Inline(b *testing.B) {
-	x := types.Decimal64(123456789)
-	y := types.Decimal64(98)
-	var r types.Decimal128
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		r = d64MulInline(x, y)
-	}
-	_ = r
-}
-
-func BenchmarkBitsMul64(b *testing.B) {
-	x := uint64(123456789)
-	y := uint64(98)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		hi, lo := bits.Mul64(x, y)
-		sinkD128 = types.Decimal128{B0_63: lo, B64_127: hi}
-	}
-}
-
-func BenchmarkD64Div_Fast(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal128, benchN)
-	for i := range xs {
-		xs[i] = randD64(rng)
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
-	}
-	nul := nulls.NewWithSize(benchN)
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		_ = d64Div(xs, ys, rs, 2, 2, nul, true)
-	}
-}
-
-func BenchmarkD64Div_Generic(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal128, benchN)
-	for i := range xs {
-		xs[i] = randD64(rng)
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
-	}
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		for i := 0; i < benchN; i++ {
-			x128 := functionUtil.ConvertD64ToD128(xs[i])
-			y128 := functionUtil.ConvertD64ToD128(ys[i])
-			rs[i], _, _ = x128.Div(y128, 2, 2)
-		}
-	}
 }
 
 func BenchmarkD128Add_Fast(b *testing.B) {
@@ -2381,38 +1778,6 @@ func BenchmarkD128Div_Generic(b *testing.B) {
 	}
 }
 
-func BenchmarkD64Mod_Fast(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal64, benchN)
-	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63())
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
-	}
-	nul := nulls.NewWithSize(benchN)
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		_ = d64Mod(xs, ys, rs, 2, 2, nul, true)
-	}
-}
-
-func BenchmarkD64ModDiffScale_Fast(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]types.Decimal64, benchN)
-	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63())
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
-	}
-	nul := nulls.NewWithSize(benchN)
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		_ = d64Mod(xs, ys, rs, 2, 4, nul, true)
-	}
-}
-
 func BenchmarkD128Mod_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal128, benchN)
@@ -2445,38 +1810,721 @@ func BenchmarkD128ModDiffScale_Fast(b *testing.B) {
 	}
 }
 
-func BenchmarkD256Mod_Fast(b *testing.B) {
+func BenchmarkD128IntDiv_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal256, benchN)
-	ys := make([]types.Decimal256, benchN)
-	rs := make([]types.Decimal256, benchN)
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]int64, benchN)
 	for i := range xs {
-		xs[i] = randD256Small(rng)
-		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		// Values representable as int64 after truncation.
+		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mod(xs, ys, rs, 2, 2, nul, true)
+		_ = d128IntDiv(xs, ys, rs, 2, 2, nul, true)
 	}
 }
 
-func BenchmarkD256ModDiffScale_Fast(b *testing.B) {
+func BenchmarkD128IntDiv_Generic(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal256, benchN)
-	ys := make([]types.Decimal256, benchN)
-	rs := make([]types.Decimal256, benchN)
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]int64, benchN)
 	for i := range xs {
-		xs[i] = randD256Small(rng)
-		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
-	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d256Mod(xs, ys, rs, 2, 5, nul, true)
+		for i := 0; i < benchN; i++ {
+			r, rScale, _ := xs[i].Div(ys[i], 2, 2)
+			if rScale > 0 {
+				r, _ = r.Scale(-rScale)
+			}
+			rs[i], _ = decimal128ToInt64(r)
+		}
 	}
 }
 
+func randD256(rng *rand.Rand) types.Decimal256 {
+	return types.Decimal256{
+		B0_63:    rng.Uint64(),
+		B64_127:  uint64(rng.Int63n(1000)),
+		B128_191: 0,
+		B192_255: 0,
+	}
+}
+
+func randD256Small(rng *rand.Rand) types.Decimal256 {
+	return types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000))}
+}
+
+var sinkD128 types.Decimal128
+
+func TestD256Add(t *testing.T) {
+	t.Run("VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(7))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256(rng)
+			v2[i] = randD256(rng)
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(v1, v2, rs, 2, 2, nul))
+		for i := range v1 {
+			wantAdd, _, err := v1[i].Add(v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, wantAdd, rs[i], "d256Add[%d]", i)
+		}
+	})
+
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(53))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(scalar, vec, rs, 2, 2, nul))
+		for i := range vec {
+			want, err := scalar[0].Add256(vec[i])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 const-vec add[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(53))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(vec, scalar, rs, 2, 2, nul))
+		for i := range vec {
+			want, err := vec[i].Add256(scalar[0])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const add[%d]", i)
+		}
+	})
+
+	t.Run("Nulls", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(53))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := makeNulls(testBatchSize)
+		require.NoError(t, d256Add(vec, scalar, rs, 2, 2, nul))
+		for i := range vec {
+			if i%4 == 0 {
+				continue
+			}
+			want, err := vec[i].Add256(scalar[0])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const add null[%d]", i)
+		}
+	})
+
+	t.Run("DiffScale", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(12))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256Small(rng)
+			v2[i] = randD256Small(rng)
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(v1, v2, rs, 1, 4, nul))
+		for i := range v1 {
+			wantAdd, _, err := v1[i].Add(v2[i], 1, 4)
+			require.NoError(t, err)
+			require.Equal(t, wantAdd, rs[i], "d256Add DiffScale[%d]", i)
+		}
+	})
+
+	t.Run("DiffScaleScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(57))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		// scalar(scale1) + vec(scale3)
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(scalar, vec, rs, 1, 3, nul))
+		for i := range vec {
+			want, _, err := scalar[0].Add(vec[i], 1, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 diffscale const-vec add[%d]", i)
+		}
+
+		// vec(scale3) + scalar(scale1)
+		rs2 := make([]types.Decimal256, testBatchSize)
+		nul2 := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Add(vec, scalar, rs2, 3, 1, nul2))
+		for i := range vec {
+			want, _, err := vec[i].Add(scalar[0], 3, 1)
+			require.NoError(t, err)
+			require.Equal(t, want, rs2[i], "d256 diffscale vec-const add[%d]", i)
+		}
+	})
+}
+
+func d256SubRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
+	var err error
+	var scale int32
+	if scale1 > scale2 {
+		scale = scale1
+		y, err = y.Scale(scale - scale2)
+	} else if scale1 < scale2 {
+		scale = scale2
+		x, err = x.Scale(scale - scale1)
+	} else {
+		scale = scale1
+	}
+	if err != nil {
+		return types.Decimal256{}, scale, err
+	}
+	z, err := x.Sub256(y)
+	return z, scale, err
+}
+
+// d256MulRef is a test-only reference implementation for Decimal256 multiplication
+// with scale (mirrors the deleted Decimal256.Mul method).
+func TestD256Sub(t *testing.T) {
+	t.Run("VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(7))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256(rng)
+			v2[i] = randD256(rng)
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Sub(v1, v2, rs, 2, 2, nul))
+		for i := range v1 {
+			wantSub, _, err := d256SubRef(v1[i], v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, wantSub, rs[i], "d256Sub[%d]", i)
+		}
+	})
+
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(54))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Sub(scalar, vec, rs, 2, 2, nul))
+		for i := range vec {
+			want, err := scalar[0].Sub256(vec[i])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 const-vec sub[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(54))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Sub(vec, scalar, rs, 2, 2, nul))
+		for i := range vec {
+			want, err := vec[i].Sub256(scalar[0])
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const sub[%d]", i)
+		}
+	})
+
+	t.Run("DiffScale", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(12))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256Small(rng)
+			v2[i] = randD256Small(rng)
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Sub(v1, v2, rs, 1, 4, nul))
+		for i := range v1 {
+			wantSub, _, err := d256SubRef(v1[i], v2[i], 1, 4)
+			require.NoError(t, err)
+			require.Equal(t, wantSub, rs[i], "d256Sub DiffScale[%d]", i)
+		}
+
+		// scalar-vec diff scale sub
+		rng2 := rand.New(rand.NewSource(57))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng2)
+		}
+		scalar := []types.Decimal256{randD256Small(rng2)}
+		rs2 := make([]types.Decimal256, testBatchSize)
+		nul2 := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Sub(vec, scalar, rs2, 1, 3, nul2))
+		for i := range vec {
+			want, _, err := d256SubRef(vec[i], scalar[0], 1, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs2[i], "d256 diffscale vec-const sub[%d]", i)
+		}
+	})
+}
+
+func d256MulRef(x, y types.Decimal256, scale1, scale2 int32) (types.Decimal256, int32, error) {
+	scale := int32(12)
+	if scale1 > scale {
+		scale = scale1
+	}
+	if scale2 > scale {
+		scale = scale2
+	}
+	if scale1+scale2 < scale {
+		scale = scale1 + scale2
+	}
+	signx := x.Sign()
+	x1 := x
+	signy := y.Sign()
+	y1 := y
+	if signx {
+		x1 = x1.Minus()
+	}
+	if signy {
+		y1 = y1.Minus()
+	}
+	z, err := x1.Mul256(y1)
+	if err != nil {
+		return z, scale, err
+	}
+	if scale-scale1-scale2 != 0 {
+		z, err = z.Scale(scale - scale1 - scale2)
+		if err != nil {
+			return z, scale, err
+		}
+	}
+	if signx != signy {
+		z = z.Minus()
+	}
+	return z, scale, nil
+}
+
+// ---- D64 ----
+
+func TestD256Mul(t *testing.T) {
+	t.Run("VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(8))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256Small(rng)
+			v2[i] = randD256Small(rng)
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		err := d256Mul(v1, v2, rs, 2, 3, nul)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := d256MulRef(v1[i], v2[i], 2, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256Mul[%d]", i)
+		}
+	})
+
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(50))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mul(scalar, vec, rs, 2, 2, nul))
+		for i := range vec {
+			want, _, err := d256MulRef(scalar[0], vec[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 const-vec mul[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(50))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = randD256Small(rng)
+		}
+		scalar := []types.Decimal256{randD256Small(rng)}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mul(vec, scalar, rs, 2, 2, nul))
+		for i := range vec {
+			want, _, err := d256MulRef(vec[i], scalar[0], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const mul[%d]", i)
+		}
+	})
+}
+
+func TestD256Mul_HighScale(t *testing.T) {
+	rng := rand.New(rand.NewSource(94))
+	v1 := make([]types.Decimal256, testBatchSize)
+	v2 := make([]types.Decimal256, testBatchSize)
+	rs := make([]types.Decimal256, testBatchSize)
+	for i := range v1 {
+		v1[i] = randD256Small(rng)
+		v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+	}
+	nul := nulls.NewWithSize(testBatchSize)
+	// scale1=10, scale2=10 → desiredScale=12, scaleAdj=-8, triggers d256ScaleDown
+	err := d256Mul(v1, v2, rs, 10, 10, nul)
+	require.NoError(t, err)
+	for i := range v1 {
+		// Reference: raw Mul256 then scale down by 8 (= 10+10 - 12).
+		raw, err2 := v1[i].Mul256(v2[i])
+		require.NoError(t, err2)
+		d256ScaleDown(&raw, 8)
+		require.Equal(t, raw, rs[i], "d256Mul HighScale[%d]", i)
+	}
+}
+
+// TestD256Mod_LargeValues tests D256 Mod with values outside D128 range (generic slow path).
+func TestD256Div(t *testing.T) {
+	t.Run("VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(9))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256(rng)
+			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		err := d256Div(v1, v2, rs, 2, 2, nul, true)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := v1[i].Div(v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256Div[%d]", i)
+		}
+	})
+
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(51))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(scalar, vec, rs, 2, 2, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Div(vec[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 const-vec div[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(51))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(vec, scalar, rs, 2, 2, nul, true))
+		for i := range vec {
+			want, _, err := vec[i].Div(scalar[0], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const div[%d]", i)
+		}
+	})
+
+	t.Run("DiffScale", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(58))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		// const-vec div
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(scalar, vec, rs, 2, 5, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Div(vec[i], 2, 5)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 diffscale const-vec div[%d]", i)
+		}
+
+		// vec-const div
+		rs2 := make([]types.Decimal256, testBatchSize)
+		nul2 := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(vec, scalar, rs2, 5, 2, nul2, true))
+		for i := range vec {
+			want, _, err := vec[i].Div(scalar[0], 5, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs2[i], "d256 diffscale vec-const div[%d]", i)
+		}
+	})
+
+	t.Run("DiffScaleScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(58))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		// const-vec div
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(scalar, vec, rs, 2, 5, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Div(vec[i], 2, 5)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 diffscale const-vec div[%d]", i)
+		}
+
+		// vec-const div
+		rs2 := make([]types.Decimal256, testBatchSize)
+		nul2 := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Div(vec, scalar, rs2, 5, 2, nul2, true))
+		for i := range vec {
+			want, _, err := vec[i].Div(scalar[0], 5, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs2[i], "d256 diffscale vec-const div[%d]", i)
+		}
+	})
+
+	t.Run("Kernel", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(22))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256(rng)
+			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		kernel := d256DivKernel(true)
+		err := kernel(v1, v2, rs, 2, 2, nul)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := v1[i].Div(v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256DivKernel[%d]", i)
+		}
+	})
+}
+
+func TestD256Div_LargeValues(t *testing.T) {
+	v1 := make([]types.Decimal256, 4)
+	v2 := make([]types.Decimal256, 4)
+	rs := make([]types.Decimal256, 4)
+	v1[0] = types.Decimal256{B0_63: 0xabcdef1234567890, B64_127: 0x1234, B128_191: 1}
+	v1[1] = types.Decimal256{B0_63: 0x9876543210fedcba, B64_127: 0x5678, B128_191: 2}
+	v1[2] = types.Decimal256{B0_63: 0x1111111111111111, B64_127: 0x2222, B128_191: 3}
+	v1[3] = types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0x3333, B128_191: 0}
+	v2[0] = types.Decimal256{B0_63: 17}
+	v2[1] = types.Decimal256{B0_63: 31}
+	v2[2] = types.Decimal256{B0_63: 97}
+	v2[3] = types.Decimal256{B0_63: 1000003}
+
+	nul := nulls.NewWithSize(4)
+	err := d256Div(v1, v2, rs, 2, 2, nul, true)
+	require.NoError(t, err)
+	for i := range v1 {
+		want, _, err := v1[i].Div(v2[i], 2, 2)
+		require.NoError(t, err)
+		require.Equal(t, want, rs[i], "d256Div large[%d]", i)
+	}
+}
+
+// TestNullHandling tests that null entries are properly skipped in batch operations.
+func TestD256Mod(t *testing.T) {
+	t.Run("VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(15))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256Small(rng)
+			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		err := d256Mod(v1, v2, rs, 2, 2, nul, true)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := v1[i].Mod(v2[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256Mod[%d]", i)
+		}
+	})
+
+	t.Run("ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(52))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mod(scalar, vec, rs, 2, 2, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Mod(vec[i], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 const-vec mod[%d]", i)
+		}
+	})
+
+	t.Run("VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(52))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mod(vec, scalar, rs, 2, 2, nul, true))
+		for i := range vec {
+			want, _, err := vec[i].Mod(scalar[0], 2, 2)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 vec-const mod[%d]", i)
+		}
+	})
+
+	t.Run("Kernel", func(t *testing.T) {
+		v1 := []types.Decimal256{{B0_63: 100}}
+		v2 := []types.Decimal256{{B0_63: 3}}
+		rs := make([]types.Decimal256, 1)
+		nul := nulls.NewWithSize(1)
+
+		kernel := d256ModKernel(true)
+		err := kernel(v1, v2, rs, 2, 2, nul)
+		require.NoError(t, err)
+
+		want, _, _ := v1[0].Mod(v2[0], 2, 2)
+		require.Equal(t, want, rs[0])
+	})
+
+	t.Run("DiffScale_VecVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(83))
+		v1 := make([]types.Decimal256, testBatchSize)
+		v2 := make([]types.Decimal256, testBatchSize)
+		rs := make([]types.Decimal256, testBatchSize)
+		for i := range v1 {
+			v1[i] = randD256Small(rng)
+			v2[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		nul := nulls.NewWithSize(testBatchSize)
+		err := d256Mod(v1, v2, rs, 2, 5, nul, true)
+		require.NoError(t, err)
+		for i := range v1 {
+			want, _, err := v1[i].Mod(v2[i], 2, 5)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256Mod diffscale[%d]", i)
+		}
+	})
+
+	t.Run("DiffScale_ScalarVec", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(84))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mod(scalar, vec, rs, 3, 6, nul, true))
+		for i := range vec {
+			want, _, err := scalar[0].Mod(vec[i], 3, 6)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 diffscale const-vec[%d]", i)
+		}
+	})
+
+	t.Run("DiffScale_VecScalar", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(85))
+		vec := make([]types.Decimal256, testBatchSize)
+		for i := range vec {
+			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+		}
+		scalar := []types.Decimal256{{B0_63: uint64(rng.Int63n(999) + 1)}}
+		rs := make([]types.Decimal256, testBatchSize)
+		nul := nulls.NewWithSize(testBatchSize)
+		require.NoError(t, d256Mod(vec, scalar, rs, 6, 3, nul, true))
+		for i := range vec {
+			want, _, err := vec[i].Mod(scalar[0], 6, 3)
+			require.NoError(t, err)
+			require.Equal(t, want, rs[i], "d256 diffscale vec-const[%d]", i)
+		}
+	})
+}
+
+func TestD256Mod_LargeValues(t *testing.T) {
+	// Values with B128_191 != 0 so d256AllFitD128 returns false.
+	v1 := make([]types.Decimal256, 4)
+	v2 := make([]types.Decimal256, 4)
+	rs := make([]types.Decimal256, 4)
+	v1[0] = types.Decimal256{B0_63: 0xabcdef1234567890, B64_127: 0x1234, B128_191: 1}
+	v1[1] = types.Decimal256{B0_63: 0x9876543210fedcba, B64_127: 0x5678, B128_191: 2}
+	v1[2] = types.Decimal256{B0_63: 0x1111111111111111, B64_127: 0x2222, B128_191: 3}
+	v1[3] = types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0x3333, B128_191: 0}
+	v2[0] = types.Decimal256{B0_63: 17}
+	v2[1] = types.Decimal256{B0_63: 31}
+	v2[2] = types.Decimal256{B0_63: 97}
+	v2[3] = types.Decimal256{B0_63: 1000003}
+
+	nul := nulls.NewWithSize(4)
+	err := d256Mod(v1, v2, rs, 2, 2, nul, true)
+	require.NoError(t, err)
+	for i := range v1 {
+		want, _, err := v1[i].Mod(v2[i], 2, 2)
+		require.NoError(t, err)
+		require.Equal(t, want, rs[i], "d256Mod large[%d]", i)
+	}
+}
+
+// TestD256Div_LargeValues tests D256 Div with values outside D128 range (generic slow path).
 func BenchmarkD256Add_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal256, benchN)
@@ -2667,83 +2715,35 @@ func BenchmarkD256Div_Generic(b *testing.B) {
 
 // ---- IntDiv (DIV operator) benchmarks ----
 
-func BenchmarkD64IntDiv_Fast(b *testing.B) {
+func BenchmarkD256Mod_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]int64, benchN)
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
 	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63())
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+		xs[i] = randD256Small(rng)
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d64IntDiv(xs, ys, rs, 2, 2, nul, true)
+		_ = d256Mod(xs, ys, rs, 2, 2, nul, true)
 	}
 }
 
-func BenchmarkD64IntDiv_Generic(b *testing.B) {
+func BenchmarkD256ModDiffScale_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal64, benchN)
-	ys := make([]types.Decimal64, benchN)
-	rs := make([]int64, benchN)
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
 	for i := range xs {
-		xs[i] = types.Decimal64(rng.Int63())
-		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
-	}
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		for i := 0; i < benchN; i++ {
-			d1 := types.Decimal128{B0_63: uint64(xs[i])}
-			if xs[i]>>63 != 0 {
-				d1.B64_127 = ^uint64(0)
-			}
-			d2 := types.Decimal128{B0_63: uint64(ys[i])}
-			r, rScale, _ := d1.Div(d2, 2, 2)
-			if rScale > 0 {
-				r, _ = r.Scale(-rScale)
-			}
-			rs[i], _ = decimal128ToInt64(r)
-		}
-	}
-}
-
-func BenchmarkD128IntDiv_Fast(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal128, benchN)
-	ys := make([]types.Decimal128, benchN)
-	rs := make([]int64, benchN)
-	for i := range xs {
-		// Values representable as int64 after truncation.
-		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
-		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
+		xs[i] = randD256Small(rng)
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
 	nul := nulls.NewWithSize(benchN)
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
-		_ = d128IntDiv(xs, ys, rs, 2, 2, nul, true)
-	}
-}
-
-func BenchmarkD128IntDiv_Generic(b *testing.B) {
-	rng := rand.New(rand.NewSource(42))
-	xs := make([]types.Decimal128, benchN)
-	ys := make([]types.Decimal128, benchN)
-	rs := make([]int64, benchN)
-	for i := range xs {
-		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
-		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
-	}
-	b.ResetTimer()
-	for iter := 0; iter < b.N; iter++ {
-		for i := 0; i < benchN; i++ {
-			r, rScale, _ := xs[i].Div(ys[i], 2, 2)
-			if rScale > 0 {
-				r, _ = r.Scale(-rScale)
-			}
-			rs[i], _ = decimal128ToInt64(r)
-		}
+		_ = d256Mod(xs, ys, rs, 2, 5, nul, true)
 	}
 }
 

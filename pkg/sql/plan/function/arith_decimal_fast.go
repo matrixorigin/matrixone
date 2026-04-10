@@ -23,8 +23,8 @@ package function
 //   - Multiply:    d64Mul, d128Mul, d256Mul
 //   - Add/Sub:     d64Add/d64Sub, d128Add/d128Sub, d256Add/d256Sub
 //   - Division:    d64Div, d128Div, d256Div
-//   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
 //   - Modulo:      d64Mod, d128Mod, d256Mod
+//   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
 
 import (
 	"math/bits"
@@ -56,248 +56,42 @@ func operandsAt[T any](v1, v2 []T, idx int) (T, T) {
 
 // d128MulPow10 multiplies unsigned D128 x by 10^n in-place.
 // Returns false on overflow. n must be in [1, 38].
-func d128MulPow10(x *types.Decimal128, n int32) bool {
-	var hi, lo uint64
-	if n <= 19 {
-		f := types.Pow10[n]
-		hi, lo = bits.Mul64(x.B0_63, f)
-		if x.B64_127 != 0 {
-			crossHi, crossLo := bits.Mul64(x.B64_127, f)
-			if crossHi != 0 {
-				return false
+func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
+	bmp := rsnull.GetBitmap()
+	scaleFactor := types.Decimal64(types.Pow10[scaleDiff])
+	if rsnull.IsEmpty() {
+		for i := 0; i < n; i++ {
+			signBit := vec[i] >> 63
+			mask := -signBit
+			var err error
+			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
+			if err != nil {
+				return err
 			}
-			var c uint64
-			hi, c = bits.Add64(hi, crossLo, 0)
-			if c != 0 || hi>>63 != 0 {
-				return false
+			rs[i] = (rs[i] ^ mask) + signBit
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if bmp.Contains(uint64(i)) {
+				continue
 			}
-		}
-		x.B0_63 = lo
-		x.B64_127 = hi
-		return true
-	}
-	// n in (19, 38]: two stages.
-	f1 := types.Pow10[19]
-	hi, lo = bits.Mul64(x.B0_63, f1)
-	if x.B64_127 != 0 {
-		crossHi, crossLo := bits.Mul64(x.B64_127, f1)
-		if crossHi != 0 {
-			return false
-		}
-		var c uint64
-		hi, c = bits.Add64(hi, crossLo, 0)
-		if c != 0 || hi>>63 != 0 {
-			return false
-		}
-	}
-	x.B0_63 = lo
-	x.B64_127 = hi
-
-	f2 := types.Pow10[n-19]
-	hi, lo = bits.Mul64(x.B0_63, f2)
-	if x.B64_127 != 0 {
-		crossHi, crossLo := bits.Mul64(x.B64_127, f2)
-		if crossHi != 0 {
-			return false
-		}
-		var c uint64
-		hi, c = bits.Add64(hi, crossLo, 0)
-		if c != 0 || hi>>63 != 0 {
-			return false
-		}
-	}
-	x.B0_63 = lo
-	x.B64_127 = hi
-	return true
-}
-
-// d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
-// n must be in [1, 38].
-func d128DivPow10(x *types.Decimal128, n int32) {
-	if n <= 19 {
-		d := types.Pow10[n]
-		var rem uint64
-		x.B64_127, rem = bits.Div64(0, x.B64_127, d)
-		x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-		if rem*2 >= d || rem>>63 != 0 {
-			x.B0_63++
-			if x.B0_63 == 0 {
-				x.B64_127++
+			signBit := vec[i] >> 63
+			mask := -signBit
+			var err error
+			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
+			if err != nil {
+				return err
 			}
-		}
-		return
-	}
-	// n in (19, 38]: two stages.
-	d1 := types.Pow10[19]
-	var rem uint64
-	x.B64_127, rem = bits.Div64(0, x.B64_127, d1)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d1)
-	if rem*2 >= d1 || rem>>63 != 0 {
-		x.B0_63++
-		if x.B0_63 == 0 {
-			x.B64_127++
+			rs[i] = (rs[i] ^ mask) + signBit
 		}
 	}
-
-	d2 := types.Pow10[n-19]
-	x.B64_127, rem = bits.Div64(0, x.B64_127, d2)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d2)
-	if rem*2 >= d2 || rem>>63 != 0 {
-		x.B0_63++
-		if x.B0_63 == 0 {
-			x.B64_127++
-		}
-	}
+	return nil
 }
 
-// d128ScaleUp scales a signed D128 up by 10^n. Branchless sign handling, in-place.
-// Returns false on overflow (x may be corrupted; callers use original for error msg).
-func d128ScaleUp(x *types.Decimal128, n int32) bool {
-	sign := x.B64_127 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
-	ok := d128MulPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
-	return ok
-}
+// ---- Decimal64 multiply ----
 
-// d128ScaleDown divides a signed D128 by 10^n with round-half-up. Branchless, in-place.
-func d128ScaleDown(x *types.Decimal128, n int32) {
-	sign := x.B64_127 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
-	d128DivPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
-}
-
-// d256Mul1Limb multiplies unsigned D256 x by a single 64-bit factor p in-place.
-// Returns false on overflow (unsigned result must fit in 255 bits for signed restore).
-func d256Mul1Limb(x *types.Decimal256, p uint64) bool {
-	h0, l0 := bits.Mul64(x.B0_63, p)
-	h1, l1 := bits.Mul64(x.B64_127, p)
-	h2, l2 := bits.Mul64(x.B128_191, p)
-	h3, l3 := bits.Mul64(x.B192_255, p)
-	x.B0_63 = l0
-	var c uint64
-	x.B64_127, c = bits.Add64(l1, h0, 0)
-	x.B128_191, c = bits.Add64(l2, h1, c)
-	x.B192_255, c = bits.Add64(l3, h2, c)
-	return h3 == 0 && c == 0 && x.B192_255>>63 == 0
-}
-
-// d256MulPow10 multiplies unsigned D256 x by 10^n in-place.
-// Returns false on overflow. n must be in [1, 38].
-func d256MulPow10(x *types.Decimal256, n int32) bool {
-	if n <= 19 {
-		return d256Mul1Limb(x, types.Pow10[n])
-	}
-	return d256Mul1Limb(x, types.Pow10[19]) && d256Mul1Limb(x, types.Pow10[n-19])
-}
-
-// d256ScaleUp scales a signed D256 up by 10^n. Branchless sign handling, in-place.
-// Returns false on overflow (x may be corrupted; callers use original for error msg).
-func d256ScaleUp(x *types.Decimal256, n int32) bool {
-	sign := x.B192_255 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-	ok := d256MulPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-	return ok
-}
-
-// d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
-// n must be in [0, 38]. Branchless: always two stages via balanced split.
-// n=0 naturally divides by 1 twice (no-op).
-func d256DivPow10(x *types.Decimal256, n int32) {
-	n1 := n >> 1
-	n2 := n - n1
-
-	d := types.Pow10[n1]
-	var rem uint64
-	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
-	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
-	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-	// Branchless round half-up: round = 1 iff 2*rem >= d.
-	dblLo, dblHi := bits.Add64(rem, rem, 0)
-	_, borrow := bits.Sub64(dblLo, d, 0)
-	round := (1 - borrow) | dblHi
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-
-	d = types.Pow10[n2]
-	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
-	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
-	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
-	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-	dblLo, dblHi = bits.Add64(rem, rem, 0)
-	_, borrow = bits.Sub64(dblLo, d, 0)
-	round = (1 - borrow) | dblHi
-	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-}
-
-// d256ScaleDown divides a signed D256 by 10^n with round-half-up. Branchless, in-place.
-func d256ScaleDown(x *types.Decimal256, n int32) {
-	sign := x.B192_255 >> 63
-	negMask := -sign
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	var c uint64
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-	d256DivPow10(x, n)
-	x.B0_63 ^= negMask
-	x.B64_127 ^= negMask
-	x.B128_191 ^= negMask
-	x.B192_255 ^= negMask
-	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
-	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
-	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
-	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
-}
-
-// ---- Decimal64 add/sub ----
-
-// d64Add is the batch kernel for Decimal64 addition.
+// d64Mul is the batch kernel for Decimal64 × Decimal64 → Decimal128.
+// len(v1)==1 or len(v2)==1 indicates a broadcast constant.
 func d64Add(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
 	var err error
@@ -579,42 +373,6 @@ func d64SubDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 // d64ScaleIntoRs scales vec[i] by 10^scaleDiff into rs[i], respecting nulls.
 // scaleDiff is bounded by Decimal64 max scale (18), so Pow10[scaleDiff] is safe (Pow10 has 20 entries).
 
-func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
-	bmp := rsnull.GetBitmap()
-	scaleFactor := types.Decimal64(types.Pow10[scaleDiff])
-	if rsnull.IsEmpty() {
-		for i := 0; i < n; i++ {
-			signBit := vec[i] >> 63
-			mask := -signBit
-			var err error
-			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
-			if err != nil {
-				return err
-			}
-			rs[i] = (rs[i] ^ mask) + signBit
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			if bmp.Contains(uint64(i)) {
-				continue
-			}
-			signBit := vec[i] >> 63
-			mask := -signBit
-			var err error
-			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
-			if err != nil {
-				return err
-			}
-			rs[i] = (rs[i] ^ mask) + signBit
-		}
-	}
-	return nil
-}
-
-// ---- Decimal64 multiply ----
-
-// d64Mul is the batch kernel for Decimal64 × Decimal64 → Decimal128.
-// len(v1)==1 or len(v2)==1 indicates a broadcast constant.
 func d64Mul(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
 	desiredScale := int32(12)
@@ -1053,6 +811,236 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 // d128Add is the batch kernel for Decimal128 addition.
 // Same-scale: direct bits.Add64 without overflow checking.
 // Different-scale: scales operand(s) first, then uses bits.Add64 loop.
+func d64IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d64IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
+	}
+}
+
+// d128IntDivKernel returns a closure for Decimal128 → int64 integer division.
+func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	bmp := rsnull.GetBitmap()
+	hasNull := !rsnull.IsEmpty()
+	// Compute result scale (same as Decimal128.Div).
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	var scaleFactor uint64
+	canInline := scaleAdj >= 0 && scaleAdj <= 19
+	if canInline {
+		scaleFactor = types.Pow10[scaleAdj]
+	}
+
+	d64toD128 := func(v types.Decimal64) types.Decimal128 {
+		x := types.Decimal128{B0_63: uint64(v)}
+		if v>>63 != 0 {
+			x.B64_127 = ^uint64(0)
+		}
+		return x
+	}
+
+	len1, len2 := len(v1), len(v2)
+	for i := 0; i < max(len1, len2); i++ {
+		if hasNull && bmp.Contains(uint64(i)) {
+			continue
+		}
+		a, b := v1[i], v2[i]
+		if len1 == 1 {
+			a = v1[0]
+		}
+		if len2 == 1 {
+			b = v2[0]
+		}
+		if b == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsnull.Add(uint64(i))
+			continue
+		}
+		x, y := d64toD128(a), d64toD128(b)
+		var divResult types.Decimal128
+		if err := d128DivOneDispatch(x, y, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		// Truncate fractional part.
+		if scale > 0 {
+			d128ScaleDown(&divResult, scale)
+		}
+		var err error
+		rs[i], err = decimal128ToInt64(divResult)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func d128MulPow10(x *types.Decimal128, n int32) bool {
+	var hi, lo uint64
+	if n <= 19 {
+		f := types.Pow10[n]
+		hi, lo = bits.Mul64(x.B0_63, f)
+		if x.B64_127 != 0 {
+			crossHi, crossLo := bits.Mul64(x.B64_127, f)
+			if crossHi != 0 {
+				return false
+			}
+			var c uint64
+			hi, c = bits.Add64(hi, crossLo, 0)
+			if c != 0 || hi>>63 != 0 {
+				return false
+			}
+		}
+		x.B0_63 = lo
+		x.B64_127 = hi
+		return true
+	}
+	// n in (19, 38]: two stages.
+	f1 := types.Pow10[19]
+	hi, lo = bits.Mul64(x.B0_63, f1)
+	if x.B64_127 != 0 {
+		crossHi, crossLo := bits.Mul64(x.B64_127, f1)
+		if crossHi != 0 {
+			return false
+		}
+		var c uint64
+		hi, c = bits.Add64(hi, crossLo, 0)
+		if c != 0 || hi>>63 != 0 {
+			return false
+		}
+	}
+	x.B0_63 = lo
+	x.B64_127 = hi
+
+	f2 := types.Pow10[n-19]
+	hi, lo = bits.Mul64(x.B0_63, f2)
+	if x.B64_127 != 0 {
+		crossHi, crossLo := bits.Mul64(x.B64_127, f2)
+		if crossHi != 0 {
+			return false
+		}
+		var c uint64
+		hi, c = bits.Add64(hi, crossLo, 0)
+		if c != 0 || hi>>63 != 0 {
+			return false
+		}
+	}
+	x.B0_63 = lo
+	x.B64_127 = hi
+	return true
+}
+
+// d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
+// n must be in [1, 38].
+func d128DivPow10(x *types.Decimal128, n int32) {
+	if n <= 19 {
+		d := types.Pow10[n]
+		var rem uint64
+		x.B64_127, rem = bits.Div64(0, x.B64_127, d)
+		x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+		if rem*2 >= d || rem>>63 != 0 {
+			x.B0_63++
+			if x.B0_63 == 0 {
+				x.B64_127++
+			}
+		}
+		return
+	}
+	// n in (19, 38]: two stages.
+	d1 := types.Pow10[19]
+	var rem uint64
+	x.B64_127, rem = bits.Div64(0, x.B64_127, d1)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d1)
+	if rem*2 >= d1 || rem>>63 != 0 {
+		x.B0_63++
+		if x.B0_63 == 0 {
+			x.B64_127++
+		}
+	}
+
+	d2 := types.Pow10[n-19]
+	x.B64_127, rem = bits.Div64(0, x.B64_127, d2)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d2)
+	if rem*2 >= d2 || rem>>63 != 0 {
+		x.B0_63++
+		if x.B0_63 == 0 {
+			x.B64_127++
+		}
+	}
+}
+
+// d128ScaleUp scales a signed D128 up by 10^n. Branchless sign handling, in-place.
+// Returns false on overflow (x may be corrupted; callers use original for error msg).
+func d128ScaleUp(x *types.Decimal128, n int32) bool {
+	sign := x.B64_127 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	ok := d128MulPow10(x, n)
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	return ok
+}
+
+// d128ScaleDown divides a signed D128 by 10^n with round-half-up. Branchless, in-place.
+func d128ScaleDown(x *types.Decimal128, n int32) {
+	sign := x.B64_127 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+	d128DivPow10(x, n)
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, _ = bits.Add64(x.B64_127, 0, c)
+}
+
+// d256Mul1Limb multiplies unsigned D256 x by a single 64-bit factor p in-place.
+// Returns false on overflow (unsigned result must fit in 255 bits for signed restore).
+func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
+	bmp := rsnull.GetBitmap()
+	if rsnull.IsEmpty() {
+		for i := 0; i < n; i++ {
+			rs[i] = vec[i]
+			if !d128ScaleUp(&rs[i], scaleDiff) {
+				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			rs[i] = vec[i]
+			if bmp.Contains(uint64(i)) {
+				continue
+			}
+			if !d128ScaleUp(&rs[i], scaleDiff) {
+				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
+			}
+		}
+	}
+	return nil
+}
+
+// ---- Decimal128 multiply ----
+
+// d128Mul is the batch kernel for Decimal128 multiplication. It inlines a fast
+// multiply path for D64-origin values and falls back to MulInplace for
+// genuinely large Decimal128 values.
 func d128Add(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
 	var err error
@@ -1363,34 +1351,6 @@ func d128SubDiffScale(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnul
 // d128ScaleIntoRs scales vec[i] * 10^scaleDiff into rs[i], respecting nulls.
 // scaleDiff is always positive (multiply up). Values are signed D128.
 
-func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
-	bmp := rsnull.GetBitmap()
-	if rsnull.IsEmpty() {
-		for i := 0; i < n; i++ {
-			rs[i] = vec[i]
-			if !d128ScaleUp(&rs[i], scaleDiff) {
-				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
-			}
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			rs[i] = vec[i]
-			if bmp.Contains(uint64(i)) {
-				continue
-			}
-			if !d128ScaleUp(&rs[i], scaleDiff) {
-				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
-			}
-		}
-	}
-	return nil
-}
-
-// ---- Decimal128 multiply ----
-
-// d128Mul is the batch kernel for Decimal128 multiplication. It inlines a fast
-// multiply path for D64-origin values and falls back to MulInplace for
-// genuinely large Decimal128 values.
 func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
 	var scale int32 = 12
@@ -2071,6 +2031,181 @@ func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.D
 // ---- Decimal256 add/sub ----
 
 // d256Add is the batch kernel for Decimal256 addition.
+func d128IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	return func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d128IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
+	}
+}
+
+// d256IntDivKernel returns a closure for Decimal256 → int64 integer division.
+func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	bmp := rsnull.GetBitmap()
+	hasNull := !rsnull.IsEmpty()
+	// Compute result scale (same as Decimal128.Div).
+	scale := int32(12)
+	if scale > scale1+6 {
+		scale = scale1 + 6
+	}
+	if scale < scale1 {
+		scale = scale1
+	}
+	scaleAdj := scale - scale1 + scale2
+
+	var scaleFactor uint64
+	canInline := scaleAdj >= 0 && scaleAdj <= 19
+	if canInline {
+		scaleFactor = types.Pow10[scaleAdj]
+	}
+
+	len1, len2 := len(v1), len(v2)
+	for i := 0; i < max(len1, len2); i++ {
+		if hasNull && bmp.Contains(uint64(i)) {
+			continue
+		}
+		a, b := v1[i], v2[i]
+		if len1 == 1 {
+			a = v1[0]
+		}
+		if len2 == 1 {
+			b = v2[0]
+		}
+		if b.B0_63 == 0 && b.B64_127 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsnull.Add(uint64(i))
+			continue
+		}
+		var divResult types.Decimal128
+		if err := d128DivOneDispatch(a, b, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		// Truncate fractional part.
+		if scale > 0 {
+			d128ScaleDown(&divResult, scale)
+		}
+		var err error
+		rs[i], err = decimal128ToInt64(divResult)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func d256Mul1Limb(x *types.Decimal256, p uint64) bool {
+	h0, l0 := bits.Mul64(x.B0_63, p)
+	h1, l1 := bits.Mul64(x.B64_127, p)
+	h2, l2 := bits.Mul64(x.B128_191, p)
+	h3, l3 := bits.Mul64(x.B192_255, p)
+	x.B0_63 = l0
+	var c uint64
+	x.B64_127, c = bits.Add64(l1, h0, 0)
+	x.B128_191, c = bits.Add64(l2, h1, c)
+	x.B192_255, c = bits.Add64(l3, h2, c)
+	return h3 == 0 && c == 0 && x.B192_255>>63 == 0
+}
+
+// d256MulPow10 multiplies unsigned D256 x by 10^n in-place.
+// Returns false on overflow. n must be in [1, 38].
+func d256MulPow10(x *types.Decimal256, n int32) bool {
+	if n <= 19 {
+		return d256Mul1Limb(x, types.Pow10[n])
+	}
+	return d256Mul1Limb(x, types.Pow10[19]) && d256Mul1Limb(x, types.Pow10[n-19])
+}
+
+// d256ScaleUp scales a signed D256 up by 10^n. Branchless sign handling, in-place.
+// Returns false on overflow (x may be corrupted; callers use original for error msg).
+func d256ScaleUp(x *types.Decimal256, n int32) bool {
+	sign := x.B192_255 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	ok := d256MulPow10(x, n)
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	return ok
+}
+
+// d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
+// n must be in [0, 38]. Branchless: always two stages via balanced split.
+// n=0 naturally divides by 1 twice (no-op).
+func d256DivPow10(x *types.Decimal256, n int32) {
+	n1 := n >> 1
+	n2 := n - n1
+
+	d := types.Pow10[n1]
+	var rem uint64
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	// Branchless round half-up: round = 1 iff 2*rem >= d.
+	dblLo, dblHi := bits.Add64(rem, rem, 0)
+	_, borrow := bits.Sub64(dblLo, d, 0)
+	round := (1 - borrow) | dblHi
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+
+	d = types.Pow10[n2]
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	dblLo, dblHi = bits.Add64(rem, rem, 0)
+	_, borrow = bits.Sub64(dblLo, d, 0)
+	round = (1 - borrow) | dblHi
+	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+}
+
+// d256ScaleDown divides a signed D256 by 10^n with round-half-up. Branchless, in-place.
+func d256ScaleDown(x *types.Decimal256, n int32) {
+	sign := x.B192_255 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	d256DivPow10(x, n)
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+}
+
+// ---- Decimal64 add/sub ----
+
+// d64Add is the batch kernel for Decimal64 addition.
 func d256Add(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
 	var err error
@@ -2090,26 +2225,6 @@ func d256Add(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 }
 
 // d256Sub is the batch kernel for Decimal256 subtraction.
-func d256Sub(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	var idx int
-	var err error
-	if scale1 == scale2 {
-		idx = d256SubSameScale(v1, v2, rs, rsnull)
-	} else {
-		idx, err = d256SubDiffScale(v1, v2, rs, scale1, scale2, rsnull)
-		if err != nil {
-			return err
-		}
-	}
-	if idx >= 0 {
-		a, b := operandsAt(v1, v2, idx)
-		return moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", a.Format(scale1), b.Format(scale2))
-	}
-	return nil
-}
-
-// d256AddSameScale adds two Decimal256 vectors with the same scale, inlining
-// the 4-limb carry chain and overflow check to avoid the non-inlinable Add256 method.
 func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -2176,7 +2291,6 @@ func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	}
 	return -1
 }
-
 
 // d256AddDiffScale handles Decimal256 addition when scales differ.
 // Fuses per-element scaling and addition into a single pass to avoid
@@ -2308,6 +2422,26 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 
 // d256SubSameScale subtracts two Decimal256 vectors with the same scale, inlining
 // the 4-limb borrow chain and overflow check to avoid the non-inlinable Sub256 method.
+func d256Sub(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	var idx int
+	var err error
+	if scale1 == scale2 {
+		idx = d256SubSameScale(v1, v2, rs, rsnull)
+	} else {
+		idx, err = d256SubDiffScale(v1, v2, rs, scale1, scale2, rsnull)
+		if err != nil {
+			return err
+		}
+	}
+	if idx >= 0 {
+		a, b := operandsAt(v1, v2, idx)
+		return moerr.NewInvalidInputNoCtxf("Decimal256 Sub overflow: %s-%s", a.Format(scale1), b.Format(scale2))
+	}
+	return nil
+}
+
+// d256AddSameScale adds two Decimal256 vectors with the same scale, inlining
+// the 4-limb carry chain and overflow check to avoid the non-inlinable Add256 method.
 func d256SubSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -2501,7 +2635,6 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	}
 	return -1, nil
 }
-
 
 // ---- Decimal256 multiply ----
 
@@ -3044,146 +3177,11 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 
 // d64IntDivKernel returns a closure matching the decimalBatchArith arithFn
 // signature for Decimal64 → int64 integer division.
-func d64IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	return func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-		return d64IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
-	}
-}
-
-// d128IntDivKernel returns a closure for Decimal128 → int64 integer division.
-func d128IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	return func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-		return d128IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
-	}
-}
-
-// d256IntDivKernel returns a closure for Decimal256 → int64 integer division.
 func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	return func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 		return d256IntDiv(v1, v2, rs, scale1, scale2, rsnull, shouldError)
 	}
-}
-
-func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	bmp := rsnull.GetBitmap()
-	hasNull := !rsnull.IsEmpty()
-	// Compute result scale (same as Decimal128.Div).
-	scale := int32(12)
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	scaleAdj := scale - scale1 + scale2
-
-	var scaleFactor uint64
-	canInline := scaleAdj >= 0 && scaleAdj <= 19
-	if canInline {
-		scaleFactor = types.Pow10[scaleAdj]
-	}
-
-	d64toD128 := func(v types.Decimal64) types.Decimal128 {
-		x := types.Decimal128{B0_63: uint64(v)}
-		if v>>63 != 0 {
-			x.B64_127 = ^uint64(0)
-		}
-		return x
-	}
-
-	len1, len2 := len(v1), len(v2)
-	for i := 0; i < max(len1, len2); i++ {
-		if hasNull && bmp.Contains(uint64(i)) {
-			continue
-		}
-		a, b := v1[i], v2[i]
-		if len1 == 1 {
-			a = v1[0]
-		}
-		if len2 == 1 {
-			b = v2[0]
-		}
-		if b == 0 {
-			if shouldError {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			rsnull.Add(uint64(i))
-			continue
-		}
-		x, y := d64toD128(a), d64toD128(b)
-		var divResult types.Decimal128
-		if err := d128DivOneDispatch(x, y, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-			return err
-		}
-		// Truncate fractional part.
-		if scale > 0 {
-			d128ScaleDown(&divResult, scale)
-		}
-		var err error
-		rs[i], err = decimal128ToInt64(divResult)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	bmp := rsnull.GetBitmap()
-	hasNull := !rsnull.IsEmpty()
-	// Compute result scale (same as Decimal128.Div).
-	scale := int32(12)
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	scaleAdj := scale - scale1 + scale2
-
-	var scaleFactor uint64
-	canInline := scaleAdj >= 0 && scaleAdj <= 19
-	if canInline {
-		scaleFactor = types.Pow10[scaleAdj]
-	}
-
-	len1, len2 := len(v1), len(v2)
-	for i := 0; i < max(len1, len2); i++ {
-		if hasNull && bmp.Contains(uint64(i)) {
-			continue
-		}
-		a, b := v1[i], v2[i]
-		if len1 == 1 {
-			a = v1[0]
-		}
-		if len2 == 1 {
-			b = v2[0]
-		}
-		if b.B0_63 == 0 && b.B64_127 == 0 {
-			if shouldError {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			rsnull.Add(uint64(i))
-			continue
-		}
-		var divResult types.Decimal128
-		if err := d128DivOneDispatch(a, b, &divResult, scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-			return err
-		}
-		// Truncate fractional part.
-		if scale > 0 {
-			d128ScaleDown(&divResult, scale)
-		}
-		var err error
-		rs[i], err = decimal128ToInt64(divResult)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
