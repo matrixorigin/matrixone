@@ -234,6 +234,67 @@ func d256ScaleUp(x *types.Decimal256, n int32) bool {
 	return ok
 }
 
+// d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
+// n must be in [0, 38]. Branchless: always two stages via balanced split.
+// n=0 naturally divides by 1 twice (no-op).
+func d256DivPow10(x *types.Decimal256, n int32) {
+	n1 := n >> 1
+	n2 := n - n1
+
+	d := types.Pow10[n1]
+	var rem uint64
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	// Branchless round half-up: round = 1 iff 2*rem >= d.
+	dblLo, dblHi := bits.Add64(rem, rem, 0)
+	_, borrow := bits.Sub64(dblLo, d, 0)
+	round := (1 - borrow) | dblHi
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+
+	d = types.Pow10[n2]
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	dblLo, dblHi = bits.Add64(rem, rem, 0)
+	_, borrow = bits.Sub64(dblLo, d, 0)
+	round = (1 - borrow) | dblHi
+	x.B0_63, c = bits.Add64(x.B0_63, round, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+}
+
+// d256ScaleDown divides a signed D256 by 10^n with round-half-up. Branchless, in-place.
+func d256ScaleDown(x *types.Decimal256, n int32) {
+	sign := x.B192_255 >> 63
+	negMask := -sign
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	var c uint64
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+	d256DivPow10(x, n)
+	x.B0_63 ^= negMask
+	x.B64_127 ^= negMask
+	x.B128_191 ^= negMask
+	x.B192_255 ^= negMask
+	x.B0_63, c = bits.Add64(x.B0_63, sign, 0)
+	x.B64_127, c = bits.Add64(x.B64_127, 0, c)
+	x.B128_191, c = bits.Add64(x.B128_191, 0, c)
+	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
+}
+
 // ---- Decimal64 add/sub ----
 
 // d64Add is the batch kernel for Decimal64 addition.
@@ -1445,11 +1506,11 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 		}
 	}
 
-	// D256 fallback: multiply in 256-bit, scale, truncate.
+	// D256 fallback: multiply in 256-bit, scale down, truncate.
 	x2 := types.Decimal256{B0_63: ax.B0_63, B64_127: ax.B64_127}
 	y2 := types.Decimal256{B0_63: ay.B0_63, B64_127: ay.B64_127}
 	x2, _ = x2.Mul256(y2)
-	x2, _ = x2.Scale(scaleAdj)
+	d256DivPow10(&x2, -scaleAdj)
 	if x2.B128_191 != 0 || x2.B192_255 != 0 || x2.B64_127>>63 != 0 {
 		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(scale1), y.Format(scale2))
 	}
@@ -1658,13 +1719,11 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		// Overflow in scale: fall back to D256 division.
 		x2 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 		y2 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
-		var err error
-		x2, err = x2.Scale(scaleAdj)
-		if err != nil {
+		if !d256MulPow10(&x2, scaleAdj) {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 		}
-		x2, err = x2.Div256(y2)
-		if err != nil || x2.B192_255 != 0 || x2.B128_191 != 0 || x2.B64_127>>63 != 0 {
+		x2, divErr := x2.Div256(y2)
+		if divErr != nil || x2.B192_255 != 0 || x2.B128_191 != 0 || x2.B64_127>>63 != 0 {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 		}
 		z = types.Decimal128{B0_63: x2.B0_63, B64_127: x2.B64_127}
@@ -2385,7 +2444,7 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if err := d256MulInline(&v1[i], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
+			if err := d256MulInline(&v1[i], &v2[i], &rs[i], scale1, scale2); err != nil {
 				return err
 			}
 		}
@@ -2394,7 +2453,7 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if err := d256MulInline(&v1[0], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
+			if err := d256MulInline(&v1[0], &v2[i], &rs[i], scale1, scale2); err != nil {
 				return err
 			}
 		}
@@ -2403,9 +2462,16 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if err := d256MulInline(&v1[i], &v2[0], &rs[i], scaleAdj, scale1, scale2); err != nil {
+			if err := d256MulInline(&v1[i], &v2[0], &rs[i], scale1, scale2); err != nil {
 				return err
 			}
+		}
+	}
+	// Batch-level scale-down: applied once per batch, outside per-element loops.
+	if scaleAdj < 0 {
+		divN := -scaleAdj
+		for i := range rs {
+			d256ScaleDown(&rs[i], divN)
 		}
 	}
 	return nil
@@ -2413,7 +2479,7 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 
 // d256MulInline performs a single D256 multiply with inlined schoolbook 4×4 cross-product.
 // Uses a single overflow flag instead of per-branch error returns.
-func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scaleAdj, scale1, scale2 int32) error {
+func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scale1, scale2 int32) error {
 	signxU := x.B192_255 >> 63
 	signyU := y.B192_255 >> 63
 	// Branchless absolute value for x.
@@ -2495,13 +2561,6 @@ func d256MulInline(x, y *types.Decimal256, dst *types.Decimal256, scaleAdj, scal
 	}
 
 	z := types.Decimal256{B0_63: z0, B64_127: z1, B128_191: z2, B192_255: z3}
-	if scaleAdj != 0 {
-		var err error
-		z, err = z.Scale(scaleAdj)
-		if err != nil {
-			return err
-		}
-	}
 	neg := signxU ^ signyU
 	negMask := -neg
 	z.B0_63 ^= negMask
@@ -2963,12 +3022,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 		if err != nil {
 			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
 		}
-		if resultScale > 0 {
-			divResult, err = divResult.Scale(-resultScale)
-			if err != nil {
-				return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
-			}
-		}
+		d256ScaleDown(&divResult, resultScale)
 		*dst, err = decimal256ToInt64(divResult)
 		return err
 	}
