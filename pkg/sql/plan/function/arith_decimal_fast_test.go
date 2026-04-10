@@ -2000,6 +2000,73 @@ func BenchmarkD256Add_Generic(b *testing.B) {
 	}
 }
 
+func BenchmarkD256AddDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = randD256Small(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256Add(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD256AddDiffScale_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = randD256Small(rng)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			rs[i], _, _ = xs[i].Add(ys[i], 2, 5)
+		}
+	}
+}
+
+func BenchmarkD256SubDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = randD256Small(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256Sub(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD256SubDiffScale_Generic(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = randD256Small(rng)
+	}
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		for i := 0; i < benchN; i++ {
+			neg := ys[i].Minus()
+			rs[i], _, _ = xs[i].Add(neg, 2, 5)
+		}
+	}
+}
+
 func BenchmarkD256Mul_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal256, benchN)
