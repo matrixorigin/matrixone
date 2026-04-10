@@ -98,6 +98,11 @@ func d256Negate(x *types.Decimal256, sign uint64) {
 	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
 }
 
+func d128IsZero(d types.Decimal128) bool { return d.B0_63 == 0 && d.B64_127 == 0 }
+func d256IsZero(d types.Decimal256) bool {
+	return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
+}
+
 // ---- Inline Scale helpers ----
 //
 // d64MulPow10 multiplies signed D64 x by 10^n. n must be in [1, 18].
@@ -1743,9 +1748,6 @@ func d128ModKernel(shouldError bool) func(v1, v2, rs []types.Decimal128, scale1,
 }
 
 func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	isZero := func(d types.Decimal128) bool {
-		return d.B0_63 == 0 && d.B64_127 == 0
-	}
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
 	var bmp *bitmap.Bitmap
@@ -1755,7 +1757,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 
 	// Same-scale fast path: inline sign handling + 128-bit mod.
 	if scale1 == scale2 {
-		return d128ModSameScale(v1, v2, rs, rsnull, shouldError, len1, len2, hasNull, bmp, isZero)
+		return d128ModSameScale(v1, v2, rs, rsnull, shouldError, len1, len2, hasNull, bmp)
 	}
 
 	// Diff-scale fast path: branchless abs + inline scale + mod.
@@ -1769,7 +1771,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if d128IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -1791,7 +1793,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if d128IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -1809,7 +1811,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 			rs[i] = r
 		}
 	} else {
-		if isZero(v2[0]) {
+		if d128IsZero(v2[0]) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -1838,15 +1840,14 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 
 // d128ModSameScale handles same-scale D128 modulo with inline 128-bit mod.
 func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, shouldError bool,
-	len1, len2 int, hasNull bool, bmp *bitmap.Bitmap,
-	isZero func(types.Decimal128) bool) error {
+	len1, len2 int, hasNull bool, bmp *bitmap.Bitmap) error {
 
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if d128IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -1861,7 +1862,7 @@ func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, should
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero(v2[i]) {
+			if d128IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -1871,7 +1872,7 @@ func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, should
 			rs[i] = d128ModOne(x, v2[i])
 		}
 	} else {
-		if isZero(v2[0]) {
+		if d128IsZero(v2[0]) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2667,9 +2668,6 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
-	isZero256 := func(d types.Decimal256) bool {
-		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
-	}
 
 	// Pre-compute D128 scale factors for fast path.
 	scale := int32(12)
@@ -2702,7 +2700,7 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2719,7 +2717,7 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2732,7 +2730,7 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 		}
 	} else {
 		b := v2[0]
-		if isZero256(b) {
+		if d256IsZero(b) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2835,9 +2833,6 @@ func d256ModKernel(shouldError bool) func(v1, v2, rs []types.Decimal256, scale1,
 }
 
 func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	isZero256 := func(d types.Decimal256) bool {
-		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
-	}
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
 	var bmp *bitmap.Bitmap
@@ -2856,7 +2851,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2874,7 +2869,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2888,7 +2883,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			rs[i] = r
 		}
 	} else {
-		if isZero256(v2[0]) {
+		if d256IsZero(v2[0]) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2924,9 +2919,6 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 		signExt := ^uint64(0) * (d.B64_127 >> 63)
 		return types.Decimal256{B0_63: d.B0_63, B64_127: d.B64_127, B128_191: signExt, B192_255: signExt}
 	}
-	isZero := func(d types.Decimal128) bool {
-		return d.B0_63 == 0 && d.B64_127 == 0
-	}
 
 	diff := scale2 - scale1
 	mask := diff >> 31
@@ -2939,7 +2931,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 				continue
 			}
 			y := d256toD128(v2[i])
-			if isZero(y) {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2964,7 +2956,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 				continue
 			}
 			y := d256toD128(v2[i])
-			if isZero(y) {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2984,7 +2976,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 		}
 	} else {
 		y := d256toD128(v2[0])
-		if isZero(y) {
+		if d128IsZero(y) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -3032,9 +3024,6 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
-	isZero256 := func(d types.Decimal256) bool {
-		return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
-	}
 
 	// Pre-compute D128 scale factors for fast path.
 	scale := int32(12)
@@ -3067,7 +3056,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -3084,7 +3073,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			if isZero256(v2[i]) {
+			if d256IsZero(v2[i]) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -3097,7 +3086,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 		}
 	} else {
 		b := v2[0]
-		if isZero256(b) {
+		if d256IsZero(b) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
