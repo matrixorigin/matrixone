@@ -545,7 +545,7 @@ func (r *Resource) Get(key string) (any, bool) {
 	return val, has
 }
 
-// String need to improve
+// String returns the JSON-encoded representation of the resource map.
 func (r *Resource) String() string {
 	buf, _ := json.Marshal(r.m)
 	return string(buf)
