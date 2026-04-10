@@ -20,7 +20,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -162,23 +161,6 @@ func TestQCloudRegion(t *testing.T) {
 }
 
 func TestAWSRegion(t *testing.T) {
-	origHead := objectStorageHTTPHead
-	objectStorageHTTPHead = func(url string) (*http.Response, error) {
-		resp := &http.Response{Header: make(http.Header)}
-		switch url {
-		case "https://aws.s3.amazonaws.com":
-			resp.Header.Set("x-amz-bucket-region", "us-east-1")
-			return resp, nil
-		case "https://fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew.s3.amazonaws.com":
-			return resp, nil
-		default:
-			return nil, assert.AnError
-		}
-	}
-	t.Cleanup(func() {
-		objectStorageHTTPHead = origHead
-	})
-
 	args := ObjectStorageArguments{
 		Endpoint: "amazonaws.com",
 
