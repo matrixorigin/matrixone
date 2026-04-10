@@ -955,7 +955,12 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 		return nil
 	}
 
-	// Diff-scale: delegate to generic method.
+	// Diff-scale fast path: widen D64 to D128, branchless abs + inline scale + mod.
+	diff := scale2 - scale1
+	mask := diff >> 31
+	scaleAx := diff &^ mask
+	scaleAy := (-diff) & mask
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -968,13 +973,24 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := v1[i].Mod(v2[i], scale1, scale2)
-			if err != nil {
-				return err
+			sx := int64(v1[i])
+			x128 := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
+			sy := int64(v2[i])
+			y128 := types.Decimal128{B0_63: uint64(sy), B64_127: uint64(sy >> 63)}
+			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			if !ok {
+				r64, _, err := v1[i].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				rs[i] = r64
+				continue
 			}
-			rs[i] = r
+			rs[i] = types.Decimal64(r.B0_63)
 		}
 	} else if len1 == 1 {
+		sx := int64(v1[0])
+		x128 := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -986,11 +1002,18 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := v1[0].Mod(v2[i], scale1, scale2)
-			if err != nil {
-				return err
+			sy := int64(v2[i])
+			y128 := types.Decimal128{B0_63: uint64(sy), B64_127: uint64(sy >> 63)}
+			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			if !ok {
+				r64, _, err := v1[0].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				rs[i] = r64
+				continue
 			}
-			rs[i] = r
+			rs[i] = types.Decimal64(r.B0_63)
 		}
 	} else {
 		if v2[0] == 0 {
@@ -1002,15 +1025,24 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 			}
 			return nil
 		}
+		sy := int64(v2[0])
+		y128 := types.Decimal128{B0_63: uint64(sy), B64_127: uint64(sy >> 63)}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, _, err := v1[i].Mod(v2[0], scale1, scale2)
-			if err != nil {
-				return err
+			sx := int64(v1[i])
+			x128 := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
+			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			if !ok {
+				r64, _, err := v1[i].Mod(v2[0], scale1, scale2)
+				if err != nil {
+					return err
+				}
+				rs[i] = r64
+				continue
 			}
-			rs[i] = r
+			rs[i] = types.Decimal64(r.B0_63)
 		}
 	}
 	return nil
@@ -1828,7 +1860,12 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 		return d128ModSameScale(v1, v2, rs, rsnull, shouldError, len1, len2, hasNull, bmp, isZero)
 	}
 
-	// Diff-scale: delegate to generic method.
+	// Diff-scale fast path: branchless abs + inline scale + mod.
+	diff := scale2 - scale1
+	mask := diff >> 31
+	scaleAx := diff &^ mask
+	scaleAy := (-diff) & mask
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -1841,9 +1878,13 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := v1[i].Mod(v2[i], scale1, scale2)
-			if err != nil {
-				return err
+			r, ok := d128ModDiffScaleOne(v1[i], v2[i], scaleAx, scaleAy)
+			if !ok {
+				var err error
+				r, _, err = v1[i].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
 			}
 			rs[i] = r
 		}
@@ -1859,9 +1900,13 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, _, err := v1[0].Mod(v2[i], scale1, scale2)
-			if err != nil {
-				return err
+			r, ok := d128ModDiffScaleOne(v1[0], v2[i], scaleAx, scaleAy)
+			if !ok {
+				var err error
+				r, _, err = v1[0].Mod(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
 			}
 			rs[i] = r
 		}
@@ -1879,9 +1924,13 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, _, err := v1[i].Mod(v2[0], scale1, scale2)
-			if err != nil {
-				return err
+			r, ok := d128ModDiffScaleOne(v1[i], v2[0], scaleAx, scaleAy)
+			if !ok {
+				var err error
+				r, _, err = v1[i].Mod(v2[0], scale1, scale2)
+				if err != nil {
+					return err
+				}
 			}
 			rs[i] = r
 		}
@@ -1978,6 +2027,44 @@ func d128ModOne(x, y types.Decimal128) types.Decimal128 {
 	r.B0_63, c = bits.Add64(r.B0_63, signx, 0)
 	r.B64_127, _ = bits.Add64(r.B64_127, 0, c)
 	return r
+}
+
+// d128ModDiffScaleOne computes x mod y where scales differ.
+// scaleAx and scaleAy are precomputed at batch level: one is scaleDiff, the other 0.
+// Branchless abs + inline scale eliminates ~5 branches vs generic .Mod().
+// Returns (result, ok). ok=false only on D128 scaling overflow (rare).
+func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.Decimal128, bool) {
+	signx := x.B64_127 >> 63
+	negMaskX := -signx
+	ax := types.Decimal128{B0_63: x.B0_63 ^ negMaskX, B64_127: x.B64_127 ^ negMaskX}
+	var c uint64
+	ax.B0_63, c = bits.Add64(ax.B0_63, signx, 0)
+	ax.B64_127, _ = bits.Add64(ax.B64_127, 0, c)
+
+	signy := y.B64_127 >> 63
+	negMaskY := -signy
+	ay := types.Decimal128{B0_63: y.B0_63 ^ negMaskY, B64_127: y.B64_127 ^ negMaskY}
+	ay.B0_63, c = bits.Add64(ay.B0_63, signy, 0)
+	ay.B64_127, _ = bits.Add64(ay.B64_127, 0, c)
+
+	if !d128MulPow10(&ax, scaleAx) || !d128MulPow10(&ay, scaleAy) {
+		return types.Decimal128{}, false
+	}
+
+	var r types.Decimal128
+	if ay.B64_127 == 0 {
+		_, rhi := bits.Div64(0, ax.B64_127, ay.B0_63)
+		_, rlo := bits.Div64(rhi, ax.B0_63, ay.B0_63)
+		r = types.Decimal128{B0_63: rlo}
+	} else {
+		r, _ = ax.Mod128(ay)
+	}
+
+	r.B0_63 ^= negMaskX
+	r.B64_127 ^= negMaskX
+	r.B0_63, c = bits.Add64(r.B0_63, signx, 0)
+	r.B64_127, _ = bits.Add64(r.B64_127, 0, c)
+	return r, true
 }
 
 // ---- Decimal256 add/sub ----

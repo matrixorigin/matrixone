@@ -1987,6 +1987,86 @@ func BenchmarkD128Div_Generic(b *testing.B) {
 	}
 }
 
+func BenchmarkD64Mod_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Mod(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD64ModDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63())
+		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Mod(xs, ys, rs, 2, 4, nul, true)
+	}
+}
+
+func BenchmarkD128Mod_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128(rng)
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Mod(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
+func BenchmarkD128ModDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128(rng)
+		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Mod(xs, ys, rs, 2, 4, nul, true)
+	}
+}
+
+func BenchmarkD256Mod_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256Mod(xs, ys, rs, 2, 2, nul, true)
+	}
+}
+
 func BenchmarkD256Add_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal256, benchN)
