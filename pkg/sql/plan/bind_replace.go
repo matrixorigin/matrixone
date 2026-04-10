@@ -96,6 +96,29 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}
 
 	// get old columns from existing main table
+	//
+	// Real-PK path: skip the LEFT JOIN entirely. The old columns are filled as
+	// NULL placeholders here and later captured on-the-fly by the PK DEDUP JOIN
+	// from the same main-table scan that performs conflict detection
+	// (OldColCaptureList is populated below). This merges the two main-table
+	// scans (LEFT JOIN + DEDUP JOIN) into one.
+	//
+	// Fake-PK tables take a separate branch: the main-table scan there
+	// co-exists with index-table scans, so no merge is possible and we keep the
+	// legacy LEFT JOIN path unchanged.
+	// Merged-scan only works when every index is single-part. Multi-part
+	// indexes require serial(old_c1, old_c2, ...) which needs an intermediate
+	// PROJECT after capture — deferred to a follow-up PR.
+	hasMultiPartIdx := false
+	if !isFakePK {
+		for _, idxDef := range tableDef.Indexes {
+			if len(idxDef.Parts) > 1 {
+				hasMultiPartIdx = true
+				break
+			}
+		}
+	}
+	useMergedMainScan := !isFakePK && !hasMultiPartIdx
 	if isFakePK && !hasUniqueIdx {
 		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
 		for _, col := range tableDef.Cols {
@@ -106,6 +129,42 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 					Lit: &plan.Literal{Isnull: true},
 				},
 			})
+		}
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: fullProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{fullProjTag},
+		}, bindCtx)
+	} else if useMergedMainScan {
+		// Real-PK path: fill fullProjList old-col slots with NULL literals.
+		// The PK DEDUP JOIN below will capture the real values from its own
+		// main-table scan via OldColCaptureList. Only tables with exclusively
+		// single-part indexes reach here (see hasMultiPartIdx guard above), so
+		// no serial() slots are needed.
+		for _, col := range tableDef.Cols {
+			oldColName2Idx[tableDef.Name+"."+col.Name] = [2]int32{fullProjTag, int32(len(fullProjList))}
+			fullProjList = append(fullProjList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Isnull: true},
+				},
+			})
+		}
+
+		var err error
+		for i, idxDef := range tableDef.Indexes {
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
+
+			if len(idxDef.Parts) == 1 {
+				// Single-part: alias the idx-col lookup to the raw captured column.
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			}
+			// Multi-part indexes are excluded by hasMultiPartIdx guard above.
 		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -321,6 +380,39 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldPkPos := oldColName2Idx[tableDef.Name+"."+pkName]
 
+		dedupJoinCtx := &plan.DedupJoinCtx{}
+		if useMergedMainScan {
+			// Merged-scan mode: the DEDUP JOIN captures every main-table column
+			// from its own probe-side scan into the build-side NULL placeholder
+			// slots set up in fullProjList above. The old DelRows/OldColList
+			// path is no longer needed because the captured values feed
+			// downstream consumers directly.
+			captureList := make([]plan.OldColCapture, 0, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				placeholderPos := oldColName2Idx[tableDef.Name+"."+col.Name]
+				captureList = append(captureList, plan.OldColCapture{
+					BuildPlaceholder: plan.ColRef{
+						RelPos: placeholderPos[0],
+						ColPos: placeholderPos[1],
+					},
+					ProbeSource: plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(i),
+					},
+				})
+			}
+			dedupJoinCtx.OldColCaptureList = captureList
+		} else {
+			// Legacy DelRows path: used when merged-scan is disabled (e.g.
+			// tables with multi-part indexes).
+			dedupJoinCtx.OldColList = []plan.ColRef{
+				{
+					RelPos: oldPkPos[0],
+					ColPos: oldPkPos[1],
+				},
+			}
+		}
+
 		dedupJoinNode := &plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{scanNodeID, lastNodeID},
@@ -329,14 +421,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			OnDuplicateAction: plan.Node_FAIL,
 			DedupColName:      dedupColName,
 			DedupColTypes:     dedupColTypes,
-			DedupJoinCtx: &plan.DedupJoinCtx{
-				OldColList: []plan.ColRef{
-					{
-						RelPos: oldPkPos[0],
-						ColPos: oldPkPos[1],
-					},
-				},
-			},
+			DedupJoinCtx:      dedupJoinCtx,
 		}
 
 		lastNodeID = builder.appendNode(dedupJoinNode, bindCtx)

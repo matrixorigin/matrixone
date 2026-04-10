@@ -1002,6 +1002,14 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			arg.OldColCapturePlaceholderIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			arg.OldColCaptureProbeIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			for i, capture := range node.DedupJoinCtx.OldColCaptureList {
+				arg.OldColCapturePlaceholderIdxList[i] = capture.BuildPlaceholder.ColPos
+				arg.OldColCaptureProbeIdxList[i] = capture.ProbeSource.ColPos
+			}
+		}
 	}
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
