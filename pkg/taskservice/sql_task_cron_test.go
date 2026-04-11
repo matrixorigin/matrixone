@@ -85,3 +85,97 @@ func TestScheduleSQLTaskSkipsManualOnlyTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tasks)
 }
+
+func TestScheduleSQLTaskStartStopNoop(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	ts.StopScheduleSQLTask()
+	ts.StartScheduleSQLTask()
+	require.NotNil(t, ts.sqlCrons.stopper)
+	require.NotNil(t, ts.sqlCrons.jobs)
+
+	ts.StartScheduleSQLTask()
+	ts.StopScheduleSQLTask()
+	require.Nil(t, ts.sqlCrons.stopper)
+	require.Nil(t, ts.sqlCrons.jobs)
+
+	ts.StopScheduleSQLTask()
+}
+
+func TestLoadSQLTasksAddsReplacesAndRemoves(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
+	defer func() {
+		for id := range ts.sqlCrons.jobs {
+			ts.removeSQLTask(id)
+		}
+		require.NoError(t, ts.Close())
+	}()
+	ts.sqlCrons.jobs = make(map[uint64]*sqlTaskCronJob)
+
+	sqlTask := newTestSQLTask("task-refresh", 1)
+	sqlTask.CronExpr = "0 0 0 1 1 *"
+	sqlTask.Timezone = "UTC"
+	sqlTask.NextFireTime = time.Now().Add(time.Hour).UnixMilli()
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "task-refresh"))[0]
+
+	ts.loadSQLTasks(context.Background())
+	require.Len(t, ts.sqlCrons.jobs, 1)
+	require.Equal(t, sqlTask.CronExpr, ts.sqlCrons.jobs[sqlTask.TaskID].task.CronExpr)
+
+	sqlTask.CronExpr = "0 */2 * * * *"
+	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	ts.loadSQLTasks(context.Background())
+	require.Len(t, ts.sqlCrons.jobs, 1)
+	require.Equal(t, "0 */2 * * * *", ts.sqlCrons.jobs[sqlTask.TaskID].task.CronExpr)
+
+	sqlTask.Enabled = false
+	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	ts.loadSQLTasks(context.Background())
+	require.Empty(t, ts.sqlCrons.jobs)
+}
+
+func TestSQLTaskCronJobEdges(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	_, err := newSQLTaskCronJob(SQLTask{CronExpr: "bad cron"}, ts)
+	require.Error(t, err)
+
+	oldTask := newTestSQLTask("task-old", 1)
+	newTask := oldTask
+	require.False(t, sqlTaskNeedsRefresh(oldTask, newTask))
+	newTask.Timezone = "Asia/Shanghai"
+	require.True(t, sqlTaskNeedsRefresh(oldTask, newTask))
+
+	job := &sqlTaskCronJob{s: ts, task: SQLTask{TaskID: 999}}
+	job.Run()
+
+	sqlTask := newTestSQLTask("task-disabled", 1)
+	sqlTask.Enabled = false
+	sqlTask.CronExpr = "0 * * * * *"
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "task-disabled"))[0]
+	job.task = sqlTask
+	job.Run()
+	tasks, err := store.QueryAsyncTask(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, tasks)
+
+	sqlTask.Enabled = true
+	sqlTask.CronExpr = "bad cron"
+	mustUpdateTestSQLTask(t, store, 1, []SQLTask{sqlTask}, WithTaskIDCond(EQ, sqlTask.TaskID))
+	job.task = sqlTask
+	job.Run()
+	tasks, err = store.QueryAsyncTask(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, tasks)
+}

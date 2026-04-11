@@ -202,6 +202,94 @@ func TestSQLTaskExecutorAttachesAccountContext(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSQLTaskExecutorTaskExecutorPayloads(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return &fakeInternalExecutor{} }, ts, "cn-test")
+	require.Error(t, executor.TaskExecutor()(context.Background(), &task.CronTask{}))
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = ""
+		task.SQLBody = ""
+	})
+	mustAddTestSQLTaskRun(t, store, 1, newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning))
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual)))
+	require.NoError(t, executor.TaskExecutor()(context.Background(), &asyncTask))
+}
+
+func TestSQLTaskExecutorExecuteContextEdges(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return &fakeInternalExecutor{} }, ts, "cn-test")
+	require.Error(t, executor.ExecuteContext(context.Background(), nil, true))
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = ""
+		task.SQLBody = "select"
+		task.RetryLimit = 0
+	})
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.Error(t, err)
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+	require.Equal(t, SQLTaskStatusFailed, runs[0].Status)
+
+	sqlTask = mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.TaskName = "task-empty-body"
+		task.GateCondition = ""
+		task.SQLBody = ""
+	})
+	require.NoError(t, executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true))
+}
+
+func TestSQLTaskExecutorGateAndBoolEdges(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := newTestSQLTask("task-gate", 1)
+	sqlTask.GateCondition = ""
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return &fakeInternalExecutor{} }, ts, "cn-test")
+	allowed, err := executor.evaluateGate(context.Background(), sqlTask)
+	require.NoError(t, err)
+	require.True(t, allowed)
+
+	sqlTask.GateCondition = "select 1"
+	executor = NewSQLTaskExecutor(func() ie.InternalExecutor {
+		return &fakeInternalExecutor{queryErrs: []error{moerr.NewInternalErrorNoCtx("gate failed")}}
+	}, ts, "cn-test")
+	allowed, err = executor.evaluateGate(context.Background(), sqlTask)
+	require.Error(t, err)
+	require.False(t, allowed)
+
+	executor = NewSQLTaskExecutor(func() ie.InternalExecutor { return &fakeInternalExecutor{} }, ts, "cn-test")
+	allowed, err = executor.evaluateGate(context.Background(), sqlTask)
+	require.NoError(t, err)
+	require.False(t, allowed)
+
+	for _, value := range []any{true, int8(1), int16(1), int32(1), int64(1), int(1), uint8(1), uint16(1), uint32(1), uint64(1), uint(1), float32(1), float64(1), "yes", "t", "true", "1"} {
+		got, err := toBool(value)
+		require.NoError(t, err)
+		require.True(t, got, "value %v", value)
+	}
+	for _, value := range []any{nil, false, int8(0), int16(0), int32(0), int64(0), int(0), uint8(0), uint16(0), uint32(0), uint64(0), uint(0), float32(0), float64(0), "", "0", "false", "f", "no", "n"} {
+		got, err := toBool(value)
+		require.NoError(t, err)
+		require.False(t, got, "value %v", value)
+	}
+	_, err = toBool(struct{}{})
+	require.Error(t, err)
+}
+
 func mustAddSQLTaskForExecutorTest(t *testing.T, store *memTaskStorage, adjust func(*SQLTask)) SQLTask {
 	t.Helper()
 	sqlTask := newTestSQLTask("task-exec", 1)

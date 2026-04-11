@@ -171,6 +171,127 @@ func TestHandleShowSQLTasksAndRuns(t *testing.T) {
 	require.Equal(t, taskservice.SQLTaskStatusSuccess, row[3])
 }
 
+func TestHandleSQLTaskEdges(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	ctx := context.Background()
+	createStmt := &tree.CreateSQLTask{
+		Name:    tree.Identifier("task_edge"),
+		SQLBody: "select 1",
+	}
+	require.NoError(t, handleCreateSQLTask(ctx, ses, createStmt))
+	require.NoError(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{
+		IfNotExists: true,
+		Name:        tree.Identifier("task_edge"),
+	}))
+	require.Len(t, mustGetTestSQLTasksForFrontend(t, store, taskservice.WithTaskName(taskservice.EQ, "task_edge")), 1)
+	require.Error(t, handleCreateSQLTask(ctx, ses, createStmt))
+	require.Error(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{
+		Name:    tree.Identifier("task_bad_timeout"),
+		Timeout: "-1s",
+	}))
+
+	require.NoError(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:          tree.Identifier("task_edge"),
+		Action:        tree.AlterTaskSetWhen,
+		GateCondition: "select 1",
+	}))
+	sqlTask, err := getSQLTaskByName(ctx, store, "task_edge", ses.GetAccountId())
+	require.NoError(t, err)
+	require.Equal(t, "select 1", sqlTask.GateCondition)
+
+	require.NoError(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:       tree.Identifier("task_edge"),
+		Action:     tree.AlterTaskSetRetry,
+		RetryLimit: 3,
+	}))
+	sqlTask, err = getSQLTaskByName(ctx, store, "task_edge", ses.GetAccountId())
+	require.NoError(t, err)
+	require.Equal(t, 3, sqlTask.RetryLimit)
+
+	require.NoError(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:    tree.Identifier("task_edge"),
+		Action:  tree.AlterTaskSetTimeout,
+		Timeout: "2m",
+	}))
+	sqlTask, err = getSQLTaskByName(ctx, store, "task_edge", ses.GetAccountId())
+	require.NoError(t, err)
+	require.Equal(t, 120, sqlTask.TimeoutSeconds)
+
+	require.Error(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:    tree.Identifier("task_edge"),
+		Action:  tree.AlterTaskSetTimeout,
+		Timeout: "bad",
+	}))
+	require.Error(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:     tree.Identifier("task_edge"),
+		Action:   tree.AlterTaskSetSchedule,
+		CronExpr: "bad cron",
+	}))
+	require.Error(t, handleAlterSQLTask(ctx, ses, &tree.AlterSQLTask{
+		Name:   tree.Identifier("missing"),
+		Action: tree.AlterTaskSuspend,
+	}))
+
+	require.NoError(t, handleDropSQLTask(ctx, ses, &tree.DropSQLTask{
+		IfExists: true,
+		Name:     tree.Identifier("missing"),
+	}))
+	require.Error(t, handleDropSQLTask(ctx, ses, &tree.DropSQLTask{
+		Name: tree.Identifier("missing"),
+	}))
+}
+
+func TestExecInFrontendSQLTaskStatements(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	ctx := context.Background()
+	run := func(stmt tree.Statement) error {
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			stmt:   stmt,
+			ses:    ses,
+		}
+		defer execCtx.Close()
+		_, err := execInFrontend(ses, execCtx)
+		return err
+	}
+
+	require.NoError(t, run(&tree.CreateSQLTask{
+		Name:    tree.Identifier("task_frontend"),
+		SQLBody: "",
+	}))
+	require.NoError(t, run(&tree.AlterSQLTask{
+		Name:   tree.Identifier("task_frontend"),
+		Action: tree.AlterTaskSuspend,
+	}))
+	require.NoError(t, run(&tree.ExecuteSQLTask{Name: tree.Identifier("task_frontend")}))
+
+	ses.mrs = &MysqlResultSet{}
+	require.NoError(t, run(&tree.ShowSQLTasks{}))
+	require.Equal(t, uint64(1), ses.mrs.GetRowCount())
+
+	ses.mrs = &MysqlResultSet{}
+	require.NoError(t, run(&tree.ShowSQLTaskRuns{TaskName: tree.Identifier("task_frontend"), HasTask: true}))
+	require.Equal(t, uint64(1), ses.mrs.GetRowCount())
+
+	require.NoError(t, run(&tree.DropSQLTask{Name: tree.Identifier("task_frontend")}))
+}
+
 func TestDetachSQLTaskExecuteContext(t *testing.T) {
 	parent, cancel := context.WithTimeout(context.WithValue(context.Background(), sqlTaskContextKey{}, "value"), time.Millisecond)
 	defer cancel()
@@ -197,4 +318,11 @@ func newSQLTaskHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Sessi
 	})
 	getPu(ses.GetService()).TaskService = ts
 	return ses, ts, store
+}
+
+func mustGetTestSQLTasksForFrontend(t *testing.T, store taskservice.TaskStorage, conds ...taskservice.Condition) []taskservice.SQLTask {
+	t.Helper()
+	tasks, err := store.QuerySQLTask(context.Background(), conds...)
+	require.NoError(t, err)
+	return tasks
 }
