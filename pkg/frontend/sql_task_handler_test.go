@@ -97,6 +97,38 @@ func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	require.NoError(t, ts.Close())
 }
 
+func TestHandleSQLTaskDefaultsTimezoneToUTC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	require.NoError(t, handleCreateSQLTask(context.Background(), ses, &tree.CreateSQLTask{
+		Name:     tree.Identifier("task_default_tz"),
+		CronExpr: "0 0 0 1 1 *",
+		SQLBody:  "select 1;",
+	}))
+
+	sqlTask, err := getSQLTaskByName(context.Background(), store, "task_default_tz", ses.GetAccountId())
+	require.NoError(t, err)
+	require.Equal(t, "UTC", sqlTask.Timezone)
+
+	require.NoError(t, handleAlterSQLTask(context.Background(), ses, &tree.AlterSQLTask{
+		Name:     tree.Identifier("task_default_tz"),
+		Action:   tree.AlterTaskSetSchedule,
+		CronExpr: "0 */5 * * * *",
+	}))
+
+	sqlTask, err = getSQLTaskByName(context.Background(), store, "task_default_tz", ses.GetAccountId())
+	require.NoError(t, err)
+	require.Equal(t, "UTC", sqlTask.Timezone)
+	require.Equal(t, "0 */5 * * * *", sqlTask.CronExpr)
+}
+
 func TestHandleShowSQLTasksAndRuns(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

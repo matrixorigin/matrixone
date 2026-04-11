@@ -90,6 +90,34 @@ func TestSQLTaskExecutorSkipsWhenGateFalse(t *testing.T) {
 	require.False(t, runs[0].GateResult)
 }
 
+func TestSQLTaskExecutorReturnsFinishRunErrorOnGateFailure(t *testing.T) {
+	baseStore := NewMemTaskStorage().(*memTaskStorage)
+	store := &finishRunFailingTaskStorage{
+		TaskStorage: baseStore,
+	}
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, baseStore, func(task *SQLTask) {
+		task.GateCondition = "select 1"
+		task.SQLBody = "select 1"
+		task.RetryLimit = 1
+	})
+
+	fakeIE := &fakeInternalExecutor{
+		queryErrs: []error{moerr.NewInternalErrorNoCtx("gate failed")},
+	}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled), true)
+	require.EqualError(t, err, "internal error: finish failed")
+	require.Equal(t, 1, store.completeCalls)
+
+	runs := mustGetTestSQLTaskRun(t, baseStore, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+	require.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+}
+
 func TestSQLTaskExecutorRetryOnFailure(t *testing.T) {
 	store := NewMemTaskStorage().(*memTaskStorage)
 	ts := NewTaskService(runtime.DefaultRuntime(), store)
@@ -334,6 +362,16 @@ type fakeInternalExecutor struct {
 	execOpts []ie.SessionOverrideOptions
 	execErrs []error
 	execHook func(context.Context, string, ie.SessionOverrideOptions) error
+}
+
+type finishRunFailingTaskStorage struct {
+	TaskStorage
+	completeCalls int
+}
+
+func (s *finishRunFailingTaskStorage) CompleteSQLTaskRun(context.Context, SQLTaskRun) (int, error) {
+	s.completeCalls++
+	return 0, moerr.NewInternalErrorNoCtx("finish failed")
 }
 
 func (f *fakeInternalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -110,12 +111,13 @@ func handleAlterSQLTask(ctx context.Context, ses *Session, stmt *tree.AlterSQLTa
 		}
 		sqlTask.NextFireTime = nextFire
 	case tree.AlterTaskSetSchedule:
-		nextFire, err := taskservice.NextSQLTaskFireTime(newSQLTaskCronParser(), stmt.CronExpr, stmt.Timezone, now)
+		timezone := normalizeSQLTaskTimezone(stmt.Timezone)
+		nextFire, err := taskservice.NextSQLTaskFireTime(newSQLTaskCronParser(), stmt.CronExpr, timezone, now)
 		if err != nil {
 			return err
 		}
 		sqlTask.CronExpr = stmt.CronExpr
-		sqlTask.Timezone = stmt.Timezone
+		sqlTask.Timezone = timezone
 		sqlTask.TriggerCount = 0
 		sqlTask.NextFireTime = nextFire
 	case tree.AlterTaskSetWhen:
@@ -280,7 +282,8 @@ func detachSQLTaskExecuteContext(ctx context.Context) context.Context {
 
 func buildSQLTaskFromStmt(ses *Session, stmt *tree.CreateSQLTask, timeoutSeconds int, now time.Time) (taskservice.SQLTask, error) {
 	tenant := ses.GetTenantInfo()
-	nextFire, err := taskservice.NextSQLTaskFireTime(newSQLTaskCronParser(), stmt.CronExpr, stmt.Timezone, now)
+	timezone := normalizeSQLTaskTimezone(stmt.Timezone)
+	nextFire, err := taskservice.NextSQLTaskFireTime(newSQLTaskCronParser(), stmt.CronExpr, timezone, now)
 	if err != nil {
 		return taskservice.SQLTask{}, err
 	}
@@ -289,7 +292,7 @@ func buildSQLTaskFromStmt(ses *Session, stmt *tree.CreateSQLTask, timeoutSeconds
 		AccountID:      ses.GetAccountId(),
 		DatabaseName:   ses.GetDatabaseName(),
 		CronExpr:       stmt.CronExpr,
-		Timezone:       stmt.Timezone,
+		Timezone:       timezone,
 		SQLBody:        stmt.SQLBody,
 		GateCondition:  stmt.GateCondition,
 		RetryLimit:     int(stmt.RetryLimit),
@@ -306,6 +309,13 @@ func buildSQLTaskFromStmt(ses *Session, stmt *tree.CreateSQLTask, timeoutSeconds
 		sqlTask.CreatorRoleID = tenant.GetDefaultRoleID()
 	}
 	return sqlTask, nil
+}
+
+func normalizeSQLTaskTimezone(timezone string) string {
+	if strings.TrimSpace(timezone) == "" {
+		return "UTC"
+	}
+	return timezone
 }
 
 func getSQLTaskService(ctx context.Context, ses *Session) (taskservice.TaskService, error) {

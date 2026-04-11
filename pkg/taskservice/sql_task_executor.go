@@ -116,7 +116,9 @@ func (e *SQLTaskExecutor) ExecuteContext(ctx context.Context, spec *task.SQLTask
 		if err != nil {
 			run.Status = SQLTaskStatusFailed
 			run.GateResult = false
-			e.finishRun(ctx, &run, err, false)
+			if _, completeErr := e.finishRun(ctx, &run, err, false); completeErr != nil {
+				return completeErr
+			}
 			lastErr = err
 		} else if !allowed {
 			run.Status = SQLTaskStatusSkipped
