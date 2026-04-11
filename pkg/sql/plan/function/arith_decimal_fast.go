@@ -98,9 +98,9 @@ func d256Negate(x *types.Decimal256, sign uint64) {
 	x.B192_255, _ = bits.Add64(x.B192_255, 0, c)
 }
 
-func d128IsZero(d types.Decimal128) bool { return d.B0_63 == 0 && d.B64_127 == 0 }
+func d128IsZero(d types.Decimal128) bool { return d.B0_63|d.B64_127 == 0 }
 func d256IsZero(d types.Decimal256) bool {
-	return d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0
+	return d.B0_63|d.B64_127|d.B128_191|d.B192_255 == 0
 }
 
 // ---- Decimal128 add/sub ----
@@ -428,17 +428,6 @@ func d128MulPow10(x *types.Decimal128, n int32) bool {
 	return d128Mul1Limb(x, types.Pow10[19]) && d128Mul1Limb(x, types.Pow10[n-19])
 }
 
-// d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
-// n must be in [1, 38].
-func d128DivPow10(x *types.Decimal128, n int32) {
-	if n <= 19 {
-		d128DivPow10Once(x, types.Pow10[n])
-		return
-	}
-	d128DivPow10Once(x, types.Pow10[19])
-	d128DivPow10Once(x, types.Pow10[n-19])
-}
-
 // d128ScaleUp scales a signed D128 up by 10^n. Branchless sign handling, in-place.
 // Returns false on overflow (x may be corrupted; callers use original for error msg).
 func d128ScaleUp(x *types.Decimal128, n int32) bool {
@@ -446,13 +435,6 @@ func d128ScaleUp(x *types.Decimal128, n int32) bool {
 	ok := d128MulPow10(x, n)
 	d128Negate(x, sign)
 	return ok
-}
-
-// d128ScaleDown divides a signed D128 by 10^n with round-half-up. Branchless, in-place.
-func d128ScaleDown(x *types.Decimal128, n int32) {
-	sign := d128Abs(x)
-	d128DivPow10(x, n)
-	d128Negate(x, sign)
 }
 
 // d256Mul1Limb multiplies unsigned D256 x by a single 64-bit factor p in-place.
@@ -481,6 +463,24 @@ func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull 
 }
 
 // ---- Decimal128 multiply ----
+
+// d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
+// n must be in [1, 38].
+func d128DivPow10(x *types.Decimal128, n int32) {
+	if n <= 19 {
+		d128DivPow10Once(x, types.Pow10[n])
+		return
+	}
+	d128DivPow10Once(x, types.Pow10[19])
+	d128DivPow10Once(x, types.Pow10[n-19])
+}
+
+// d128ScaleDown divides a signed D128 by 10^n with round-half-up. Branchless, in-place.
+func d128ScaleDown(x *types.Decimal128, n int32) {
+	sign := d128Abs(x)
+	d128DivPow10(x, n)
+	d128Negate(x, sign)
+}
 
 func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
@@ -3161,12 +3161,9 @@ func d128Mul1Limb(x *types.Decimal128, f uint64) bool {
 	hi, lo := bits.Mul64(x.B0_63, f)
 	if x.B64_127 != 0 {
 		crossHi, crossLo := bits.Mul64(x.B64_127, f)
-		if crossHi != 0 {
-			return false
-		}
 		var c uint64
 		hi, c = bits.Add64(hi, crossLo, 0)
-		if c != 0 || hi>>63 != 0 {
+		if crossHi|c|(hi>>63) != 0 {
 			return false
 		}
 	}
@@ -3180,10 +3177,10 @@ func d128DivPow10Once(x *types.Decimal128, d uint64) {
 	var rem uint64
 	x.B64_127, rem = bits.Div64(0, x.B64_127, d)
 	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
-	if rem*2 >= d || rem>>63 != 0 {
-		x.B0_63++
-		if x.B0_63 == 0 {
-			x.B64_127++
-		}
-	}
+	// Branchless round half-up: round = 1 iff rem >= ceil(d/2).
+	_, borrow := bits.Sub64(rem, (d+1)>>1, 0)
+	round := 1 - borrow
+	lo, c := bits.Add64(x.B0_63, round, 0)
+	x.B0_63 = lo
+	x.B64_127 += c
 }
