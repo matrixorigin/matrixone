@@ -933,11 +933,20 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 		return d128ModSameScale(v1, v2, rs, rsnull, shouldError, len1, len2, hasNull, bmp)
 	}
 
-	// Diff-scale fast path: branchless abs + inline scale + mod.
+	// Diff-scale fast path: hoist pow10 factors before the loop so d128Mul1Limb
+	// inlines directly (eliminates d128MulPow10 wrapper call per element).
 	diff := scale2 - scale1
+	scaleX := diff > 0
 	mask := diff >> 31
-	scaleAx := diff &^ mask
-	scaleAy := (-diff) & mask
+	scaleDiff := (diff ^ mask) - mask
+	pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+
+	// Dispatch once: pick the scaleX or scaleY variant to eliminate
+	// the scaleX branch per element.
+	modFn := d128ModDiffScaleYPow10
+	if scaleX {
+		modFn = d128ModDiffScaleXPow10
+	}
 
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
@@ -951,7 +960,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(v1[i], v2[i], scaleAx, scaleAy)
+			r, ok := modFn(v1[i], v2[i], pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				r, _, err = v1[i].Mod(v2[i], scale1, scale2)
@@ -973,7 +982,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(v1[0], v2[i], scaleAx, scaleAy)
+			r, ok := modFn(v1[0], v2[i], pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				r, _, err = v1[0].Mod(v2[i], scale1, scale2)
@@ -997,7 +1006,7 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(v1[i], v2[0], scaleAx, scaleAy)
+			r, ok := modFn(v1[i], v2[0], pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				r, _, err = v1[i].Mod(v2[0], scale1, scale2)
@@ -1011,9 +1020,26 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 	return nil
 }
 
+// d128AllAbsFit64 checks whether |v[i]| fits in 64 bits for all elements.
+// True when B64_127 is 0 (positive small) or ^0 (negative small) for every element.
+func d128AllAbsFit64(vs []types.Decimal128, n int) bool {
+	// Branchless: h+1 is 0 or 1 iff h is ^0 or 0. OR-accumulate and check ≤ 1.
+	var acc uint64
+	for i := 0; i < n; i++ {
+		acc |= vs[i].B64_127 + 1
+	}
+	return acc <= 1
+}
+
 // d128ModSameScale handles same-scale D128 modulo with inline 128-bit mod.
 func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, shouldError bool,
 	len1, len2 int, hasNull bool, bmp *bitmap.Bitmap) error {
+
+	// Pre-scan: if all |divisors| fit in 64 bits, use loop with no ay.B64_127 branch
+	// and no d128ModOne function call overhead.
+	if d128AllAbsFit64(v2, len2) {
+		return d128ModSameScale64(v1, v2, rs, rsnull, shouldError, len1, len2, hasNull, bmp)
+	}
 
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
@@ -1065,6 +1091,81 @@ func d128ModSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, should
 	return nil
 }
 
+// d128ModSameScale64 is the specialized same-scale loop for when all |divisors| fit in 64 bits.
+// Eliminates the d128ModOne function call and the ay.B64_127 == 0 branch per element.
+func d128ModSameScale64(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls, shouldError bool,
+	len1, len2 int, hasNull bool, bmp *bitmap.Bitmap) error {
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			ay := v2[i]
+			d128Abs(&ay)
+			if ay.B0_63 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			ax := v1[i]
+			signx := d128Abs(&ax)
+			_, rhi := bits.Div64(0, ax.B64_127, ay.B0_63)
+			_, rlo := bits.Div64(rhi, ax.B0_63, ay.B0_63)
+			rs[i] = types.Decimal128{B0_63: rlo}
+			d128Negate(&rs[i], signx)
+		}
+	} else if len1 == 1 {
+		ax0 := v1[0]
+		signx0 := d128Abs(&ax0)
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			ay := v2[i]
+			d128Abs(&ay)
+			if ay.B0_63 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				rsnull.Add(uint64(i))
+				continue
+			}
+			_, rhi := bits.Div64(0, ax0.B64_127, ay.B0_63)
+			_, rlo := bits.Div64(rhi, ax0.B0_63, ay.B0_63)
+			rs[i] = types.Decimal128{B0_63: rlo}
+			d128Negate(&rs[i], signx0)
+		}
+	} else {
+		ay := v2[0]
+		d128Abs(&ay)
+		if ay.B0_63 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			for i := 0; i < len1; i++ {
+				rsnull.Add(uint64(i))
+			}
+			return nil
+		}
+		d := ay.B0_63
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			ax := v1[i]
+			signx := d128Abs(&ax)
+			_, rhi := bits.Div64(0, ax.B64_127, d)
+			_, rlo := bits.Div64(rhi, ax.B0_63, d)
+			rs[i] = types.Decimal128{B0_63: rlo}
+			d128Negate(&rs[i], signx)
+		}
+	}
+	return nil
+}
+
 // d128ModOne computes x mod y for signed Decimal128 values (same scale).
 // Result has the sign of x (Go % semantics).
 func d128ModOne(x, y types.Decimal128) types.Decimal128 {
@@ -1099,6 +1200,61 @@ func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.D
 	d128Abs(&ay)
 
 	if !d128MulPow10(&ax, scaleAx) || !d128MulPow10(&ay, scaleAy) {
+		return types.Decimal128{}, false
+	}
+
+	var r types.Decimal128
+	if ay.B64_127 == 0 {
+		_, rhi := bits.Div64(0, ax.B64_127, ay.B0_63)
+		_, rlo := bits.Div64(rhi, ax.B0_63, ay.B0_63)
+		r = types.Decimal128{B0_63: rlo}
+	} else {
+		r, _ = ax.Mod128(ay)
+	}
+
+	d128Negate(&r, signx)
+	return r, true
+}
+
+// d128ModDiffScaleXPow10 computes x mod y, scaling x up by pre-computed pow10 factors.
+// d128Abs, d128Mul1Limb, d128Negate all inline inside this function.
+func d128ModDiffScaleXPow10(x, y types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) (types.Decimal128, bool) {
+	ax := x
+	signx := d128Abs(&ax)
+	ay := y
+	d128Abs(&ay)
+
+	if !d128Mul1Limb(&ax, pow10a) {
+		return types.Decimal128{}, false
+	}
+	if twoStep && !d128Mul1Limb(&ax, pow10b) {
+		return types.Decimal128{}, false
+	}
+
+	var r types.Decimal128
+	if ay.B64_127 == 0 {
+		_, rhi := bits.Div64(0, ax.B64_127, ay.B0_63)
+		_, rlo := bits.Div64(rhi, ax.B0_63, ay.B0_63)
+		r = types.Decimal128{B0_63: rlo}
+	} else {
+		r, _ = ax.Mod128(ay)
+	}
+
+	d128Negate(&r, signx)
+	return r, true
+}
+
+// d128ModDiffScaleYPow10 computes x mod y, scaling y up by pre-computed pow10 factors.
+func d128ModDiffScaleYPow10(x, y types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) (types.Decimal128, bool) {
+	ax := x
+	signx := d128Abs(&ax)
+	ay := y
+	d128Abs(&ay)
+
+	if !d128Mul1Limb(&ay, pow10a) {
+		return types.Decimal128{}, false
+	}
+	if twoStep && !d128Mul1Limb(&ay, pow10b) {
 		return types.Decimal128{}, false
 	}
 
@@ -2134,9 +2290,15 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 	}
 
 	diff := scale2 - scale1
-	mask := diff >> 31
-	scaleAx := diff &^ mask
-	scaleAy := (-diff) & mask
+	scaleX := diff > 0
+	dMask := diff >> 31
+	scaleDiff := (diff ^ dMask) - dMask
+	pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+
+	modFn := d128ModDiffScaleYPow10
+	if scaleX {
+		modFn = d128ModDiffScaleXPow10
+	}
 
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
@@ -2151,7 +2313,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(d256toD128(v1[i]), y, scaleAx, scaleAy)
+			r, ok := modFn(d256toD128(v1[i]), y, pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				rs[i], _, err = v1[i].Mod(v2[i], scale1, scale2)
@@ -2176,7 +2338,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 				rsnull.Add(uint64(i))
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(x, y, scaleAx, scaleAy)
+			r, ok := modFn(x, y, pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				rs[i], _, err = v1[0].Mod(v2[i], scale1, scale2)
@@ -2202,7 +2364,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			r, ok := d128ModDiffScaleOne(d256toD128(v1[i]), y, scaleAx, scaleAy)
+			r, ok := modFn(d256toD128(v1[i]), y, pow10a, twoStep, pow10b)
 			if !ok {
 				var err error
 				rs[i], _, err = v1[i].Mod(v2[0], scale1, scale2)
@@ -3029,11 +3191,17 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 		return nil
 	}
 
-	// Diff-scale fast path: widen D64 to D128, branchless abs + inline scale + mod.
+	// Diff-scale fast path: hoist pow10 factors, widen D64 to D128.
 	diff := scale2 - scale1
-	mask := diff >> 31
-	scaleAx := diff &^ mask
-	scaleAy := (-diff) & mask
+	scaleX := diff > 0
+	dMask := diff >> 31
+	scaleDiff := (diff ^ dMask) - dMask
+	pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+
+	modFn := d128ModDiffScaleYPow10
+	if scaleX {
+		modFn = d128ModDiffScaleXPow10
+	}
 
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
@@ -3051,7 +3219,7 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 			x128 := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
 			sy := int64(v2[i])
 			y128 := types.Decimal128{B0_63: uint64(sy), B64_127: uint64(sy >> 63)}
-			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			r, ok := modFn(x128, y128, pow10a, twoStep, pow10b)
 			if !ok {
 				r64, _, err := v1[i].Mod(v2[i], scale1, scale2)
 				if err != nil {
@@ -3078,7 +3246,7 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 			}
 			sy := int64(v2[i])
 			y128 := types.Decimal128{B0_63: uint64(sy), B64_127: uint64(sy >> 63)}
-			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			r, ok := modFn(x128, y128, pow10a, twoStep, pow10b)
 			if !ok {
 				r64, _, err := v1[0].Mod(v2[i], scale1, scale2)
 				if err != nil {
@@ -3107,7 +3275,7 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 			}
 			sx := int64(v1[i])
 			x128 := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
-			r, ok := d128ModDiffScaleOne(x128, y128, scaleAx, scaleAy)
+			r, ok := modFn(x128, y128, pow10a, twoStep, pow10b)
 			if !ok {
 				r64, _, err := v1[i].Mod(v2[0], scale1, scale2)
 				if err != nil {
