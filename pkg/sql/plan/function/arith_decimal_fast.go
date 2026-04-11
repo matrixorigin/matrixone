@@ -842,12 +842,9 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	zHi, zLo = bits.Mul64(x.B0_63, scaleFactor)
 	if x.B64_127 != 0 {
 		crossHi, crossLo := bits.Mul64(x.B64_127, scaleFactor)
-		if crossHi != 0 {
-			return false // overflow
-		}
 		var carry uint64
 		zHi, carry = bits.Add64(zHi, crossLo, 0)
-		if carry != 0 || zHi>>63 != 0 {
+		if crossHi|carry|(zHi>>63) != 0 {
 			return false // overflow (result must be positive D128)
 		}
 	}
@@ -1144,7 +1141,7 @@ func d256Mul1Limb(x *types.Decimal256, p uint64) bool {
 	x.B64_127, c = bits.Add64(l1, h0, 0)
 	x.B128_191, c = bits.Add64(l2, h1, c)
 	x.B192_255, c = bits.Add64(l3, h2, c)
-	return h3 == 0 && c == 0 && x.B192_255>>63 == 0
+	return (h3 | c | (x.B192_255 >> 63)) == 0
 }
 
 // d256MulPow10 multiplies unsigned D256 x by 10^n in-place.
@@ -3140,7 +3137,7 @@ func d64MulPow10(x types.Decimal64, n int32) (types.Decimal64, bool) {
 	mask := -signBit
 	abs := (uint64(x) ^ mask) + signBit
 	hi, lo := bits.Mul64(abs, types.Pow10[n])
-	if hi != 0 || lo>>63 != 0 {
+	if hi|(lo>>63) != 0 {
 		return x, false
 	}
 	return types.Decimal64((lo ^ mask) + signBit), true
