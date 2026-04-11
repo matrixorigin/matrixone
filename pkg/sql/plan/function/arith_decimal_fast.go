@@ -856,13 +856,11 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	var rem uint64
 	zHi, rem = bits.Div64(0, zHi, absY64)
 	zLo, rem = bits.Div64(rem, zLo, absY64)
-	// Rounding: if remainder*2 >= divisor, round up.
-	if rem*2 >= absY64 || rem>>63 != 0 {
-		zLo++
-		if zLo == 0 {
-			zHi++
-		}
-	}
+	// Branchless round half-up: round = 1 iff rem >= ceil(absY64/2).
+	_, borrow := bits.Sub64(rem, (absY64+1)>>1, 0)
+	round := 1 - borrow
+	zLo, c2 := bits.Add64(zLo, round, 0)
+	zHi += c2
 
 	// Branchless sign restore.
 	z := types.Decimal128{B0_63: zLo, B64_127: zHi}
