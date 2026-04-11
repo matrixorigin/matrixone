@@ -16,7 +16,32 @@ package v3_0_2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// No cluster-level upgrades for v3.0.2.
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_create_mo_task_sql_task,
+	upg_create_mo_task_sql_task_run,
+}
+
+var upg_create_mo_task_sql_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTask)
+	},
+}
+
+var upg_create_mo_task_sql_task_run = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSQLTaskRun,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoTaskSQLTaskRunDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSQLTaskRun)
+	},
+}

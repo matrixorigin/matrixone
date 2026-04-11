@@ -329,6 +329,76 @@ func (c *cnLabelsCond) sql() string {
 	return fmt.Sprintf("%v", c.labels)
 }
 
+type sqlTaskEnabledCond struct {
+	enabled bool
+}
+
+func (c *sqlTaskEnabledCond) eval(v any) bool {
+	enabled, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return enabled == c.enabled
+}
+
+func (c *sqlTaskEnabledCond) sql() string {
+	if c.enabled {
+		return "enabled=1"
+	}
+	return "enabled=0"
+}
+
+type sqlTaskRunIDCond struct {
+	op    Op
+	runID uint64
+}
+
+func (c *sqlTaskRunIDCond) eval(v any) bool {
+	runID, ok := v.(uint64)
+	if !ok {
+		return false
+	}
+	return compare(c.op, runID, c.runID)
+}
+
+func (c *sqlTaskRunIDCond) sql() string {
+	return fmt.Sprintf("run_id%s%d", OpName[c.op], c.runID)
+}
+
+type sqlTaskRunStatusCond struct {
+	op     Op
+	status string
+}
+
+func (c *sqlTaskRunStatusCond) eval(v any) bool {
+	status, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return compare(c.op, status, c.status)
+}
+
+func (c *sqlTaskRunStatusCond) sql() string {
+	return fmt.Sprintf("status %s '%s'", OpName[c.op], c.status)
+}
+
+type sqlTaskTriggerTypeCond struct {
+	op          Op
+	triggerType string
+}
+
+func (c *sqlTaskTriggerTypeCond) eval(v any) bool {
+	triggerType, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return compare(c.op, triggerType, c.triggerType)
+}
+
+func (c *sqlTaskTriggerTypeCond) sql() string {
+	return fmt.Sprintf("trigger_type %s '%s'", OpName[c.op], c.triggerType)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -365,6 +435,10 @@ const (
 	CondTaskMetadataId
 	CondCdcTaskName
 	CondCnLabels
+	CondSQLTaskEnabled
+	CondSQLTaskRunID
+	CondSQLTaskRunStatus
+	CondSQLTaskTriggerType
 )
 
 var (
@@ -508,6 +582,30 @@ func WithLabels(op Op, labels *CnLabels) Condition {
 	}
 }
 
+func WithSQLTaskEnabled(enabled bool) Condition {
+	return func(c *conditions) {
+		(*c)[CondSQLTaskEnabled] = &sqlTaskEnabledCond{enabled: enabled}
+	}
+}
+
+func WithSQLTaskRunIDCond(op Op, value uint64) Condition {
+	return func(c *conditions) {
+		(*c)[CondSQLTaskRunID] = &sqlTaskRunIDCond{op: op, runID: value}
+	}
+}
+
+func WithSQLTaskRunStatus(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondSQLTaskRunStatus] = &sqlTaskRunStatusCond{op: op, status: value}
+	}
+}
+
+func WithSQLTaskTriggerType(op Op, value string) Condition {
+	return func(c *conditions) {
+		(*c)[CondSQLTaskTriggerType] = &sqlTaskTriggerTypeCond{op: op, triggerType: value}
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -551,6 +649,10 @@ type TaskService interface {
 	StartScheduleCronTask()
 	// StopScheduleCronTask stop schedule cron tasks.
 	StopScheduleCronTask()
+	// StartScheduleSQLTask starts SQL task scheduling.
+	StartScheduleSQLTask()
+	// StopScheduleSQLTask stops SQL task scheduling.
+	StopScheduleSQLTask()
 
 	TruncateCompletedTasks(ctx context.Context) error
 
@@ -655,6 +757,29 @@ type TaskStorage interface {
 		) (int, error),
 		...Condition,
 	) (int, error)
+
+	// AddSQLTask adds sql tasks and returns number of successful added.
+	AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error)
+	// UpdateSQLTask updates sql tasks and returns number of successful updated.
+	UpdateSQLTask(ctx context.Context, tasks []SQLTask, conds ...Condition) (int, error)
+	// DeleteSQLTask deletes sql tasks and returns number of successful deleted.
+	DeleteSQLTask(ctx context.Context, conds ...Condition) (int, error)
+	// QuerySQLTask queries sql tasks by conditions.
+	QuerySQLTask(ctx context.Context, conds ...Condition) ([]SQLTask, error)
+
+	// AddSQLTaskRun adds sql task run records.
+	AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error)
+	// UpdateSQLTaskRun updates sql task run records.
+	UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conds ...Condition) (int, error)
+	// QuerySQLTaskRun queries sql task run records.
+	QuerySQLTaskRun(ctx context.Context, conds ...Condition) ([]SQLTaskRun, error)
+	// AcquireSQLTaskRun atomically acquires execution ownership and creates a RUNNING run record.
+	AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error)
+	// CompleteSQLTaskRun updates the terminal state of a sql task run.
+	CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error)
+
+	// TriggerSQLTask updates persisted trigger state and inserts an async task in one transaction.
+	TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error)
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create

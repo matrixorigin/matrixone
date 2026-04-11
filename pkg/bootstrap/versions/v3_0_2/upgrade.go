@@ -34,7 +34,7 @@ func init() {
 		metadata: versions.Version{
 			Version:           "3.0.2",
 			MinUpgradeVersion: "3.0.1",
-			UpgradeCluster:    versions.No,
+			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
 		},
@@ -110,7 +110,21 @@ func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor,
 ) error {
-	// No cluster-level upgrades for v3.0.2.
+	for _, upgEntry := range clusterUpgEntries {
+		start := time.Now()
+
+		err := upgEntry.Upgrade(txn, catalog.System_Account)
+		if err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+
+		duration := time.Since(start)
+		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+			zap.String("upgrade entry", upgEntry.String()),
+			zap.Int64("time cost(ms)", duration.Milliseconds()),
+			zap.String("toVersion", v.Metadata().Version))
+	}
 	return nil
 }
 
