@@ -45,6 +45,7 @@ func Test_Upgrade(t *testing.T) {
 
 			metadata := Handler.Metadata()
 			t.Logf("version metadata:%v", metadata)
+			assert.Equal(t, versions.Yes, metadata.UpgradeCluster)
 
 			if err := Handler.Prepare(context.Background(), executor, true); err != nil {
 				t.Errorf("Prepare() error = %v", err)
@@ -66,6 +67,12 @@ func Test_Upgrade(t *testing.T) {
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
+	originalEntries := clusterUpgEntries
+	clusterUpgEntries = nil
+	defer func() {
+		clusterUpgEntries = originalEntries
+	}()
+
 	v := &versionHandle{
 		metadata: versions.Version{
 			Version: "v3.0.2",
@@ -82,6 +89,34 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func Test_upg_create_mo_task_sql_task_check_exists(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckTableDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, table string) (bool, error) {
+		assert.Equal(t, uint32(0), accountId)
+		assert.Equal(t, "mo_task", schema)
+		assert.Equal(t, "sql_task", table)
+		return true, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_create_mo_task_sql_task.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_create_mo_task_sql_task_run_check_missing(t *testing.T) {
+	stubs := gostub.Stub(&versions.CheckTableDefinition, func(txn executor.TxnExecutor, accountId uint32, schema string, table string) (bool, error) {
+		assert.Equal(t, uint32(0), accountId)
+		assert.Equal(t, "mo_task", schema)
+		assert.Equal(t, "sql_task_run", table)
+		return false, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_create_mo_task_sql_task_run.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func Test_upg_statistics_view_check_error(t *testing.T) {
