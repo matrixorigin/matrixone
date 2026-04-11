@@ -704,7 +704,48 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 	len1, len2 := len(v1), len(v2)
 
 	if len1 == len2 {
-		// vec / vec
+		// vec / vec: prescan divisors for 64-bit fit to skip dispatch overhead.
+		if canInline && d128AllAbsFit64(v2, len2) {
+			if rsnull.IsEmpty() {
+				for i := 0; i < len1; i++ {
+					y := v2[i]
+					if d128IsZero(y) {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signy := d128Abs(&y)
+					if !d128DivInline(v1[i], y.B0_63, signy, scaleFactor, &rs[i]) {
+						if err := d128DivOne(v1[i], v2[i], &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := 0; i < len1; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					y := v2[i]
+					if d128IsZero(y) {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signy := d128Abs(&y)
+					if !d128DivInline(v1[i], y.B0_63, signy, scaleFactor, &rs[i]) {
+						if err := d128DivOne(v1[i], v2[i], &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			return nil
+		}
 		if rsnull.IsEmpty() {
 			for i := 0; i < len1; i++ {
 				if err := d128DivOneDispatch(v1[i], v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
@@ -722,8 +763,49 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 			}
 		}
 	} else if len1 == 1 {
-		// const / vec
+		// const / vec: prescan divisors for 64-bit fit.
 		a := v1[0]
+		if canInline && d128AllAbsFit64(v2, len2) {
+			if rsnull.IsEmpty() {
+				for i := 0; i < len2; i++ {
+					y := v2[i]
+					if d128IsZero(y) {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signy := d128Abs(&y)
+					if !d128DivInline(a, y.B0_63, signy, scaleFactor, &rs[i]) {
+						if err := d128DivOne(a, v2[i], &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := 0; i < len2; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					y := v2[i]
+					if d128IsZero(y) {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signy := d128Abs(&y)
+					if !d128DivInline(a, y.B0_63, signy, scaleFactor, &rs[i]) {
+						if err := d128DivOne(a, v2[i], &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			return nil
+		}
 		if rsnull.IsEmpty() {
 			for i := 0; i < len2; i++ {
 				if err := d128DivOneDispatch(a, v2[i], &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
@@ -743,7 +825,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 	} else {
 		// vec / const: precompute divisor properties.
 		b := v2[0]
-		if b.B0_63 == 0 && b.B64_127 == 0 {
+		if d128IsZero(b) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -805,7 +887,7 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32,
 	scaleFactor uint64, canInline bool, rsnull *nulls.Nulls, idx uint64, shouldError bool, scale1, scale2 int32) error {
 	// Zero-divisor check.
-	if y.B0_63 == 0 && y.B64_127 == 0 {
+	if d128IsZero(y) {
 		if shouldError {
 			return moerr.NewDivByZeroNoCtx()
 		}
@@ -829,7 +911,7 @@ func d128DivOneDispatch(x, y types.Decimal128, dst *types.Decimal128, scaleAdj i
 // Handles all cases including overflow fallback to D256.
 
 func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rsnull *nulls.Nulls, idx uint64, shouldError bool, scale1, scale2 int32) error {
-	if y.B0_63 == 0 && y.B64_127 == 0 {
+	if d128IsZero(y) {
 		if shouldError {
 			return moerr.NewDivByZeroNoCtx()
 		}
@@ -1315,7 +1397,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 			continue
 		}
 		a, b := operandsAt(v1, v2, i)
-		if b.B0_63 == 0 && b.B64_127 == 0 {
+		if d128IsZero(b) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -2131,13 +2213,53 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 		return types.Decimal256{B0_63: d.B0_63, B64_127: d.B64_127, B128_191: signExt, B192_255: signExt}
 	}
 
+	// Pre-compute scale factor for inline fast path.
+	var scaleFactor uint64
+	canInline := scaleAdj >= 0 && scaleAdj <= 19
+	if canInline {
+		scaleFactor = types.Pow10[scaleAdj]
+	}
+
+	// Branchless prescan: check if all D256 divisors (narrowed to D128) fit in 64 bits.
+	d256DivFit64 := func(vs []types.Decimal256) bool {
+		var acc uint64
+		for i := range vs {
+			acc |= vs[i].B64_127 + 1
+		}
+		return acc <= 1
+	}
+
 	if len1 == len2 {
+		if canInline && d256DivFit64(v2) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				y := d256toD128(v2[i])
+				if d128IsZero(y) {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signy := d128Abs(&y)
+				var r128 types.Decimal128
+				if !d128DivInline(d256toD128(v1[i]), y.B0_63, signy, scaleFactor, &r128) {
+					if err := d128DivOne(d256toD128(v1[i]), d256toD128(v2[i]), &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
+				}
+				rs[i] = d128toD256(r128)
+			}
+			return nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			y := d256toD128(v2[i])
-			if y.B0_63 == 0 && y.B64_127 == 0 {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2152,12 +2274,36 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 		}
 	} else if len1 == 1 {
 		x := d256toD128(v1[0])
+		if canInline && d256DivFit64(v2) {
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				y := d256toD128(v2[i])
+				if d128IsZero(y) {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signy := d128Abs(&y)
+				var r128 types.Decimal128
+				if !d128DivInline(x, y.B0_63, signy, scaleFactor, &r128) {
+					if err := d128DivOne(x, d256toD128(v2[i]), &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
+				}
+				rs[i] = d128toD256(r128)
+			}
+			return nil
+		}
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			y := d256toD128(v2[i])
-			if y.B0_63 == 0 && y.B64_127 == 0 {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2172,12 +2318,33 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 		}
 	} else {
 		y := d256toD128(v2[0])
-		if y.B0_63 == 0 && y.B64_127 == 0 {
+		if d128IsZero(y) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
 			nulls.AddRange(rsnull, 0, uint64(len1))
 			return nil
+		}
+		// vec/const: pre-compute divisor properties for inline path.
+		if canInline {
+			absY := y
+			signyU := d128Abs(&absY)
+			if absY.B64_127 == 0 {
+				absY64 := absY.B0_63
+				for i := 0; i < len1; i++ {
+					if hasNull && bmp.Contains(uint64(i)) {
+						continue
+					}
+					var r128 types.Decimal128
+					if !d128DivInline(d256toD128(v1[i]), absY64, signyU, scaleFactor, &r128) {
+						if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+					rs[i] = d128toD256(r128)
+				}
+				return nil
+			}
 		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -2516,7 +2683,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 				continue
 			}
 			y := d256toD128(v2[i])
-			if y.B0_63 == 0 && y.B64_127 == 0 {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2534,7 +2701,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 				continue
 			}
 			y := d256toD128(v2[i])
-			if y.B0_63 == 0 && y.B64_127 == 0 {
+			if d128IsZero(y) {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -2547,7 +2714,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 		}
 	} else {
 		y := d256toD128(v2[0])
-		if y.B0_63 == 0 && y.B64_127 == 0 {
+		if d128IsZero(y) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
@@ -3017,50 +3184,144 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 	}
 
 	if len1 == len2 {
-		if rsnull.IsEmpty() {
-			for i := 0; i < len1; i++ {
-				x := d64toD128(v1[i])
-				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-					return err
+		// vec / vec: D64 always fits in 64 bits — skip dispatch when canInline.
+		if canInline {
+			if rsnull.IsEmpty() {
+				for i := 0; i < len1; i++ {
+					y64 := int64(v2[i])
+					if y64 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signyBit := uint64(y64 >> 63) >> 63
+					negMask := -signyBit
+					absY64 := (uint64(y64) ^ negMask) + signyBit
+					x := d64toD128(v1[i])
+					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
+						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := 0; i < len1; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					y64 := int64(v2[i])
+					if y64 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signyBit := uint64(y64 >> 63) >> 63
+					negMask := -signyBit
+					absY64 := (uint64(y64) ^ negMask) + signyBit
+					x := d64toD128(v1[i])
+					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
+						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
 				}
 			}
 		} else {
-			for i := 0; i < len1; i++ {
-				if bmp.Contains(uint64(i)) {
-					continue
+			if rsnull.IsEmpty() {
+				for i := 0; i < len1; i++ {
+					x := d64toD128(v1[i])
+					y := d64toD128(v2[i])
+					if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
 				}
-				x := d64toD128(v1[i])
-				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-					return err
+			} else {
+				for i := 0; i < len1; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					x := d64toD128(v1[i])
+					y := d64toD128(v2[i])
+					if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	} else if len1 == 1 {
+		// const / vec: D64 always fits in 64 bits — skip dispatch when canInline.
 		x := d64toD128(v1[0])
-		if rsnull.IsEmpty() {
-			for i := 0; i < len2; i++ {
-				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-					return err
+		if canInline {
+			if rsnull.IsEmpty() {
+				for i := 0; i < len2; i++ {
+					y64 := int64(v2[i])
+					if y64 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signyBit := uint64(y64 >> 63) >> 63
+					negMask := -signyBit
+					absY64 := (uint64(y64) ^ negMask) + signyBit
+					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
+						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := 0; i < len2; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					y64 := int64(v2[i])
+					if y64 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						rsnull.Add(uint64(i))
+						continue
+					}
+					signyBit := uint64(y64 >> 63) >> 63
+					negMask := -signyBit
+					absY64 := (uint64(y64) ^ negMask) + signyBit
+					if !d128DivInline(x, absY64, signyBit, scaleFactor, &rs[i]) {
+						if err := d128DivOne(x, d64toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+							return err
+						}
+					}
 				}
 			}
 		} else {
-			for i := 0; i < len2; i++ {
-				if bmp.Contains(uint64(i)) {
-					continue
+			if rsnull.IsEmpty() {
+				for i := 0; i < len2; i++ {
+					y := d64toD128(v2[i])
+					if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
 				}
-				y := d64toD128(v2[i])
-				if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
-					return err
+			} else {
+				for i := 0; i < len2; i++ {
+					if bmp.Contains(uint64(i)) {
+						continue
+					}
+					y := d64toD128(v2[i])
+					if err := d128DivOneDispatch(x, y, &rs[i], scaleAdj, scaleFactor, canInline, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	} else {
 		y := d64toD128(v2[0])
 		// Check constant divisor for zero once.
-		if y.B0_63 == 0 && y.B64_127 == 0 {
+		if d128IsZero(y) {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
