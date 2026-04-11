@@ -2758,11 +2758,7 @@ func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 
 	// Helper: sign-extend D64 to D128.
 	d64toD128 := func(v types.Decimal64) types.Decimal128 {
-		x := types.Decimal128{B0_63: uint64(v)}
-		if v>>63 != 0 {
-			x.B64_127 = ^uint64(0)
-		}
-		return x
+		return types.Decimal128{B0_63: uint64(v), B64_127: uint64(int64(v) >> 63)}
 	}
 
 	if len1 == len2 {
@@ -3066,11 +3062,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 	}
 
 	d64toD128 := func(v types.Decimal64) types.Decimal128 {
-		x := types.Decimal128{B0_63: uint64(v)}
-		if v>>63 != 0 {
-			x.B64_127 = ^uint64(0)
-		}
-		return x
+		return types.Decimal128{B0_63: uint64(v), B64_127: uint64(int64(v) >> 63)}
 	}
 
 	len1, len2 := len(v1), len(v2)
