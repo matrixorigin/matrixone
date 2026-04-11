@@ -891,6 +891,8 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 		if crossHi|carry|(zHi>>63) != 0 {
 			return false // overflow (result must be positive D128)
 		}
+	} else if zHi>>63 != 0 {
+		return false // overflow (result must be positive D128)
 	}
 
 	// Inline Div128 for 64-bit divisor: two bits.Div64 calls.
@@ -3246,6 +3248,8 @@ func d64MulPow10(x types.Decimal64, n int32) (types.Decimal64, bool) {
 }
 
 // d128Mul1Limb multiplies unsigned D128 x by f in-place. Returns false on overflow.
+// The gate keeps the common B64_127==0 path fast (skips cross-multiply), while the
+// else-if catches the case where hi overflows into bit 63 (sign bit of D128).
 func d128Mul1Limb(x *types.Decimal128, f uint64) bool {
 	hi, lo := bits.Mul64(x.B0_63, f)
 	if x.B64_127 != 0 {
@@ -3255,6 +3259,8 @@ func d128Mul1Limb(x *types.Decimal128, f uint64) bool {
 		if crossHi|c|(hi>>63) != 0 {
 			return false
 		}
+	} else if hi>>63 != 0 {
+		return false
 	}
 	x.B0_63 = lo
 	x.B64_127 = hi
