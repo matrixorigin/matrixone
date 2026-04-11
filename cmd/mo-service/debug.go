@@ -118,6 +118,10 @@ func writeHeapProfile() {
 }
 
 func init() {
+	// Enable block and mutex profiling for continuous profiling via Pyroscope.
+	// Block: record blocking events ≥5ns; Mutex: sample 1 in 100 contention events.
+	runtime.SetBlockProfileRate(5)
+	runtime.SetMutexProfileFraction(100)
 
 	const cssStyles = `
     <style>
