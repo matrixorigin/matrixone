@@ -415,8 +415,17 @@ func d128SubDiffScale(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnul
 	return d128SubSameScale(v1, rs[:len2], rs, rsnull), nil
 }
 
-// d128ScaleIntoRs scales vec[i] * 10^scaleDiff into rs[i], respecting nulls.
-// scaleDiff is always positive (multiply up). Values are signed D128.
+// scalePow10Factors returns pre-computed pow10 factors for scaling by 10^n.
+// For n ≤ 19: returns (Pow10[n], false, 0). For n > 19: returns (Pow10[19], true, Pow10[n-19]).
+func scalePow10Factors(n int32) (pow10a uint64, twoStep bool, pow10b uint64) {
+	pow10a = types.Pow10[n]
+	if n > 19 {
+		pow10a = types.Pow10[19]
+		pow10b = types.Pow10[n-19]
+		twoStep = true
+	}
+	return
+}
 
 func d128MulPow10(x *types.Decimal128, n int32) bool {
 	if n <= 19 {
@@ -437,16 +446,38 @@ func d128ScaleUp(x *types.Decimal128, n int32) bool {
 	return ok
 }
 
-// d256Mul1Limb multiplies unsigned D256 x by a single 64-bit factor p in-place.
-// Returns false on overflow (unsigned result must fit in 255 bits for signed restore).
+// d128ScaleUpPow10 scales a signed D128 by pre-computed pow10 factor(s).
+// For n ≤ 19: pass (Pow10[n], false, 0). For n > 19: pass (Pow10[19], true, Pow10[n-19]).
+// Eliminates d128ScaleUp→d128MulPow10 wrapper chain; d128Abs/d128Mul1Limb/d128Negate inline.
+func d128ScaleUpPow10(x *types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) bool {
+	sign := d128Abs(x)
+	ok := d128Mul1Limb(x, pow10a)
+	if ok && twoStep {
+		ok = d128Mul1Limb(x, pow10b)
+	}
+	d128Negate(x, sign)
+	return ok
+}
+
+// d128ScaleIntoRs scales vec[i] * 10^scaleDiff into rs[i], respecting nulls.
+// Hoists pow10 factor outside the loop so d128Abs/d128Mul1Limb/d128Negate all inline.
 func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
+	pow10a := types.Pow10[scaleDiff]
+	var pow10b uint64
+	twoStep := scaleDiff > 19
+	if twoStep {
+		pow10a = types.Pow10[19]
+		pow10b = types.Pow10[scaleDiff-19]
+	}
 	if rsnull.IsEmpty() {
 		for i := 0; i < n; i++ {
 			rs[i] = vec[i]
-			if !d128ScaleUp(&rs[i], scaleDiff) {
+			sign := d128Abs(&rs[i])
+			if !d128Mul1Limb(&rs[i], pow10a) || (twoStep && !d128Mul1Limb(&rs[i], pow10b)) {
 				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
 			}
+			d128Negate(&rs[i], sign)
 		}
 	} else {
 		for i := 0; i < n; i++ {
@@ -454,9 +485,11 @@ func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull 
 			if bmp.Contains(uint64(i)) {
 				continue
 			}
-			if !d128ScaleUp(&rs[i], scaleDiff) {
+			sign := d128Abs(&rs[i])
+			if !d128Mul1Limb(&rs[i], pow10a) || (twoStep && !d128Mul1Limb(&rs[i], pow10b)) {
 				return moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", vec[i].Format(scaleDiff))
 			}
+			d128Negate(&rs[i], sign)
 		}
 	}
 	return nil
@@ -479,6 +512,17 @@ func d128DivPow10(x *types.Decimal128, n int32) {
 func d128ScaleDown(x *types.Decimal128, n int32) {
 	sign := d128Abs(x)
 	d128DivPow10(x, n)
+	d128Negate(x, sign)
+}
+
+// d128ScaleDownPow10 divides signed D128 by pre-computed pow10 factor(s).
+// d128Abs/d128DivPow10Once/d128Negate all inline (costs 48, 66, 38).
+func d128ScaleDownPow10(x *types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) {
+	sign := d128Abs(x)
+	d128DivPow10Once(x, pow10a)
+	if twoStep {
+		d128DivPow10Once(x, pow10b)
+	}
 	d128Negate(x, sign)
 }
 
@@ -1099,6 +1143,14 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 		scaleFactor = types.Pow10[scaleAdj]
 	}
 
+	// Hoist pow10 factors for scale-down outside the loop.
+	var sdPow10a uint64
+	var sdTwoStep bool
+	var sdPow10b uint64
+	if scale > 0 {
+		sdPow10a, sdTwoStep, sdPow10b = scalePow10Factors(scale)
+	}
+
 	len1, len2 := len(v1), len(v2)
 	for i := 0; i < max(len1, len2); i++ {
 		if hasNull && bmp.Contains(uint64(i)) {
@@ -1118,7 +1170,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 		}
 		// Truncate fractional part.
 		if scale > 0 {
-			d128ScaleDown(&divResult, scale)
+			d128ScaleDownPow10(&divResult, sdPow10a, sdTwoStep, sdPow10b)
 		}
 		var err error
 		rs[i], err = decimal128ToInt64(divResult)
@@ -1165,6 +1217,18 @@ func d256ScaleUp(x *types.Decimal256, n int32) bool {
 	return ok
 }
 
+// d256ScaleUpPow10 scales a signed D256 by pre-computed pow10 factor(s).
+// Eliminates d256ScaleUp→d256MulPow10 wrapper chain; d256Abs/d256Negate inline.
+func d256ScaleUpPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b uint64) bool {
+	sign := d256Abs(x)
+	ok := d256Mul1Limb(x, pow10a)
+	if ok && twoStep {
+		ok = d256Mul1Limb(x, pow10b)
+	}
+	d256Negate(x, sign)
+	return ok
+}
+
 // d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
 // n must be >= 1. Uses loop for n > 19 (same approach as d256MulPow10).
 func d256DivPow10(x *types.Decimal256, n int32) {
@@ -1197,6 +1261,17 @@ func d256DivPow10Once(x *types.Decimal256, d uint64) {
 func d256ScaleDown(x *types.Decimal256, n int32) {
 	sign := d256Abs(x)
 	d256DivPow10(x, n)
+	d256Negate(x, sign)
+}
+
+// d256ScaleDownPow10 divides signed D256 by pre-computed pow10 factor(s).
+// Eliminates d256ScaleDown→d256DivPow10 wrapper chain; d256Abs/d256Negate inline.
+func d256ScaleDownPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b uint64) {
+	sign := d256Abs(x)
+	d256DivPow10Once(x, pow10a)
+	if twoStep {
+		d256DivPow10Once(x, pow10b)
+	}
 	d256Negate(x, sign)
 }
 
@@ -1309,12 +1384,13 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		a := v1[0]
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUp(&b, scaleDiff) {
+			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			signB := b.B192_255 >> 63
@@ -1342,12 +1418,13 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		b := v2[0]
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUp(&a, scaleDiff) {
+			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			signA := a.B192_255 >> 63
@@ -1367,12 +1444,13 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	// len1 == len2: fuse scale + add per element
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUp(&a, scaleDiff) {
+			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			y := v2[i]
@@ -1390,12 +1468,13 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		}
 	} else {
 		scaleDiff := scale1 - scale2
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUp(&b, scaleDiff) {
+			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			x := v1[i]
@@ -1525,12 +1604,13 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		a := v1[0]
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUp(&b, scaleDiff) {
+			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			signB := b.B192_255 >> 63
@@ -1558,12 +1638,13 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		b := v2[0]
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUp(&a, scaleDiff) {
+			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			signA := a.B192_255 >> 63
@@ -1583,12 +1664,13 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	// len1 == len2: fuse scale + sub per element
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUp(&a, scaleDiff) {
+			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			y := v2[i]
@@ -1606,12 +1688,13 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		}
 	} else {
 		scaleDiff := scale1 - scale2
+		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUp(&b, scaleDiff) {
+			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			x := v1[i]
@@ -1686,8 +1769,9 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	// Batch-level scale-down: applied once per batch, outside per-element loops.
 	if scaleAdj < 0 {
 		divN := -scaleAdj
+		pow10a, twoStep, pow10b := scalePow10Factors(divN)
 		for i := range rs {
-			d256ScaleDown(&rs[i], divN)
+			d256ScaleDownPow10(&rs[i], pow10a, twoStep, pow10b)
 		}
 	}
 	return nil
@@ -2241,13 +2325,21 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 		return types.Decimal128{B0_63: d.B0_63, B64_127: d.B64_127}
 	}
 
+	// Hoist pow10 factors for scale-down.
+	var sdPow10a uint64
+	var sdTwoStep bool
+	var sdPow10b uint64
+	if scale > 0 {
+		sdPow10a, sdTwoStep, sdPow10b = scalePow10Factors(scale)
+	}
+
 	divOne := func(x, y types.Decimal128, dst *int64, idx uint64) error {
 		var divResult types.Decimal128
 		if err := d128DivOne(x, y, &divResult, scaleAdj, rsnull, idx, shouldError, scale1, scale2); err != nil {
 			return err
 		}
 		if scale > 0 {
-			d128ScaleDown(&divResult, scale)
+			d128ScaleDownPow10(&divResult, sdPow10a, sdTwoStep, sdPow10b)
 		}
 		var err error
 		*dst, err = decimal128ToInt64(divResult)
@@ -2681,6 +2773,8 @@ func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int3
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
+	negAdj := -scaleAdj
+	pow10a, twoStep, pow10b := scalePow10Factors(negAdj)
 	for i := 0; i < n; i++ {
 		if hasNull && bmp.Contains(uint64(i)) {
 			continue
@@ -2697,7 +2791,7 @@ func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int3
 			b = v2[i]
 		}
 		r := d64MulInline(a, b)
-		d128ScaleDown(&r, -scaleAdj)
+		d128ScaleDownPow10(&r, pow10a, twoStep, pow10b)
 		rs[i] = r
 	}
 	return nil
@@ -3062,6 +3156,14 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 		return types.Decimal128{B0_63: uint64(v), B64_127: uint64(int64(v) >> 63)}
 	}
 
+	// Hoist pow10 factors for scale-down outside the loop.
+	var sdPow10a uint64
+	var sdTwoStep bool
+	var sdPow10b uint64
+	if scale > 0 {
+		sdPow10a, sdTwoStep, sdPow10b = scalePow10Factors(scale)
+	}
+
 	len1, len2 := len(v1), len(v2)
 	for i := 0; i < max(len1, len2); i++ {
 		if hasNull && bmp.Contains(uint64(i)) {
@@ -3082,7 +3184,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 		}
 		// Truncate fractional part.
 		if scale > 0 {
-			d128ScaleDown(&divResult, scale)
+			d128ScaleDownPow10(&divResult, sdPow10a, sdTwoStep, sdPow10b)
 		}
 		var err error
 		rs[i], err = decimal128ToInt64(divResult)
