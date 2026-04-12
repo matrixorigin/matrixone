@@ -835,6 +835,22 @@ func BenchmarkD64Mul_Fast(b *testing.B) {
 	_ = rs
 }
 
+func BenchmarkD64MulScaled_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Mul(xs, ys, rs, 10, 10, nul)
+	}
+}
+
 func BenchmarkD64Mul_Generic(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal64, benchN)
@@ -2671,6 +2687,22 @@ func BenchmarkD256Mul_FastMixed(b *testing.B) {
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mul(xs, ys, rs, 2, 3, nul)
+	}
+}
+
+func BenchmarkD256MulScaled_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		xs[i] = randD256Small(rng)
+		ys[i] = randD256Small(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256Mul(xs, ys, rs, 10, 10, nul)
 	}
 }
 

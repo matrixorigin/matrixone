@@ -2144,8 +2144,7 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	}
 	// Batch-level scale-down: applied once per batch, outside per-element loops.
 	if scaleAdj < 0 {
-		divN := -scaleAdj
-		pow10a, twoStep, pow10b := scalePow10Factors(divN)
+		pow10a, twoStep, pow10b := scalePow10Factors(-scaleAdj)
 		for i := range rs {
 			d256ScaleDownPow10(&rs[i], pow10a, twoStep, pow10b)
 		}
@@ -3346,24 +3345,35 @@ func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int3
 	}
 	negAdj := -scaleAdj
 	pow10a, twoStep, pow10b := scalePow10Factors(negAdj)
-	for i := 0; i < n; i++ {
-		if hasNull && bmp.Contains(uint64(i)) {
-			continue
+	if len(v1) == 1 {
+		x := v1[0]
+		for i := 0; i < n; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			r := d64MulInline(x, v2[i])
+			d128ScaleDownPow10(&r, pow10a, twoStep, pow10b)
+			rs[i] = r
 		}
-		var a, b types.Decimal64
-		if len(v1) == 1 {
-			a = v1[0]
-		} else {
-			a = v1[i]
+	} else if len(v2) == 1 {
+		y := v2[0]
+		for i := 0; i < n; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			r := d64MulInline(v1[i], y)
+			d128ScaleDownPow10(&r, pow10a, twoStep, pow10b)
+			rs[i] = r
 		}
-		if len(v2) == 1 {
-			b = v2[0]
-		} else {
-			b = v2[i]
+	} else {
+		for i := 0; i < n; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			r := d64MulInline(v1[i], v2[i])
+			d128ScaleDownPow10(&r, pow10a, twoStep, pow10b)
+			rs[i] = r
 		}
-		r := d64MulInline(a, b)
-		d128ScaleDownPow10(&r, pow10a, twoStep, pow10b)
-		rs[i] = r
 	}
 	return nil
 }
