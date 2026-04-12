@@ -288,6 +288,77 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputValidateProjectedColumns(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("t1").AnyTimes()
+	tarRel.EXPECT().GetTableName().Return("t2").AnyTimes()
+
+	tblStuff := tableStuff{
+		baseRel: baseRel,
+		tarRel:  tarRel,
+	}
+	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+
+	limit := int64(5)
+
+	t.Run("nil columns", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("count validates columns but remains supported", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("name")},
+			OutputOpt: &tree.DiffOutputOpt{Count: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("summary validates columns but remains supported", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Summary: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("row output validates columns", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Limit: &limit},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("unknown column returns invalid input", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("missing")},
+			OutputOpt: &tree.DiffOutputOpt{Count: true},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "missing")
+		require.Contains(t, err.Error(), "t2")
+	})
+
+	t.Run("output file is rejected", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("name")},
+			OutputOpt: &tree.DiffOutputOpt{DirPath: "/tmp"},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Contains(t, err.Error(), "OUTPUT FILE")
+	})
+}
+
 func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 	t.Run("reject malformed result without panic", func(t *testing.T) {
 		ok, err := shouldDiffAsCSV(executor.Result{})
