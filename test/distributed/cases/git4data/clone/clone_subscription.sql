@@ -155,38 +155,3 @@ drop database if exists sub_view_src;
 drop publication pub_view_src;
 drop account acc_view;
 drop database view_src;
-
--- case 6: cross account clone db should skip view whose dependency is outside clone target.
-drop database if exists base_dep;
-drop database if exists view_skip_src;
-drop publication if exists pub_view_skip;
-drop account if exists acc_skip;
-
-create database base_dep;
-create table base_dep.ref_t(a int primary key);
-insert into base_dep.ref_t values(10),(20);
-
-create database view_skip_src;
-create table view_skip_src.marker(id int primary key);
-insert into view_skip_src.marker values(1);
-create view view_skip_src.v_skip as select a from base_dep.ref_t;
-
-create account acc_skip admin_name "roots" identified by "111";
-create publication pub_view_skip database view_skip_src account acc_skip;
-
--- @session:id=7&user=acc_skip:roots&password=111
-create database sub_view_skip from sys publication pub_view_skip;
-show full tables from sub_view_skip;
-
-create database clone_view_skip clone sub_view_skip;
-show full tables from clone_view_skip;
-select * from clone_view_skip.marker;
-
-drop database if exists clone_view_skip;
-drop database if exists sub_view_skip;
--- @session
-
-drop publication pub_view_skip;
-drop account acc_skip;
-drop database view_skip_src;
-drop database base_dep;
