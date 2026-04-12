@@ -236,22 +236,13 @@ func TestValidate(t *testing.T) {
 	require.NoError(t, validate(context.Background(), ses, stmt))
 
 	stmt.OutputOpt = &tree.DiffOutputOpt{Count: true}
-	err := validate(context.Background(), ses, stmt)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "OUTPUT COUNT")
+	require.NoError(t, validate(context.Background(), ses, stmt))
 
 	stmt.OutputOpt = &tree.DiffOutputOpt{Summary: true}
-	err = validate(context.Background(), ses, stmt)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "OUTPUT SUMMARY")
+	require.NoError(t, validate(context.Background(), ses, stmt))
 
 	stmt.OutputOpt = &tree.DiffOutputOpt{DirPath: tmpDir}
-	err = validate(context.Background(), ses, stmt)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "OUTPUT FILE")
+	require.NoError(t, validate(context.Background(), ses, stmt))
 
 	require.NoError(t, validate(context.Background(), ses, nil))
 }

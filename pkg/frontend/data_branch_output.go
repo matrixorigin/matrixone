@@ -191,6 +191,24 @@ func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]
 	return projected, nil
 }
 
+func validateProjectedColumns(stmt *tree.DataBranchDiff, tblStuff tableStuff) error {
+	if stmt == nil || stmt.Columns == nil {
+		return nil
+	}
+
+	if _, err := resolveProjectedIdxes(stmt.Columns, tblStuff); err != nil {
+		return err
+	}
+
+	if stmt.OutputOpt != nil && len(stmt.OutputOpt.DirPath) != 0 {
+		return moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH DIFF COLUMNS is not supported with OUTPUT FILE",
+		)
+	}
+
+	return nil
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,

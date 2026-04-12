@@ -288,6 +288,62 @@ func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputValidateProjectedColumns(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel.EXPECT().GetTableName().Return("t2").AnyTimes()
+
+	tblStuff := tableStuff{
+		tarRel: tarRel,
+	}
+	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+
+	t.Run("nil columns", func(t *testing.T) {
+		require.NoError(t, validateProjectedColumns(&tree.DataBranchDiff{}, tblStuff))
+	})
+
+	t.Run("count output allowed", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Count: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("summary output allowed", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Summary: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("file output rejected", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{DirPath: "out"},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Contains(t, err.Error(), "OUTPUT FILE")
+	})
+
+	t.Run("unknown column rejected", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns: tree.IdentifierList{tree.Identifier("missing")},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "missing")
+		require.Contains(t, err.Error(), "t2")
+	})
+}
+
 func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 	t.Run("reject malformed result without panic", func(t *testing.T) {
 		ok, err := shouldDiffAsCSV(executor.Result{})
