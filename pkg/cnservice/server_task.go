@@ -324,4 +324,8 @@ func (s *service) registerExecutorsLocked() {
 			s.storeEngine,
 		),
 	)
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_SQLTask,
+		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
+	)
 }

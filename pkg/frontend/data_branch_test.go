@@ -226,6 +226,33 @@ func TestValidate(t *testing.T) {
 	stmt.OutputOpt.DirPath = filePath
 	require.Error(t, validate(context.Background(), ses, stmt))
 
+	limit := int64(1)
+	stmt = &tree.DataBranchDiff{
+		Columns: tree.IdentifierList{tree.Identifier("id")},
+	}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Limit: &limit}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Count: true}
+	err := validate(context.Background(), ses, stmt)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Contains(t, err.Error(), "OUTPUT COUNT")
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Summary: true}
+	err = validate(context.Background(), ses, stmt)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Contains(t, err.Error(), "OUTPUT SUMMARY")
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{DirPath: tmpDir}
+	err = validate(context.Background(), ses, stmt)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Contains(t, err.Error(), "OUTPUT FILE")
+
 	require.NoError(t, validate(context.Background(), ses, nil))
 }
 

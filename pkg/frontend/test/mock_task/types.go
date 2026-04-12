@@ -305,6 +305,18 @@ func (mr *MockTaskServiceMockRecorder) StartScheduleCronTask() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartScheduleCronTask", reflect.TypeOf((*MockTaskService)(nil).StartScheduleCronTask))
 }
 
+// StartScheduleSQLTask mocks base method.
+func (m *MockTaskService) StartScheduleSQLTask() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "StartScheduleSQLTask")
+}
+
+// StartScheduleSQLTask indicates an expected call of StartScheduleSQLTask.
+func (mr *MockTaskServiceMockRecorder) StartScheduleSQLTask() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartScheduleSQLTask", reflect.TypeOf((*MockTaskService)(nil).StartScheduleSQLTask))
+}
+
 // StopScheduleCronTask mocks base method.
 func (m *MockTaskService) StopScheduleCronTask() {
 	m.ctrl.T.Helper()
@@ -315,6 +327,18 @@ func (m *MockTaskService) StopScheduleCronTask() {
 func (mr *MockTaskServiceMockRecorder) StopScheduleCronTask() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopScheduleCronTask", reflect.TypeOf((*MockTaskService)(nil).StopScheduleCronTask))
+}
+
+// StopScheduleSQLTask mocks base method.
+func (m *MockTaskService) StopScheduleSQLTask() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "StopScheduleSQLTask")
+}
+
+// StopScheduleSQLTask indicates an expected call of StopScheduleSQLTask.
+func (mr *MockTaskServiceMockRecorder) StopScheduleSQLTask() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopScheduleSQLTask", reflect.TypeOf((*MockTaskService)(nil).StopScheduleSQLTask))
 }
 
 // TruncateCompletedTasks mocks base method.
@@ -553,6 +577,61 @@ func (mr *MockTaskStorageMockRecorder) AddDaemonTask(ctx any, tasks ...any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).AddDaemonTask), varargs...)
 }
 
+// AddSQLTask mocks base method.
+func (m *MockTaskStorage) AddSQLTask(ctx context.Context, tasks ...taskservice.SQLTask) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx}
+	for _, a := range tasks {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "AddSQLTask", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddSQLTask indicates an expected call of AddSQLTask.
+func (mr *MockTaskStorageMockRecorder) AddSQLTask(ctx any, tasks ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx}, tasks...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddSQLTask", reflect.TypeOf((*MockTaskStorage)(nil).AddSQLTask), varargs...)
+}
+
+// AddSQLTaskRun mocks base method.
+func (m *MockTaskStorage) AddSQLTaskRun(ctx context.Context, runs ...taskservice.SQLTaskRun) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx}
+	for _, a := range runs {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "AddSQLTaskRun", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddSQLTaskRun indicates an expected call of AddSQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) AddSQLTaskRun(ctx any, runs ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx}, runs...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddSQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).AddSQLTaskRun), varargs...)
+}
+
+// AcquireSQLTaskRun mocks base method.
+func (m *MockTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask taskservice.SQLTask, run taskservice.SQLTaskRun) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AcquireSQLTaskRun", ctx, sqlTask, run)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AcquireSQLTaskRun indicates an expected call of AcquireSQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) AcquireSQLTaskRun(ctx, sqlTask, run any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AcquireSQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).AcquireSQLTaskRun), ctx, sqlTask, run)
+}
+
 // Close mocks base method.
 func (m *MockTaskStorage) Close() error {
 	m.ctrl.T.Helper()
@@ -587,6 +666,21 @@ func (mr *MockTaskStorageMockRecorder) DeleteAsyncTask(arg0 any, arg1 ...any) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAsyncTask", reflect.TypeOf((*MockTaskStorage)(nil).DeleteAsyncTask), varargs...)
 }
 
+// CompleteSQLTaskRun mocks base method.
+func (m *MockTaskStorage) CompleteSQLTaskRun(ctx context.Context, run taskservice.SQLTaskRun) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CompleteSQLTaskRun", ctx, run)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CompleteSQLTaskRun indicates an expected call of CompleteSQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) CompleteSQLTaskRun(ctx, run any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompleteSQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).CompleteSQLTaskRun), ctx, run)
+}
+
 // DeleteDaemonTask mocks base method.
 func (m *MockTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...taskservice.Condition) (int, error) {
 	m.ctrl.T.Helper()
@@ -605,6 +699,26 @@ func (mr *MockTaskStorageMockRecorder) DeleteDaemonTask(ctx any, condition ...an
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx}, condition...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).DeleteDaemonTask), varargs...)
+}
+
+// DeleteSQLTask mocks base method.
+func (m *MockTaskStorage) DeleteSQLTask(ctx context.Context, condition ...taskservice.Condition) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx}
+	for _, a := range condition {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "DeleteSQLTask", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteSQLTask indicates an expected call of DeleteSQLTask.
+func (mr *MockTaskStorageMockRecorder) DeleteSQLTask(ctx any, condition ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx}, condition...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSQLTask", reflect.TypeOf((*MockTaskStorage)(nil).DeleteSQLTask), varargs...)
 }
 
 // HeartbeatDaemonTask mocks base method.
@@ -696,6 +810,46 @@ func (mr *MockTaskStorageMockRecorder) QueryDaemonTask(ctx any, condition ...any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QueryDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).QueryDaemonTask), varargs...)
 }
 
+// QuerySQLTask mocks base method.
+func (m *MockTaskStorage) QuerySQLTask(ctx context.Context, condition ...taskservice.Condition) ([]taskservice.SQLTask, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx}
+	for _, a := range condition {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "QuerySQLTask", varargs...)
+	ret0, _ := ret[0].([]taskservice.SQLTask)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// QuerySQLTask indicates an expected call of QuerySQLTask.
+func (mr *MockTaskStorageMockRecorder) QuerySQLTask(ctx any, condition ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx}, condition...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QuerySQLTask", reflect.TypeOf((*MockTaskStorage)(nil).QuerySQLTask), varargs...)
+}
+
+// QuerySQLTaskRun mocks base method.
+func (m *MockTaskStorage) QuerySQLTaskRun(ctx context.Context, condition ...taskservice.Condition) ([]taskservice.SQLTaskRun, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx}
+	for _, a := range condition {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "QuerySQLTaskRun", varargs...)
+	ret0, _ := ret[0].([]taskservice.SQLTaskRun)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// QuerySQLTaskRun indicates an expected call of QuerySQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) QuerySQLTaskRun(ctx any, condition ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx}, condition...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QuerySQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).QuerySQLTaskRun), varargs...)
+}
+
 // UpdateAsyncTask mocks base method.
 func (m *MockTaskStorage) UpdateAsyncTask(arg0 context.Context, arg1 []task.AsyncTask, arg2 ...taskservice.Condition) (int, error) {
 	m.ctrl.T.Helper()
@@ -749,6 +903,61 @@ func (mr *MockTaskStorageMockRecorder) UpdateDaemonTask(ctx, tasks any, conds ..
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, tasks}, conds...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).UpdateDaemonTask), varargs...)
+}
+
+// UpdateSQLTask mocks base method.
+func (m *MockTaskStorage) UpdateSQLTask(ctx context.Context, tasks []taskservice.SQLTask, conds ...taskservice.Condition) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, tasks}
+	for _, a := range conds {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "UpdateSQLTask", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateSQLTask indicates an expected call of UpdateSQLTask.
+func (mr *MockTaskStorageMockRecorder) UpdateSQLTask(ctx, tasks any, conds ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, tasks}, conds...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSQLTask", reflect.TypeOf((*MockTaskStorage)(nil).UpdateSQLTask), varargs...)
+}
+
+// UpdateSQLTaskRun mocks base method.
+func (m *MockTaskStorage) UpdateSQLTaskRun(ctx context.Context, runs []taskservice.SQLTaskRun, conds ...taskservice.Condition) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, runs}
+	for _, a := range conds {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "UpdateSQLTaskRun", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateSQLTaskRun indicates an expected call of UpdateSQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) UpdateSQLTaskRun(ctx, runs any, conds ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, runs}, conds...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).UpdateSQLTaskRun), varargs...)
+}
+
+// TriggerSQLTask mocks base method.
+func (m *MockTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask taskservice.SQLTask, asyncTask task.AsyncTask) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TriggerSQLTask", ctx, sqlTask, asyncTask)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// TriggerSQLTask indicates an expected call of TriggerSQLTask.
+func (mr *MockTaskStorageMockRecorder) TriggerSQLTask(ctx, sqlTask, asyncTask any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TriggerSQLTask", reflect.TypeOf((*MockTaskStorage)(nil).TriggerSQLTask), ctx, sqlTask, asyncTask)
 }
 
 // MockTaskServiceHolder is a mock of TaskServiceHolder interface.

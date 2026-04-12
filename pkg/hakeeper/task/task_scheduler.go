@@ -90,6 +90,18 @@ func (s *scheduler) StopScheduleCronTask() {
 	}
 }
 
+func (s *scheduler) StartScheduleSQLTask() {
+	if ts := s.taskServiceGetter(); ts != nil {
+		ts.StartScheduleSQLTask()
+	}
+}
+
+func (s *scheduler) StopScheduleSQLTask() {
+	if ts := s.taskServiceGetter(); ts != nil {
+		ts.StopScheduleSQLTask()
+	}
+}
+
 func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	ts := s.taskServiceGetter()
 	if ts == nil {

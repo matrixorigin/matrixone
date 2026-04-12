@@ -855,10 +855,37 @@ func validate(
 		return nil
 	}
 
+	if err := validateDiffColumnsOutputOpt(diffStmt); err != nil {
+		return err
+	}
+
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
 		if err := validateOutputDirPath(ctx, ses, diffStmt.OutputOpt.DirPath); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func validateDiffColumnsOutputOpt(stmt *tree.DataBranchDiff) error {
+	if stmt == nil || stmt.Columns == nil || stmt.OutputOpt == nil {
+		return nil
+	}
+
+	switch {
+	case stmt.OutputOpt.Count:
+		return moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH DIFF COLUMNS is not supported with OUTPUT COUNT",
+		)
+	case stmt.OutputOpt.Summary:
+		return moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH DIFF COLUMNS is not supported with OUTPUT SUMMARY",
+		)
+	case len(stmt.OutputOpt.DirPath) > 0:
+		return moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH DIFF COLUMNS is not supported with OUTPUT FILE",
+		)
 	}
 
 	return nil

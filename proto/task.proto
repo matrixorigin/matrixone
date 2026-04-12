@@ -74,6 +74,8 @@ option (gogoproto.protosizer_all) = true;
    InitCdc = 7;
    // MO Table Stats Task
    MOTableStats = 8;
+   // SQL task
+   SQLTask = 9;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -86,6 +88,23 @@ option (gogoproto.protosizer_all) = true;
      bytes       Context  = 3;
      // Options options for execute task
      TaskOptions Options  = 4 [(gogoproto.nullable) = false];
+ }
+
+ message SQLTaskContext {
+     uint64 TaskId = 1;
+     string TaskName = 2;
+     uint32 AccountId = 3;
+     string DatabaseName = 4;
+     string SQLBody = 5;
+     string GateCondition = 6;
+     uint32 RetryLimit = 7;
+     uint32 TimeoutSeconds = 8;
+     string Creator = 9;
+     uint32 CreatorUserId = 10;
+     uint32 CreatorRoleId = 11;
+     string TriggerType = 12;
+     int64 ScheduledAt = 13;
+     uint64 TriggerCount = 14;
  }
  
  // TaskOptions task options

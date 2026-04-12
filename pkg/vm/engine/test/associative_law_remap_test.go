@@ -133,17 +133,19 @@ func TestAssociativeLawRemapping(t *testing.T) {
 	// Test the problematic query
 	// This should not cause remapping error after the fix
 	txnop = p.StartCNTxn()
-	res, err := exec.Exec(ctx, fmt.Sprintf(`
-		SELECT DISTINCT t.id 
-		FROM %s.connector_job job, %s.task t, %s.file f 
-		WHERE job.task_id = t.id 
-		  AND f.job_id = job.id  
-		  AND f.task_id = t.id 
-		  AND job.status != 4 
-		  AND job.status != 5 
-		  AND t.uid = '019ac448-45b7-7545-9762-2a73f9ab129' 
-		  AND f.table_id in (1)
-	`, dbName, dbName, dbName), executor.Options{}.WithTxn(txnop))
+	query := fmt.Sprintf(
+		"SELECT DISTINCT t.id\n"+
+			"FROM %s.connector_job job, %s.`task` t, %s.file f\n"+
+			"WHERE job.task_id = t.id\n"+
+			"  AND f.job_id = job.id\n"+
+			"  AND f.task_id = t.id\n"+
+			"  AND job.status != 4\n"+
+			"  AND job.status != 5\n"+
+			"  AND t.uid = '019ac448-45b7-7545-9762-2a73f9ab129'\n"+
+			"  AND f.table_id in (1)\n",
+		dbName, dbName, dbName,
+	)
+	res, err := exec.Exec(ctx, query, executor.Options{}.WithTxn(txnop))
 
 	// Print logical plan in EXPLAIN format
 	if res.LogicalPlan != nil {
