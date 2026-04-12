@@ -541,56 +541,97 @@ func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 	scaleAdj := scale - scale1 - scale2
 
 	len1, len2 := len(v1), len(v2)
+	hasNull := !rsnull.IsEmpty()
+	needScale := scaleAdj != 0
+	negScaleAdj := -scaleAdj
 
-	if len1 == len2 {
-		if rsnull.IsEmpty() {
+	// Prescan: if all values in both arrays fit in int64, use inline 64-bit multiply
+	// loop — avoids the non-inlinable d128MulInline call (cost 941) per element.
+	if d128AllFitInt64(v1, len1) && d128AllFitInt64(v2, len2) {
+		if len1 == len2 {
 			for i := 0; i < len1; i++ {
-				if err := d128MulInline(&v1[i], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := 0; i < len1; i++ {
-				if bmp.Contains(uint64(i)) {
+				if hasNull && bmp.Contains(uint64(i)) {
 					continue
 				}
-				if err := d128MulInline(&v1[i], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
+				neg := (v1[i].B64_127 ^ v2[i].B64_127) >> 63
+				xi, yi := int64(v1[i].B0_63), int64(v2[i].B0_63)
+				ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+				ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
 				}
+				d128Negate(&rs[i], neg)
+			}
+		} else if len1 == 1 {
+			xi := int64(v1[0].B0_63)
+			ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+			signx := v1[0].B64_127 >> 63
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				neg := signx ^ (v2[i].B64_127 >> 63)
+				yi := int64(v2[i].B0_63)
+				ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
+				}
+				d128Negate(&rs[i], neg)
+			}
+		} else {
+			yi := int64(v2[0].B0_63)
+			ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+			signy := v2[0].B64_127 >> 63
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				neg := (v1[i].B64_127 >> 63) ^ signy
+				xi := int64(v1[i].B0_63)
+				ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
+				}
+				d128Negate(&rs[i], neg)
+			}
+		}
+		return nil
+	}
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := d128MulInline(&v1[i], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
+				return err
 			}
 		}
 	} else if len1 == 1 {
-		if rsnull.IsEmpty() {
-			for i := 0; i < len2; i++ {
-				if err := d128MulInline(&v1[0], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
-				}
+		for i := 0; i < len2; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
 			}
-		} else {
-			for i := 0; i < len2; i++ {
-				if bmp.Contains(uint64(i)) {
-					continue
-				}
-				if err := d128MulInline(&v1[0], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
-				}
+			if err := d128MulInline(&v1[0], &v2[i], &rs[i], scaleAdj, scale1, scale2); err != nil {
+				return err
 			}
 		}
 	} else {
-		if rsnull.IsEmpty() {
-			for i := 0; i < len1; i++ {
-				if err := d128MulInline(&v1[i], &v2[0], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
-				}
+		for i := 0; i < len1; i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
 			}
-		} else {
-			for i := 0; i < len1; i++ {
-				if bmp.Contains(uint64(i)) {
-					continue
-				}
-				if err := d128MulInline(&v1[i], &v2[0], &rs[i], scaleAdj, scale1, scale2); err != nil {
-					return err
-				}
+			if err := d128MulInline(&v1[i], &v2[0], &rs[i], scaleAdj, scale1, scale2); err != nil {
+				return err
 			}
 		}
 	}
@@ -1193,6 +1234,16 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 		}
 	}
 	return nil
+}
+
+// d128AllFitInt64 checks whether every element fits in int64 range [-2^63, 2^63-1].
+// True when B64_127 == sign extension of B0_63 for every element.
+func d128AllFitInt64(vs []types.Decimal128, n int) bool {
+	var acc uint64
+	for i := 0; i < n; i++ {
+		acc |= uint64(int64(vs[i].B0_63)>>63) ^ vs[i].B64_127
+	}
+	return acc == 0
 }
 
 // d128AllAbsFit64 checks whether |v[i]| fits in 64 bits for all elements.
