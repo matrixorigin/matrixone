@@ -469,6 +469,33 @@ func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull 
 		pow10a = types.Pow10[19]
 		pow10b = types.Pow10[scaleDiff-19]
 	}
+	// Prescan: when all values fit in int64 and scaleDiff ≤ 19, replace
+	// d128Abs+d128Mul1Limb+d128Negate with branchless abs → bits.Mul64 → d128Negate.
+	// Saves the B64_127 branch in d128Mul1Limb and the copy+abs overhead.
+	if !twoStep && d128AllFitInt64(vec, n) {
+		if rsnull.IsEmpty() {
+			for i := 0; i < n; i++ {
+				s := vec[i].B64_127 >> 63
+				a := (vec[i].B0_63 ^ (-s)) + s
+				h, l := bits.Mul64(a, pow10a)
+				rs[i] = types.Decimal128{B0_63: l, B64_127: h}
+				d128Negate(&rs[i], s)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				rs[i] = vec[i]
+				if bmp.Contains(uint64(i)) {
+					continue
+				}
+				s := vec[i].B64_127 >> 63
+				a := (vec[i].B0_63 ^ (-s)) + s
+				h, l := bits.Mul64(a, pow10a)
+				rs[i] = types.Decimal128{B0_63: l, B64_127: h}
+				d128Negate(&rs[i], s)
+			}
+		}
+		return nil
+	}
 	if rsnull.IsEmpty() {
 		for i := 0; i < n; i++ {
 			rs[i] = vec[i]
@@ -1299,41 +1326,40 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 // d256AllFitInt64 checks whether every D256 element fits in int64 range.
 // True when B64_127, B128_191, B192_255 are all sign extension of B0_63 bit 63.
 func d256AllFitInt64(vs []types.Decimal256, n int) bool {
-	var acc uint64
 	for i := 0; i < n; i++ {
 		signExt := uint64(int64(vs[i].B0_63) >> 63)
-		acc |= vs[i].B64_127 ^ signExt
-		acc |= vs[i].B128_191 ^ signExt
-		acc |= vs[i].B192_255 ^ signExt
+		if vs[i].B64_127^signExt|vs[i].B128_191^signExt|vs[i].B192_255^signExt != 0 {
+			return false
+		}
 	}
-	return acc == 0
+	return true
 }
 
 // d128AllFitInt64 checks whether every element fits in int64 range [-2^63, 2^63-1].
 // True when B64_127 == sign extension of B0_63 for every element.
 func d128AllFitInt64(vs []types.Decimal128, n int) bool {
-	var acc uint64
 	for i := 0; i < n; i++ {
-		acc |= uint64(int64(vs[i].B0_63)>>63) ^ vs[i].B64_127
+		if uint64(int64(vs[i].B0_63)>>63)^vs[i].B64_127 != 0 {
+			return false
+		}
 	}
-	return acc == 0
+	return true
 }
 
 // d128AllAbsFit64 checks whether |v[i]| fits in 64 bits for all elements.
 // True when B64_127 is 0 (positive small) or ^0 (negative small) for every element,
 // excluding the degenerate {B0_63=0, B64_127=^0} = -2^64 whose abs is 2^64 > uint64 max.
 func d128AllAbsFit64(vs []types.Decimal128, n int) bool {
-	// Branchless: h+1 is 0 or 1 iff h is ^0 or 0. OR-accumulate and check ≤ 1.
-	// Edge case: h=^0 && lo=0 means value is exactly -2^64; |val| doesn't fit.
-	var acc uint64
 	for i := 0; i < n; i++ {
 		h := vs[i].B64_127
-		acc |= h + 1
-		lo := vs[i].B0_63
-		zeroLo := ((lo | -lo) >> 63) ^ 1 // 1 when lo==0
-		acc |= ((h >> 63) & zeroLo) << 1 // poison bit 1 for -2^64
+		if h+1 > 1 {
+			return false // h is neither 0 nor ^0
+		}
+		if h>>63 != 0 && vs[i].B0_63 == 0 {
+			return false // -2^64: abs doesn't fit
+		}
 	}
-	return acc <= 1
+	return true
 }
 
 // d128ModSameScale handles same-scale D128 modulo with inline 128-bit mod.

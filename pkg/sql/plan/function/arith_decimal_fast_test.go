@@ -1698,6 +1698,54 @@ func BenchmarkD128Add_Generic(b *testing.B) {
 	}
 }
 
+func BenchmarkD128AddDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128Small(rng)
+		ys[i] = randD128Small(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Add(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD128SubDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128Small(rng)
+		ys[i] = randD128Small(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Sub(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD128AddDiffScale_FastLarge(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal128, benchN)
+	ys := make([]types.Decimal128, benchN)
+	rs := make([]types.Decimal128, benchN)
+	for i := range xs {
+		xs[i] = randD128(rng)
+		ys[i] = randD128(rng)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d128Add(xs, ys, rs, 2, 5, nul)
+	}
+}
+
 func BenchmarkD128Mul_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal128, benchN)
