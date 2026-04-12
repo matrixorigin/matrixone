@@ -3912,6 +3912,107 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 		modFn = d128ModDiffScaleXPow10
 	}
 
+	// When scaleX, y is not scaled — D64 always fits in 64 bits, so inline directly.
+	if scaleX {
+		if len1 == len2 {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				if v2[i] == 0 {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signyBit := uint64(v2[i]) >> 63
+				absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
+				sx := int64(v1[i])
+				ax := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					r64, _, err := v1[i].Mod(v2[i], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					rs[i] = r64
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				rs[i] = types.Decimal64(r.B0_63)
+			}
+		} else if len1 == 1 {
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				if v2[i] == 0 {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signyBit := uint64(v2[i]) >> 63
+				absY64 := (uint64(v2[i]) ^ (-signyBit)) + signyBit
+				sx := int64(v1[0])
+				ax := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					r64, _, err := v1[0].Mod(v2[i], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					rs[i] = r64
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				rs[i] = types.Decimal64(r.B0_63)
+			}
+		} else {
+			if v2[0] == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				for i := 0; i < len1; i++ {
+					rsnull.Add(uint64(i))
+				}
+				return nil
+			}
+			signyBit := uint64(v2[0]) >> 63
+			absY64 := (uint64(v2[0]) ^ (-signyBit)) + signyBit
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sx := int64(v1[i])
+				ax := types.Decimal128{B0_63: uint64(sx), B64_127: uint64(sx >> 63)}
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					r64, _, err := v1[i].Mod(v2[0], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					rs[i] = r64
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				rs[i] = types.Decimal64(r.B0_63)
+			}
+		}
+		return nil
+	}
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
