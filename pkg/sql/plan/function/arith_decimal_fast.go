@@ -105,9 +105,8 @@ func d256IsZero(d types.Decimal256) bool {
 
 // ---- Decimal128 add/sub ----
 
-// d128Mul is the batch kernel for Decimal128 multiplication. It inlines a fast
-// multiply path for D64-origin values and falls back to MulInplace for
-// genuinely large Decimal128 values.
+// d128Add is the batch kernel for Decimal128 addition. It dispatches to
+// same-scale or diff-scale handlers based on the operand scales.
 func d128Add(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
 	var err error
@@ -1495,33 +1494,6 @@ func d128ModOne(x, y types.Decimal128) types.Decimal128 {
 	return r
 }
 
-// d128ModDiffScaleOne computes x mod y where scales differ.
-// scaleAx and scaleAy are precomputed at batch level: one is scaleDiff, the other 0.
-// Branchless abs + inline scale eliminates ~5 branches vs generic .Mod().
-// Returns (result, ok). ok=false only on D128 scaling overflow (rare).
-func d128ModDiffScaleOne(x, y types.Decimal128, scaleAx, scaleAy int32) (types.Decimal128, bool) {
-	ax := x
-	signx := d128Abs(&ax)
-	ay := y
-	d128Abs(&ay)
-
-	if !d128MulPow10(&ax, scaleAx) || !d128MulPow10(&ay, scaleAy) {
-		return types.Decimal128{}, false
-	}
-
-	var r types.Decimal128
-	if ay.B64_127 == 0 {
-		_, rhi := bits.Div64(0, ax.B64_127, ay.B0_63)
-		_, rlo := bits.Div64(rhi, ax.B0_63, ay.B0_63)
-		r = types.Decimal128{B0_63: rlo}
-	} else {
-		r, _ = ax.Mod128(ay)
-	}
-
-	d128Negate(&r, signx)
-	return r, true
-}
-
 // d128ModDiffScaleXPow10 computes x mod y, scaling x up by pre-computed pow10 factors.
 // d128Abs, d128Mul1Limb, d128Negate all inline inside this function.
 func d128ModDiffScaleXPow10(x, y types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) (types.Decimal128, bool) {
@@ -1579,7 +1551,7 @@ func d128ModDiffScaleYPow10(x, y types.Decimal128, pow10a uint64, twoStep bool, 
 
 // ---- Decimal128 integer division ----
 
-// d256Add is the batch kernel for Decimal256 addition.
+// d128IntDivKernel returns a closure for Decimal128 → int64 integer division.
 func d128IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	return func(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
@@ -1875,7 +1847,7 @@ func d256ScaleDownPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b
 	d256Negate(x, sign)
 }
 
-// d64Add is the batch kernel for Decimal64 addition.
+// d256Add is the batch kernel for Decimal256 addition.
 func d256Add(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
 	var err error
@@ -1894,7 +1866,8 @@ func d256Add(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	return nil
 }
 
-// d256Sub is the batch kernel for Decimal256 subtraction.
+// d256AddSameScale adds two Decimal256 vectors with the same scale, inlining
+// the 4-limb carry chain and overflow check to avoid the non-inlinable Add256 method.
 func d256AddSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -2114,8 +2087,8 @@ func d256Sub(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	return nil
 }
 
-// d256AddSameScale adds two Decimal256 vectors with the same scale, inlining
-// the 4-limb carry chain and overflow check to avoid the non-inlinable Add256 method.
+// d256SubSameScale subtracts two Decimal256 vectors with the same scale, inlining
+// the 4-limb borrow chain and overflow check to avoid the non-inlinable Sub256 method.
 func d256SubSameScale(v1, v2, rs []types.Decimal256, rsnull *nulls.Nulls) int {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -3087,11 +3060,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 
 // ---- Decimal256 integer division ----
 
-// Returns int64 results. Uses the same division kernels as / but truncates
-// the fractional part and converts to int64.
-
-// d64IntDivKernel returns a closure matching the decimalBatchArith arithFn
-// signature for Decimal64 → int64 integer division.
+// d256IntDivKernel returns a closure for Decimal256 → int64 integer division.
 func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	return func(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
@@ -3378,7 +3347,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 
 // ---- Decimal64 add/sub ----
 
-// d64Mul is the batch kernel for Decimal64 × Decimal64 → Decimal128.
+// d64Add is the batch kernel for Decimal64 addition.
 // len(v1)==1 or len(v2)==1 indicates a broadcast constant.
 func d64Add(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
@@ -4300,9 +4269,7 @@ func d64Mod(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull *nulls.Nu
 
 // ---- Decimal64 integer division ----
 
-// d128Add is the batch kernel for Decimal128 addition.
-// Same-scale: direct bits.Add64 without overflow checking.
-// Different-scale: scales operand(s) first, then uses bits.Add64 loop.
+// d64IntDivKernel returns a closure for Decimal64 → int64 integer division.
 func d64IntDivKernel(proc *process.Process, selectList *FunctionSelectList) func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	return func(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls) error {
@@ -4512,9 +4479,6 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 	}
 	return nil
 }
-
-// d128MulPow10 multiplies unsigned D128 x by 10^n in-place.
-// Returns false on overflow. n must be >= 1.
 
 // ---- Scale helpers ----
 
