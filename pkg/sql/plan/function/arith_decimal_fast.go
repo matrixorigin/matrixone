@@ -2602,7 +2602,51 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 		modFn = d128ModDiffScaleXPow10
 	}
 
+	// Prescan: when y is not scaled up (scaleX scales x, or same-scale scales by 1),
+	// check if all |v2| narrowed to D128 fit in 64 bits for inline fast 64-bit mod.
+	canInline64 := false
+	if scaleX || scaleDiff == 0 {
+		var acc uint64
+		for i := 0; i < len2; i++ {
+			acc |= v2[i].B64_127 + 1
+		}
+		canInline64 = acc <= 1
+	}
+
 	if len1 == len2 {
+		if canInline64 {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				if v2[i].B0_63|v2[i].B64_127 == 0 {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signy := v2[i].B64_127 >> 63
+				absY64 := (v2[i].B0_63 ^ (-signy)) + signy
+				ax := types.Decimal128{B0_63: v1[i].B0_63, B64_127: v1[i].B64_127}
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					var err error
+					rs[i], _, err = v1[i].Mod(v2[i], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				signExt := ^uint64(0) * (r.B64_127 >> 63)
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127, B128_191: signExt, B192_255: signExt}
+			}
+			return nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2627,6 +2671,40 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 			rs[i] = d128toD256(r)
 		}
 	} else if len1 == 1 {
+		if canInline64 {
+			x := types.Decimal128{B0_63: v1[0].B0_63, B64_127: v1[0].B64_127}
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				if v2[i].B0_63|v2[i].B64_127 == 0 {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					rsnull.Add(uint64(i))
+					continue
+				}
+				signy := v2[i].B64_127 >> 63
+				absY64 := (v2[i].B0_63 ^ (-signy)) + signy
+				ax := x
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					var err error
+					rs[i], _, err = v1[0].Mod(v2[i], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				signExt := ^uint64(0) * (r.B64_127 >> 63)
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127, B128_191: signExt, B192_255: signExt}
+			}
+			return nil
+		}
 		x := d256toD128(v1[0])
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -2652,6 +2730,41 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 			rs[i] = d128toD256(r)
 		}
 	} else {
+		if d256IsZero(v2[0]) {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			for i := 0; i < len1; i++ {
+				rsnull.Add(uint64(i))
+			}
+			return nil
+		}
+		if canInline64 {
+			signy := v2[0].B64_127 >> 63
+			absY64 := (v2[0].B0_63 ^ (-signy)) + signy
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				ax := types.Decimal128{B0_63: v1[i].B0_63, B64_127: v1[i].B64_127}
+				signx := d128Abs(&ax)
+				if !d128Mul1Limb(&ax, pow10a) || (twoStep && !d128Mul1Limb(&ax, pow10b)) {
+					var err error
+					rs[i], _, err = v1[i].Mod(v2[0], scale1, scale2)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				_, rhi := bits.Div64(0, ax.B64_127, absY64)
+				_, rlo := bits.Div64(rhi, ax.B0_63, absY64)
+				r := types.Decimal128{B0_63: rlo}
+				d128Negate(&r, signx)
+				signExt := ^uint64(0) * (r.B64_127 >> 63)
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127, B128_191: signExt, B192_255: signExt}
+			}
+			return nil
+		}
 		y := d256toD128(v2[0])
 		if d128IsZero(y) {
 			if shouldError {
