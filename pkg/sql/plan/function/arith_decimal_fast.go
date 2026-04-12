@@ -1236,6 +1236,19 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 	return nil
 }
 
+// d256AllFitInt64 checks whether every D256 element fits in int64 range.
+// True when B64_127, B128_191, B192_255 are all sign extension of B0_63 bit 63.
+func d256AllFitInt64(vs []types.Decimal256, n int) bool {
+	var acc uint64
+	for i := 0; i < n; i++ {
+		signExt := uint64(int64(vs[i].B0_63) >> 63)
+		acc |= vs[i].B64_127 ^ signExt
+		acc |= vs[i].B128_191 ^ signExt
+		acc |= vs[i].B192_255 ^ signExt
+	}
+	return acc == 0
+}
+
 // d128AllFitInt64 checks whether every element fits in int64 range [-2^63, 2^63-1].
 // True when B64_127 == sign extension of B0_63 for every element.
 func d128AllFitInt64(vs []types.Decimal128, n int) bool {
@@ -2258,6 +2271,73 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	if hasNull {
 		bmp = rsnull.GetBitmap()
 	}
+
+	// Prescan: if all values fit in int64, use inline bits.Mul64 — skips the
+	// 10-multiply schoolbook in d256MulInline (cost >> 80, never inlines).
+	// When scaleAdj < 0, fuse scale-down into the loop (d128DivPow10 on
+	// the unsigned 128-bit product) to avoid a second pass over the array.
+	if d256AllFitInt64(v1, len1) && d256AllFitInt64(v2, len2) {
+		needScale := scaleAdj < 0
+		negScaleAdj := -scaleAdj
+		if len1 == len2 {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				neg := (v1[i].B192_255 ^ v2[i].B192_255) >> 63
+				xi, yi := int64(v1[i].B0_63), int64(v2[i].B0_63)
+				ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+				ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				r := types.Decimal128{B0_63: lo, B64_127: hi}
+				if needScale {
+					d128DivPow10(&r, negScaleAdj)
+				}
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127}
+				d256Negate(&rs[i], neg)
+			}
+		} else if len1 == 1 {
+			xi := int64(v1[0].B0_63)
+			ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+			signx := v1[0].B192_255 >> 63
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				neg := signx ^ (v2[i].B192_255 >> 63)
+				yi := int64(v2[i].B0_63)
+				ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				r := types.Decimal128{B0_63: lo, B64_127: hi}
+				if needScale {
+					d128DivPow10(&r, negScaleAdj)
+				}
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127}
+				d256Negate(&rs[i], neg)
+			}
+		} else {
+			yi := int64(v2[0].B0_63)
+			ay := uint64((yi ^ (yi >> 63)) - (yi >> 63))
+			signy := v2[0].B192_255 >> 63
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				neg := (v1[i].B192_255 >> 63) ^ signy
+				xi := int64(v1[i].B0_63)
+				ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
+				hi, lo := bits.Mul64(ax, ay)
+				r := types.Decimal128{B0_63: lo, B64_127: hi}
+				if needScale {
+					d128DivPow10(&r, negScaleAdj)
+				}
+				rs[i] = types.Decimal256{B0_63: r.B0_63, B64_127: r.B64_127}
+				d256Negate(&rs[i], neg)
+			}
+		}
+		return nil
+	}
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -2286,7 +2366,7 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			}
 		}
 	}
-	// Batch-level scale-down: applied once per batch, outside per-element loops.
+	// Batch-level scale-down for slow path only.
 	if scaleAdj < 0 {
 		pow10a, twoStep, pow10b := scalePow10Factors(-scaleAdj)
 		for i := range rs {

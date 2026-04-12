@@ -2706,6 +2706,23 @@ func BenchmarkD256MulScaled_Fast(b *testing.B) {
 	}
 }
 
+func BenchmarkD256Mul_FastLarge(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal256, benchN)
+	ys := make([]types.Decimal256, benchN)
+	rs := make([]types.Decimal256, benchN)
+	for i := range xs {
+		// Values that don't fit in int64 — use 2 limbs.
+		xs[i] = types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000)), B64_127: uint64(rng.Int63n(100))}
+		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000))}
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d256Mul(xs, ys, rs, 2, 3, nul)
+	}
+}
+
 func BenchmarkD256Mul_Generic(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal256, benchN)
