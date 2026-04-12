@@ -275,6 +275,67 @@ DELETE 只追加 tombstone / delete bitmap，不立即重写大段索引。
 
 而不是先把大量候选拉出来再在上层聚合。
 
+## 5.4 与向量检索共存的设计边界
+
+如果 MO 同时要支持全文检索和向量检索，第一阶段最重要的原则不是“统一底层存储”，而是**互不影响、按需融合**。
+
+建议明确为下面四条：
+
+### A. 向量查询链路保持独立
+
+现有向量查询已经有自己独立的 planner rewrite、index search 和回表路径。  
+FTS v2-lite 不应为了“混合检索”去改写当前向量单查链路。
+
+换句话说：
+
+- 纯向量查询继续走原有 HNSW / IVF 路线
+- 不因为引入全文而改变向量索引格式或默认执行路径
+
+### B. 全文查询链路也保持独立
+
+纯全文查询走自己的：
+
+- FTS metadata
+- delta/segment
+- postings/positions
+- FTS scan executor
+- BM25 / phrase / boolean 执行
+
+不要试图让全文索引直接复用向量索引的物理表达。
+
+### C. 混合检索只在上层做融合
+
+只有在 SQL 明确表达“全文 + 向量”混合检索时，才进入 hybrid 路径。  
+第一阶段建议只支持两种稳定模式：
+
+1. **FTS first, vector rerank**
+   - 全文先召回候选 doc_id
+   - 对较小候选集做向量相似度重排
+
+2. **dual retrieval + late fusion**
+   - 全文拿 top-N
+   - 向量拿 top-N
+   - coordinator 按 RRF 或加权分数融合
+
+这样可以避免：
+
+- 把全文和向量硬耦合成一个难以维护的大执行器
+- 为了混合检索影响当前向量查询延迟
+
+### D. 资源和后台任务必须隔离
+
+即使全文和向量同时存在，也应当分开控制：
+
+- cache / memory budget
+- build 并发
+- background merge / optimize
+- explain / metrics
+
+这样才能保证：
+
+- 全文 merge 不拖慢向量查询
+- 向量 build 也不会反向拖垮全文索引维护
+
 ---
 
 ## 6. 打分与统计设计
