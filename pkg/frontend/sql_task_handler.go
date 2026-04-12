@@ -201,17 +201,25 @@ func handleShowSQLTasks(ctx context.Context, ses *Session, _ *ExecCtx, _ *tree.S
 	if err != nil {
 		return err
 	}
-	tasks, err := ts.GetStorage().QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()))
+	store := ts.GetStorage()
+	tasks, err := store.QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()))
 	if err != nil {
 		return err
 	}
-	runs, err := ts.GetStorage().QuerySQLTaskRun(ctx, taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()))
+	taskIDs := make([]uint64, 0, len(tasks))
+	for _, sqlTask := range tasks {
+		taskIDs = append(taskIDs, sqlTask.TaskID)
+	}
+	runs, err := store.QueryLatestSQLTaskRun(ctx, ses.GetAccountId(), taskIDs)
 	if err != nil {
 		return err
 	}
-	lastRun := make(map[uint64]taskservice.SQLTaskRun, len(runs))
+	lastRun := make(map[uint64]taskservice.SQLTaskRun, len(tasks))
 	for _, run := range runs {
-		lastRun[run.TaskID] = run
+		prev, exists := lastRun[run.TaskID]
+		if !exists || run.RunID > prev.RunID {
+			lastRun[run.TaskID] = run
+		}
 	}
 
 	mrs := ses.GetMysqlResultSet()
@@ -223,9 +231,9 @@ func handleShowSQLTasks(ctx context.Context, ses *Session, _ *ExecCtx, _ *tree.S
 		row := []any{
 			sqlTask.TaskName,
 			taskservice.BuildSQLTaskCronSpec(sqlTask.CronExpr, sqlTask.Timezone),
-			boolToInt(sqlTask.Enabled),
+			int32(boolToInt(sqlTask.Enabled)),
 			sqlTask.GateCondition,
-			sqlTask.RetryLimit,
+			int32(sqlTask.RetryLimit),
 			formatSQLTaskTimeout(sqlTask.TimeoutSeconds),
 			sqlTask.CreatedAt.String(),
 			run.Status,
@@ -261,14 +269,14 @@ func handleShowSQLTaskRuns(ctx context.Context, ses *Session, _ *ExecCtx, stmt *
 	}
 	for _, run := range runs {
 		mrs.AddRow([]any{
-			run.RunID,
+			int64(run.RunID),
 			run.TaskName,
 			run.TriggerType,
 			run.Status,
 			formatNullableTime(run.StartedAt),
 			formatNullableTime(run.FinishedAt),
 			run.DurationSeconds,
-			run.AttemptNumber,
+			int32(run.AttemptNumber),
 			run.RowsAffected,
 			run.ErrorMessage,
 		})

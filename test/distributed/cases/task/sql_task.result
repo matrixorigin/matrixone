@@ -1,0 +1,288 @@
+drop database if exists sql_task_case;
+create database sql_task_case;
+use sql_task_case;
+drop task if exists sql_task_cron;
+drop task if exists sql_task_manual;
+drop task if exists sql_task_gate;
+drop task if exists sql_task_multistmt;
+drop task if exists sql_task_timeout;
+drop task if exists sql_task_retry;
+drop task if exists sql_task_overlap;
+drop task if exists sql_task_build_silver;
+drop task if exists sql_task_build_gold;
+drop task if exists sql_task_validate;
+create table scheduled_events(
+marker varchar(32) not null,
+created_at timestamp default current_timestamp
+);
+create table manual_events(id int primary key);
+create table gate_source(id int primary key);
+create table gate_sink(tag varchar(32) primary key);
+create table ms_target(v int);
+create table timeout_sink(v int);
+create table retry_target(v int);
+create table overlap_sink(v int);
+create table suspend_snapshot(cnt bigint);
+create table ingest_meta(batch_id int primary key, ready int not null);
+create table raw_orders(order_id int primary key, amount int not null);
+create table silver_orders(order_id int primary key, amount int not null);
+create table gold_summary(summary_id int primary key, total_orders int not null, total_amount int not null);
+create table validate_results(result_id int primary key, status varchar(16) not null);
+create task sql_task_cron
+schedule '0 0 0 1 1 *'
+timezone 'UTC'
+as begin
+insert into scheduled_events(marker) values ('cron');
+end
+create task sql_task_manual
+as begin
+insert into manual_events
+select 1
+where not exists (select 1 from manual_events where id = 1);
+end
+select sleep(2);
+sleep(2)
+0
+select count(*) from scheduled_events;
+count(*)
+0
+select count(*) from manual_events;
+count(*)
+0
+alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
+select sleep(10);
+sleep(10)
+0
+select count(*) from scheduled_events;
+count(*)
+0
+select count(*) from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'SCHEDULED' and status = 'SUCCESS';
+count(*)
+0
+execute task sql_task_manual;
+select count(*) from manual_events;
+count(*)
+1
+show task runs for sql_task_cron limit 1;
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
+show task runs for sql_task_manual limit 1;
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
+120001    sql_task_manual    MANUAL    SUCCESS    2026-04-12 11:54:13 +0800 CST    2026-04-12 11:54:13 +0800 CST    0.031865    1    0    
+alter task sql_task_cron suspend;
+select sleep(2);
+sleep(2)
+0
+truncate table suspend_snapshot;
+insert into suspend_snapshot select count(*) from scheduled_events;
+select sleep(4);
+sleep(4)
+0
+select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
+(select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events)
+true
+alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
+truncate table suspend_snapshot;
+insert into suspend_snapshot select count(*) from scheduled_events;
+alter task sql_task_cron resume;
+select sleep(4);
+sleep(4)
+0
+select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
+(select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events)
+true
+create task sql_task_gate
+when (exists(select 1 from gate_source where id = 1))
+as begin
+insert into gate_sink
+select 'gate-ok'
+where not exists (select 1 from gate_sink where tag = 'gate-ok');
+end
+execute task sql_task_gate;
+select count(*) from gate_sink;
+count(*)
+0
+insert into gate_source values (1);
+execute task sql_task_gate;
+select count(*) from gate_sink;
+count(*)
+1
+select status
+from mo_task.sql_task_run
+where task_name = 'sql_task_gate'
+order by run_id desc
+limit 2;
+status
+SUCCESS
+SKIPPED
+create task sql_task_multistmt
+as begin
+insert into ms_target values (1);
+insert into no_such_table values (1);
+insert into ms_target values (2);
+end
+execute task sql_task_multistmt;
+no such table sql_task_case.no_such_table
+select count(*), min(v), max(v) from ms_target;
+count(*)    min(v)    max(v)
+1    1    1
+select status from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
+status
+FAILED
+create task sql_task_timeout
+timeout '1s'
+as begin
+insert into timeout_sink select sleep(2);
+end
+execute task sql_task_timeout;
+context deadline exceeded
+internal error: internal executor exec
+select count(*) from timeout_sink;
+count(*)
+0
+select status from mo_task.sql_task_run where task_name = 'sql_task_timeout' order by run_id desc limit 1;
+status
+TIMEOUT
+create task sql_task_retry
+retry 1
+as begin
+insert into retry_target values (1);
+insert into no_such_retry_table values (1);
+end
+execute task sql_task_retry;
+no such table sql_task_case.no_such_retry_table
+select count(*) from retry_target;
+count(*)
+2
+select status from mo_task.sql_task_run where task_name = 'sql_task_retry' order by run_id desc limit 2;
+status
+FAILED
+FAILED
+create task sql_task_overlap
+as begin
+insert into overlap_sink select sleep(4);
+end
+use sql_task_case;
+execute task sql_task_overlap;
+select sleep(1);
+sleep(1)
+0
+execute task sql_task_overlap;
+select sleep(5);
+sleep(5)
+0
+select count(*) from overlap_sink;
+count(*)
+2
+select status from mo_task.sql_task_run where task_name = 'sql_task_overlap' order by run_id desc limit 2;
+status
+SUCCESS
+SUCCESS
+use sql_task_case;
+drop task if exists sql_task_build_silver;
+drop task if exists sql_task_build_gold;
+drop task if exists sql_task_validate;
+insert into raw_orders values (1, 10), (2, 20);
+create task sql_task_build_silver
+when (exists(select 1 from ingest_meta where batch_id = 1 and ready = 1))
+as begin
+insert into silver_orders
+select r.order_id, r.amount
+from raw_orders r
+where not exists (
+select 1 from silver_orders s where s.order_id = r.order_id
+);
+end
+create task sql_task_build_gold
+when (exists(select 1 from silver_orders))
+as begin
+delete from gold_summary where summary_id = 1;
+insert into gold_summary
+select 1, count(*), sum(amount) from silver_orders;
+end
+create task sql_task_validate
+when (exists(select 1 from gold_summary where summary_id = 1))
+as begin
+delete from validate_results where result_id = 1;
+insert into validate_results
+select 1, case when total_orders = 2 and total_amount = 30 then 'PASS' else 'FAIL' end
+from gold_summary
+where summary_id = 1;
+end
+execute task sql_task_validate;
+execute task sql_task_build_gold;
+execute task sql_task_build_silver;
+insert into ingest_meta values (1, 1);
+execute task sql_task_build_silver;
+execute task sql_task_build_gold;
+execute task sql_task_validate;
+execute task sql_task_validate;
+select count(*) from silver_orders;
+count(*)
+2
+select total_orders, total_amount from gold_summary where summary_id = 1;
+total_orders    total_amount
+2    30
+select status from validate_results where result_id = 1;
+status
+PASS
+select status from mo_task.sql_task_run where task_name = 'sql_task_build_silver' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+status
+SUCCESS
+select status from mo_task.sql_task_run where task_name = 'sql_task_build_gold' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+status
+SUCCESS
+select status from mo_task.sql_task_run where task_name = 'sql_task_validate' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+status
+SUCCESS
+select count(*) from validate_results;
+count(*)
+1
+show task runs for sql_task_validate limit 3;
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
+120016    sql_task_validate    MANUAL    SUCCESS    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.02571025    1    0    
+120015    sql_task_validate    MANUAL    SUCCESS    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.029997875    1    0    
+120010    sql_task_validate    MANUAL    SKIPPED    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.012215333    1    0    
+drop account if exists sql_task_tenant;
+create account sql_task_tenant admin_name 'admin' identified by '111';
+create database if not exists tenant_task_case;
+use tenant_task_case;
+create table tenant_sink(v int primary key);
+create task tenant_task_show
+schedule '0 0 0 1 1 *'
+timezone 'UTC'
+when (1)
+timeout '30s'
+as begin
+insert into tenant_sink
+select 1
+where not exists (select 1 from tenant_sink where v = 1);
+end
+execute task tenant_task_show;
+alter task tenant_task_show set when (0);
+execute task tenant_task_show;
+show tasks;
+task_name    schedule    enabled    gate_condition    retry_limit    timeout    created_at    last_run_status    last_run_time
+tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 00:00:00 +0800 CST    SKIPPED    2026-04-13 00:00:00 +0800 CST
+show task runs for tenant_task_show limit 2;
+run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
+120018    tenant_task_show    MANUAL    SKIPPED    2026-04-13 00:00:00 +0800 CST    2026-04-13 00:00:00 +0800 CST    0.010000    1    0    
+120017    tenant_task_show    MANUAL    SUCCESS    2026-04-13 00:00:00 +0800 CST    2026-04-13 00:00:00 +0800 CST    0.020000    1    0    
+select count(*) from tenant_sink;
+count(*)
+1
+select count(*) from mo_task.sql_task_run;
+Unknown database mo_task
+drop task if exists tenant_task_show;
+drop database if exists tenant_task_case;
+drop task if exists sql_task_validate;
+drop task if exists sql_task_build_gold;
+drop task if exists sql_task_build_silver;
+drop task if exists sql_task_overlap;
+drop task if exists sql_task_retry;
+drop task if exists sql_task_timeout;
+drop task if exists sql_task_multistmt;
+drop task if exists sql_task_gate;
+drop task if exists sql_task_manual;
+drop task if exists sql_task_cron;
+drop database if exists sql_task_case;
+drop account if exists sql_task_tenant;

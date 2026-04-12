@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,103 @@ func TestSQLTaskExecutorExecuteContext(t *testing.T) {
 	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
 	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
 	require.True(t, runs[0].GateResult)
+}
+
+func TestSQLTaskExecutorPreservesQuotedStrings(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = "1"
+		task.SQLBody = "insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end"
+	})
+
+	fakeIE := &fakeInternalExecutor{
+		queryValues: []any{true},
+	}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{
+		"insert into gate_sink select 'gate-ok'",
+		"select case when 1 = 1 then 'PASS' else 'FAIL' end",
+	}, fakeIE.execSQLs)
+}
+
+func TestSQLTaskExecutorPreservesTimestampDiffUnits(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = "1"
+		task.SQLBody = "select timestampdiff(hour, current_timestamp(), current_timestamp())"
+	})
+
+	fakeIE := &fakeInternalExecutor{
+		queryValues: []any{true},
+	}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{
+		"select timestampdiff(hour, current_timestamp(), current_timestamp())",
+	}, fakeIE.execSQLs)
+}
+
+func TestSQLTaskExecutorPreservesComplexTimestampDiffUnits(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	sqlTask := mustAddSQLTaskForExecutorTest(t, store, func(task *SQLTask) {
+		task.GateCondition = "1"
+		task.SQLBody = `
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match`
+	})
+
+	fakeIE := &fakeInternalExecutor{
+		queryValues: []any{true},
+	}
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor { return fakeIE }, ts, "cn-test")
+	err := executor.ExecuteContext(context.Background(), newSQLTaskContextForTest(sqlTask, SQLTaskTriggerManual), true)
+	require.NoError(t, err)
+
+	executed := strings.Join(fakeIE.execSQLs, "\n")
+	require.NotContains(t, executed, "timestampdiff('hour'")
+	require.NotContains(t, executed, "timestampdiff('minute'")
+	require.Contains(t, executed, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, executed, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, executed, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
 }
 
 func TestSQLTaskExecutorSkipsWhenGateFalse(t *testing.T) {

@@ -773,6 +773,8 @@ type TaskStorage interface {
 	UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conds ...Condition) (int, error)
 	// QuerySQLTaskRun queries sql task run records.
 	QuerySQLTaskRun(ctx context.Context, conds ...Condition) ([]SQLTaskRun, error)
+	// QueryLatestSQLTaskRun returns the newest run for each task in taskIDs under the given account.
+	QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error)
 	// AcquireSQLTaskRun atomically acquires execution ownership and creates a RUNNING run record.
 	AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error)
 	// CompleteSQLTaskRun updates the terminal state of a sql task run.

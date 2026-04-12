@@ -484,6 +484,23 @@ func (s *refreshableTaskStorage) QuerySQLTaskRun(ctx context.Context, conditions
 	return v, err
 }
 
+func (s *refreshableTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error) {
+	var v []SQLTaskRun
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.QueryLatestSQLTaskRun(ctx, accountID, taskIDs)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
 func (s *refreshableTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error) {
 	var v uint64
 	var err error

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -204,6 +205,24 @@ var (
 
 	deleteSQLTask = "delete from sql_task where 1=1"
 
+	sqlTaskRunSelectColumns = "" +
+		"run_id," +
+		"task_id," +
+		"task_name," +
+		"account_id," +
+		"scheduled_at," +
+		"started_at," +
+		"finished_at," +
+		"duration_seconds," +
+		"status," +
+		"trigger_type," +
+		"attempt_number," +
+		"rows_affected," +
+		"error_code," +
+		"error_message," +
+		"gate_result," +
+		"runner_cn"
+
 	selectSQLTask = "select " +
 		"task_id," +
 		"task_name," +
@@ -259,23 +278,7 @@ var (
 		"gate_result=?," +
 		"runner_cn=? where run_id=?"
 
-	selectSQLTaskRun = "select " +
-		"run_id," +
-		"task_id," +
-		"task_name," +
-		"account_id," +
-		"scheduled_at," +
-		"started_at," +
-		"finished_at," +
-		"duration_seconds," +
-		"status," +
-		"trigger_type," +
-		"attempt_number," +
-		"rows_affected," +
-		"error_code," +
-		"error_message," +
-		"gate_result," +
-		"runner_cn from sql_task_run where 1=1"
+	selectSQLTaskRun = "select " + sqlTaskRunSelectColumns + " from sql_task_run where 1=1"
 
 	countSQLTaskTrigger = "select trigger_count from sql_task where task_id=?"
 )
@@ -927,7 +930,54 @@ func (m *mysqlTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Conditi
 		buildSQLTaskRunOrderByClause() +
 		buildLimitClause(newConditions(conds...))
 
-	rows, err := m.db.QueryContext(ctx, query)
+	return m.querySQLTaskRuns(ctx, query)
+}
+
+func (m *mysqlTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error) {
+	if taskFrameworkDisabled() || len(taskIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(taskIDs)), ",")
+	query := fmt.Sprintf(
+		"select "+
+			"r.run_id,"+
+			"r.task_id,"+
+			"r.task_name,"+
+			"r.account_id,"+
+			"r.scheduled_at,"+
+			"r.started_at,"+
+			"r.finished_at,"+
+			"r.duration_seconds,"+
+			"r.status,"+
+			"r.trigger_type,"+
+			"r.attempt_number,"+
+			"r.rows_affected,"+
+			"r.error_code,"+
+			"r.error_message,"+
+			"r.gate_result,"+
+			"r.runner_cn "+
+			"from sql_task_run r "+
+			"join ("+
+			"select task_id, max(run_id) as max_run_id "+
+			"from sql_task_run "+
+			"where account_id=? and task_id in (%s) "+
+			"group by task_id"+
+			") latest on r.task_id=latest.task_id and r.run_id=latest.max_run_id "+
+			"where r.account_id=? order by r.task_id",
+		placeholders,
+	)
+	args := make([]any, 0, len(taskIDs)+2)
+	args = append(args, accountID)
+	for _, taskID := range taskIDs {
+		args = append(args, taskID)
+	}
+	args = append(args, accountID)
+	return m.querySQLTaskRuns(ctx, query, args...)
+}
+
+func (m *mysqlTaskStorage) querySQLTaskRuns(ctx context.Context, query string, args ...any) ([]SQLTaskRun, error) {
+	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -935,6 +985,10 @@ func (m *mysqlTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Conditi
 		_ = rows.Close()
 	}()
 
+	return scanSQLTaskRuns(rows)
+}
+
+func scanSQLTaskRuns(rows *sql.Rows) ([]SQLTaskRun, error) {
 	runs := make([]SQLTaskRun, 0)
 	for rows.Next() {
 		var run SQLTaskRun
@@ -1240,7 +1294,7 @@ func buildSQLTaskOrderByClause() string {
 }
 
 func buildSQLTaskRunOrderByClause() string {
-	return " order by run_id"
+	return " order by run_id desc"
 }
 
 func buildLabels(c *conditions) *CnLabels {
