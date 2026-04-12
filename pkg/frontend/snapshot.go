@@ -1360,7 +1360,13 @@ func canSkipRestoreViewError(err error) bool {
 	}
 
 	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "no such table") || strings.Contains(errMsg, "unknown database")
+	if strings.Contains(errMsg, "no such table") || strings.Contains(errMsg, "unknown database") {
+		return true
+	}
+
+	return moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+		strings.Contains(errMsg, "does not exist") &&
+		(strings.Contains(errMsg, "table ") || strings.Contains(errMsg, "database "))
 }
 
 func sortedViewInfos(

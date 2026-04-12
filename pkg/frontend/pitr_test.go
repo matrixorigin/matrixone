@@ -3027,7 +3027,6 @@ func Test_restoreViewsSkipMissingDependency(t *testing.T) {
 
 		missingSQL := "create view skip_v as select * from missing_t"
 		okSQL := "create view ok_v as select 1"
-		bh.sql2err[missingSQL] = moerr.NewNoSuchTable(ctx, "db01", "missing_t")
 
 		viewMap := map[string]*tableInfo{
 			genKey("db01", "skip_v"): {
@@ -3045,15 +3044,80 @@ func Test_restoreViewsSkipMissingDependency(t *testing.T) {
 		}
 		sortedViews := []string{genKey("db01", "skip_v"), genKey("db01", "ok_v")}
 
-		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, true)
-		require.NoError(t, err)
-		require.Contains(t, bh.executedSQLs, okSQL)
+		testCases := []struct {
+			name       string
+			missingErr error
+		}{
+			{
+				name:       "no such table",
+				missingErr: moerr.NewNoSuchTable(ctx, "db01", "missing_t"),
+			},
+			{
+				name:       "parse missing table",
+				missingErr: moerr.NewParseErrorf(ctx, "table %q does not exist", "missing_t"),
+			},
+		}
 
-		bh.executedSQLs = nil
-		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
-		require.Error(t, err)
-		require.NotContains(t, bh.executedSQLs, okSQL)
+		for _, tc := range testCases {
+			bh.sql2err = map[string]error{missingSQL: tc.missingErr}
+			bh.executedSQLs = nil
+
+			err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, true)
+			require.NoError(t, err, tc.name)
+			require.Contains(t, bh.executedSQLs, okSQL, tc.name)
+
+			bh.executedSQLs = nil
+			err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+			require.Error(t, err, tc.name)
+			require.NotContains(t, bh.executedSQLs, okSQL, tc.name)
+		}
 	})
+}
+
+func Test_canSkipRestoreViewError(t *testing.T) {
+	ctx := context.Background()
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "no such table",
+			err:  moerr.NewNoSuchTable(ctx, "db01", "missing_t"),
+			want: true,
+		},
+		{
+			name: "bad database",
+			err:  moerr.NewBadDB(ctx, "missing_db"),
+			want: true,
+		},
+		{
+			name: "parse missing table",
+			err:  moerr.NewParseErrorf(ctx, "table %q does not exist", "missing_t"),
+			want: true,
+		},
+		{
+			name: "parse missing column",
+			err:  moerr.NewParseErrorf(ctx, "column %q does not exist", "missing_c"),
+			want: false,
+		},
+		{
+			name: "other error",
+			err:  moerr.NewInternalError(ctx, "boom"),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, canSkipRestoreViewError(tc.err))
+		})
+	}
 }
 
 func Test_restoreViewsWithPitr(t *testing.T) {

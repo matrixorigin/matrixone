@@ -40,9 +40,18 @@ func Test_prepareCloneViewSnapshot(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 2002},
 	}
 	require.Same(t, valid, prepareCloneViewSnapshot(valid, 42))
+
+	fromNil := prepareCloneViewSnapshot(nil, 24)
+	require.NotNil(t, fromNil)
+	require.NotNil(t, fromNil.TS)
+	require.Equal(t, int64(24), fromNil.TS.PhysicalTime)
+	require.Nil(t, fromNil.Tenant)
+
+	require.Nil(t, prepareCloneViewSnapshot(nil, 0))
 }
 
 func Test_rewriteCloneViewInfos(t *testing.T) {
+	fallbackKey := "pub_db#"
 	viewMap := map[string]*tableInfo{
 		genKey("pub_db", "v1"): {
 			dbName:    "pub_db",
@@ -50,15 +59,23 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 			typ:       view,
 			createSql: "create view `pub_db`.`v1` as select * from `pub_db`.`t1`",
 		},
+		fallbackKey: {
+			dbName:    "pub_db",
+			tblName:   "legacy_v",
+			typ:       view,
+			createSql: "create view `pub_db`.`legacy_v` as select 1",
+		},
 	}
 	sortedViews := []string{
 		genKey("other_db", "dep_v"),
+		fallbackKey,
 		genKey("pub_db", "v1"),
 	}
 
 	rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db")
 	require.Equal(t, []string{
 		genKey("other_db", "dep_v"),
+		"clone_db#",
 		genKey("clone_db", "v1"),
 	}, rewrittenViews)
 
@@ -67,6 +84,13 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 	require.Equal(t, "clone_db", info.dbName)
 	require.Equal(t, "create view `clone_db`.`v1` as select * from `clone_db`.`t1`", info.createSql)
 
+	fallbackInfo, ok := rewrittenViewMap["clone_db#"]
+	require.True(t, ok)
+	require.Equal(t, "clone_db", fallbackInfo.dbName)
+	require.Equal(t, "create view `clone_db`.`legacy_v` as select 1", fallbackInfo.createSql)
+
 	require.Equal(t, "pub_db", viewMap[genKey("pub_db", "v1")].dbName)
 	require.Equal(t, "create view `pub_db`.`v1` as select * from `pub_db`.`t1`", viewMap[genKey("pub_db", "v1")].createSql)
+	require.Equal(t, "pub_db", viewMap[fallbackKey].dbName)
+	require.Equal(t, "create view `pub_db`.`legacy_v` as select 1", viewMap[fallbackKey].createSql)
 }
