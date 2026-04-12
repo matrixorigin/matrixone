@@ -607,6 +607,67 @@ func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 		return nil
 	}
 
+	// Tier 2: if all |values| fit in uint64 (but not int64), inline multiply
+	// using branchless abs on B0_63. Avoids d128MulInline call (cost 941).
+	if d128AllAbsFit64(v1, len1) && d128AllAbsFit64(v2, len2) {
+		if len1 == len2 {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				signx := v1[i].B64_127 >> 63
+				signy := v2[i].B64_127 >> 63
+				neg := signx ^ signy
+				ax := (v1[i].B0_63 ^ (-signx)) + signx
+				ay := (v2[i].B0_63 ^ (-signy)) + signy
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
+				}
+				d128Negate(&rs[i], neg)
+			}
+		} else if len1 == 1 {
+			signx := v1[0].B64_127 >> 63
+			ax := (v1[0].B0_63 ^ (-signx)) + signx
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				signy := v2[i].B64_127 >> 63
+				neg := signx ^ signy
+				ay := (v2[i].B0_63 ^ (-signy)) + signy
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
+				}
+				d128Negate(&rs[i], neg)
+			}
+		} else {
+			signy := v2[0].B64_127 >> 63
+			ay := (v2[0].B0_63 ^ (-signy)) + signy
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				signx := v1[i].B64_127 >> 63
+				neg := signx ^ signy
+				ax := (v1[i].B0_63 ^ (-signx)) + signx
+				hi, lo := bits.Mul64(ax, ay)
+				rs[i].B0_63 = lo
+				rs[i].B64_127 = hi
+				if needScale {
+					d128DivPow10(&rs[i], negScaleAdj)
+				}
+				d128Negate(&rs[i], neg)
+			}
+		}
+		return nil
+	}
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -1260,12 +1321,18 @@ func d128AllFitInt64(vs []types.Decimal128, n int) bool {
 }
 
 // d128AllAbsFit64 checks whether |v[i]| fits in 64 bits for all elements.
-// True when B64_127 is 0 (positive small) or ^0 (negative small) for every element.
+// True when B64_127 is 0 (positive small) or ^0 (negative small) for every element,
+// excluding the degenerate {B0_63=0, B64_127=^0} = -2^64 whose abs is 2^64 > uint64 max.
 func d128AllAbsFit64(vs []types.Decimal128, n int) bool {
 	// Branchless: h+1 is 0 or 1 iff h is ^0 or 0. OR-accumulate and check ≤ 1.
+	// Edge case: h=^0 && lo=0 means value is exactly -2^64; |val| doesn't fit.
 	var acc uint64
 	for i := 0; i < n; i++ {
-		acc |= vs[i].B64_127 + 1
+		h := vs[i].B64_127
+		acc |= h + 1
+		lo := vs[i].B0_63
+		zeroLo := ((lo | -lo) >> 63) ^ 1 // 1 when lo==0
+		acc |= ((h >> 63) & zeroLo) << 1 // poison bit 1 for -2^64
 	}
 	return acc <= 1
 }
