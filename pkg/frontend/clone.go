@@ -520,11 +520,11 @@ func handleCloneDatabase(
 			return
 		}
 
-		newViewMap, sortedViews := rewriteCloneViewInfos(
+		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
 			viewMap, sortedViews, srcDBName, stmt.DstDatabase.String(),
 		)
 
-		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews, true); err != nil {
+		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
