@@ -1958,6 +1958,29 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v2, len2) {
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sb := v2[i].B192_255 >> 63
+				ab := (v2[i].B0_63 ^ (-sb)) + sb
+				bh, bl := bits.Mul64(ab, pow10a)
+				b := types.Decimal256{B0_63: bl, B64_127: bh}
+				d256Negate(&b, sb)
+				signB := b.B192_255 >> 63
+				var c uint64
+				rs[i].B0_63, c = bits.Add64(a.B0_63, b.B0_63, 0)
+				rs[i].B64_127, c = bits.Add64(a.B64_127, b.B64_127, c)
+				rs[i].B128_191, c = bits.Add64(a.B128_191, b.B128_191, c)
+				rs[i].B192_255, _ = bits.Add64(a.B192_255, b.B192_255, c)
+				signR := rs[i].B192_255 >> 63
+				if signA == signB && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -1992,6 +2015,29 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v1, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sa := v1[i].B192_255 >> 63
+				aa := (v1[i].B0_63 ^ (-sa)) + sa
+				ah, al := bits.Mul64(aa, pow10a)
+				a := types.Decimal256{B0_63: al, B64_127: ah}
+				d256Negate(&a, sa)
+				signA := a.B192_255 >> 63
+				var c uint64
+				rs[i].B0_63, c = bits.Add64(a.B0_63, b.B0_63, 0)
+				rs[i].B64_127, c = bits.Add64(a.B64_127, b.B64_127, c)
+				rs[i].B128_191, c = bits.Add64(a.B128_191, b.B128_191, c)
+				rs[i].B192_255, _ = bits.Add64(a.B192_255, b.B192_255, c)
+				signR := rs[i].B192_255 >> 63
+				if signA == signB && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2014,10 +2060,38 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		return -1, nil
 	}
 
-	// len1 == len2: fuse scale + add per element
+	// len1 == len2: fuse scale + add per element.
+	// Prescan: when all scaled values fit in int64 and scaleDiff ≤ 19,
+	// inline the scale-up as a single bits.Mul64 instead of calling
+	// d256ScaleUpPow10 (cost 287) which does 3 wasted Mul64 on zero limbs.
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v1, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sa := v1[i].B192_255 >> 63
+				aa := (v1[i].B0_63 ^ (-sa)) + sa
+				ah, al := bits.Mul64(aa, pow10a)
+				a := types.Decimal256{B0_63: al, B64_127: ah}
+				d256Negate(&a, sa)
+				y := v2[i]
+				signA := a.B192_255 >> 63
+				signY := y.B192_255 >> 63
+				var c uint64
+				rs[i].B0_63, c = bits.Add64(a.B0_63, y.B0_63, 0)
+				rs[i].B64_127, c = bits.Add64(a.B64_127, y.B64_127, c)
+				rs[i].B128_191, c = bits.Add64(a.B128_191, y.B128_191, c)
+				rs[i].B192_255, _ = bits.Add64(a.B192_255, y.B192_255, c)
+				signR := rs[i].B192_255 >> 63
+				if signA == signY && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2042,6 +2116,31 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	} else {
 		scaleDiff := scale1 - scale2
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v2, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sb := v2[i].B192_255 >> 63
+				ab := (v2[i].B0_63 ^ (-sb)) + sb
+				bh, bl := bits.Mul64(ab, pow10a)
+				b := types.Decimal256{B0_63: bl, B64_127: bh}
+				d256Negate(&b, sb)
+				x := v1[i]
+				signX := x.B192_255 >> 63
+				signB := b.B192_255 >> 63
+				var c uint64
+				rs[i].B0_63, c = bits.Add64(x.B0_63, b.B0_63, 0)
+				rs[i].B64_127, c = bits.Add64(x.B64_127, b.B64_127, c)
+				rs[i].B128_191, c = bits.Add64(x.B128_191, b.B128_191, c)
+				rs[i].B192_255, _ = bits.Add64(x.B192_255, b.B192_255, c)
+				signR := rs[i].B192_255 >> 63
+				if signX == signB && signX != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2178,6 +2277,29 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v2, len2) {
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sb := v2[i].B192_255 >> 63
+				ab := (v2[i].B0_63 ^ (-sb)) + sb
+				bh, bl := bits.Mul64(ab, pow10a)
+				b := types.Decimal256{B0_63: bl, B64_127: bh}
+				d256Negate(&b, sb)
+				signB := b.B192_255 >> 63
+				var bw uint64
+				rs[i].B0_63, bw = bits.Sub64(a.B0_63, b.B0_63, 0)
+				rs[i].B64_127, bw = bits.Sub64(a.B64_127, b.B64_127, bw)
+				rs[i].B128_191, bw = bits.Sub64(a.B128_191, b.B128_191, bw)
+				rs[i].B192_255, _ = bits.Sub64(a.B192_255, b.B192_255, bw)
+				signR := rs[i].B192_255 >> 63
+				if signA != signB && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len2; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2212,6 +2334,29 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v1, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sa := v1[i].B192_255 >> 63
+				aa := (v1[i].B0_63 ^ (-sa)) + sa
+				ah, al := bits.Mul64(aa, pow10a)
+				a := types.Decimal256{B0_63: al, B64_127: ah}
+				d256Negate(&a, sa)
+				signA := a.B192_255 >> 63
+				var bw uint64
+				rs[i].B0_63, bw = bits.Sub64(a.B0_63, b.B0_63, 0)
+				rs[i].B64_127, bw = bits.Sub64(a.B64_127, b.B64_127, bw)
+				rs[i].B128_191, bw = bits.Sub64(a.B128_191, b.B128_191, bw)
+				rs[i].B192_255, _ = bits.Sub64(a.B192_255, b.B192_255, bw)
+				signR := rs[i].B192_255 >> 63
+				if signA != signB && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2234,10 +2379,38 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		return -1, nil
 	}
 
-	// len1 == len2: fuse scale + sub per element
+	// len1 == len2: fuse scale + sub per element.
+	// Prescan: when all scaled values fit in int64 and scaleDiff ≤ 19,
+	// inline the scale-up as a single bits.Mul64 instead of calling
+	// d256ScaleUpPow10 (cost 287) which does 3 wasted Mul64 on zero limbs.
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v1, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sa := v1[i].B192_255 >> 63
+				aa := (v1[i].B0_63 ^ (-sa)) + sa
+				ah, al := bits.Mul64(aa, pow10a)
+				a := types.Decimal256{B0_63: al, B64_127: ah}
+				d256Negate(&a, sa)
+				y := v2[i]
+				signA := a.B192_255 >> 63
+				signY := y.B192_255 >> 63
+				var bw uint64
+				rs[i].B0_63, bw = bits.Sub64(a.B0_63, y.B0_63, 0)
+				rs[i].B64_127, bw = bits.Sub64(a.B64_127, y.B64_127, bw)
+				rs[i].B128_191, bw = bits.Sub64(a.B128_191, y.B128_191, bw)
+				rs[i].B192_255, _ = bits.Sub64(a.B192_255, y.B192_255, bw)
+				signR := rs[i].B192_255 >> 63
+				if signA != signY && signA != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
@@ -2262,6 +2435,31 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	} else {
 		scaleDiff := scale1 - scale2
 		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
+		if !twoStep && d256AllFitInt64(v2, len1) {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				sb := v2[i].B192_255 >> 63
+				ab := (v2[i].B0_63 ^ (-sb)) + sb
+				bh, bl := bits.Mul64(ab, pow10a)
+				b := types.Decimal256{B0_63: bl, B64_127: bh}
+				d256Negate(&b, sb)
+				x := v1[i]
+				signX := x.B192_255 >> 63
+				signB := b.B192_255 >> 63
+				var bw uint64
+				rs[i].B0_63, bw = bits.Sub64(x.B0_63, b.B0_63, 0)
+				rs[i].B64_127, bw = bits.Sub64(x.B64_127, b.B64_127, bw)
+				rs[i].B128_191, bw = bits.Sub64(x.B128_191, b.B128_191, bw)
+				rs[i].B192_255, _ = bits.Sub64(x.B192_255, b.B192_255, bw)
+				signR := rs[i].B192_255 >> 63
+				if signX != signB && signX != signR {
+					return i, nil
+				}
+			}
+			return -1, nil
+		}
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
