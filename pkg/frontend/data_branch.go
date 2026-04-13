@@ -648,6 +648,9 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
+		if err = validateProjectedColumns(diffStmt, tblStuff); err != nil {
+			return
+		}
 	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
