@@ -508,37 +508,80 @@ func handleCloneDatabase(
 
 	// clone view table
 	if len(viewMap) != 0 {
+		viewSnapshot := prepareCloneViewSnapshot(snapshot, snapshotTS)
 		fromAccount := opAccountId
-		if snapshot != nil && snapshot.Tenant != nil {
-			fromAccount = snapshot.Tenant.TenantID
+		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
+			fromAccount = viewSnapshot.Tenant.TenantID
 		}
 
 		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", snapshot, viewMap, fromAccount, toAccountId,
+			reqCtx, ses, bh, "", viewSnapshot, viewMap, fromAccount, toAccountId,
 		); err != nil {
 			return
 		}
 
-		for i := range sortedViews {
-			sortedViews[i] = strings.ReplaceAll(
-				sortedViews[i], stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-		}
+		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
+			viewMap, sortedViews, srcDBName, stmt.DstDatabase.String(),
+		)
 
-		newViewMap := make(map[string]*tableInfo)
-		for key, info := range viewMap {
-			key = strings.ReplaceAll(key, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.createSql = strings.ReplaceAll(info.createSql, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.dbName = stmt.DstDatabase.String()
-
-			newViewMap[key] = info
-		}
-
-		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews); err != nil {
+		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
 
 	return
+}
+
+func prepareCloneViewSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {
+	if plan.IsSnapshotValid(snapshot) || snapshotTS == 0 {
+		return snapshot
+	}
+	if snapshot == nil {
+		return &plan.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: snapshotTS},
+		}
+	}
+
+	cloned := *snapshot
+	cloned.TS = &timestamp.Timestamp{PhysicalTime: snapshotTS}
+	return &cloned
+}
+
+func rewriteCloneViewInfos(
+	viewMap map[string]*tableInfo,
+	sortedViews []string,
+	srcDBName string,
+	dstDBName string,
+) (map[string]*tableInfo, []string) {
+	rewrittenViews := make([]string, 0, len(sortedViews))
+	for _, key := range sortedViews {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			rewrittenViews = append(rewrittenViews, strings.ReplaceAll(key, srcDBName, dstDBName))
+			continue
+		}
+		if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+		rewrittenViews = append(rewrittenViews, key)
+	}
+
+	rewrittenViewMap := make(map[string]*tableInfo, len(viewMap))
+	for key, info := range viewMap {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			key = strings.ReplaceAll(key, srcDBName, dstDBName)
+		} else if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+
+		clonedInfo := *info
+		clonedInfo.dbName = dstDBName
+		clonedInfo.createSql = strings.ReplaceAll(info.createSql, srcDBName, dstDBName)
+		rewrittenViewMap[key] = &clonedInfo
+	}
+
+	return rewrittenViewMap, rewrittenViews
 }
 
 func tryToIncreaseTxnPhysicalTS(

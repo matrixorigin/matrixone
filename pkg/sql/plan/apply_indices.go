@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -71,34 +70,19 @@ func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
 	}
 }
 
-// calculateAutoModeOverFetchFactor calculates the over-fetch factor for auto mode.
-// It uses a simplified selectivity-based formula: max(baseFactor, 1/Selectivity)
-//
-// Parameters:
-//   - originalLimit: The user-specified LIMIT value
-//   - stats: Statistics of the scan node
-//
-// Returns:
-//   - over-fetch factor (multiplier)
-func calculateAutoModeOverFetchFactor(originalLimit uint64, stats *plan.Stats) float64 {
-	// 1. Base factor: use existing conservative strategy (1.2x - 5.0x)
-	baseFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-	// 2. If no statistics available or selectivity is invalid, return base factor
-	// We check for selectivity > 1 and <= 0 as invalid/unsupported cases
-	if stats == nil || stats.Selectivity <= 0 || stats.Selectivity >= 1 {
-		return baseFactor
+// calculateFilteredPostModeOverFetchFactor returns a fixed, more conservative
+// multiplier for filtered post mode. It intentionally avoids statistics-based
+// heuristics so the behavior is predictable across plans.
+func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
+	if originalLimit < 50 {
+		return 5.0
+	} else if originalLimit < 100 {
+		return 2.0
+	} else if originalLimit < 200 {
+		return 1.5
+	} else {
+		return 1.3
 	}
-
-	// 3. Compensation factor: 1 / Selectivity
-	// E.g., if only 10% rows remain, we need 10x more candidates to satisfy LIMIT
-	selectivityFactor := 1.0 / stats.Selectivity
-
-	// 4. Combine factors: take maximum to maintain at least the base redundancy
-	adaptiveFactor := math.Max(baseFactor, selectivityFactor)
-
-	// 5. Cap at MaxOverFetchFactor to avoid excessive memory usage and candidate processing
-	return math.Min(adaptiveFactor, MaxOverFetchFactor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {

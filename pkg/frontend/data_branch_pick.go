@@ -841,9 +841,12 @@ func materializeSubqueryUnified(
 	errChan := make(chan error, 1)
 	subqueryCtx := compile.AttachInternalExecutorSession(ctx, ses)
 	subqueryCtx = compile.AttachInternalExecutorPrivilegeCheck(subqueryCtx)
+	subqueryCtx, cancelSubquery := context.WithCancel(subqueryCtx)
 
 	// Launch the streaming SQL in a goroutine.
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer close(streamChan)
 		defer close(errChan)
 		if _, err2 := runSql(subqueryCtx, ses, bh, orderSQL, streamChan, errChan); err2 != nil {
@@ -852,6 +855,24 @@ func materializeSubqueryUnified(
 			default:
 			}
 		}
+	}()
+
+	// Ensure the goroutine finishes before we return so that
+	// callers can safely close bh without a data race on the
+	// underlying session.
+	defer func() {
+		cancelSubquery()
+		// Drain errChan to unblock the executor's double-send on
+		// context cancellation (sql_executor.go sends to err_chan
+		// in the callback AND after c.Run, with buffer=1).
+		go func() {
+			for range errChan {
+			}
+		}()
+		for res := range streamChan {
+			res.Close()
+		}
+		<-done
 	}()
 
 	mp := ses.proc.Mp()
