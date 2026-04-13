@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,4 +46,30 @@ func TestGeometrySubtypeCompatible(t *testing.T) {
 	require.True(t, geometrySubtypeCompatible("POINT", "POINT"))
 	require.False(t, geometrySubtypeCompatible("POINT", ""))
 	require.False(t, geometrySubtypeCompatible("POINT", "LINESTRING"))
+}
+
+func TestFuncCastForGeometryTypeNull(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_geometry), Enumvalues: "GEOMETRY"}
+	for _, expr := range []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_any)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Isnull: true},
+			},
+		},
+		{
+			Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Isnull: true},
+			},
+		},
+	} {
+		casted, err := funcCastForGeometryType(context.Background(), expr, target)
+		require.NoError(t, err)
+		require.Equal(t, target.Id, casted.Typ.Id)
+		require.Equal(t, target.Enumvalues, casted.Typ.Enumvalues)
+		lit, ok := casted.Expr.(*plan.Expr_Lit)
+		require.True(t, ok)
+		require.True(t, lit.Lit.Isnull)
+	}
 }

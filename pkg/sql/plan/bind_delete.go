@@ -250,7 +250,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			})
 
 			joinType := plan.Node_INNER
-			if idxDef.Unique {
+			if idxDef.Unique || isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_LEFT
 			}
 

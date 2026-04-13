@@ -644,7 +644,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 
 			joinType := plan.Node_LEFT
-			if !idxDef.Unique {
+			if !idxDef.Unique && !isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_INNER
 			}
 			lastNodeID = builder.appendNode(&plan.Node{

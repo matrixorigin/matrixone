@@ -181,6 +181,11 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	if !isGeometryPlanType(&targetType) {
 		return expr, nil
 	}
+	targetType.NotNullable = expr.Typ.NotNullable
+	if types.T(expr.Typ.Id) == types.T_any || isGeometryNullLiteralExpr(expr) {
+		expr.Typ = targetType
+		return expr, nil
+	}
 	targetMetadata := targetType.Enumvalues
 	if isGeometryPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetMetadata {
 		expr.Typ = targetType
@@ -202,4 +207,12 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	}
 	castedExpr.Typ = targetType
 	return castedExpr, nil
+}
+
+func isGeometryNullLiteralExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	lit, ok := expr.Expr.(*plan.Expr_Lit)
+	return ok && lit.Lit != nil && lit.Lit.Isnull
 }
