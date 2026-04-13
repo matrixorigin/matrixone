@@ -316,6 +316,7 @@ type DataBranchDiff struct {
 
 	TargetTable TableName
 	BaseTable   TableName
+	Columns     IdentifierList // optional column projection; nil means all columns
 	OutputOpt   *DiffOutputOpt
 }
 
