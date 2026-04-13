@@ -92,6 +92,7 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.True(t, diffStmt.OutputOpt.Summary)
 	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
 
 	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
 	require.NoError(t, err)
@@ -101,6 +102,44 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
 }
 
 var (

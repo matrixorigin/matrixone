@@ -226,6 +226,24 @@ func TestValidate(t *testing.T) {
 	stmt.OutputOpt.DirPath = filePath
 	require.Error(t, validate(context.Background(), ses, stmt))
 
+	limit := int64(1)
+	stmt = &tree.DataBranchDiff{
+		Columns: tree.IdentifierList{tree.Identifier("id")},
+	}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Limit: &limit}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Count: true}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{Summary: true}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	stmt.OutputOpt = &tree.DiffOutputOpt{DirPath: tmpDir}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
 	require.NoError(t, validate(context.Background(), ses, nil))
 }
 
