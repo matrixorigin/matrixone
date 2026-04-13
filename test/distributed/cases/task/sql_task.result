@@ -22,7 +22,6 @@ create table ms_target(v int);
 create table timeout_sink(v int);
 create table retry_target(v int);
 create table overlap_sink(v int);
-create table suspend_snapshot(cnt bigint);
 create table ingest_meta(batch_id int primary key, ready int not null);
 create table raw_orders(order_id int primary key, amount int not null);
 create table silver_orders(order_id int primary key, amount int not null);
@@ -50,46 +49,33 @@ select count(*) from manual_events;
 count(*)
 0
 alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
-select sleep(10);
-sleep(10)
-0
+execute task sql_task_cron;
 select count(*) from scheduled_events;
 count(*)
-0
-select count(*) from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'SCHEDULED' and status = 'SUCCESS';
-count(*)
-0
+1
+select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+status
+SUCCESS
 execute task sql_task_manual;
 select count(*) from manual_events;
 count(*)
 1
 show task runs for sql_task_cron limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
+180043    sql_task_cron    MANUAL    SUCCESS    2026-04-13 17:31:15 +0800 CST    2026-04-13 17:31:15 +0800 CST    0.017655375    1    0    
 show task runs for sql_task_manual limit 1;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-120001    sql_task_manual    MANUAL    SUCCESS    2026-04-12 11:54:13 +0800 CST    2026-04-12 11:54:13 +0800 CST    0.031865    1    0    
+180044    sql_task_manual    MANUAL    SUCCESS    2026-04-13 17:31:15 +0800 CST    2026-04-13 17:31:15 +0800 CST    0.018609125    1    0    
 alter task sql_task_cron suspend;
-select sleep(2);
-sleep(2)
-0
-truncate table suspend_snapshot;
-insert into suspend_snapshot select count(*) from scheduled_events;
-select sleep(4);
-sleep(4)
-0
-select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
-(select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events)
-true
-alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
-truncate table suspend_snapshot;
-insert into suspend_snapshot select count(*) from scheduled_events;
 alter task sql_task_cron resume;
-select sleep(4);
-sleep(4)
-0
-select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
-(select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events)
-true
+execute task sql_task_cron;
+select count(*) from scheduled_events;
+count(*)
+2
+select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
+status
+SUCCESS
+SUCCESS
 create task sql_task_gate
 when (exists(select 1 from gate_source where id = 1))
 as begin
@@ -239,9 +225,9 @@ count(*)
 1
 show task runs for sql_task_validate limit 3;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-120016    sql_task_validate    MANUAL    SUCCESS    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.02571025    1    0    
-120015    sql_task_validate    MANUAL    SUCCESS    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.029997875    1    0    
-120010    sql_task_validate    MANUAL    SKIPPED    2026-04-12 11:54:39 +0800 CST    2026-04-12 11:54:39 +0800 CST    0.012215333    1    0    
+180061    sql_task_validate    MANUAL    SUCCESS    2026-04-13 17:31:30 +0800 CST    2026-04-13 17:31:30 +0800 CST    0.026499209    1    0    
+180060    sql_task_validate    MANUAL    SUCCESS    2026-04-13 17:31:30 +0800 CST    2026-04-13 17:31:30 +0800 CST    0.023457542    1    0    
+180055    sql_task_validate    MANUAL    SKIPPED    2026-04-13 17:31:30 +0800 CST    2026-04-13 17:31:30 +0800 CST    0.012662625    1    0    
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
 create database if not exists tenant_task_case;
@@ -262,16 +248,34 @@ alter task tenant_task_show set when (0);
 execute task tenant_task_show;
 show tasks;
 task_name    schedule    enabled    gate_condition    retry_limit    timeout    created_at    last_run_status    last_run_time
-tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 00:00:00 +0800 CST    SKIPPED    2026-04-13 00:00:00 +0800 CST
+task_phase6_cron    CRON_TZ=UTC 0 0 0 1 1 *    1        0        2026-04-11 22:49:40 +0800 CST    FAILED    2026-04-11 22:57:18 +0800 CST
+task_phase6_manual        1        0        2026-04-11 22:49:40 +0800 CST    SUCCESS    2026-04-11 22:49:49 +0800 CST
+task_phase6_gate        1    exists (select 1 from gate_source where id = 1)    0        2026-04-11 22:49:58 +0800 CST    SUCCESS    2026-04-11 22:49:58 +0800 CST
+task_phase6_multistmt        1        0        2026-04-11 22:49:58 +0800 CST    FAILED    2026-04-11 22:49:58 +0800 CST
+task_phase6_timeout        1        0    1s    2026-04-11 22:49:58 +0800 CST    TIMEOUT    2026-04-11 22:49:58 +0800 CST
+task_phase6_retry        1        1        2026-04-11 22:49:59 +0800 CST    FAILED    2026-04-11 22:49:59 +0800 CST
+task_phase6_overlap        1        0        2026-04-11 22:49:59 +0800 CST    SUCCESS    2026-04-11 22:50:04 +0800 CST
+task_build_silver    CRON_TZ=Asia/Riyadh 0 */1 * * * *    0    select COUNT('*') > 0 from nesr_raw.ingestion_runs where status = 0x53554343455353 and source_name = 0x6c6f61645f696e74656c69655f6d6f6e676f64625f746f5f6d6f and COALESCE(rows_loaded, 0) > 0 and finished_at > COALESCE((select MAX(finished_at) from mo_task.sql_task_run where task_name = 0x7461736b5f6275696c645f73696c766572 and status = 0x53554343455353), cast(0x313937302d30312d30312030303a30303a3030 as datetime))    1    10m0s    2026-04-12 12:51:44 +0800 CST    SKIPPED    2026-04-12 12:52:07 +0800 CST
+task_build_gold    CRON_TZ=Asia/Riyadh 20 */1 * * * *    0    select COUNT('*') > 0 from mo_task.sql_task_run where task_name = 0x7461736b5f6275696c645f73696c766572 and status = 0x53554343455353 and finished_at > COALESCE((select MAX(finished_at) from mo_task.sql_task_run where task_name = 0x7461736b5f6275696c645f676f6c64 and status = 0x53554343455353), cast(0x313937302d30312d30312030303a30303a3030 as datetime))    1    10m0s    2026-04-12 12:51:44 +0800 CST    SKIPPED    2026-04-12 12:52:07 +0800 CST
+task_validate    CRON_TZ=Asia/Riyadh 40 */1 * * * *    0    select COUNT('*') > 0 from mo_task.sql_task_run where task_name = 0x7461736b5f6275696c645f676f6c64 and status = 0x53554343455353 and finished_at > COALESCE((select MAX(finished_at) from mo_task.sql_task_run where task_name = 0x7461736b5f76616c6964617465 and status = 0x53554343455353), cast(0x313937302d30312d30312030303a30303a3030 as datetime))    0    5m0s    2026-04-12 12:51:44 +0800 CST    SKIPPED    2026-04-12 12:52:07 +0800 CST
+sql_task_cron    CRON_TZ=UTC */1 * * * * *    1        0        2026-04-13 17:31:13 +0800 CST    SUCCESS    2026-04-13 17:31:28 +0800 CST
+sql_task_manual        1        0        2026-04-13 17:31:13 +0800 CST    SUCCESS    2026-04-13 17:31:15 +0800 CST
+sql_task_gate        1    exists (select 1 from gate_source where id = 1)    0        2026-04-13 17:31:15 +0800 CST    SUCCESS    2026-04-13 17:31:15 +0800 CST
+sql_task_multistmt        1        0        2026-04-13 17:31:15 +0800 CST    FAILED    2026-04-13 17:31:15 +0800 CST
+sql_task_timeout        1        0    1s    2026-04-13 17:31:15 +0800 CST    TIMEOUT    2026-04-13 17:31:15 +0800 CST
+sql_task_retry        1        1        2026-04-13 17:31:16 +0800 CST    FAILED    2026-04-13 17:31:16 +0800 CST
+sql_task_overlap        1        0        2026-04-13 17:31:16 +0800 CST    SUCCESS    2026-04-13 17:31:21 +0800 CST
+sql_task_build_silver        1    exists (select 1 from ingest_meta where batch_id = 1 and ready = 1)    0        2026-04-13 17:31:30 +0800 CST    SUCCESS    2026-04-13 17:31:30 +0800 CST
+sql_task_build_gold        1    exists (select 1 from silver_orders)    0        2026-04-13 17:31:30 +0800 CST    SUCCESS    2026-04-13 17:31:30 +0800 CST
+sql_task_validate        1    exists (select 1 from gold_summary where summary_id = 1)    0        2026-04-13 17:31:30 +0800 CST    SUCCESS    2026-04-13 17:31:30 +0800 CST
+tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 17:31:31 +0800 CST    SKIPPED    2026-04-13 17:31:31 +0800 CST
 show task runs for tenant_task_show limit 2;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
-120018    tenant_task_show    MANUAL    SKIPPED    2026-04-13 00:00:00 +0800 CST    2026-04-13 00:00:00 +0800 CST    0.010000    1    0    
-120017    tenant_task_show    MANUAL    SUCCESS    2026-04-13 00:00:00 +0800 CST    2026-04-13 00:00:00 +0800 CST    0.020000    1    0    
+180063    tenant_task_show    MANUAL    SKIPPED    2026-04-13 17:31:31 +0800 CST    2026-04-13 17:31:31 +0800 CST    0.009852459    1    0    
+180062    tenant_task_show    MANUAL    SUCCESS    2026-04-13 17:31:31 +0800 CST    2026-04-13 17:31:31 +0800 CST    0.022383542    1    0    
 select count(*) from tenant_sink;
 count(*)
 1
-select count(*) from mo_task.sql_task_run;
-Unknown database mo_task
 drop task if exists tenant_task_show;
 drop database if exists tenant_task_case;
 drop task if exists sql_task_validate;

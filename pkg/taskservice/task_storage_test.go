@@ -368,6 +368,8 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			mustAddTestSQLTaskRun(t, s, 2, run1, run2)
 
 			runs := mustGetTestSQLTaskRun(t, s, 2)
+			latest := mustGetTestSQLTaskRun(t, s, 1, WithLimitCond(1))
+			require.Equal(t, runs[0].RunID, latest[0].RunID)
 			mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, 1), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
 			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskTriggerType(EQ, SQLTaskTriggerManual))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 1))

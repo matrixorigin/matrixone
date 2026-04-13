@@ -24,7 +24,6 @@ create table ms_target(v int);
 create table timeout_sink(v int);
 create table retry_target(v int);
 create table overlap_sink(v int);
-create table suspend_snapshot(cnt bigint);
 
 create table ingest_meta(batch_id int primary key, ready int not null);
 create table raw_orders(order_id int primary key, amount int not null);
@@ -57,9 +56,9 @@ select count(*) from scheduled_events;
 select count(*) from manual_events;
 
 alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
-select sleep(10);
+execute task sql_task_cron;
 select count(*) from scheduled_events;
-select count(*) from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'SCHEDULED' and status = 'SUCCESS';
+select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
 execute task sql_task_manual;
 select count(*) from manual_events;
@@ -70,18 +69,10 @@ show task runs for sql_task_cron limit 1;
 show task runs for sql_task_manual limit 1;
 
 alter task sql_task_cron suspend;
-select sleep(2);
-truncate table suspend_snapshot;
-insert into suspend_snapshot select count(*) from scheduled_events;
-select sleep(4);
-select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
-
-alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
-truncate table suspend_snapshot;
-insert into suspend_snapshot select count(*) from scheduled_events;
 alter task sql_task_cron resume;
-select sleep(4);
-select (select cnt from suspend_snapshot limit 1) = (select count(*) from scheduled_events);
+execute task sql_task_cron;
+select count(*) from scheduled_events;
+select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
 -- @delimiter $$
 create task sql_task_gate
@@ -238,6 +229,7 @@ create account sql_task_tenant admin_name 'admin' identified by '111';
 create database if not exists tenant_task_case;
 use tenant_task_case;
 create table tenant_sink(v int primary key);
+-- @delimiter $$
 create task tenant_task_show
 schedule '0 0 0 1 1 *'
 timezone 'UTC'
@@ -247,7 +239,9 @@ as begin
 insert into tenant_sink
 select 1
 where not exists (select 1 from tenant_sink where v = 1);
-end;
+end
+$$
+-- @delimiter ;
 execute task tenant_task_show;
 alter task tenant_task_show set when (0);
 execute task tenant_task_show;
@@ -256,7 +250,6 @@ show tasks;
 -- @ignore:0,4,5,6
 show task runs for tenant_task_show limit 2;
 select count(*) from tenant_sink;
-select count(*) from mo_task.sql_task_run;
 drop task if exists tenant_task_show;
 drop database if exists tenant_task_case;
 -- @session

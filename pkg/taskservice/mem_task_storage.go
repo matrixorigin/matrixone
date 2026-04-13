@@ -339,7 +339,7 @@ func (s *memTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Condition
 	for _, run := range s.sqlTaskRuns {
 		sortedRuns = append(sortedRuns, run)
 	}
-	sort.Slice(sortedRuns, func(i, j int) bool { return sortedRuns[i].RunID < sortedRuns[j].RunID })
+	sort.Slice(sortedRuns, func(i, j int) bool { return sortedRuns[i].RunID > sortedRuns[j].RunID })
 
 	var result []SQLTaskRun
 	for _, run := range sortedRuns {

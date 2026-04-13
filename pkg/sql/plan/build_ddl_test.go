@@ -457,6 +457,16 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
+	got := restoreIntervalSyntaxForCTAS(
+		"select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
+	)
+	require.Contains(t, got, "interval 45 day")
+	require.Contains(t, got, "interval 5 day")
+	require.NotContains(t, got, "interval(45, day)")
+	require.NotContains(t, got, "interval(5, day)")
+}
+
 func TestParseDuration(t *testing.T) {
 
 	cases := []struct {

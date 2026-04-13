@@ -20,7 +20,11 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
@@ -262,9 +266,21 @@ func TestHandleShowSQLTasksAndRunsWithSavedQueryResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	showTasks, err := parsers.Parse(context.Background(), dialect.MYSQL, "show tasks", 1)
+	require.NoError(t, err)
+	ses.ast = showTasks[0]
+	ses.SetStmtId(uuid.New())
+	ses.SetSqlSourceType(constant.CloudUserSql)
+
 	ses.mrs = &MysqlResultSet{}
 	require.NoError(t, handleShowSQLTasks(context.Background(), ses, nil, &tree.ShowSQLTasks{}))
 	require.NotNil(t, ses.rs)
+
+	showTaskRuns, err := parsers.Parse(context.Background(), dialect.MYSQL, "show task runs for task_saved_result limit 1", 1)
+	require.NoError(t, err)
+	ses.ast = showTaskRuns[0]
+	ses.SetStmtId(uuid.New())
+	ses.SetSqlSourceType(constant.CloudUserSql)
 
 	ses.mrs = &MysqlResultSet{}
 	require.NoError(t, handleShowSQLTaskRuns(context.Background(), ses, nil, &tree.ShowSQLTaskRuns{
