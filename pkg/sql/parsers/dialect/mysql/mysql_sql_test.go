@@ -3421,6 +3421,82 @@ func TestSQLStringFmt(t *testing.T) {
 	}
 }
 
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "interval(1, hour)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "interval(1, hour)")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+}
+
 var (
 	multiSQL = []struct {
 		input  string

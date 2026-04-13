@@ -368,6 +368,8 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			mustAddTestSQLTaskRun(t, s, 2, run1, run2)
 
 			runs := mustGetTestSQLTaskRun(t, s, 2)
+			latest := mustGetTestSQLTaskRun(t, s, 1, WithLimitCond(1))
+			require.Equal(t, runs[0].RunID, latest[0].RunID)
 			mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, 1), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
 			mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskTriggerType(EQ, SQLTaskTriggerManual))
 			mustGetTestSQLTaskRun(t, s, 1, WithAccountID(EQ, 1))
@@ -376,6 +378,34 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 			runs[0].Status = SQLTaskStatusSuccess
 			mustUpdateTestSQLTaskRun(t, s, 1, []SQLTaskRun{runs[0]}, WithSQLTaskRunIDCond(EQ, runs[0].RunID))
 			assert.Equal(t, SQLTaskStatusSuccess, mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, runs[0].RunID))[0].Status)
+		})
+	}
+}
+
+func TestQueryLatestSQLTaskRun(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			run1 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning)
+			run2 := newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)
+			run3 := newTestSQLTaskRun(2, "task-2", SQLTaskStatusFailed)
+			run4 := newTestSQLTaskRun(2, "task-2", SQLTaskStatusSuccess)
+			run4.AccountID = 2
+			mustAddTestSQLTaskRun(t, s, 4, run1, run2, run3, run4)
+
+			latest := mustGetLatestTestSQLTaskRun(t, s, 1, []uint64{1, 2}, 2)
+			require.Equal(t, uint64(1), latest[0].TaskID)
+			require.Equal(t, SQLTaskStatusSuccess, latest[0].Status)
+			require.Equal(t, uint64(2), latest[1].TaskID)
+			require.Equal(t, SQLTaskStatusFailed, latest[1].Status)
+
+			latest = mustGetLatestTestSQLTaskRun(t, s, 2, []uint64{2}, 1)
+			require.Equal(t, SQLTaskStatusSuccess, latest[0].Status)
+			mustGetLatestTestSQLTaskRun(t, s, 1, nil, 0)
 		})
 	}
 }
@@ -580,6 +610,15 @@ func mustGetTestSQLTaskRun(t *testing.T, s TaskStorage, expectCount int, conds .
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	runs, err := s.QuerySQLTaskRun(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectCount, len(runs))
+	return runs
+}
+
+func mustGetLatestTestSQLTaskRun(t *testing.T, s TaskStorage, accountID uint32, taskIDs []uint64, expectCount int) []SQLTaskRun {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	runs, err := s.QueryLatestSQLTaskRun(ctx, accountID, taskIDs)
 	require.NoError(t, err)
 	require.Equal(t, expectCount, len(runs))
 	return runs

@@ -203,7 +203,7 @@ func (e *SQLTaskExecutor) executeStatements(ctx context.Context, sqlTask SQLTask
 	exec := e.ieFactory()
 	opts := DefinerOpts(sqlTask)
 	for _, stmt := range stmts {
-		sql := tree.String(stmt, dialect.MYSQL)
+		sql := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
 		if err := exec.Exec(runCtx, sql, opts); err != nil {
 			return err
 		}

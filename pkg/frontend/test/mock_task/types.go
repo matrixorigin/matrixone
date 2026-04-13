@@ -850,6 +850,21 @@ func (mr *MockTaskStorageMockRecorder) QuerySQLTaskRun(ctx any, condition ...any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QuerySQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).QuerySQLTaskRun), varargs...)
 }
 
+// QueryLatestSQLTaskRun mocks base method.
+func (m *MockTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]taskservice.SQLTaskRun, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "QueryLatestSQLTaskRun", ctx, accountID, taskIDs)
+	ret0, _ := ret[0].([]taskservice.SQLTaskRun)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// QueryLatestSQLTaskRun indicates an expected call of QueryLatestSQLTaskRun.
+func (mr *MockTaskStorageMockRecorder) QueryLatestSQLTaskRun(ctx, accountID, taskIDs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "QueryLatestSQLTaskRun", reflect.TypeOf((*MockTaskStorage)(nil).QueryLatestSQLTaskRun), ctx, accountID, taskIDs)
+}
+
 // UpdateAsyncTask mocks base method.
 func (m *MockTaskStorage) UpdateAsyncTask(arg0 context.Context, arg1 []task.AsyncTask, arg2 ...taskservice.Condition) (int, error) {
 	m.ctrl.T.Helper()

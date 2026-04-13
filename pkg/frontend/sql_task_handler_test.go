@@ -20,7 +20,11 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
@@ -174,7 +178,12 @@ func TestHandleShowSQLTasksAndRuns(t *testing.T) {
 		GateResult:      true,
 		RunnerCN:        "cn1",
 	}
-	_, err = store.AddSQLTaskRun(context.Background(), run)
+	laterRun := run
+	laterRun.StartedAt = now.Add(3 * time.Second)
+	laterRun.FinishedAt = now.Add(4 * time.Second)
+	laterRun.Status = taskservice.SQLTaskStatusSkipped
+	laterRun.TriggerType = taskservice.SQLTaskTriggerManual
+	_, err = store.AddSQLTaskRun(context.Background(), run, laterRun)
 	require.NoError(t, err)
 
 	ses.mrs = &MysqlResultSet{}
@@ -185,7 +194,9 @@ func TestHandleShowSQLTasksAndRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "task_show", row[0])
 	require.Equal(t, "CRON_TZ=UTC 0 0 0 1 1 *", row[1])
-	require.Equal(t, taskservice.SQLTaskStatusSuccess, row[7])
+	require.Equal(t, int32(1), row[2])
+	require.Equal(t, int32(1), row[4])
+	require.Equal(t, taskservice.SQLTaskStatusSkipped, row[7])
 
 	ses.mrs = &MysqlResultSet{}
 	require.NoError(t, handleShowSQLTaskRuns(context.Background(), ses, nil, &tree.ShowSQLTaskRuns{
@@ -198,9 +209,87 @@ func TestHandleShowSQLTasksAndRuns(t *testing.T) {
 	require.Equal(t, uint64(1), ses.mrs.GetRowCount())
 	row, err = ses.mrs.GetRow(context.Background(), 0)
 	require.NoError(t, err)
+	_, ok := row[0].(int64)
+	require.True(t, ok)
 	require.Equal(t, "task_show", row[1])
-	require.Equal(t, taskservice.SQLTaskTriggerScheduled, row[2])
-	require.Equal(t, taskservice.SQLTaskStatusSuccess, row[3])
+	require.Equal(t, taskservice.SQLTaskTriggerManual, row[2])
+	require.Equal(t, taskservice.SQLTaskStatusSkipped, row[3])
+	require.Equal(t, int32(1), row[7])
+}
+
+func TestHandleShowSQLTasksAndRunsWithSavedQueryResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "save_query_result", int8(1)))
+
+	now := time.Now()
+	sqlTask := taskservice.SQLTask{
+		TaskName:       "task_saved_result",
+		AccountID:      ses.GetAccountId(),
+		DatabaseName:   ses.GetDatabaseName(),
+		CronExpr:       "0 0 0 1 1 *",
+		Timezone:       "UTC",
+		SQLBody:        "select 1",
+		GateCondition:  "1",
+		RetryLimit:     1,
+		TimeoutSeconds: 30,
+		Enabled:        true,
+		NextFireTime:   now.Add(time.Hour).UnixMilli(),
+		Creator:        ses.GetUserName(),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	_, err := store.AddSQLTask(context.Background(), sqlTask)
+	require.NoError(t, err)
+	sqlTask, err = getSQLTaskByName(context.Background(), store, "task_saved_result", ses.GetAccountId())
+	require.NoError(t, err)
+
+	_, err = store.AddSQLTaskRun(context.Background(), taskservice.SQLTaskRun{
+		TaskID:          sqlTask.TaskID,
+		TaskName:        sqlTask.TaskName,
+		AccountID:       sqlTask.AccountID,
+		StartedAt:       now,
+		FinishedAt:      now.Add(time.Second),
+		DurationSeconds: 1,
+		Status:          taskservice.SQLTaskStatusSuccess,
+		TriggerType:     taskservice.SQLTaskTriggerScheduled,
+		AttemptNumber:   1,
+		GateResult:      true,
+		RunnerCN:        "cn1",
+	})
+	require.NoError(t, err)
+
+	showTasks, err := parsers.Parse(context.Background(), dialect.MYSQL, "show tasks", 1)
+	require.NoError(t, err)
+	ses.ast = showTasks[0]
+	ses.SetStmtId(uuid.New())
+	ses.SetSqlSourceType(constant.CloudUserSql)
+
+	ses.mrs = &MysqlResultSet{}
+	require.NoError(t, handleShowSQLTasks(context.Background(), ses, nil, &tree.ShowSQLTasks{}))
+	require.NotNil(t, ses.rs)
+
+	showTaskRuns, err := parsers.Parse(context.Background(), dialect.MYSQL, "show task runs for task_saved_result limit 1", 1)
+	require.NoError(t, err)
+	ses.ast = showTaskRuns[0]
+	ses.SetStmtId(uuid.New())
+	ses.SetSqlSourceType(constant.CloudUserSql)
+
+	ses.mrs = &MysqlResultSet{}
+	require.NoError(t, handleShowSQLTaskRuns(context.Background(), ses, nil, &tree.ShowSQLTaskRuns{
+		TaskName: tree.Identifier("task_saved_result"),
+		HasTask:  true,
+		Limit:    1,
+		HasLimit: true,
+	}))
+	require.NotNil(t, ses.rs)
 }
 
 func TestHandleSQLTaskEdges(t *testing.T) {

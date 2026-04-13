@@ -339,7 +339,7 @@ func (s *memTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Condition
 	for _, run := range s.sqlTaskRuns {
 		sortedRuns = append(sortedRuns, run)
 	}
-	sort.Slice(sortedRuns, func(i, j int) bool { return sortedRuns[i].RunID < sortedRuns[j].RunID })
+	sort.Slice(sortedRuns, func(i, j int) bool { return sortedRuns[i].RunID > sortedRuns[j].RunID })
 
 	var result []SQLTaskRun
 	for _, run := range sortedRuns {
@@ -350,6 +350,46 @@ func (s *memTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Condition
 			break
 		}
 	}
+	return result, nil
+}
+
+func (s *memTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error) {
+	s.RLock()
+	defer s.RUnlock()
+
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+
+	taskIDSet := make(map[uint64]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskIDSet[taskID] = struct{}{}
+	}
+
+	latestByTask := make(map[uint64]SQLTaskRun, len(taskIDs))
+	for _, run := range s.sqlTaskRuns {
+		if run.AccountID != accountID {
+			continue
+		}
+		if _, ok := taskIDSet[run.TaskID]; !ok {
+			continue
+		}
+		prev, exists := latestByTask[run.TaskID]
+		if !exists || run.RunID > prev.RunID {
+			latestByTask[run.TaskID] = run
+		}
+	}
+
+	result := make([]SQLTaskRun, 0, len(latestByTask))
+	for _, run := range latestByTask {
+		result = append(result, run)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TaskID == result[j].TaskID {
+			return result[i].RunID > result[j].RunID
+		}
+		return result[i].TaskID < result[j].TaskID
+	})
 	return result, nil
 }
 

@@ -361,7 +361,7 @@ func TestSQLTaskRunInSqlMock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, affected)
 
-	mock.ExpectQuery(selectSQLTaskRun + " AND status = 'RUNNING' order by run_id").
+	mock.ExpectQuery(selectSQLTaskRun + " AND status = 'RUNNING' order by run_id desc").
 		WillReturnRows(sqlmock.NewRows(sqlTaskRunRows).
 			AddRow(1, 1, "task_a", 1, now, now, nil, 0, SQLTaskStatusRunning, SQLTaskTriggerScheduled, 1, 0, 0, nil, 1, "cn1"))
 	runs, err := storage.QuerySQLTaskRun(context.Background(), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
@@ -1272,6 +1272,8 @@ func TestMysqlTaskStorageDisabledBranch(t *testing.T) {
 	_, err = storage.QuerySQLTask(context.Background())
 	require.NoError(t, err)
 	_, err = storage.QuerySQLTaskRun(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QueryLatestSQLTaskRun(context.Background(), 1, []uint64{1})
 	require.NoError(t, err)
 
 	mock.ExpectClose()

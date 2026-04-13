@@ -29,7 +29,7 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     if node == nil {
         return ""
     }
-    return tree.String(node, dialect.MYSQL)
+    return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
 func sqlTaskBodyString(stmt tree.Statement) string {
@@ -40,7 +40,7 @@ func sqlTaskBodyString(stmt tree.Statement) string {
     parts := make([]string, 0, len(compound.Stmts))
     for _, s := range compound.Stmts {
         if s != nil {
-            parts = append(parts, tree.String(s, dialect.MYSQL))
+            parts = append(parts, tree.StringWithOpts(s, dialect.MYSQL, tree.WithSingleQuoteString()))
         }
     }
     return strings.Join(parts, "; ")
@@ -11368,7 +11368,7 @@ function_call_generic:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        timeUinit := tree.NewNumVal(str, str, false, tree.P_char)
+        timeUinit := tree.NewTimeUnitExpr(str)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -11567,7 +11567,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg1 := tree.NewTimeUnitExpr(str)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -11833,7 +11833,7 @@ interval_expr:
     {
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg2 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg2 := tree.NewTimeUnitExpr(str)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
