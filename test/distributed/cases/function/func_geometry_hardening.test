@@ -11,6 +11,21 @@ select st_dimension(
     )
 );
 
+select st_intersects(
+    st_geomfromtext(
+        concat(repeat('GEOMETRYCOLLECTION(', 64), 'POINT(0 0)', repeat(')', 64))
+    ),
+    st_geomfromtext('POINT(0 0)')
+) as boundary_intersects;
+
+-- @regex("geometry collection nesting depth exceeds 64",true)
+select st_intersects(
+    st_geomfromtext(
+        concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
+    ),
+    st_geomfromtext('POINT(0 0)')
+);
+
 set session max_points_in_geometry = 3;
 -- @regex("max_points_in_geometry=3",true)
 select st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)');

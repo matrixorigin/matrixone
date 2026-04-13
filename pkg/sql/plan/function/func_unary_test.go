@@ -1090,6 +1090,27 @@ func TestStGeomFromTextRejectTooManyPoints(t *testing.T) {
 	require.Contains(t, info, "max_points_in_geometry=3")
 }
 
+func TestStGeomFromTextRejectExcessiveCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{buildNestedCollection(maxGeometryCollectionNestingDepth + 1)}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry collection nesting depth exceeds")
+}
+
 func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{

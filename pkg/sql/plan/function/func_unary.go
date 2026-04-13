@@ -1137,6 +1137,9 @@ func validateMultiPolygonGeometryTextContent(content string) error {
 }
 
 func validateGeometryCollectionTextContent(content string, depth int) error {
+	if depth >= maxGeometryCollectionNestingDepth {
+		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
+	}
 	if content == "" {
 		return nil
 	}
@@ -1480,6 +1483,45 @@ func splitTopLevelGeometryItemsStrict(content string, errMsg string) ([]string, 
 
 const maxGeometryCollectionNestingDepth = 64
 
+func validateGeometryCollectionNestingDepthFromText(wkt string) error {
+	return validateGeometryCollectionNestingDepthFromTextWithDepth(wkt, 0)
+}
+
+func validateGeometryCollectionNestingDepthFromTextWithDepth(wkt string, depth int) error {
+	s := strings.TrimSpace(wkt)
+	typeName, err := geometryTypeNameFromText(s)
+	if err != nil {
+		return err
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return nil
+	}
+	if depth >= maxGeometryCollectionNestingDepth {
+		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
+	}
+
+	openIdx := strings.IndexByte(s, '(')
+	closeIdx := strings.LastIndexByte(s, ')')
+	if openIdx < 0 || closeIdx <= openIdx {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	content := strings.TrimSpace(s[openIdx+1 : closeIdx])
+	if content == "" {
+		return nil
+	}
+
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err := validateGeometryCollectionNestingDepthFromTextWithDepth(item, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func geometryCountFromPayload(payload []byte) (int64, error) {
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
@@ -1493,6 +1535,11 @@ func geometryCountFromPayload(payload []byte) (int64, error) {
 	s, _, _, err := decodeGeometryPayload(payload)
 	if err != nil {
 		return 0, err
+	}
+	if typeName == "GEOMETRYCOLLECTION" {
+		if err := validateGeometryCollectionNestingDepthFromText(s); err != nil {
+			return 0, err
+		}
 	}
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
@@ -1532,6 +1579,11 @@ func geometryNFromPayload(payload []byte, n int64) (string, error) {
 	s, _, _, err := decodeGeometryPayload(payload)
 	if err != nil {
 		return "", err
+	}
+	if typeName == "GEOMETRYCOLLECTION" {
+		if err := validateGeometryCollectionNestingDepthFromText(s); err != nil {
+			return "", err
+		}
 	}
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')

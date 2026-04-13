@@ -6068,6 +6068,27 @@ func TestStIntersectsWithGeometryCollections(t *testing.T) {
 	}
 }
 
+func TestStIntersectsRejectExcessiveGeometryCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	point := encodeGeometryPayload("POINT(0 0)", 0, false)
+	boundary := encodeGeometryPayload(buildNestedCollection(maxGeometryCollectionNestingDepth), 0, false)
+	intersects, err := geometryIntersects(boundary, point)
+	require.NoError(t, err)
+	require.True(t, intersects)
+
+	tooDeep := encodeGeometryPayload(buildNestedCollection(maxGeometryCollectionNestingDepth+1), 0, false)
+	_, err = geometryIntersects(tooDeep, point)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
 func initStDisjointTestCase() []tcTemp {
 	return []tcTemp{
 		{
