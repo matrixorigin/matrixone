@@ -35,7 +35,7 @@ import (
 // memory from the local file. Returns the model with Index != nil.
 func loadedModel(t *testing.T, id string) *CagraModel[float32] {
 	t.Helper()
-	built := buildTestModel(t, id)
+	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
 	t.Cleanup(func() { os.Remove(tarPath) })
 
@@ -171,7 +171,7 @@ func TestCagraSearchLoad(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	built := buildTestModel(t, "search-load")
+	built := buildTestModel(t, "search-load", nil)
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 

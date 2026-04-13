@@ -61,10 +61,10 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
                                      const uint32_t* ids, void* errmsg);
 
 // Add chunk of data (same type as index quantization)
-void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);
+void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, const uint32_t* ids, void* errmsg);
 
 // Add chunk of data (from float, with on-the-fly quantization if needed)
-void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg);
+void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, const uint32_t* ids, void* errmsg);
 
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);

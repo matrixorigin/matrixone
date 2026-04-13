@@ -60,7 +60,7 @@ gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, 
                                         distribution_mode_t dist_mode, quantization_t qtype, 
                                         const int64_t* ids, void* errmsg);
 // Add chunk of data (same type as index quantization)
-void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg);
+void gpu_ivf_flat_add_chunk(gpu_ivf_flat_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
 // Extend an already-built index with new vectors (same type as index quantization)
 // new_ids may be NULL to auto-assign sequential IDs starting from current index size
@@ -72,7 +72,7 @@ void gpu_ivf_flat_extend_float(gpu_ivf_flat_c index_c, const float* new_data, ui
                                const int64_t* new_ids, void* errmsg);
 
 // Add chunk of data (from float, with on-the-fly quantization if needed)
-void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg);
+void gpu_ivf_flat_add_chunk_float(gpu_ivf_flat_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_ivf_flat_train_quantizer(gpu_ivf_flat_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);

@@ -233,7 +233,7 @@ func NewGpuIvfPqEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64) error {
+func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -242,13 +242,19 @@ func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64) error {
 	}
 
 	var errmsg *C.char
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+	}
 	C.gpu_ivf_pq_add_chunk(
 		gi.cIvfPq,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
+		cIds,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -259,7 +265,7 @@ func (gi *GpuIvfPq[T]) AddChunk(chunk []T, chunkCount uint64) error {
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
+func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -268,13 +274,19 @@ func (gi *GpuIvfPq[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
 	}
 
 	var errmsg *C.char
+	var cIds *C.int64_t
+	if len(ids) > 0 {
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+	}
 	C.gpu_ivf_pq_add_chunk_float(
 		gi.cIvfPq,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
+		cIds,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)

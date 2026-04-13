@@ -129,7 +129,7 @@ func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
 
 // buildTestModel builds, trains and saves a CagraModel, returning it with Index==nil and
 // Path/Checksum/FileSize set. The caller is responsible for removing the tar file.
-func buildTestModel(t *testing.T, id string) *CagraModel[float32] {
+func buildTestModel(t *testing.T, id string, ids []uint32) *CagraModel[float32] {
 	t.Helper()
 
 	idxcfg := testIdxcfg()
@@ -141,7 +141,7 @@ func buildTestModel(t *testing.T, id string) *CagraModel[float32] {
 	err = m.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = m.AddChunkFloat(data, testNVectors)
+	err = m.AddChunkFloat(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = m.Build()
@@ -196,6 +196,10 @@ func TestModelBuildAndLoad(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 	data := generateTestData(testNVectors, testDim)
+	ids := make([]uint32, testNVectors)
+	for i := range ids {
+		ids[i] = uint32(i + 1000)
+	}
 
 	// ---- Build ----
 	built, err := NewCagraModelForBuild[float32]("test-build", idxcfg, 1, []int{0})
@@ -204,7 +208,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 	err = built.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = built.AddChunkFloat(data, testNVectors)
+	err = built.AddChunkFloat(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = built.Build()
@@ -243,15 +247,15 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.NoError(t, err)
 
 	// ---- Search ----
-	// Query the first vector. CAGRA uses sequential internal IDs so key 0 should be closest.
+	// Query the first vector.
 	query := data[:testDim]
 	keys, dists, err := loader.Search(query, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(keys))
 	require.Equal(t, 1, len(dists))
 	fmt.Printf("Search result: keys=%v dists=%v\n", keys, dists)
-	// CAGRA is approximate; verify the top result is very close to the query.
-	require.Equal(t, int64(0), keys[0])
+	// CAGRA is approximate; verify the top result matches the provided ID.
+	require.Equal(t, int64(1000), keys[0])
 	require.InDelta(t, float32(0), dists[0], 1e-3)
 
 	// ---- DeleteSql ----
@@ -279,8 +283,13 @@ func TestModelLoadFromDB(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 
+	ids := make([]uint32, testNVectors)
+	for i := range ids {
+		ids[i] = uint32(i + 2000)
+	}
+
 	// Build a real index and save to tar.
-	built := buildTestModel(t, "test-from-db")
+	built := buildTestModel(t, "test-from-db", ids)
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 
@@ -328,7 +337,7 @@ func TestModelLoadFromDB(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(keys))
 	fmt.Printf("LoadFromDB Search: keys=%v dists=%v\n", keys, dists)
-	require.Equal(t, int64(0), keys[0])
+	require.Equal(t, int64(2000), keys[0])
 	require.InDelta(t, float32(0), dists[0], 1e-3)
 }
 
@@ -349,11 +358,11 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// AddChunk fails because Index is nil.
-	err = idx.AddChunk([]float32{1, 2}, 1)
+	err = idx.AddChunk([]float32{1, 2}, 1, []uint32{1})
 	require.NotNil(t, err)
 
 	// AddChunkFloat fails because Index is nil.
-	err = idx.AddChunkFloat([]float32{1, 2}, 1)
+	err = idx.AddChunkFloat([]float32{1, 2}, 1, []uint32{1})
 	require.NotNil(t, err)
 
 	// Search fails because Index is nil.

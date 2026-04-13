@@ -271,15 +271,15 @@ void gpu_ivf_pq_extend_float(gpu_ivf_pq_c index_c, const float* new_data, uint64
     }
 }
 
-void gpu_ivf_pq_add_chunk(gpu_ivf_pq_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg) {
+void gpu_ivf_pq_add_chunk(gpu_ivf_pq_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count); break;
+            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count, -1, ids); break;
+            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count, -1, ids); break;
+            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk(static_cast<const int8_t*>(chunk_data), chunk_count, -1, ids); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk(static_cast<const uint8_t*>(chunk_data), chunk_count, -1, ids); break;
             default: break;
         }
     } catch (const std::exception& e) {
@@ -288,15 +288,15 @@ void gpu_ivf_pq_add_chunk(gpu_ivf_pq_c index_c, const void* chunk_data, uint64_t
     }
 }
 
-void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg) {
+void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
+            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
+            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
+            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
             default: break;
         }
     } catch (const std::exception& e) {

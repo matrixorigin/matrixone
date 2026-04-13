@@ -126,11 +126,11 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 }
 
 // AddChunk appends a chunk of typed vectors to the pre-allocated GPU buffer.
-func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64) error {
+func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
-	if err := idx.Index.AddChunk(chunk, chunkCount); err != nil {
+	if err := idx.Index.AddChunk(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -138,11 +138,11 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64) error {
 }
 
 // AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
-func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
+func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []uint32) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
-	if err := idx.Index.AddChunkFloat(chunk, chunkCount); err != nil {
+	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -521,9 +521,8 @@ func (idx *CagraModel[T]) LoadIndex(
 
 	if view {
 		// Remove the local tar; the index is fully in GPU memory.
-		if len(fname) > 0 {
-			os.Remove(fname)
-			fname = ""
+		if len(idx.Path) > 0 {
+			os.Remove(idx.Path)
 		}
 		idx.Path = ""
 	}
