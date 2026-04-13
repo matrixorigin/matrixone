@@ -18,9 +18,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -478,7 +480,19 @@ func sameFullTextIndexGroup(lhs, rhs *plan.IndexDef) bool {
 }
 
 func (builder *QueryBuilder) buildFullTextScanParams(scanNode *plan.Node, idxdef *plan.IndexDef) (string, error) {
-	return idxdef.IndexAlgoParams, nil
+	var param fulltext.FullTextParserParam
+	if len(idxdef.IndexAlgoParams) > 0 {
+		if err := sonic.Unmarshal([]byte(idxdef.IndexAlgoParams), &param); err != nil {
+			return "", err
+		}
+	}
+	param.Implementation = fulltext.FullTextImplementationNative
+	param.Parts = append(param.Parts[:0], idxdef.Parts...)
+	buf, err := sonic.Marshal(param)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 // Get the filters that are fulltext_match() in ScanNode

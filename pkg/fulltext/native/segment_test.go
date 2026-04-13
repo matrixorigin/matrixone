@@ -15,6 +15,9 @@
 package native
 
 import (
+	"bytes"
+	"encoding/binary"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +45,8 @@ func TestBuilderLookupAndPhrase(t *testing.T) {
 	}))
 
 	segment := builder.Build()
+	require.Equal(t, int64(2), segment.DocCount)
+	require.Equal(t, int64(5), segment.TokenSum)
 
 	matrix := segment.Lookup("matrix")
 	require.Len(t, matrix, 2)
@@ -76,6 +81,8 @@ func TestSegmentMarshalRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, segment.Lookup("matrix origin"), decoded.Lookup("matrix origin"))
 	require.Equal(t, segment.Lookup("fts"), decoded.Lookup("fts"))
+	require.Equal(t, segment.DocCount, decoded.DocCount)
+	require.Equal(t, segment.TokenSum, decoded.TokenSum)
 }
 
 func TestSidecarPathDeterministic(t *testing.T) {
@@ -86,4 +93,82 @@ func TestSidecarPathDeterministic(t *testing.T) {
 	require.Equal(t, path1, path2)
 	require.NotEqual(t, path1, path3)
 	require.Contains(t, path1, "obj_001.fts.")
+}
+
+func TestSegmentUnmarshalLegacyRebuildsStats(t *testing.T) {
+	builder := NewBuilder(fulltext.FullTextParserParam{}, nil)
+	require.NoError(t, builder.Add(Document{
+		Block: 1,
+		Row:   1,
+		PK:    []byte("pk-1"),
+		Values: []fulltext.IndexValue{
+			{Text: "matrix origin", Type: types.T_text},
+		},
+	}))
+	require.NoError(t, builder.Add(Document{
+		Block: 1,
+		Row:   2,
+		PK:    []byte("pk-2"),
+		Values: []fulltext.IndexValue{
+			{Text: "native search", Type: types.T_text},
+		},
+	}))
+	segment := builder.Build()
+
+	data, err := marshalLegacySegment(segment)
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalBinary(data)
+	require.NoError(t, err)
+	require.Equal(t, segment.DocCount, decoded.DocCount)
+	require.Equal(t, segment.TokenSum, decoded.TokenSum)
+	require.Equal(t, segment.Lookup("matrix"), decoded.Lookup("matrix"))
+}
+
+func marshalLegacySegment(s *Segment) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := buf.Write(segmentMagicV1[:]); err != nil {
+		return nil, err
+	}
+	terms := make([]string, 0, len(s.Terms))
+	for term := range s.Terms {
+		terms = append(terms, term)
+	}
+	sort.Strings(terms)
+	if err := binary.Write(&buf, binary.LittleEndian, uint32(len(terms))); err != nil {
+		return nil, err
+	}
+	for _, term := range terms {
+		postings := append([]Posting(nil), s.Terms[term]...)
+		sortPostings(postings)
+		if err := writeBytes(&buf, []byte(term)); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, binary.LittleEndian, uint32(len(postings))); err != nil {
+			return nil, err
+		}
+		for _, posting := range postings {
+			if err := binary.Write(&buf, binary.LittleEndian, posting.Ref.Block); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(&buf, binary.LittleEndian, posting.Ref.Row); err != nil {
+				return nil, err
+			}
+			if err := writeBytes(&buf, posting.Ref.PK); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(&buf, binary.LittleEndian, posting.DocLen); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(&buf, binary.LittleEndian, uint32(len(posting.Positions))); err != nil {
+				return nil, err
+			}
+			for _, pos := range posting.Positions {
+				if err := binary.Write(&buf, binary.LittleEndian, pos); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return buf.Bytes(), nil
 }

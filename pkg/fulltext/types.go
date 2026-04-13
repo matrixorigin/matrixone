@@ -101,7 +101,15 @@ Run Eval() to get final answer and score
 
 // Parser parameters
 type FullTextParserParam struct {
-	Parser string `json:"parser"`
+	Parser         string   `json:"parser"`
+	Implementation string   `json:"implementation,omitempty"`
+	Parts          []string `json:"parts,omitempty"`
+}
+
+const FullTextImplementationNative = "native"
+
+func (p FullTextParserParam) UseNative() bool {
+	return strings.EqualFold(p.Implementation, FullTextImplementationNative)
 }
 
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text

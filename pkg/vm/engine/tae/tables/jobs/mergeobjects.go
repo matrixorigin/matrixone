@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	ftnative "github.com/matrixorigin/matrixone/pkg/fulltext/native"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -78,6 +79,10 @@ type mergeObjectsTask struct {
 	num       uint16
 
 	arena *objectio.WriteArena
+
+	nativeIndexer        *ftnative.ObjectIndexer
+	nativeObjectFailed   bool
+	nativeIndexingClosed bool
 }
 
 func NewMergeObjectsTask(
@@ -161,6 +166,7 @@ func NewMergeObjectsTask(
 	if task.GetTotalSize() > 300*common.Const1MBytes {
 		task.arena = objectio.NewArena(300 * common.Const1MBytes)
 	}
+	task.resetNativeIndexer()
 	return
 }
 
@@ -198,6 +204,57 @@ func (task *mergeObjectsTask) GetObjectMaxBlocks() uint16 {
 
 func (task *mergeObjectsTask) GetTargetObjSize() uint32 {
 	return task.targetObjSize
+}
+
+func (task *mergeObjectsTask) OnBlockWritten(bat *batch.Batch, _ uint16) error {
+	if task.isTombstone || task.nativeIndexingClosed || task.nativeObjectFailed ||
+		task.nativeIndexer == nil || task.nativeIndexer.Empty() {
+		return nil
+	}
+	if err := task.nativeIndexer.AddBatch(bat, []uint32{uint32(bat.RowCount())}); err != nil {
+		task.nativeObjectFailed = true
+		task.logNativeSidecarError("merge-add", err)
+	}
+	return nil
+}
+
+func (task *mergeObjectsTask) OnObjectSynced(ctx context.Context, stats *objectio.ObjectStats) error {
+	defer task.resetNativeIndexer()
+	if task.isTombstone || task.nativeIndexingClosed || task.nativeObjectFailed ||
+		task.nativeIndexer == nil || task.nativeIndexer.Empty() {
+		return nil
+	}
+	if err := task.nativeIndexer.Write(ctx, task.rt.Fs, stats.ObjectName()); err != nil {
+		task.nativeObjectFailed = true
+		task.logNativeSidecarError("merge-write", err)
+	}
+	return nil
+}
+
+func (task *mergeObjectsTask) resetNativeIndexer() {
+	task.nativeObjectFailed = false
+	if task.isTombstone || task.nativeIndexingClosed {
+		task.nativeIndexer = nil
+		return
+	}
+	indexer, err := ftnative.NewObjectIndexer(task.schema)
+	if err != nil {
+		task.nativeIndexer = nil
+		task.nativeIndexingClosed = true
+		task.logNativeSidecarError("merge-init", err)
+		return
+	}
+	task.nativeIndexer = indexer
+}
+
+func (task *mergeObjectsTask) logNativeSidecarError(phase string, err error) {
+	logutil.Error(
+		"[NATIVE-FTS-SIDECAR-SKIP]",
+		zap.String("phase", phase),
+		zap.String("table", task.schema.Name),
+		common.AnyField("task", task.Name()),
+		zap.Error(err),
+	)
 }
 
 func (task *mergeObjectsTask) GetSortKeyPos() int {

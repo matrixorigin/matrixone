@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	ftnative "github.com/matrixorigin/matrixone/pkg/fulltext/native"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -141,6 +142,22 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	if !task.meta.IsTombstone {
+		indexer, idxErr := ftnative.NewObjectIndexer(task.meta.GetSchema())
+		if idxErr != nil {
+			task.logNativeSidecarError("flush-init", idxErr)
+		} else if !indexer.Empty() {
+			blockRows := make([]uint32, len(task.blocks))
+			for i, block := range task.blocks {
+				blockRows[i] = block.GetRows()
+			}
+			if idxErr = indexer.AddBatch(cnBatch, blockRows); idxErr != nil {
+				task.logNativeSidecarError("flush-add", idxErr)
+			} else if idxErr = indexer.Write(ctx, task.fs, task.name); idxErr != nil {
+				task.logNativeSidecarError("flush-write", idxErr)
+			}
+		}
+	}
 	ioT := time.Since(inst)
 	if time.Since(task.createAt) > SlowFlushIOTask {
 		logutil.Info(
@@ -179,4 +196,14 @@ func (task *flushObjTask) release() {
 	if task.data != nil {
 		task.data.Close()
 	}
+}
+
+func (task *flushObjTask) logNativeSidecarError(phase string, err error) {
+	logutil.Error(
+		"[NATIVE-FTS-SIDECAR-SKIP]",
+		zap.String("phase", phase),
+		zap.String("table", task.meta.GetSchema().Name),
+		common.AnyField("obj", task.meta.ID().ShortStringEx()),
+		zap.Error(err),
+	)
 }

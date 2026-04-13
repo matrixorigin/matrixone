@@ -25,7 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 )
 
-var segmentMagic = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '1', 0}
+var (
+	segmentMagicV1 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '1', 0}
+	segmentMagicV2 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '2', 0}
+)
 
 type RowRef struct {
 	Block uint16
@@ -58,13 +61,17 @@ type Document struct {
 }
 
 type Segment struct {
-	Terms map[string][]Posting
+	Terms    map[string][]Posting
+	DocCount int64
+	TokenSum int64
 }
 
 type Builder struct {
 	param          fulltext.FullTextParserParam
 	resolveDatalnk fulltext.DatalinkTextResolver
 	terms          map[string]map[string]*postingBuilder
+	docCount       int64
+	tokenSum       int64
 }
 
 type postingBuilder struct {
@@ -115,6 +122,8 @@ func (b *Builder) Add(doc Document) error {
 		PK:    bytes.Clone(doc.PK),
 	}
 	docLen := int32(len(tokens))
+	b.docCount++
+	b.tokenSum += int64(docLen)
 	for term, positions := range grouped {
 		if _, ok := b.terms[term]; !ok {
 			b.terms[term] = make(map[string]*postingBuilder)
@@ -130,7 +139,9 @@ func (b *Builder) Add(doc Document) error {
 
 func (b *Builder) Build() *Segment {
 	segment := &Segment{
-		Terms: make(map[string][]Posting, len(b.terms)),
+		Terms:    make(map[string][]Posting, len(b.terms)),
+		DocCount: b.docCount,
+		TokenSum: b.tokenSum,
 	}
 	for term, postingsByRow := range b.terms {
 		postings := make([]Posting, 0, len(postingsByRow))
@@ -293,7 +304,13 @@ func (s *Segment) MarshalBinary() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := buf.Write(segmentMagic[:]); err != nil {
+	if _, err := buf.Write(segmentMagicV2[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, s.DocCount); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, s.TokenSum); err != nil {
 		return nil, err
 	}
 
@@ -342,58 +359,77 @@ func (s *Segment) MarshalBinary() ([]byte, error) {
 
 func UnmarshalBinary(data []byte) (*Segment, error) {
 	reader := bytes.NewReader(data)
+	segment := &Segment{}
 
 	var magic [8]byte
 	if _, err := reader.Read(magic[:]); err != nil {
 		return nil, err
 	}
-	if magic != segmentMagic {
+	switch magic {
+	case segmentMagicV2:
+		if err := binary.Read(reader, binary.LittleEndian, &segment.DocCount); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &segment.TokenSum); err != nil {
+			return nil, err
+		}
+	case segmentMagicV1:
+	default:
 		return nil, moerr.NewInternalErrorNoCtx("invalid native fulltext segment magic")
 	}
 
-	var termCount uint32
-	if err := binary.Read(reader, binary.LittleEndian, &termCount); err != nil {
+	if err := readSegmentTerms(reader, segment); err != nil {
 		return nil, err
 	}
+	if magic == segmentMagicV1 {
+		segment.rebuildStats()
+	}
+	return segment, nil
+}
 
-	segment := &Segment{Terms: make(map[string][]Posting, termCount)}
+func readSegmentTerms(reader *bytes.Reader, segment *Segment) error {
+	var termCount uint32
+	if err := binary.Read(reader, binary.LittleEndian, &termCount); err != nil {
+		return err
+	}
+	segment.Terms = make(map[string][]Posting, termCount)
 	for range termCount {
 		termBytes, err := readBytes(reader)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		var postingCount uint32
 		if err := binary.Read(reader, binary.LittleEndian, &postingCount); err != nil {
-			return nil, err
+			return err
 		}
 
 		postings := make([]Posting, 0, postingCount)
 		for range postingCount {
 			var posting Posting
 			if err := binary.Read(reader, binary.LittleEndian, &posting.Ref.Block); err != nil {
-				return nil, err
+				return err
 			}
 			if err := binary.Read(reader, binary.LittleEndian, &posting.Ref.Row); err != nil {
-				return nil, err
+				return err
 			}
 			pk, err := readBytes(reader)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			posting.Ref.PK = pk
 			if err := binary.Read(reader, binary.LittleEndian, &posting.DocLen); err != nil {
-				return nil, err
+				return err
 			}
 			var posCount uint32
 			if err := binary.Read(reader, binary.LittleEndian, &posCount); err != nil {
-				return nil, err
+				return err
 			}
 			posting.Positions = make([]int32, 0, posCount)
 			for range posCount {
 				var pos int32
 				if err := binary.Read(reader, binary.LittleEndian, &pos); err != nil {
-					return nil, err
+					return err
 				}
 				posting.Positions = append(posting.Positions, pos)
 			}
@@ -401,7 +437,7 @@ func UnmarshalBinary(data []byte) (*Segment, error) {
 		}
 		segment.Terms[string(termBytes)] = postings
 	}
-	return segment, nil
+	return nil
 }
 
 func SidecarPath(objectName string, indexName string) string {
@@ -463,4 +499,26 @@ func readBytes(reader *bytes.Reader) ([]byte, error) {
 
 func encodeRowKey(key rowKey) string {
 	return fmt.Sprintf("%d/%d/%x", key.block, key.row, key.pk)
+}
+
+func (s *Segment) rebuildStats() {
+	if s == nil || len(s.Terms) == 0 {
+		return
+	}
+	docLens := make(map[string]int32)
+	for _, postings := range s.Terms {
+		for _, posting := range postings {
+			key := encodeRowKey(rowKey{
+				block: posting.Ref.Block,
+				row:   posting.Ref.Row,
+				pk:    string(posting.Ref.PK),
+			})
+			if _, ok := docLens[key]; ok {
+				continue
+			}
+			docLens[key] = posting.DocLen
+			s.DocCount++
+			s.TokenSum += int64(posting.DocLen)
+		}
+	}
 }

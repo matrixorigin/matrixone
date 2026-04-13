@@ -192,6 +192,14 @@ func (t *cnMergeTask) GetTargetObjSize() uint32 {
 	return t.targetObjSize
 }
 
+func (t *cnMergeTask) OnBlockWritten(*batch.Batch, uint16) error {
+	return nil
+}
+
+func (t *cnMergeTask) OnObjectSynced(context.Context, *objectio.ObjectStats) error {
+	return nil
+}
+
 func (t *cnMergeTask) GetSortKeyType() types.Type {
 	if t.sortkeyPos >= 0 {
 		return t.host.typs[t.sortkeyPos]

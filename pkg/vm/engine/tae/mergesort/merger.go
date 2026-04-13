@@ -219,6 +219,9 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}
+			if err := m.host.OnBlockWritten(m.buffer, uint16(m.stats.objBlkCnt-1)); err != nil {
+				return err
+			}
 			m.stats.writtenBytes = m.writer.GetWrittenOriginalSize()
 			m.stats.mergedSize += uint64(m.stats.writtenBytes)
 			// force clean
@@ -251,6 +254,9 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			m.writer = m.host.PrepareNewWriter()
 		}
 		if _, err := m.writer.WriteBatch(m.buffer); err != nil {
+			return err
+		}
+		if err := m.host.OnBlockWritten(m.buffer, uint16(m.stats.objBlkCnt-1)); err != nil {
 			return err
 		}
 		m.buffer.CleanOnlyData()
@@ -323,6 +329,9 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 		return err
 	}
 	cobjstats := m.writer.GetObjectStats()
+	if err := m.host.OnObjectSynced(ctx, &cobjstats); err != nil {
+		return err
+	}
 	commitEntry := m.host.GetCommitEntry()
 	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	m.writer = nil

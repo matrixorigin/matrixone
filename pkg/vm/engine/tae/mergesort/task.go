@@ -65,6 +65,8 @@ type MergeTaskHost interface {
 	GetBlockMaxRows() uint32
 	GetObjectMaxBlocks() uint16
 	GetTargetObjSize() uint32
+	OnBlockWritten(*batch.Batch, uint16) error
+	OnObjectSynced(context.Context, *objectio.ObjectStats) error
 }
 
 func getSimilarBatch(bat *batch.Batch, capacity int, vpool DisposableVecPool) (*batch.Batch, func()) {

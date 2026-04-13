@@ -44,22 +44,23 @@ var ft_runSql = sqlexec.RunSql
 var ft_runSql_streaming = sqlexec.RunStreamingSql
 
 type fulltextState struct {
-	inited    bool
-	errCh     chan error
-	streamCh  chan executor.Result
-	n_result  uint64
-	sacc      *fulltext.SearchAccum
-	limit     uint64
-	nrows     int
-	idx2word  map[int]string
-	agghtab   map[any]uint64
-	aggcnt    []int64
-	mpool     *fulltext.FixedBytePool
-	param     fulltext.FullTextParserParam
-	docLenMap map[any]int32
-	minheap   vectorindex.SearchResultHeap
-	resbuf    []*vectorindex.SearchResultAnyKey
-	ranking   bool
+	inited      bool
+	errCh       chan error
+	streamCh    chan executor.Result
+	n_result    uint64
+	sacc        *fulltext.SearchAccum
+	limit       uint64
+	nrows       int
+	idx2word    map[int]string
+	agghtab     map[any]uint64
+	aggcnt      []int64
+	mpool       *fulltext.FixedBytePool
+	param       fulltext.FullTextParserParam
+	docLenMap   map[any]int32
+	minheap     vectorindex.SearchResultHeap
+	resbuf      []*vectorindex.SearchResultAnyKey
+	ranking     bool
+	statsLoaded bool
 
 	// holding output batch
 	batch *batch.Batch
@@ -627,15 +628,26 @@ func fulltextIndexMatch(
 		u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)
 		u.agghtab = make(map[any]uint64, 1024)
 		u.aggcnt = make([]int64, s.Nkeywords)
+		u.sacc = s
+	}
 
-		// count(*) to get number of records in source table
-		res, err := runCountStar(proc, s, u.param)
+	if u.param.UseNative() {
+		used, err := fulltextIndexMatchNative(u, proc, u.sacc, srctbl, tblname)
 		if err != nil {
 			return err
 		}
+		if used {
+			return nil
+		}
+	}
 
-		u.sacc = s
-
+	if !u.statsLoaded {
+		// count(*) to get number of indexed records in source table
+		res, err := runCountStar(proc, u.sacc, u.param)
+		if err != nil {
+			return err
+		}
+		u.statsLoaded = true
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
 	}
 
