@@ -1071,6 +1071,25 @@ func TestStGeomFromTextRejectMalformedStructure(t *testing.T) {
 	}
 }
 
+func TestStGeomFromTextRejectTooManyPoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,1 1,2 2,3 3)"}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "max_points_in_geometry=3")
+}
+
 func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1110,6 +1129,26 @@ func TestStGeomFromTextWithSRIDRejectMalformedStructure(t *testing.T) {
 	s, info := fcTC.Run()
 	require.False(t, s)
 	require.Contains(t, info, "invalid geometry payload")
+}
+
+func TestStGeomFromTextWithSRIDRejectTooManyPoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,1 1,2 2,3 3)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "max_points_in_geometry=3")
 }
 
 func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {

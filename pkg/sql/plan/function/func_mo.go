@@ -1170,7 +1170,7 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 		}
 
-		wkt, valueSubtype, valueSRID, valueSRIDDefined, err := validateGeometryPayload(payload)
+		wkt, valueSubtype, valueSRID, valueSRIDDefined, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
 		if err != nil {
 			return nil, err
 		}

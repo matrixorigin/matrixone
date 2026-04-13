@@ -735,15 +735,13 @@ func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		wkt := strings.TrimSpace(functionUtil.QuickBytesToStr(v))
 		if len(wkt) == 0 {
 			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		if err := validateGeometryTextStructure(wkt); err != nil {
-			return nil, err
-		}
-		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+		if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
 			return nil, err
 		}
 		return encodeGeometryPayload(wkt, 0, false), nil
@@ -754,6 +752,7 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxPoints := maxPointsInGeometryLimit(proc)
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for i := uint64(0); i < uint64(length); i++ {
@@ -788,10 +787,7 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 		if len(wkt) == 0 {
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		if err := validateGeometryTextStructure(wkt); err != nil {
-			return err
-		}
-		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+		if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
 			return err
 		}
 		if err := rs.AppendBytes(encodeGeometryPayload(wkt, uint32(sridValue), true), false); err != nil {
@@ -886,7 +882,9 @@ func GeometryPayloadToText(payload []byte) (string, error) {
 	return wkt, nil
 }
 
-func validateGeometryPayload(payload []byte) (wkt string, typeName string, srid uint32, sridDefined bool, err error) {
+const defaultMaxPointsInGeometry = int64(65536)
+
+func validateGeometryPayload(payload []byte, maxPoints int64) (wkt string, typeName string, srid uint32, sridDefined bool, err error) {
 	wkt, srid, sridDefined, err = decodeGeometryPayload(payload)
 	if err != nil {
 		return "", "", 0, false, err
@@ -895,13 +893,52 @@ func validateGeometryPayload(payload []byte) (wkt string, typeName string, srid 
 	if err != nil {
 		return "", "", 0, false, err
 	}
-	if err = validateGeometryTextStructure(wkt); err != nil {
-		return "", "", 0, false, err
-	}
-	if err = validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+	if err = validateGeometryTextForStorage(wkt, maxPoints); err != nil {
 		return "", "", 0, false, err
 	}
 	return wkt, typeName, srid, sridDefined, nil
+}
+
+func maxPointsInGeometryLimit(proc *process.Process) int64 {
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("max_points_in_geometry", true, false); err == nil && v != nil {
+			switch val := v.(type) {
+			case int64:
+				return val
+			case int32:
+				return int64(val)
+			case uint64:
+				return int64(val)
+			case uint32:
+				return int64(val)
+			case int:
+				return int64(val)
+			case uint:
+				return int64(val)
+			}
+		}
+	}
+	return defaultMaxPointsInGeometry
+}
+
+func validateGeometryTextForStorage(wkt string, maxPoints int64) error {
+	if err := validateGeometryTextStructure(wkt); err != nil {
+		return err
+	}
+	if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+		return err
+	}
+	if maxPoints <= 0 {
+		return nil
+	}
+	pointCount, err := geometryPointCountFromText(wkt)
+	if err != nil {
+		return err
+	}
+	if pointCount > maxPoints {
+		return moerr.NewInvalidInputNoCtxf("geometry has %d points, which exceeds max_points_in_geometry=%d", pointCount, maxPoints)
+	}
+	return nil
 }
 
 func validateGeometryTextStructure(wkt string) error {
@@ -1125,6 +1162,185 @@ func validateGenericGeometryTextContent(content string, depth int) error {
 		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	return validateGeometryTextStructureWithDepth(items[0], depth+1)
+}
+
+func geometryPointCountFromText(wkt string) (int64, error) {
+	return geometryPointCountFromTextWithDepth(wkt, 0)
+}
+
+func geometryPointCountFromTextWithDepth(wkt string, depth int) (int64, error) {
+	s := strings.TrimSpace(wkt)
+	typeName, err := geometryTypeNameFromText(s)
+	if err != nil {
+		return 0, err
+	}
+	if strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY") {
+		return 0, nil
+	}
+
+	openIdx := strings.IndexByte(s, '(')
+	if openIdx <= 0 || s[len(s)-1] != ')' {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if strings.TrimSpace(strings.ToUpper(s[:openIdx])) != typeName {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+
+	content := strings.TrimSpace(s[openIdx+1 : len(s)-1])
+	switch typeName {
+	case "POINT":
+		if content == "" {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return 1, nil
+	case "LINESTRING":
+		return coordinateListPointCount(content)
+	case "POLYGON":
+		return polygonPointCountFromTextContent(content)
+	case "MULTIPOINT":
+		return multiPointCountFromTextContent(content, depth)
+	case "MULTILINESTRING":
+		return multiLineStringPointCountFromTextContent(content)
+	case "MULTIPOLYGON":
+		return multiPolygonPointCountFromTextContent(content)
+	case "GEOMETRYCOLLECTION":
+		return geometryCollectionPointCountFromTextContent(content, depth)
+	case "GEOMETRY":
+		return genericGeometryPointCountFromTextContent(content, depth)
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry type")
+	}
+}
+
+func coordinateListPointCount(content string) (int64, error) {
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(items)), nil
+}
+
+func polygonPointCountFromTextContent(content string) (int64, error) {
+	rings, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	total := int64(0)
+	for _, ring := range rings {
+		ring = strings.TrimSpace(ring)
+		if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		count, err := coordinateListPointCount(strings.TrimSpace(ring[1 : len(ring)-1]))
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func multiPointCountFromTextContent(content string, depth int) (int64, error) {
+	if content == "" {
+		return 0, nil
+	}
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	total := int64(0)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if itemType, err := geometryTypeNameFromText(item); err == nil {
+			if itemType != "POINT" {
+				return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+			count, err := geometryPointCountFromTextWithDepth(item, depth+1)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+			continue
+		}
+		total++
+	}
+	return total, nil
+}
+
+func multiLineStringPointCountFromTextContent(content string) (int64, error) {
+	if content == "" {
+		return 0, nil
+	}
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	total := int64(0)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		count, err := coordinateListPointCount(strings.TrimSpace(item[1 : len(item)-1]))
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func multiPolygonPointCountFromTextContent(content string) (int64, error) {
+	if content == "" {
+		return 0, nil
+	}
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	total := int64(0)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		count, err := polygonPointCountFromTextContent(strings.TrimSpace(item[1 : len(item)-1]))
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func geometryCollectionPointCountFromTextContent(content string, depth int) (int64, error) {
+	if content == "" {
+		return 0, nil
+	}
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	total := int64(0)
+	for _, item := range items {
+		count, err := geometryPointCountFromTextWithDepth(item, depth+1)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func genericGeometryPointCountFromTextContent(content string, depth int) (int64, error) {
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return 0, err
+	}
+	if len(items) != 1 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return geometryPointCountFromTextWithDepth(items[0], depth+1)
 }
 
 func geometryTypeNameFromPayload(payload []byte) (string, error) {

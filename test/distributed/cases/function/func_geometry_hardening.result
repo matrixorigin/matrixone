@@ -12,3 +12,17 @@ concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
 );
 -- @regex("geometry collection nesting depth exceeds 64", true)
 invalid input: geometry collection nesting depth exceeds 64
+set session max_points_in_geometry = 3;
+select st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)');
+-- @regex("max_points_in_geometry=3", true)
+invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
+select cast('LINESTRING(0 0,1 1,2 2,3 3)' as geometry);
+-- @regex("max_points_in_geometry=3", true)
+invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
+drop table if exists geo_line_limit;
+create table geo_line_limit(g linestring);
+insert into geo_line_limit values ('LINESTRING(0 0,1 1,2 2,3 3)');
+-- @regex("max_points_in_geometry=3", true)
+invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
+drop table geo_line_limit;
+set session max_points_in_geometry = 65536;

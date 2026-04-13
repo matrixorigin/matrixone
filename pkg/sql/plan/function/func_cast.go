@@ -1881,7 +1881,7 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, source, rs, length, toType)
+		return strToStr(ctx, proc, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5352,6 +5352,7 @@ func strToTimestamp(
 
 func strToStr(
 	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	totype := to.GetType()
@@ -5369,6 +5370,7 @@ func strToStr(
 		return nil
 	}
 	if toType.Oid == types.T_geometry {
+		maxPoints := maxPointsInGeometryLimit(proc)
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -5378,10 +5380,7 @@ func strToStr(
 				continue
 			}
 			wkt := strings.TrimSpace(convertByteSliceToString(v))
-			if err := validateGeometryTextStructure(wkt); err != nil {
-				return err
-			}
-			if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
+			if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
 				return err
 			}
 			if err := to.AppendBytes(encodeGeometryPayload(wkt, 0, false), false); err != nil {

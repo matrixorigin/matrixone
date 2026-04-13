@@ -10,3 +10,15 @@ select st_dimension(
         concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
     )
 );
+
+set session max_points_in_geometry = 3;
+-- @regex("max_points_in_geometry=3",true)
+select st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)');
+-- @regex("max_points_in_geometry=3",true)
+select cast('LINESTRING(0 0,1 1,2 2,3 3)' as geometry);
+drop table if exists geo_line_limit;
+create table geo_line_limit(g linestring);
+-- @regex("max_points_in_geometry=3",true)
+insert into geo_line_limit values ('LINESTRING(0 0,1 1,2 2,3 3)');
+drop table geo_line_limit;
+set session max_points_in_geometry = 65536;

@@ -2406,7 +2406,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2442,6 +2442,31 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+
+	inputVec := testutil.MakeVarcharVector([]string{"LINESTRING(0 0,1 1,2 2,3 3)"}, nil, mp)
+	defer inputVec.Free(mp)
+	inputVec.SetType(types.T_varchar.ToType())
+
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	to := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer to.Free()
+	err := to.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
 
 // makeJSONEncodedFromText parses JSON text strings and returns their bytejson-encoded form as []string for vector.

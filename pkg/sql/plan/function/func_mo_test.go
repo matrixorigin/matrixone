@@ -116,3 +116,23 @@ func TestCastGeometryToSubtypeRejectMalformedStructure(t *testing.T) {
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
+
+func TestCastGeometryToSubtypeRejectTooManyPoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING"}, []bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"LINESTRING(0 0,1 1,2 2,3 3)"}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "max_points_in_geometry=3")
+}
