@@ -346,6 +346,7 @@ func TestObjectListFormat_GoodPath(t *testing.T) {
 	ctx6 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	stmt6.Format(ctx6)
 	require.Equal(t, "OBJECTLIST DATABASE db1 TABLE tbl1 SNAPSHOT snap6 AGAINST SNAPSHOT against6 FROM account1 PUBLICATION pub1", ctx6.String())
+}
 
 func TestDataBranchPickLifecycle(t *testing.T) {
 	stmt := NewDataBranchPick()

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -349,14 +348,6 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 		)
 	}()
 	defer exec.wg.Done()
-	defer func() {
-		if r := recover(); r != nil {
-			logutil.Error("Publication-Task run panic recovered",
-				zap.Any("panic", r),
-				zap.String("stack", string(debug.Stack())),
-			)
-		}
-	}()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	defer syncTaskTrigger.Stop()
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
