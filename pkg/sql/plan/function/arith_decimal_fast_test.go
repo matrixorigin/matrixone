@@ -816,6 +816,59 @@ func BenchmarkD64Sub_Generic(b *testing.B) {
 	_ = r
 }
 
+func BenchmarkD64AddDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+		ys[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Add(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD64SubDiffScale_Fast(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+		ys[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Sub(xs, ys, rs, 2, 5, nul)
+	}
+}
+
+func BenchmarkD64AddDiffScale_FastLarge(b *testing.B) {
+	rng := rand.New(rand.NewSource(42))
+	xs := make([]types.Decimal64, benchN)
+	ys := make([]types.Decimal64, benchN)
+	rs := make([]types.Decimal64, benchN)
+	for i := range xs {
+		// Values near D64 max (~9.2e18) — will NOT pass prescan for scaleDiff=3
+		v := int64(rng.Int63n(4_000_000_000_000_000_000) + 5_000_000_000_000_000_000)
+		if rng.Intn(2) == 0 {
+			v = -v
+		}
+		xs[i] = types.Decimal64(v)
+		ys[i] = types.Decimal64(rng.Int63n(1_000_000) - 500_000) // small so add doesn't overflow
+	}
+	nul := nulls.NewWithSize(benchN)
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		_ = d64Add(xs, ys, rs, 2, 5, nul)
+	}
+}
+
 func BenchmarkD64Mul_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
 	xs := make([]types.Decimal64, benchN)

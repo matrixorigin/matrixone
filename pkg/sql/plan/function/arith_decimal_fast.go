@@ -27,6 +27,7 @@ package function
 //   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -4708,31 +4709,71 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 
 func d64ScaleIntoRs(vec, rs []types.Decimal64, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
-	scaleFactor := types.Decimal64(types.Pow10[scaleDiff])
+	f := types.Pow10[scaleDiff]
+	maxSafe := uint64(math.MaxInt64) / f
+
+	// Prescan: if every |vec[i]| ≤ maxSafe, overflow is impossible and we can
+	// use a plain multiply without bits.Mul64.  The prescan checks all slots
+	// (including null positions whose values are harmless); if a garbage null
+	// value exceeds maxSafe we simply fall back to the checked path.
+	allSafe := true
+	for i := 0; i < n; i++ {
+		signBit := uint64(vec[i]) >> 63
+		abs := (uint64(vec[i]) ^ -signBit) + signBit
+		if abs > maxSafe {
+			allSafe = false
+			break
+		}
+	}
+
+	if allSafe {
+		if rsnull.IsEmpty() {
+			for i := 0; i < n; i++ {
+				signBit := uint64(vec[i]) >> 63
+				mask := -signBit
+				abs := (uint64(vec[i]) ^ mask) + signBit
+				rs[i] = types.Decimal64((abs*f ^ mask) + signBit)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				if bmp.Contains(uint64(i)) {
+					continue
+				}
+				signBit := uint64(vec[i]) >> 63
+				mask := -signBit
+				abs := (uint64(vec[i]) ^ mask) + signBit
+				rs[i] = types.Decimal64((abs*f ^ mask) + signBit)
+			}
+		}
+		return nil
+	}
+
+	// Fallback: use bits.Mul64 for overflow detection (replaces Mul64's
+	// division-based check).
 	if rsnull.IsEmpty() {
 		for i := 0; i < n; i++ {
-			signBit := vec[i] >> 63
+			signBit := uint64(vec[i]) >> 63
 			mask := -signBit
-			var err error
-			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
-			if err != nil {
-				return err
+			abs := (uint64(vec[i]) ^ mask) + signBit
+			hi, lo := bits.Mul64(abs, f)
+			if hi|(lo>>63) != 0 {
+				return moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", vec[i].Format(scaleDiff))
 			}
-			rs[i] = (rs[i] ^ mask) + signBit
+			rs[i] = types.Decimal64((lo ^ mask) + signBit)
 		}
 	} else {
 		for i := 0; i < n; i++ {
 			if bmp.Contains(uint64(i)) {
 				continue
 			}
-			signBit := vec[i] >> 63
+			signBit := uint64(vec[i]) >> 63
 			mask := -signBit
-			var err error
-			rs[i], err = ((vec[i] ^ mask) + signBit).Mul64(scaleFactor)
-			if err != nil {
-				return err
+			abs := (uint64(vec[i]) ^ mask) + signBit
+			hi, lo := bits.Mul64(abs, f)
+			if hi|(lo>>63) != 0 {
+				return moerr.NewInvalidInputNoCtxf("Decimal64 scale overflow: %s", vec[i].Format(scaleDiff))
 			}
-			rs[i] = (rs[i] ^ mask) + signBit
+			rs[i] = types.Decimal64((lo ^ mask) + signBit)
 		}
 	}
 	return nil
