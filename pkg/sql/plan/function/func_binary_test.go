@@ -6335,12 +6335,12 @@ func TestStTouches(t *testing.T) {
 }
 
 func TestStTouchesRejectInvalidInput(t *testing.T) {
-	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))", 0, false)
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
 	validRight := encodeGeometryPayload("POINT(1 1)", 0, false)
 	touched, err := geometryTouches(invalidLeft, validRight)
 	require.Error(t, err)
 	require.False(t, touched)
-	require.Contains(t, err.Error(), "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.Contains(t, err.Error(), "invalid geometry payload")
 
 	proc := testutil.NewProcess(t)
 
@@ -6415,6 +6415,47 @@ func TestStTouchesWithMultiGeometries(t *testing.T) {
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StTouches)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestStTouchesWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection touches point at member line endpoint",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(2 0)",
+			want:  true,
+		},
+		{
+			name:  "point touches collection",
+			left:  "POINT(4 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "nested collection touches point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(2 0)",
+			want:  true,
+		},
+		{
+			name:  "collection does not touch point on member interior",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(3 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryTouches(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func TestStTouchesWithPolygonHoleLines(t *testing.T) {
@@ -6684,21 +6725,12 @@ func TestStOverlaps(t *testing.T) {
 }
 
 func TestStOverlapsRejectInvalidInput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
-
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))"},
-			[]bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
-			[]bool{false}),
-	}
-	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StOverlaps)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("LINESTRING(0 0,1 1)", 0, false)
+	overlaps, err := geometryOverlaps(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, overlaps)
+	require.Contains(t, err.Error(), "invalid geometry payload")
 }
 
 func TestStOverlapsWithMultiGeometries(t *testing.T) {
@@ -6754,6 +6786,47 @@ func TestStOverlapsWithMultiGeometries(t *testing.T) {
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StOverlaps)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestStOverlapsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection overlaps line through member line",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "LINESTRING(1 0,4 0)",
+			want:  true,
+		},
+		{
+			name:  "collection overlaps collection through member lines",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(1 0,4 0),POINT(9 9))",
+			want:  true,
+		},
+		{
+			name:  "nested collection overlaps multipoint through member multipoint",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT((0 0),(1 1))),POINT(8 8))",
+			right: "MULTIPOINT((1 1),(2 2))",
+			want:  true,
+		},
+		{
+			name:  "collection does not overlap equal member line",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "LINESTRING(0 0,3 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryOverlaps(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func TestStOverlapsWithPolygonHolePolygons(t *testing.T) {
@@ -6876,21 +6949,53 @@ func TestStEquals(t *testing.T) {
 }
 
 func TestStEqualsRejectInvalidInput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("POINT(0 0)", 0, false)
+	equal, err := geometryEquals(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, equal)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
 
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
-			[]bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
-			[]bool{false}),
+func TestStEqualsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection equals reordered collection",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not equal when member differs",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  false,
+		},
+		{
+			name:  "collection not equal to simple geometry",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0))",
+			right: "POINT(0 0)",
+			want:  false,
+		},
+		{
+			name:  "nested collections equal when matching items reorder",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),GEOMETRYCOLLECTION(POINT(0 0)))",
+			want:  true,
+		},
 	}
-	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StEquals)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryEquals(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func TestStEqualsWithPolygonHoles(t *testing.T) {
@@ -7450,8 +7555,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "touches",
 			fn:    StTouches,
 			label: "ST_TOUCHES",
-			left:  "SRID=4326;MULTIPOINT((0 0),(3 3))",
-			right: "SRID=3857;LINESTRING(0 0,2 0)",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(2 0)",
 		},
 		{
 			name:  "crosses",
@@ -7464,15 +7569,15 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "overlaps",
 			fn:    StOverlaps,
 			label: "ST_OVERLAPS",
-			left:  "SRID=4326;MULTIPOINT((0 0),(1 1))",
-			right: "SRID=3857;MULTIPOINT((1 1),(2 2))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "SRID=3857;LINESTRING(1 0,4 0)",
 		},
 		{
 			name:  "equals",
 			fn:    StEquals,
 			label: "ST_EQUALS",
-			left:  "SRID=4326;MULTIPOINT((0 0),(1 1))",
-			right: "SRID=3857;MULTIPOINT((1 1),(0 0))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))",
 		},
 		{
 			name:  "covers",

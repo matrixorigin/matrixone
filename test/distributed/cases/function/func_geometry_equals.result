@@ -73,9 +73,18 @@ select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromt
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 4326)) as equals_multipoint_srid;
 ➤ equals_multipoint_srid[-7,1,0]  𝄀
 1
-select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
--- @regex("ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
-invalid input: ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))')) as equals_geometrycollection_reordered;
+➤ equals_geometrycollection_reordered[-7,1,0]  𝄀
+1
+select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))')) as equals_geometrycollection_diff_member;
+➤ equals_geometrycollection_diff_member[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)')) as equals_geometrycollection_point_cross_type;
+➤ equals_geometrycollection_point_cross_type[-7,1,0]  𝄀
+0
+select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),GEOMETRYCOLLECTION(POINT(0 0)))')) as equals_nested_geometrycollection_reordered;
+➤ equals_nested_geometrycollection_reordered[-7,1,0]  𝄀
+1
 select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as equals_polygon_hole_polygon_same;
 ➤ equals_polygon_hole_polygon_same[-7,1,0]  𝄀
 1
