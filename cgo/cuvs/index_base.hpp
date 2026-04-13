@@ -32,7 +32,6 @@
 #include "quantize.hpp"
 #include "json.hpp"
 #include <cuvs/distance/distance.hpp>
-#include <iostream>
 #include <vector>
 #include <string>
 #include <memory>
@@ -406,7 +405,6 @@ public:
 
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
-        std::cout << "[DEBUG] gpu_index_base_t::set_ids count=" << count_vectors << " offset=" << offset << std::endl;
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
@@ -414,7 +412,6 @@ public:
         for (uint64_t i = 0; i < count_vectors; ++i) {
             this->id_to_index_[ids[i]] = offset + i;
         }
-        std::cout << "[DEBUG] gpu_index_base_t::set_ids host_ids.size()=" << this->host_ids.size() << std::endl;
     }
 
     virtual void start() {}
@@ -447,7 +444,6 @@ public:
     uint32_t len() const { return static_cast<uint32_t>(current_offset_); }
 
     void add_chunk(const T* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
-        std::cout << "[DEBUG] gpu_index_base_t::add_chunk count=" << chunk_count << " ids=" << (ids ? "set" : "null") << std::endl;
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
 
@@ -478,7 +474,6 @@ public:
             for (uint64_t i = 0; i < chunk_count; ++i) {
                 id_to_index_[ids[i]] = target_offset + i;
             }
-            std::cout << "[DEBUG] gpu_index_base_t::add_chunk host_ids.size()=" << this->host_ids.size() << std::endl;
         }
     }
 
@@ -655,7 +650,6 @@ public:
     }
 
     void save_ids(const std::string& filename) const {
-        std::cout << "[DEBUG] gpu_index_base_t::save_ids to " << filename << " size=" << host_ids.size() << std::endl;
         std::ofstream os(filename, std::ios::binary);
         if (!os) throw std::runtime_error("Failed to open file for saving IDs: " + filename);
         uint64_t size = host_ids.size();
@@ -666,7 +660,6 @@ public:
     }
 
     void load_ids(const std::string& filename) {
-        std::cout << "[DEBUG] gpu_index_base_t::load_ids from " << filename << std::endl;
         std::ifstream is(filename, std::ios::binary);
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
@@ -678,7 +671,6 @@ public:
             is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
             this->set_ids(temp_ids.data(), size);
         }
-        std::cout << "[DEBUG] gpu_index_base_t::load_ids host_ids.size()=" << this->host_ids.size() << std::endl;
     }
 
     // Returns a string name for the template element type T.
@@ -758,9 +750,6 @@ public:
         bool has_ids       = !this->host_ids.empty();
         bool has_quantizer = this->quantizer_.is_trained();
         bool has_bitset    = !this->deleted_bitset_.empty();
-
-        std::cout << "[DEBUG] gpu_index_base_t::save_common_components dir=" << dir 
-                  << " has_ids=" << has_ids << " ids_size=" << this->host_ids.size() << std::endl;
 
         if (has_ids)       this->save_ids(dir + "/ids.bin");
         if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");

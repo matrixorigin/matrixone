@@ -210,6 +210,7 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->host_ids.reserve(this->count);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -240,6 +241,7 @@ public:
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->host_ids.reserve(this->count);
         if (ids) {
             this->set_ids(ids, this->count);
         }
