@@ -238,8 +238,10 @@ func TestSQLTaskExecutorRetryOnFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	runs := mustGetTestSQLTaskRun(t, store, 2, WithTaskIDCond(EQ, sqlTask.TaskID))
-	require.Equal(t, SQLTaskStatusFailed, runs[0].Status)
-	require.Equal(t, SQLTaskStatusSuccess, runs[1].Status)
+	require.Equal(t, SQLTaskStatusSuccess, runs[0].Status)
+	require.Equal(t, 2, runs[0].AttemptNumber)
+	require.Equal(t, SQLTaskStatusFailed, runs[1].Status)
+	require.Equal(t, 1, runs[1].AttemptNumber)
 }
 
 func TestSQLTaskExecutorTimeout(t *testing.T) {
