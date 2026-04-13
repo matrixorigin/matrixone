@@ -46,7 +46,7 @@ func TestGpuSearchFloatAll(t *testing.T) {
 			t.Fatalf("TrainQuantizer failed: %v", err)
 		}
 
-		err = index.AddChunkFloat(dataset, n_vectors)
+		err = index.AddChunkFloat(dataset, n_vectors, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed: %v", err)
 		}

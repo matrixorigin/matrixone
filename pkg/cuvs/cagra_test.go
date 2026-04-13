@@ -304,7 +304,7 @@ func TestGpuCagraChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize)
+		err = index.AddChunkFloat(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -858,7 +858,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -922,7 +922,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
