@@ -418,11 +418,12 @@ func d128SubDiffScale(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnul
 // scalePow10Factors returns pre-computed pow10 factors for scaling by 10^n.
 // For n ≤ 19: returns (Pow10[n], false, 0). For n > 19: returns (Pow10[19], true, Pow10[n-19]).
 func scalePow10Factors(n int32) (pow10a uint64, twoStep bool, pow10b uint64) {
-	pow10a = types.Pow10[n]
 	if n > 19 {
 		pow10a = types.Pow10[19]
 		pow10b = types.Pow10[n-19]
 		twoStep = true
+	} else {
+		pow10a = types.Pow10[n]
 	}
 	return
 }
