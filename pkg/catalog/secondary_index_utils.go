@@ -179,6 +179,9 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 	// fulltext index here
 	if def.IndexOption != nil {
 		parsername := strings.ToLower(def.IndexOption.ParserName)
+		if parsername == "" {
+			return res, nil
+		}
 		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
 		}
