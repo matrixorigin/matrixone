@@ -80,6 +80,8 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
+	// constMask: 0 for const vectors (always index 0), -1 for flat (use full idx).
+	constMask := -min(1, len(vals)-1)
 	hasNull := vec.HasNull()
 	var np *bitmap.Bitmap
 	if hasNull {
@@ -107,7 +109,7 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 		}
 
 		// Branchless Decimal64 → Decimal128 sign extension.
-		raw := vals[idx]
+		raw := vals[idx&constMask]
 		hi := uint64(int64(raw) >> 63)
 		val := types.Decimal128{B0_63: uint64(raw), B64_127: hi}
 
@@ -252,7 +254,8 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	var exec sumDecimal128FastExec
 	exec.mp = mp
 	exec.isSum = isSum
-	// Precision > 28: SUM of 17B max-value rows can overflow Decimal128.
+	// Width ≤ 28: max input value ≈ 10^28; overflow requires ≈17 billion rows per group.
+	// Width > 28: overflow is reachable with fewer rows, so use checked Add128.
 	exec.overflowCheck = param.Width > 28
 	sumTyp := SumReturnType([]types.Type{param})
 	avgTyp := AvgReturnType([]types.Type{param})
@@ -294,6 +297,8 @@ func (exec *sumDecimal128FastExec) BatchFill(offset int, groups []uint64, vector
 func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+	// constMask: 0 for const vectors (always index 0), -1 for flat (use full idx).
+	constMask := -min(1, len(vals)-1)
 	hasNull := vec.HasNull()
 	var np *bitmap.Bitmap
 	if hasNull {
@@ -322,7 +327,7 @@ func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vector
 			}
 
 			var err error
-			sums[y], err = sums[y].Add128(vals[idx])
+			sums[y], err = sums[y].Add128(vals[idx&constMask])
 			if err != nil {
 				return err
 			}
@@ -345,7 +350,7 @@ func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vector
 				cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 			}
 
-			sums[y] = sums[y].Add128Unchecked(vals[idx])
+			sums[y] = sums[y].Add128Unchecked(vals[idx&constMask])
 			cnts[y]++
 		}
 	}
