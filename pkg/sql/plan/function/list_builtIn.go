@@ -2589,6 +2589,48 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// vecf32_from_base64
+	{
+		functionId: VECF32_FROM_BASE64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return VecFromBase64[float32]
+				},
+			},
+		},
+	},
+
+	// vecf64_from_base64
+	{
+		functionId: VECF64_FROM_BASE64,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return VecFromBase64[float64]
+				},
+			},
+		},
+	},
+
 	// compress
 	{
 		functionId: COMPRESS,

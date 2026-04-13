@@ -46,8 +46,7 @@ type flushObjTask struct {
 	createAt    time.Time
 	partentTask string
 
-	stats objectio.ObjectStats
-	done  bool
+	done bool
 }
 
 func NewFlushObjTask(
@@ -94,12 +93,25 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
-	writer, err := ioutil.NewBlockWriterNew(
+	cnBatch := containers.ToCNBatch(task.data)
+	for _, vec := range cnBatch.Vecs {
+		if vec == nil {
+			// this task has been canceled
+			return nil
+		}
+	}
+	arena := objectio.GetArena(objectio.ArenaSmall)
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.fs,
 		name,
 		task.schemaVer,
 		task.seqnums,
 		task.meta.IsTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
@@ -119,15 +131,11 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		} else if task.meta.GetSchema().HasSortKey() {
 			writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 		}
-	}
-
-	cnBatch := containers.ToCNBatch(task.data)
-	for _, vec := range cnBatch.Vecs {
-		if vec == nil {
-			// this task has been canceled
-			return nil
+		if task.meta.GetSchema().HasFakePK() {
+			writer.SetFakePK(uint16(task.meta.GetSchema().GetPrimaryKey().Idx))
 		}
 	}
+
 	dataRows := cnBatch.RowCount()
 	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)
@@ -152,8 +160,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("data-rows", dataRows),
 		)
 	}
-	task.stats = writer.GetObjectStats()
-
 	task.stat = writer.Stats()
 	return err
 }

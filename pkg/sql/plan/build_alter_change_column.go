@@ -65,6 +65,13 @@ func ChangeColumn(
 		return false, moerr.NewErrDupFieldName(ctx, newColName)
 	}
 
+	// If renaming the column, check if any generated column depends on it
+	if newColName != oldColName {
+		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
+	}
+
 	//change the name of the column in the foreign key constraint
 	if newColNameOrigin != oldColNameOrigin {
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
@@ -205,19 +212,43 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
+		case *tree.AttributeGeneratedAlways:
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			// Check for circular dependency (includes self-reference)
+			if err := checkGeneratedColCycle(ctx.GetContext(), targetTableDef, oldCol.Name, generatedCol.Expr); err != nil {
+				return nil, err
+			}
+			newCol.GeneratedCol = generatedCol
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
-	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-	}
-	if !hasDefaultValue {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-		if err != nil {
-			return nil, err
+	if newCol.GeneratedCol != nil {
+		// Reject VIRTUAL generated columns as PRIMARY KEY
+		if newCol.Primary && !newCol.GeneratedCol.IsStored {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+				"defining a virtual generated column '%s' as primary key", newColNameOrigin)
 		}
-		newCol.Default = defaultValue
+		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
+		newCol.Default = &plan.Default{
+			NullAbility:  getColumnNullAbility(specNewColumn),
+			Expr:         nil,
+			OriginString: "",
+		}
+	} else {
+		if auto_incr && hasDefaultValue {
+			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
+		}
+		if !hasDefaultValue {
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+		}
 	}
 
 	if err = checkIndexedColumnTypeChange(ctx.GetContext(), targetTableDef, oldCol, newCol); err != nil {

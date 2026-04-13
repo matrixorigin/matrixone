@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -116,6 +117,7 @@ func main() {
 		logutil.Infof("Mutex profiling enabled with fraction: %d", *mutexProfileFraction)
 	}
 	if *httpListenAddr != "" {
+		frontend.SetDebugHTTPAddr(*httpListenAddr)
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
 		}()
@@ -209,6 +211,9 @@ func startService(
 	setupServiceRuntime(cfg, stopper)
 
 	malloc.SetDefaultConfig(cfg.Malloc)
+	if cfg.Malloc.MpoolProfiling != nil && *cfg.Malloc.MpoolProfiling {
+		mpool.EnableProfiling()
+	}
 
 	setupStatusServer(runtime.ServiceRuntime(cfg.mustGetServiceUUID()))
 

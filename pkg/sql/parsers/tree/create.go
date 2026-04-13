@@ -1739,7 +1739,14 @@ type AttributeGeneratedAlways struct {
 }
 
 func (node *AttributeGeneratedAlways) Format(ctx *FmtCtx) {
+	ctx.WriteString("generated always as (")
 	node.Expr.Format(ctx)
+	ctx.WriteByte(')')
+	if node.Stored {
+		ctx.WriteString(" stored")
+	} else {
+		ctx.WriteString(" virtual")
+	}
 }
 
 func (node AttributeGeneratedAlways) TypeName() string { return "tree.AttributeGeneratedAlways" }

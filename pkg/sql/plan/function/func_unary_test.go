@@ -4310,6 +4310,42 @@ func TestFromBase64(t *testing.T) {
 	}
 }
 
+func TestVecFromBase64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// float32 roundtrip: encode [1.5, -2.25, 0, 3.14159] → base64, decode back
+	f32 := []float32{1.5, -2.25, 0, 3.14159}
+	b64 := types.ArrayToBase64(f32)
+
+	tc := tcTemp{
+		info: "vecf32_from_base64 roundtrip",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{}),
+		},
+		expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{f32}, []bool{}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float32])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("vecf32 case failed: %s", info))
+
+	// float64 roundtrip
+	f64 := []float64{1.5, -2.25, 0, 3.141592653589793}
+	b64 = types.ArrayToBase64(f64)
+
+	tc = tcTemp{
+		info: "vecf64_from_base64 roundtrip",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{}),
+		},
+		expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			[][]float64{f64}, []bool{}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float64])
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("vecf64 case failed: %s", info))
+}
+
 func initValidatePasswordStrengthTestCase() []tcTemp {
 	return []tcTemp{
 		{

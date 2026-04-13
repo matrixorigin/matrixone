@@ -85,6 +85,8 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 			return err
 		}
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
+		// Remap ColPos in all generated column expressions after the insertion
+		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		tableDef.Cols = append(tableDef.Cols, newCol)
 	}
@@ -182,27 +184,35 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
+		case *tree.AttributeGeneratedAlways:
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, alterPlan.CopyTableDef.Cols, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.GeneratedCol = generatedCol
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
 
-	defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-	if err != nil {
-		return nil, err
-	}
-	newCol.Default = defaultValue
-
-	hasDefaultValue = defaultValue.Expr != nil
-	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-	}
-	if !hasDefaultValue {
+	if newCol.GeneratedCol != nil {
+		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
+		newCol.Default = &plan.Default{
+			NullAbility:  getColumnNullAbility(specNewColumn),
+			Expr:         nil,
+			OriginString: "",
+		}
+	} else {
 		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 		if err != nil {
 			return nil, err
 		}
 		newCol.Default = defaultValue
+
+		hasDefaultValue = defaultValue.Expr != nil
+		if auto_incr && hasDefaultValue {
+			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
+		}
 	}
 	return newCol, nil
 }
@@ -381,6 +391,10 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
@@ -524,11 +538,23 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	return nil
 }
 
-// checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
+// handleDropColumnPosition removes the column from the table definition and
+// remaps ColPos references in generated column expressions.
 func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColDef) error {
+	// Find the position of the column being dropped BEFORE removing it
+	dropPos := int32(-1)
+	for i, c := range tableDef.Cols {
+		if c.Name == col.Name {
+			dropPos = int32(i)
+			break
+		}
+	}
 	tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(t *ColDef) bool {
 		return t.Name == col.Name
 	})
+	if dropPos >= 0 {
+		remapGeneratedColExprsAfterDrop(tableDef, dropPos)
+	}
 	return nil
 }
 
@@ -558,6 +584,137 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 				Name: clusterByColName,
 			}
 		}
+	}
+	return nil
+}
+
+// shiftColPosInExpr adjusts ColRef.ColPos values in a generated column expression.
+// All positions >= threshold are shifted by delta (+1 for insert, -1 for drop).
+func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
+			e.Col.ColPos += delta
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			shiftColPosInExpr(arg, threshold, delta)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			shiftColPosInExpr(item, threshold, delta)
+		}
+	}
+}
+
+// remapGeneratedColExprsAfterInsert adjusts all generated column expressions
+// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
+// The newly inserted column's own expression (if any) is also adjusted.
+func remapGeneratedColExprsAfterInsert(tableDef *TableDef, insertPos int32) {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			shiftColPosInExpr(col.GeneratedCol.Expr, insertPos, 1)
+		}
+	}
+}
+
+// remapGeneratedColExprsAfterDrop adjusts all generated column expressions
+// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
+		}
+	}
+}
+
+// checkColumnWithGeneratedDependency checks if the column is referenced
+// by any generated column expression. If so, the operation is rejected.
+func checkColumnWithGeneratedDependency(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			if exprReferencesColumn(col.GeneratedCol.Expr, colName, tableDef.Cols) {
+				return moerr.NewInvalidInputf(ctx,
+					"Cannot modify column '%s': generated column '%s' depends on it", colName, col.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// exprReferencesColumn checks if a plan expression references a column by name.
+func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if int(e.Col.ColPos) < len(cols) {
+			return strings.EqualFold(cols[e.Col.ColPos].Name, colName)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprReferencesColumn(arg, colName, cols) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprReferencesColumn(item, colName, cols) {
+				return true
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
+	}
+	return false
+}
+
+// checkGeneratedColCycle detects circular dependencies when a column is changed
+// to a generated column. It checks whether the expression transitively references
+// the target column through other generated columns.
+func checkGeneratedColCycle(ctx context.Context, tableDef *TableDef, targetColName string, expr *plan.Expr) error {
+	visited := make(map[string]bool)
+	return checkCycleHelper(ctx, tableDef, targetColName, expr, visited)
+}
+
+func checkCycleHelper(ctx context.Context, tableDef *TableDef, targetColName string, expr *plan.Expr, visited map[string]bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if pos < len(tableDef.Cols) {
+			refColName := tableDef.Cols[pos].Name
+			if strings.EqualFold(refColName, targetColName) {
+				return moerr.NewInvalidInputf(ctx, "generated column '%s' has a circular dependency", targetColName)
+			}
+			if !visited[refColName] {
+				visited[refColName] = true
+				refCol := tableDef.Cols[pos]
+				if refCol.GeneratedCol != nil && refCol.GeneratedCol.Expr != nil {
+					return checkCycleHelper(ctx, tableDef, targetColName, refCol.GeneratedCol.Expr, visited)
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkCycleHelper(ctx, tableDef, targetColName, arg, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkCycleHelper(ctx, tableDef, targetColName, item, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
 	}
 	return nil
 }

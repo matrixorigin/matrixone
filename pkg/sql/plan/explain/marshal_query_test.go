@@ -31,6 +31,13 @@ func TestGetLabelOrTitle(t *testing.T) {
 	m := MarshalNodeImpl{}
 	errCount := 0
 	for _, v := range plan2.Node_NodeType_value {
+		// REPLACE (32) is reserved in proto/plan.proto — the legacy
+		// REPLACE node type was eliminated; the constant only lingers
+		// in the not-yet-regenerated pb file. Skip it so this guard
+		// doesn't ask for title/label of a removed node type.
+		if plan2.Node_NodeType(v) == plan2.Node_REPLACE {
+			continue
+		}
 		node := &plan2.Node{
 			NodeType: plan2.Node_NodeType(v),
 			NodeId:   0,

@@ -1,0 +1,392 @@
+drop database if exists test_generated_col;
+create database test_generated_col;
+use test_generated_col;
+create table t1 (a int, b int, c int generated always as (a + b) stored);
+show create table t1;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  `c` int GENERATED ALWAYS AS ((a + b)) STORED
+)
+desc t1;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+insert into t1(a, b) values (1, 2);
+insert into t1(a, b) values (10, 20), (100, 200);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+10  ¦  20  ¦  30  𝄀
+100  ¦  200  ¦  300
+insert into t1 values (5, 6);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11  𝄀
+10  ¦  20  ¦  30  𝄀
+100  ¦  200  ¦  300
+insert into t1(a, b) values (null, 3);
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+null  ¦  3  ¦  null  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11  𝄀
+10  ¦  20  ¦  30  𝄀
+100  ¦  200  ¦  300
+insert into t1(a, b, c) values (1, 2, 3);
+invalid input: the value specified for generated column 'c' in table 't1' is not allowed
+update t1 set c = 999 where a = 1;
+invalid input: the value specified for generated column 'c' in table 't1' is not allowed
+update t1 set a = 50, b = 60 where a = 10;
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+null  ¦  3  ¦  null  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11  𝄀
+50  ¦  60  ¦  110  𝄀
+100  ¦  200  ¦  300
+create table t2 (a int, b int, c int generated always as (a + b) stored, d int generated always as (a * b) stored);
+insert into t2(a, b) values (3, 4);
+select * from t2;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[4,32,0]  𝄀
+3  ¦  4  ¦  7  ¦  12
+create table t3 (a int, b int, c int generated always as (a + b) stored, d int generated always as (c * 2) stored);
+insert into t3(a, b) values (5, 10);
+select * from t3;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[4,32,0]  𝄀
+5  ¦  10  ¦  15  ¦  30
+create table t4 (x int, y int, z int as (x - y) stored);
+show create table t4;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t4  ¦  CREATE TABLE `t4` (
+  `x` int DEFAULT NULL,
+  `y` int DEFAULT NULL,
+  `z` int GENERATED ALWAYS AS ((x - y)) STORED
+)
+insert into t4(x, y) values (100, 30);
+select * from t4;
+➤ x[4,32,0]  ¦  y[4,32,0]  ¦  z[4,32,0]  𝄀
+100  ¦  30  ¦  70
+create table t5 (first_name varchar(50), last_name varchar(50), full_name varchar(101) generated always as (concat(first_name, ' ', last_name)) stored);
+insert into t5(first_name, last_name) values ('John', 'Doe'), ('Jane', 'Smith');
+select * from t5 order by first_name;
+➤ first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  full_name[12,-1,0]  𝄀
+Jane  ¦  Smith  ¦  Jane Smith  𝄀
+John  ¦  Doe  ¦  John Doe
+create table t6 (id int primary key, val int, doubled int generated always as (val * 2) stored);
+insert into t6(id, val) values (1, 10), (2, 20);
+select * from t6 order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  doubled[4,32,0]  𝄀
+1  ¦  10  ¦  20  𝄀
+2  ¦  20  ¦  40
+update t6 set val = 15 where id = 1;
+select * from t6 order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  doubled[4,32,0]  𝄀
+1  ¦  15  ¦  30  𝄀
+2  ¦  20  ¦  40
+create table t7 (a int, b int, c int generated always as (a + b) virtual);
+show create table t7;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t7  ¦  CREATE TABLE `t7` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  `c` int GENERATED ALWAYS AS ((a + b)) VIRTUAL
+)
+insert into t7(a, b) values (1, 2);
+insert into t7(a, b) values (10, 20), (100, 200);
+select * from t7 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+10  ¦  20  ¦  30  𝄀
+100  ¦  200  ¦  300
+insert into t7 values (5, 6);
+select * from t7 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11  𝄀
+10  ¦  20  ¦  30  𝄀
+100  ¦  200  ¦  300
+insert into t7(a, b, c) values (1, 2, 3);
+invalid input: the value specified for generated column 'c' in table 't7' is not allowed
+update t7 set c = 999 where a = 1;
+invalid input: the value specified for generated column 'c' in table 't7' is not allowed
+update t7 set a = 50, b = 60 where a = 10;
+select * from t7 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11  𝄀
+50  ¦  60  ¦  110  𝄀
+100  ¦  200  ¦  300
+create table t8 (x int, y int, z int as (x * y));
+show create table t8;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t8  ¦  CREATE TABLE `t8` (
+  `x` int DEFAULT NULL,
+  `y` int DEFAULT NULL,
+  `z` int GENERATED ALWAYS AS ((x * y)) VIRTUAL
+)
+insert into t8(x, y) values (3, 7);
+select * from t8;
+➤ x[4,32,0]  ¦  y[4,32,0]  ¦  z[4,32,0]  𝄀
+3  ¦  7  ¦  21
+create table t9 (first_name varchar(50), last_name varchar(50), full_name varchar(101) generated always as (concat(first_name, ' ', last_name)) virtual);
+insert into t9(first_name, last_name) values ('Alice', 'Bob');
+select * from t9;
+➤ first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  full_name[12,-1,0]  𝄀
+Alice  ¦  Bob  ¦  Alice Bob
+create table t10 (a int, b int, c int as (a + b) virtual, d int as (c * 2) virtual);
+insert into t10(a, b) values (5, 10);
+select * from t10;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[4,32,0]  𝄀
+5  ¦  10  ¦  15  ¦  30
+create table t11 (a int, b int, c int generated always as (a + b) stored, d varchar(100) as (concat(cast(a as varchar), '-', cast(b as varchar))) virtual);
+desc t11;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
+d  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  
+show full columns from t11;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+b  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+c  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
+d  ¦  VARCHAR(100)  ¦  null  ¦  YES  ¦    ¦  null  ¦  VIRTUAL GENERATED  ¦  select,insert,update,references  ¦  
+select column_name, extra, generation_expression from information_schema.columns where table_schema = 'test_generated_col' and table_name = 't11' and column_name in ('a','b','c','d') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  extra[12,-1,0]  ¦  generation_expression[12,-1,0]  𝄀
+a  ¦    ¦    𝄀
+b  ¦    ¦    𝄀
+c  ¦  STORED GENERATED  ¦  (a + b)  𝄀
+d  ¦  VIRTUAL GENERATED  ¦  concat(cast(a as varchar), '-', cast(b as varchar))
+create table t12 (a int, b int, d int, c int generated always as (a + b) stored);
+alter table t12 drop column a;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+alter table t12 drop column b;
+invalid input: Cannot modify column 'b': generated column 'c' depends on it
+alter table t12 drop column d;
+desc t12;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+create table t13 (a int, b int);
+insert into t13 values (1,2),(3,4);
+alter table t13 add column c int generated always as (a + b) stored;
+desc t13;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+select * from t13 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+3  ¦  4  ¦  7
+create table t14 (id int primary key, a int, b int, c int generated always as (a * b) stored);
+replace into t14 (id, a, b) values (1, 3, 4);
+select * from t14;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  3  ¦  4  ¦  12
+replace into t14 (id, a, b) values (1, 5, 6);
+select * from t14;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  5  ¦  6  ¦  30
+create table t15 like t11;
+show create table t15;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t15  ¦  CREATE TABLE `t15` (
+  `a` int DEFAULT NULL,
+  `b` int DEFAULT NULL,
+  `c` int GENERATED ALWAYS AS ((a + b)) STORED,
+  `d` varchar(100) GENERATED ALWAYS AS (concat(cast(a as varchar), '-', cast(b as varchar))) VIRTUAL
+)
+insert into t15 (a, b) values (10, 20);
+select * from t15;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  d[12,-1,0]  𝄀
+10  ¦  20  ¦  30  ¦  10-20
+create table t16 (a int, b int, c int generated always as (a + b) stored, index idx_c (c));
+insert into t16 (a, b) values (1,2),(3,4),(5,6);
+select * from t16 where c = 7;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+3  ¦  4  ¦  7
+select * from t16 where c > 5 order by c;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+3  ¦  4  ¦  7  𝄀
+5  ¦  6  ¦  11
+create table t17 (a int, b int, c int, d int generated always as (a + b) stored);
+alter table t17 drop column d;
+desc t17;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table t18 (a int, b int, c int not null generated always as (a + b) stored);
+desc t18;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+insert into t18 (a, b) values (1, 2);
+select * from t18;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+create table t19 (a int, b int);
+alter table t19 change column a a int generated always as (a + 1) stored;
+invalid input: generated column 'a' has a circular dependency
+create table t20 (a int, b int, c int generated always as (a + b) stored);
+alter table t20 rename column a to a2;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+alter table t20 rename column c to c2;
+desc t20;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+create table t21 (a int, b int, c int generated always as (a + b) stored);
+alter table t21 change column a a2 int;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+alter table t21 change column a a bigint;
+desc t21;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+create table t22 (a int, b int generated always as (a + 1) stored);
+alter table t22 change column a a int generated always as (b + 1) stored;
+invalid input: generated column 'a' has a circular dependency
+create table t23 (a int, c int generated always as (a + b) stored, b int);
+insert into t23 (a, b) values (1, 2);
+select * from t23;
+➤ a[4,32,0]  ¦  c[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  3  ¦  2
+desc t23;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table t24_fail (a int, c int generated always as (d + 1) stored, d int generated always as (a + 1) stored);
+invalid input: generated column 'c' cannot refer to generated column 'd' defined later
+create table t24_self_fail (a int generated always as (a + 1) stored);
+invalid input: generated column 'a' cannot refer to itself
+create table t25 (a int, b int, c int generated always as (a + b) stored);
+insert into t25 (a, b, c) values (1, 2, default);
+select * from t25;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+insert into t25 (a, b, c) values (3, 4, default), (5, 6, default);
+select * from t25;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+3  ¦  4  ¦  7  𝄀
+5  ¦  6  ¦  11
+insert into t25 (a, b, c) values (7, 8);
+Column count doesn't match value count at row 1
+insert into t25 (a, b, c) values (9, 10, 99);
+invalid input: the value specified for generated column 'c' in table 't25' is not allowed
+create table t26 (a int, b int, c int generated always as (a + b) stored);
+insert into t26 (a, b) values (1, 2);
+select * from t26;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+update t26 set a = 10, c = default;
+select * from t26;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+10  ¦  2  ¦  12
+update t26 set c = 99;
+invalid input: the value specified for generated column 'c' in table 't26' is not allowed
+create table t27_fail (a int, b double generated always as (rand()) stored);
+invalid input: expression of generated column cannot refer to a non-deterministic function 'rand'
+create table t28_fail (a int, b varchar(36) generated always as (uuid()) stored);
+invalid input: expression of generated column cannot refer to a non-deterministic function 'uuid'
+create table t29_dup (a int primary key, b int, c int generated always as (b + 1) stored);
+insert into t29_dup (a, b) values (1, 1);
+insert into t29_dup (a, b) values (1, 2) on duplicate key update b = values(b);
+select * from t29_dup;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+insert into t29_dup (a, b) values (1, 3) on duplicate key update c = 99;
+invalid input: the value specified for generated column 'c' in table 't29_dup' is not allowed
+insert into t29_dup (a, b) values (1, 4) on duplicate key update c = default, b = values(b);
+select * from t29_dup;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  4  ¦  5
+create table t30_fail (id int auto_increment primary key, x int generated always as (id + 1) stored);
+invalid input: generated column 'x' cannot refer to auto-increment column
+create table t31_fail (a int, b varchar(200) generated always as (@@sql_mode) stored);
+invalid input: expression of generated column cannot refer to a variable
+create table t32_parent (a int, b int generated always as (a + 1) virtual, unique key uk_b (b));
+create table t32_child (c int, constraint fk_t32 foreign key (c) references t32_parent (b));
+invalid input: foreign key cannot reference virtual generated column 'b'
+create table t33_load (a int, b int, c int generated always as (a + b) stored);
+load data inline format='csv', data='1,2' into table t33_load fields terminated by ',';
+select * from t33_load;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3
+load data inline format='csv', data='3,4,99' into table t33_load fields terminated by ',' (a, b, c);
+invalid input: the value specified for generated column 'c' in table 't33_load' is not allowed
+create table t34_remap (a int, b int, c int generated always as (a + b) stored);
+insert into t34_remap (a, b) values (1, 2);
+alter table t34_remap add column x int default 0 first;
+insert into t34_remap (x, a, b) values (10, 3, 4);
+select * from t34_remap;
+➤ x[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+0  ¦  1  ¦  2  ¦  3  𝄀
+10  ¦  3  ¦  4  ¦  7
+create table t35_remap (a int, b int, c int generated always as (a * b) stored);
+insert into t35_remap (a, b) values (3, 5);
+alter table t35_remap add column y int default 0 after a;
+insert into t35_remap (a, y, b) values (4, 99, 6);
+select * from t35_remap;
+➤ a[4,32,0]  ¦  y[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+3  ¦  0  ¦  5  ¦  15  𝄀
+4  ¦  99  ¦  6  ¦  24
+create table t36_remap (a int, b int, d int, c int generated always as (a + b) stored);
+insert into t36_remap (a, b, d) values (1, 2, 99);
+alter table t36_remap drop column d;
+insert into t36_remap (a, b) values (5, 6);
+select * from t36_remap;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  2  ¦  3  𝄀
+5  ¦  6  ¦  11
+create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
+insert into t37_odku_pk (a) values (1);
+insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
+select * from t37_odku_pk;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  10
+create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+alter table t38_modify modify column a bigint;
+invalid input: Cannot modify column 'a': generated column 'c' depends on it
+create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
+not supported: defining a virtual generated column 'b' as primary key
+create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
+invalid input: generated column expression cannot use qualified column name 'a'
+create table t41_load_bulk (id int, a int, b int, c int generated always as (a + b) stored);
+load data inline format='csv', data='1,10,20\n2,30,40\n3,50,60\n' into table t41_load_bulk fields terminated by ',' (id, a, b);
+select count(*) as bad_rows from t41_load_bulk where c != a + b;
+➤ bad_rows[-5,64,0]  𝄀
+0
+select * from t41_load_bulk order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  10  ¦  20  ¦  30  𝄀
+2  ¦  30  ¦  40  ¦  70  𝄀
+3  ¦  50  ¦  60  ¦  110
+create table t42_churn (id int primary key, a int, b int, c int generated always as (a + b) stored);
+insert into t42_churn (id, a, b) select result, result, result * 2 from generate_series(1, 10000, 1) g;
+update t42_churn set a = a + 3 where id % 2 = 0;
+update t42_churn set b = b + 5 where id % 5 = 0;
+insert into t42_churn (id, a, b) values (1, 7, 8) on duplicate key update a = values(a), b = values(b);
+replace into t42_churn (id, a, b) values (2, 9, 10);
+select count(*) as bad_rows from t42_churn where c != a + b;
+➤ bad_rows[-5,64,0]  𝄀
+0
+select * from t42_churn where id between 1 and 5 order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  7  ¦  8  ¦  15  𝄀
+2  ¦  9  ¦  10  ¦  19  𝄀
+3  ¦  3  ¦  6  ¦  9  𝄀
+4  ¦  7  ¦  8  ¦  15  𝄀
+5  ¦  5  ¦  15  ¦  20
+drop database test_generated_col;

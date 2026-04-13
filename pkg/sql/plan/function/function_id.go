@@ -589,50 +589,53 @@ const (
 	CAST_INDEX_TO_SET_VALUE       = 407
 	CAST_SET_VALUE_TO_INDEX       = 408
 	CAST_SET_INDEX_VALUE_TO_INDEX = 409
-	CAST_GEOMETRY_TO_SUBTYPE      = 410
-	ST_ASTEXT                     = 411
-	ST_GEOMFROMTEXT               = 412
-	ST_GEOMETRYTYPE               = 413
-	ST_X                          = 414
-	ST_Y                          = 415
-	ST_NUMGEOMETRIES              = 416
-	ST_GEOMETRYN                  = 417
-	ST_ISEMPTY                    = 418
-	ST_DISTANCE                   = 419
-	ST_SRID                       = 420
-	ST_LENGTH                     = 421
-	ST_AREA                       = 422
-	ST_CONTAINS                   = 423
-	ST_WITHIN                     = 424
-	ST_STARTPOINT                 = 425
-	ST_ENDPOINT                   = 426
-	ST_POINTN                     = 427
-	ST_EXTERIORRING               = 428
-	ST_NUMINTERIORRINGS           = 429
-	ST_INTERIORRINGN              = 430
-	ST_NUMPOINTS                  = 431
-	ST_ISCLOSED                   = 432
-	ST_ISCOLLECTION               = 433
-	ST_DIMENSION                  = 434
-	ST_ISSIMPLE                   = 435
-	ST_ISRING                     = 436
-	ST_ENVELOPE                   = 437
-	ST_CENTROID                   = 438
-	ST_BOUNDARY                   = 439
-	ST_ISVALID                    = 440
-	ST_POINTONSURFACE             = 441
-	ST_INTERSECTS                 = 442
-	ST_DISJOINT                   = 443
-	ST_TOUCHES                    = 444
-	ST_CROSSES                    = 445
-	ST_OVERLAPS                   = 446
-	ST_EQUALS                     = 447
-	ST_COVERS                     = 448
-	ST_COVEREDBY                  = 449
+
+	VECF32_FROM_BASE64       = 410
+	VECF64_FROM_BASE64       = 411
+	CAST_GEOMETRY_TO_SUBTYPE = 412
+	ST_ASTEXT                = 413
+	ST_GEOMFROMTEXT          = 414
+	ST_GEOMETRYTYPE          = 415
+	ST_X                     = 416
+	ST_Y                     = 417
+	ST_NUMGEOMETRIES         = 418
+	ST_GEOMETRYN             = 419
+	ST_ISEMPTY               = 420
+	ST_DISTANCE              = 421
+	ST_SRID                  = 422
+	ST_LENGTH                = 423
+	ST_AREA                  = 424
+	ST_CONTAINS              = 425
+	ST_WITHIN                = 426
+	ST_STARTPOINT            = 427
+	ST_ENDPOINT              = 428
+	ST_POINTN                = 429
+	ST_EXTERIORRING          = 430
+	ST_NUMINTERIORRINGS      = 431
+	ST_INTERIORRINGN         = 432
+	ST_NUMPOINTS             = 433
+	ST_ISCLOSED              = 434
+	ST_ISCOLLECTION          = 435
+	ST_DIMENSION             = 436
+	ST_ISSIMPLE              = 437
+	ST_ISRING                = 438
+	ST_ENVELOPE              = 439
+	ST_CENTROID              = 440
+	ST_BOUNDARY              = 441
+	ST_ISVALID               = 442
+	ST_POINTONSURFACE        = 443
+	ST_INTERSECTS            = 444
+	ST_DISJOINT              = 445
+	ST_TOUCHES               = 446
+	ST_CROSSES               = 447
+	ST_OVERLAPS              = 448
+	ST_EQUALS                = 449
+	ST_COVERS                = 450
+	ST_COVEREDBY             = 451
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 450
+	FUNCTION_END_NUMBER = 452
 )
 
 // functionIdRegister is what function we have registered already.
@@ -924,6 +927,8 @@ var functionIdRegister = map[string]int32{
 	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
+	"vecf32_from_base64":             VECF32_FROM_BASE64,
+	"vecf64_from_base64":             VECF64_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

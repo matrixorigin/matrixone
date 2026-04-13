@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -27,7 +29,12 @@ import (
 
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
+	// REPLACE has its own conflict handling; bypass the generic FK table rejection
+	// in ResolveTables so FK tables can use the modern operator-based path.
+	origCtx := builder.GetContext()
+	builder.compCtx.SetContext(context.WithValue(origCtx, defines.IgnoreForeignKey{}, true))
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	builder.compCtx.SetContext(origCtx)
 	if err != nil {
 		return 0, err
 	}
@@ -51,10 +58,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
 
-	if pkName == catalog.FakePrimaryKeyColName {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "fake primary key")
-		//return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
-	}
+	isFakePK := pkName == catalog.FakePrimaryKeyColName
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
@@ -78,8 +82,39 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldColName2Idx := make(map[string][2]int32)
 
+	// For fake PK tables with no unique indexes (no PK, no UK), REPLACE behaves like INSERT.
+	// Skip the LEFT JOIN to avoid a cross join (empty join condition) that would incorrectly
+	// match and delete all existing rows.
+	hasUniqueIdx := false
+	if isFakePK {
+		for _, idxDef := range tableDef.Indexes {
+			if idxDef.Unique {
+				hasUniqueIdx = true
+				break
+			}
+		}
+	}
+
 	// get old columns from existing main table
-	{
+	if isFakePK && !hasUniqueIdx {
+		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
+		for _, col := range tableDef.Cols {
+			oldColName2Idx[tableDef.Name+"."+col.Name] = [2]int32{fullProjTag, int32(len(fullProjList))}
+			fullProjList = append(fullProjList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Isnull: true},
+				},
+			})
+		}
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: fullProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{fullProjTag},
+		}, bindCtx)
+	} else {
 		oldScanTag := builder.genNewBindTag()
 
 		builder.addNameByColRef(oldScanTag, tableDef)
@@ -144,37 +179,82 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 		}
 
-		pkPos := tableDef.Name2ColIndex[pkName]
-		pkTyp := tableDef.Cols[pkPos].Typ
-		leftExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: selectTag,
-					ColPos: colName2Idx[tableDef.Name+"."+pkName],
+		// For fake PK tables, use the first unique key for the LEFT JOIN instead of PK
+		var joinConds []*plan.Expr
+		if isFakePK {
+			// find first unique index to join on
+			for _, idxDef := range tableDef.Indexes {
+				if !idxDef.Unique {
+					continue
+				}
+				for _, part := range idxDef.Parts {
+					colName := catalog.ResolveAlias(part)
+					colIdx := tableDef.Name2ColIndex[colName]
+					colTyp := tableDef.Cols[colIdx].Typ
+					leftExpr := &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectTag,
+								ColPos: colName2Idx[tableDef.Name+"."+colName],
+							},
+						},
+					}
+					rightExpr := &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: oldScanTag,
+								ColPos: colIdx,
+							},
+						},
+					}
+					cond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
+					joinConds = append(joinConds, cond)
+				}
+				break
+			}
+		} else {
+			pkPos := tableDef.Name2ColIndex[pkName]
+			pkTyp := tableDef.Cols[pkPos].Typ
+			leftExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: colName2Idx[tableDef.Name+"."+pkName],
+					},
 				},
-			},
-		}
-		rightExpr := &plan.Expr{
-			Typ: pkTyp,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: oldScanTag,
-					ColPos: pkPos,
+			}
+			rightExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: oldScanTag,
+						ColPos: pkPos,
+					},
 				},
-			},
+			}
+			cond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
+			joinConds = append(joinConds, cond)
 		}
 
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			leftExpr,
-			rightExpr,
-		})
+		var joinOnList []*plan.Expr
+		if len(joinConds) == 1 {
+			joinOnList = joinConds
+		} else if len(joinConds) > 1 {
+			combined := joinConds[0]
+			for _, c := range joinConds[1:] {
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{combined, c})
+			}
+			joinOnList = []*plan.Expr{combined}
+		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{lastNodeID, oldScanNodeID},
 			JoinType: plan.Node_LEFT,
-			OnList:   []*plan.Expr{joinCond},
+			OnList:   joinOnList,
 		}, bindCtx)
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -185,8 +265,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}, bindCtx)
 	}
 
-	// detect primary key confliction
-	{
+	// detect primary key confliction (skip for fake PK tables)
+	if !isFakePK {
 		scanTag := builder.genNewBindTag()
 
 		// handle primary/unique key confliction
@@ -590,6 +670,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		reCheckifNeedLockWholeTable(builder)
 	}
 
+	// Self-referencing FK constraint checks are handled by DetectSqls (generated in
+	// bindAndOptimizeReplaceQuery) which run after the REPLACE execution to verify
+	// that no child rows reference deleted parent rows.
+
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{lastNodeID},
@@ -628,9 +712,14 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	columnIsNull := make(map[string]bool)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
+	colIdxToProjPos := make(map[int32]int32)
+	genColIdxToProj1Pos := make(map[int]int)
+	genColIdxToProj2Pos := make(map[int]int)
+	generatedColIdxs := make([]int, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: oldExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -644,13 +733,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-			//
-			//for k, part := range tableDef.Pkey.Names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
@@ -662,14 +744,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
-			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			//args := make([]*plan.Expr, len(names))
-			//
-			//for k, part := range names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,
@@ -680,6 +754,14 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					},
 				},
 			})
+		} else if col.GeneratedCol != nil {
+			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
+			// Defer them until base/default columns are in projList1 so forward references resolve.
+			genColIdxToProj1Pos[i] = len(projList1)
+			genColIdxToProj2Pos[i] = len(projList2)
+			generatedColIdxs = append(generatedColIdxs, i)
+			projList1 = append(projList1, nil)
+			projList2 = append(projList2, nil)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -694,6 +776,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 			}
 
+			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: defExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -709,10 +792,26 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
-	validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
-	if hasIrregularIndex {
-		return 0, nil, nil, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+	for _, i := range generatedColIdxs {
+		col := tableDef.Cols[i]
+		genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+		proj1Pos := genColIdxToProj1Pos[i]
+		projList1[proj1Pos] = genExpr
+		pos := int32(proj1Pos)
+		colIdxToProjPos[int32(i)] = pos
+		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
+			Typ: genExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: projTag1,
+					ColPos: pos,
+				},
+			},
+		}
 	}
+
+	validIndexes, _ := getValidIndexes(tableDef)
 	tableDef.Indexes = validIndexes
 
 	skipUniqueIdx := make([]bool, len(tableDef.Indexes))

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -606,4 +607,53 @@ func TestTimestampLiteral_ScaleValidation(t *testing.T) {
 		require.Contains(t, err.Error(), "TIMESTAMP")
 		require.Contains(t, err.Error(), "Maximum is 6")
 	})
+}
+
+func TestGetExprZoneMapConstantFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+
+	// Build abs(-42): a function in the "default" case with all-constant args.
+	// This exercises the constant-fold path and the defer cleanup for ivecs.
+	argExpr := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: false,
+			Value:  &plan.Literal_I64Val{I64Val: -42},
+		}},
+		Typ:   plan.Type{Id: int32(types.T_int64), NotNullable: true},
+		AuxId: 0,
+	}
+
+	// Resolve the "abs" function for int64
+	fGet, err := function.GetFunctionByName(ctx, "abs", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	funcID := fGet.GetEncodedOverloadID()
+	retType := fGet.GetReturnType()
+
+	funcExpr := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     funcID,
+				ObjName: "abs",
+			},
+			Args: []*plan.Expr{argExpr},
+		}},
+		Typ:   plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
+		AuxId: 1,
+	}
+
+	// Allocate ZM and vec arrays (size = max AuxId + 1)
+	zms := make([]index.ZM, 2)
+	vecs := make([]*vector.Vector, 2)
+
+	zm := GetExprZoneMap(ctx, proc, funcExpr, nil, nil, zms, vecs)
+	require.True(t, zm.IsInited(), "result zone map should be initialized")
+
+	// Clean up any vecs allocated during evaluation
+	for _, v := range vecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	proc.Free()
 }

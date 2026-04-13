@@ -42,18 +42,15 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/datalink"
-
-	"github.com/RoaringBitmap/roaring"
-	"golang.org/x/exp/constraints"
-
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -63,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4832,6 +4830,67 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return rs.AppendMustNullForBytesResult()
 		}
 		_ = rs.AppendMustBytesValue(buf)
+	}
+
+	return nil
+}
+
+// VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
+// The base64 payload must be the raw little-endian bytes of the vector elements,
+// as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
+func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	var elemSize int
+	switch any((*new(T))).(type) {
+	case float32:
+		elemSize = 4
+	case float64:
+		elemSize = 8
+	}
+
+	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.
+	if length > 0 {
+		for j := uint64(0); j < uint64(length); j++ {
+			data, null := source.GetStrValue(j)
+			if !null {
+				decodedSize := base64.StdEncoding.DecodedLen(len(data))
+				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, proc.Mp())
+				break
+			}
+		}
+	}
+
+	var buf []byte
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		need := base64.StdEncoding.DecodedLen(len(data))
+		if cap(buf) < need {
+			buf = make([]byte, need)
+		} else {
+			buf = buf[:need]
+		}
+		n, err := base64.StdEncoding.Decode(buf, data)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: invalid base64 input", elemSize*8)
+		}
+
+		if n%elemSize != 0 {
+			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: decoded length %d is not a multiple of %d bytes", elemSize*8, n, elemSize)
+		}
+
+		if err = rs.AppendBytes(buf[:n], false); err != nil {
+			return err
+		}
 	}
 
 	return nil

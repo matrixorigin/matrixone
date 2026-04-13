@@ -401,6 +401,271 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	return ret, nil
 }
 
+// buildGeneratedExpr builds the expression for a GENERATED ALWAYS AS column.
+// existingCols contains the columns defined before this generated column, used
+// to resolve column references in the expression.
+// getColumnNullAbility returns the nullability of a column based on its attributes.
+// Returns true if the column allows NULL (default), false if NOT NULL is specified.
+func getColumnNullAbility(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeNull); ok {
+			return s.Is
+		}
+	}
+	return true
+}
+
+func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+	var genAttr *tree.AttributeGeneratedAlways
+	for _, attr := range col.Attributes {
+		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
+			genAttr = ga
+			break
+		}
+	}
+	if genAttr == nil {
+		return nil, nil
+	}
+
+	colNameOrigin := col.Name.ColNameOrigin()
+
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+
+	// Collect column names and types from existing (non-generated or already-defined generated) columns
+	colNames := make([]string, len(existingCols))
+	colTypes := make([]plan.Type, len(existingCols))
+	for i, c := range existingCols {
+		colNames[i] = c.Name
+		colTypes[i] = c.Typ
+	}
+
+	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
+	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate: generated column expression cannot contain non-deterministic functions
+	if err := checkExprForVolatileFunc(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+	if err := checkGeneratedExprReferences(proc.Ctx, planExpr, colNameOrigin, existingCols, make(map[int32]bool)); err != nil {
+		return nil, err
+	}
+
+	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(genAttr.Expr, genAttr.Expr, false)
+	return &plan.GeneratedCol{
+		Expr:         genExpr,
+		OriginString: fmtCtx.String(),
+		IsStored:     genAttr.Stored,
+	}, nil
+}
+
+// checkGeneratedExprReferences rejects variable references and auto-increment
+// dependencies in generated-column expressions, including indirect references
+// through earlier generated columns.
+func checkGeneratedExprReferences(ctx context.Context, expr *plan.Expr, currentColName string, cols []*ColDef, visited map[int32]bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if int(e.Col.ColPos) >= len(cols) {
+			return nil
+		}
+		refCol := cols[e.Col.ColPos]
+		if refCol.Typ.AutoIncr {
+			return moerr.NewInvalidInputf(ctx, "generated column '%s' cannot refer to auto-increment column", currentColName)
+		}
+		if refCol.GeneratedCol != nil && refCol.GeneratedCol.Expr != nil && !visited[e.Col.ColPos] {
+			visited[e.Col.ColPos] = true
+			return checkGeneratedExprReferences(ctx, refCol.GeneratedCol.Expr, currentColName, cols, visited)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot contain parameter marker")
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkGeneratedExprReferences(ctx, arg, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkGeneratedExprReferences(ctx, item, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkExprForVolatileFunc walks a plan expression tree and reports an error
+// if any function call is volatile or real-time related, which is not allowed
+// in generated column expressions.
+func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+			return moerr.NewInvalidInputf(ctx,
+				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
+		}
+		for _, arg := range e.F.Args {
+			if err := checkExprForVolatileFunc(ctx, arg); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkExprForVolatileFunc(ctx, item); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
+	}
+	return nil
+}
+
+// validateNoForwardGenRef checks that a generated column expression does not
+// reference another generated column that is defined after it in the CREATE TABLE
+// statement. Forward references to base (non-generated) columns are allowed.
+func validateNoForwardGenRef(ctx context.Context, expr *plan.Expr, currentIdx int, allCols []*ColDef, isGenerated []bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		refIdx := int(e.Col.ColPos)
+		if refIdx > currentIdx && refIdx < len(isGenerated) && isGenerated[refIdx] {
+			return moerr.NewInvalidInputf(ctx,
+				"generated column '%s' cannot refer to generated column '%s' defined later",
+				allCols[currentIdx].Name, allCols[refIdx].Name)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := validateNoForwardGenRef(ctx, arg, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateNoForwardGenRef(ctx, item, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
+	}
+	return nil
+}
+
+// remapGeneratedColExpr rewrites ColRef positions in a generated column expression
+// for use in INSERT/UPDATE projections. The stored expression has ColRef(0, colIdx)
+// inlineGeneratedColExpr replaces ColRef(0, colIdx) in a generated column expression
+// with a deep copy of the corresponding expression from projList1.
+// colIdxToProjPos maps tableDef column index → projList1 position.
+// This is used in INSERT to compute the generated value in projList1 directly.
+func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, projList1 []*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if projPos, ok := colIdxToProjPos[e.Col.ColPos]; ok {
+				if int(projPos) < len(projList1) {
+					src := DeepCopyExpr(projList1[projPos])
+					expr.Expr = src.Expr
+					expr.Typ = src.Typ
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			inlineGeneratedColExpr(arg, colIdxToProjPos, projList1)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
+		}
+	}
+}
+
+// substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
+// with the actual expressions from projList at offset+colIdx. This is used in UPDATE
+// to inline referenced column values into the generated expression.
+func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int32) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			pos := offset + e.Col.ColPos
+			if int(pos) < len(projList) {
+				return DeepCopyExpr(projList[pos])
+			}
+		}
+		return expr
+	case *plan.Expr_F:
+		newArgs := make([]*plan.Expr, len(e.F.Args))
+		for i, arg := range e.F.Args {
+			newArgs[i] = substituteColRefsInExpr(arg, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: e.F.Func,
+					Args: newArgs,
+				},
+			},
+		}
+	case *plan.Expr_List:
+		newItems := make([]*plan.Expr, len(e.List.List))
+		for i, item := range e.List.List {
+			newItems[i] = substituteColRefsInExpr(item, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{List: newItems},
+			},
+		}
+	default:
+		return expr
+	}
+}
+
 func isNullExpr(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -736,6 +1001,127 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
+// genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
+// no other row references the PK values being replaced (parent→child safety).
+// These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
+func genPreCheckSqlsForReplaceFKSelfRefer(
+	ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+	stmt *tree.Replace,
+) ([]string, error) {
+	if stmt.Rows == nil {
+		return nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil
+	}
+
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		// Only RESTRICT / NO_ACTION need a parent→child pre-check.
+		// CASCADE / SET_NULL / SET_DEFAULT semantics allow the operation to
+		// proceed and let the cascading action handle the children, so a
+		// pre-check would incorrectly block valid REPLACEs.
+		if fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION {
+			continue
+		}
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(referCols) != 1 || len(fkCols) != 1 {
+			continue
+		}
+
+		// Build column name → position in the Replace column list.
+		// Names are stored lower-cased in ColDef.Name; the user-supplied
+		// AST identifiers may use any casing, so normalize both sides.
+		colNameToPos := make(map[string]int)
+		if len(stmt.Columns) > 0 {
+			for i, col := range stmt.Columns {
+				colNameToPos[strings.ToLower(string(col))] = i
+			}
+		} else {
+			// Implicit column list: same visible-column rule as
+			// getInsertColsFromStmt — skip hidden cols (e.g. composite PK
+			// helper, fake PK, cluster-by composite, Row_ID), since the
+			// user VALUES list never supplies them.
+			pos := 0
+			for _, col := range cols {
+				if col.Hidden {
+					continue
+				}
+				colNameToPos[col.Name] = pos
+				pos++
+			}
+		}
+
+		refPos, ok := colNameToPos[referCols[0]]
+		if !ok {
+			continue
+		}
+
+		// The pre-check SQL embeds referenced PK values directly into a
+		// background statement. That is only semantics-preserving for
+		// static literals (NumVal/StrVal, including NULL via NumVal
+		// P_null). Non-literals such as prepared-statement parameters
+		// (ParamExpr "?"), function calls (rand(), uuid(), now()),
+		// subqueries, arithmetic, etc. would be re-evaluated when the
+		// pre-check runs and may not match the value actually written
+		// by REPLACE — skip pre-check generation in those cases.
+		//
+		// Trade-off: prepared REPLACE on RESTRICT self-ref FK tables and
+		// REPLACE with non-literal PK expressions lose the parent-row
+		// safety check. The full fix needs to defer pre-check generation
+		// to compile time after parameters/expressions are evaluated,
+		// which is a larger change left for follow-up work.
+		isSimpleLiteralExpr := func(expr tree.Expr) bool {
+			switch expr.(type) {
+			case *tree.NumVal, *tree.StrVal:
+				return true
+			default:
+				return false
+			}
+		}
+
+		hasUnsafeRefExpr := false
+		var valStrs []string
+		for _, row := range valuesClause.Rows {
+			if refPos >= len(row) {
+				continue
+			}
+			if !isSimpleLiteralExpr(row[refPos]) {
+				hasUnsafeRefExpr = true
+				break
+			}
+			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
+		}
+		if hasUnsafeRefExpr || len(valStrs) == 0 {
+			continue
+		}
+
+		inList := strings.Join(valStrs, ",")
+		tableClause := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from %s where `%s` in (%s) and `%s` is not null and `%s` not in (%s)",
+			tableClause, fkCols[0], inList, fkCols[0], referCols[0], inList,
+		)
 		ret = append(ret, sql)
 	}
 	return ret, nil

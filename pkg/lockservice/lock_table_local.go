@@ -548,7 +548,11 @@ func (l *localLockTable) handleLockConflictLocked(
 	if len(c.rangeLastWaitKey) > 0 {
 		v, ok := l.mu.store.Get(c.rangeLastWaitKey)
 		if !ok {
-			panic("BUG: missing range last wait key")
+			l.logger.Error("missing range last wait key when moving waiter to next conflict",
+				zap.Uint64("table", l.bind.Table),
+				zap.String("txn", c.txn.txnKey),
+				zap.Binary("last-wait-key", c.rangeLastWaitKey),
+				zap.Binary("next-conflict-key", key))
 		}
 		if ok && v.closeWaiter(c.w, l.logger) {
 			l.mu.store.Delete(c.rangeLastWaitKey)

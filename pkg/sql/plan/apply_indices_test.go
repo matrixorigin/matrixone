@@ -299,6 +299,52 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 	}
 }
 
+func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
+	testCases := []struct {
+		limit    uint64
+		expected float64
+	}{
+		{
+			limit:    3,
+			expected: 5.0,
+		},
+		{
+			limit:    10,
+			expected: 5.0,
+		},
+		{
+			limit:    49,
+			expected: 5.0,
+		},
+		{
+			limit:    50,
+			expected: 2.0,
+		},
+		{
+			limit:    99,
+			expected: 2.0,
+		},
+		{
+			limit:    100,
+			expected: 1.5,
+		},
+		{
+			limit:    199,
+			expected: 1.5,
+		},
+		{
+			limit:    200,
+			expected: 1.3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run("", func(t *testing.T) {
+			assert.Equal(t, tc.expected, calculateFilteredPostModeOverFetchFactor(tc.limit))
+		})
+	}
+}
+
 func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
 	t.Helper()
 	args := make([]*planpb.Expr, 0, numArgs)

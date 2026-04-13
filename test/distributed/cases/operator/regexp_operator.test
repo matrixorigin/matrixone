@@ -1,3 +1,8 @@
+-- Verify RLIKE is an alias for REGEXP (keywords.go:417 maps rlike → REGEXP)
+SELECT 'Corn' RLIKE 'Corn' AS rlike_alias_check;
+SELECT 'Acorn' RLIKE '^Co' AS rlike_alias_check2;
+SELECT 'Cheese' RLIKE 'Corn' AS rlike_alias_check3;
+
 SELECT 'Corn' REGEXP 'Corn' AS 'Corn';
 SELECT 'Acorn' REGEXP 'Corn' AS 'Acorn';
 SELECT 'Corner' REGEXP 'Corn' AS 'Corner';

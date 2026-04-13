@@ -198,23 +198,38 @@ func (exec *varStdDevExec[T, A]) getResult(s float64, s2 float64, cnt int64) (T,
 	return z, err
 }
 
-func (exec *varStdDevExec[T, A]) Flush() ([]*vector.Vector, error) {
+func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i := range vecs {
 		vecs[i] = vector.NewOffHeapVecWithType(resultType)
-		vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+		if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+			return nil, err
+		}
 	}
 
 	if exec.IsDistinct() {
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				if exec.state[i].argCnt[j] == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
+					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
 					continue
 				} else if exec.state[i].argCnt[j] == 1 {
 					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
-					vector.AppendFixed(vecs[i], z, false, exec.mp)
+					if err := vector.AppendFixed(vecs[i], z, false, exec.mp); err != nil {
+						return nil, err
+					}
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
 					s := float64(0)

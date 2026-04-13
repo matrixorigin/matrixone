@@ -190,7 +190,9 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	defExprInShowColumns = 4 //default expr in the show columns.
+	defExprInShowColumns       = 4 //default expr in the show columns.
+	generatedExprOrigin  uint8 = 5 // generated column expression origin string
+	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
 )
 
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -199,10 +201,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 4], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 6], but got NULL")
 	}
-	if tp > defExprInShowColumns {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 4], but got %d", tp))
+	if tp > generatedExprExtra {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 6], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -296,6 +298,27 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				return []byte{}, nil
 			}
 			return functionUtil.QuickStrToBytes(fStr), nil
+		}
+	case generatedExprOrigin:
+		f = func(s []byte) ([]byte, error) {
+			gen := new(plan.GeneratedCol)
+			err := types.Decode(s, gen)
+			if err != nil {
+				return nil, err
+			}
+			return functionUtil.QuickStrToBytes(gen.OriginString), nil
+		}
+	case generatedExprExtra:
+		f = func(s []byte) ([]byte, error) {
+			gen := new(plan.GeneratedCol)
+			err := types.Decode(s, gen)
+			if err != nil {
+				return nil, err
+			}
+			if gen.IsStored {
+				return functionUtil.QuickStrToBytes("STORED GENERATED"), nil
+			}
+			return functionUtil.QuickStrToBytes("VIRTUAL GENERATED"), nil
 		}
 	}
 

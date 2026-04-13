@@ -1036,6 +1036,32 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+
+	// Pre-scan all column definitions so that generated columns can reference
+	// base columns defined later in the CREATE TABLE statement (forward reference).
+	var allColDefs []*ColDef
+	var isGeneratedCol []bool
+	for _, item := range stmt.Defs {
+		if def, ok := item.(*tree.ColumnTableDef); ok {
+			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			if err != nil {
+				return err
+			}
+			isGen := false
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributeGeneratedAlways:
+					isGen = true
+				case *tree.AttributeAutoIncrement:
+					cType.AutoIncr = true
+				}
+			}
+			allColDefs = append(allColDefs, &ColDef{Name: def.Name.ColName(), Typ: cType})
+			isGeneratedCol = append(isGeneratedCol, isGen)
+		}
+	}
+
+	genColIdx := 0 // tracks the current column's position in allColDefs
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -1068,11 +1094,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var pks []string
 			var comment string
 			var auto_incr bool
+			var isGenerated bool
 			colName := def.Name.ColName()
 			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
+				case *tree.AttributeGeneratedAlways:
+					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
@@ -1135,17 +1164,44 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
-			if err != nil {
-				return err
-			}
-			if auto_incr && defaultValue.Expr != nil {
-				return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
-			}
+			var defaultValue *plan.Default
+			var onUpdateExpr *plan.OnUpdate
+			var generatedCol *plan.GeneratedCol
 
-			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
-			if err != nil {
-				return err
+			if isGenerated {
+				// Build generated column expression using the full column list
+				// so that base columns defined later can be referenced (forward reference).
+				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
+				// Self-reference is still invalid even though base-column forward references are allowed.
+				if exprReferencesColumn(generatedCol.Expr, colName, allColDefs) {
+					return moerr.NewInvalidInputf(ctx.GetContext(), "generated column '%s' cannot refer to itself", colNameOrigin)
+				}
+				// Validate: no forward reference to generated columns defined later
+				if err := validateNoForwardGenRef(ctx.GetContext(), generatedCol.Expr, genColIdx, allColDefs, isGeneratedCol); err != nil {
+					return err
+				}
+				// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
+				defaultValue = &plan.Default{
+					NullAbility:  getColumnNullAbility(def),
+					Expr:         nil,
+					OriginString: "",
+				}
+			} else {
+				defaultValue, err = buildDefaultExpr(def, colType, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
+				if auto_incr && defaultValue.Expr != nil {
+					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
+				}
+
+				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
+				if err != nil {
+					return err
+				}
 			}
 
 			if !checkTableColumnNameValid(colName) {
@@ -1154,13 +1210,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 			colType.AutoIncr = auto_incr
 			col := &ColDef{
-				Name:       colName,
-				OriginName: colNameOrigin,
-				Alg:        plan.CompressType_Lz4,
-				Typ:        colType,
-				Default:    defaultValue,
-				OnUpdate:   onUpdateExpr,
-				Comment:    comment,
+				Name:         colName,
+				OriginName:   colNameOrigin,
+				Alg:          plan.CompressType_Lz4,
+				Typ:          colType,
+				Default:      defaultValue,
+				OnUpdate:     onUpdateExpr,
+				Comment:      comment,
+				GeneratedCol: generatedCol,
 			}
 			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
 			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
@@ -1184,6 +1241,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					defaultMap[colName] = "NULL"
 				}
 			}
+			genColIdx++
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
 				return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
@@ -1405,6 +1463,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		for _, primaryKey := range primaryKeys {
 			if _, ok := colMap[primaryKey]; !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
+			}
+			// Reject VIRTUAL generated columns in PRIMARY KEY
+			col := colMap[primaryKey]
+			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
+				return moerr.NewNotSupported(ctx.GetContext(),
+					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -4697,6 +4761,9 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 			return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
 		}
 	}
+	if err := checkFkVirtualGeneratedColumns(ctx.GetContext(), parentTableDef, fkData.ColsReferred.Cols); err != nil {
+		return err
+	}
 
 	// columnName in uk or pk -> its colId in the parent table
 	collectIndexColumn := func(names []string) {
@@ -4754,6 +4821,19 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 		return moerr.NewInternalError(ctx.GetContext(), "failed to add the foreign key constraint")
 	} else {
 		fkData.Def.ForeignCols = matchCol
+	}
+	return nil
+}
+
+func checkFkVirtualGeneratedColumns(ctx context.Context, parentTableDef *TableDef, referredCols []string) error {
+	for _, colName := range referredCols {
+		colDef := FindColumn(parentTableDef.Cols, colName)
+		if colDef == nil || colDef.GeneratedCol == nil || colDef.GeneratedCol.IsStored {
+			continue
+		}
+		return moerr.NewInvalidInputf(ctx,
+			"foreign key cannot reference virtual generated column '%s'",
+			colDef.GetOriginCaseName())
 	}
 	return nil
 }

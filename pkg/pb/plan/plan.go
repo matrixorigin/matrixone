@@ -61,6 +61,14 @@ func (m *Default) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+func (m *GeneratedCol) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *GeneratedCol) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 func (m CreateTable) IsSystemExternalRel() bool {
 	return m.TableDef.TableType == SystemExternalRel
 }

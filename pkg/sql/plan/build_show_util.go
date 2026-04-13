@@ -113,7 +113,18 @@ func ConstructCreateTableSQL(
 		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
-		if col.Typ.AutoIncr {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
+			// Generated column: output GENERATED ALWAYS AS (expr) STORED/VIRTUAL
+			if !col.Default.NullAbility {
+				buf.WriteString(" NOT NULL")
+			}
+			buf.WriteString(" GENERATED ALWAYS AS (" + col.GeneratedCol.OriginString + ")")
+			if col.GeneratedCol.IsStored {
+				buf.WriteString(" STORED")
+			} else {
+				buf.WriteString(" VIRTUAL")
+			}
+		} else if col.Typ.AutoIncr {
 			buf.WriteString(" NOT NULL AUTO_INCREMENT")
 		} else {
 			if !col.Default.NullAbility {

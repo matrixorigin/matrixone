@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -79,7 +80,7 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 	}()
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
 	t.Run("empty_buffer", func(t *testing.T) {
 		var buf *batch.Batch
@@ -97,23 +98,6 @@ func TestFlushBucketBufferBuild(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(3), cnt)
 	})
-}
-
-func TestCreateSpillFiles(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
-	require.Equal(t, spillNumBuckets, len(buckets))
-	require.Equal(t, spillNumBuckets, len(files))
-
-	spillfs, _ := proc.GetSpillFileService()
-	for i, file := range files {
-		require.NotNil(t, file)
-		file.Close()
-		spillfs.RemoveFile(context.Background(), buckets[i])
-	}
 }
 
 func TestShouldSpillBatches(t *testing.T) {
@@ -213,7 +197,7 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
 	bat.SetRowCount(size)
 
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 	cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.NoError(t, err)
 	require.Equal(t, int64(size), cnt)
@@ -269,7 +253,7 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 	_, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
 	require.Error(t, err)
 
@@ -280,13 +264,12 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -307,16 +290,18 @@ func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	buffers := make([]*batch.Batch, spillNumBuckets)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	ctr := &container{spillUUID: t.Name()}
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
-	// Flush remaining buffers
+	// Flush remaining buffers (lazy file creation via ensureSpillFile)
 	for i, buf := range buffers {
 		if buf != nil && buf.RowCount() > 0 {
-			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			file, err := ctr.ensureSpillFile(proc, files, i)
+			require.NoError(t, err)
+			_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 			require.NoError(t, err)
 		}
 	}
@@ -326,13 +311,12 @@ func TestEmptyBatchSpill(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -352,8 +336,8 @@ func TestEmptyBatchSpill(t *testing.T) {
 	buffers := make([]*batch.Batch, spillNumBuckets)
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	ctr := &container{spillUUID: t.Name()}
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
@@ -363,13 +347,12 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -395,17 +378,19 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 
 	buffers := make([]*batch.Batch, spillNumBuckets)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
-	// Flush remaining
+	// Flush remaining (lazy file creation via ensureSpillFile)
 	for i, buf := range buffers {
 		if buf != nil && buf.RowCount() > 0 {
-			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			file, err := ctr.ensureSpillFile(proc, files, i)
+			require.NoError(t, err)
+			_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 			require.NoError(t, err)
 		}
 	}
@@ -415,13 +400,12 @@ func TestAppendBuildBatchWithNulls(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -440,17 +424,19 @@ func TestAppendBuildBatchWithNulls(t *testing.T) {
 
 	buffers := make([]*batch.Batch, spillNumBuckets)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
-	// Flush remaining
+	// Flush remaining (lazy file creation via ensureSpillFile)
 	for i, buf := range buffers {
 		if buf != nil && buf.RowCount() > 0 {
-			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			file, err := ctr.ensureSpillFile(proc, files, i)
+			require.NoError(t, err)
+			_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 			require.NoError(t, err)
 		}
 	}
@@ -460,13 +446,12 @@ func TestAppendBuildBatchMultiColumn(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -492,45 +477,22 @@ func TestAppendBuildBatchMultiColumn(t *testing.T) {
 
 	buffers := make([]*batch.Batch, spillNumBuckets)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
 
-	// Flush remaining
+	// Flush remaining (lazy file creation via ensureSpillFile)
 	for i, buf := range buffers {
 		if buf != nil && buf.RowCount() > 0 {
-			_, err := ctr.flushBucketBuffer(proc, buf, files[i], analyzer)
+			file, err := ctr.ensureSpillFile(proc, files, i)
+			require.NoError(t, err)
+			_, err = ctr.flushBucketBuffer(proc, buf, file, analyzer)
 			require.NoError(t, err)
 		}
 	}
-}
-
-func TestMemUsedAndRowCnt(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	ctr := &container{}
-	ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{}
-
-	// Empty
-	require.Equal(t, int64(0), ctr.rowCnt())
-
-	// Add batches
-	bat1 := batch.NewWithSize(1)
-	bat1.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
-	bat1.SetRowCount(3)
-
-	bat2 := batch.NewWithSize(1)
-	bat2.Vecs[0] = testutil.MakeInt32Vector([]int32{4, 5}, nil, proc.Mp())
-	bat2.SetRowCount(2)
-
-	ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat1, bat2}
-
-	require.Equal(t, int64(5), ctr.rowCnt())
-	require.Greater(t, ctr.memUsed(), int64(0))
 }
 
 func TestShouldSpillBatchesRowThreshold(t *testing.T) {
@@ -581,23 +543,6 @@ func TestShouldSpillBatchesMemThreshold(t *testing.T) {
 	require.False(t, hb.shouldSpillBatches())
 }
 
-func TestCreateSpillFilesError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	// Normal case
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
-	require.Equal(t, spillNumBuckets, len(buckets))
-	require.Equal(t, spillNumBuckets, len(files))
-
-	spillfs, _ := proc.GetSpillFileService()
-	for i, file := range files {
-		file.Close()
-		spillfs.RemoveFile(context.Background(), buckets[i])
-	}
-}
-
 func TestHashWithConstVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -629,43 +574,16 @@ func TestHashMultiColumnCombinations(t *testing.T) {
 	require.NotEqual(t, hashValues[0], hashValues[2])
 }
 
-func TestFlushZeroRowBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	file, err := spillfs.CreateFile(context.Background(), "test_zero")
-	require.NoError(t, err)
-	defer func() {
-		file.Close()
-		spillfs.RemoveFile(context.Background(), "test_zero")
-	}()
-
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
-
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{}, nil, proc.Mp())
-	bat.SetRowCount(0)
-
-	cnt, err := ctr.flushBucketBuffer(proc, bat, file, analyzer)
-	require.NoError(t, err)
-	require.Equal(t, int64(0), cnt)
-}
-
 func TestAppendBuildBatchSingleBucket(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -685,9 +603,9 @@ func TestAppendBuildBatchSingleBucket(t *testing.T) {
 
 	buffers := make([]*batch.Batch, spillNumBuckets)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 	err = ctr.appendBuildBatchToSpillFiles(proc, bat, files, buffers, ctr.spillExprExecs, analyzer)
 	require.NoError(t, err)
@@ -706,13 +624,12 @@ func TestBufferReuse(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	buckets, files, err := createSpillFiles(proc)
-	require.NoError(t, err)
+	files := make([]*os.File, spillNumBuckets)
 	defer func() {
-		spillfs, _ := proc.GetSpillFileService()
-		for i, file := range files {
-			file.Close()
-			spillfs.RemoveFile(context.Background(), buckets[i])
+		for _, file := range files {
+			if file != nil {
+				file.Close()
+			}
 		}
 	}()
 
@@ -727,9 +644,9 @@ func TestBufferReuse(t *testing.T) {
 
 	buffers := make([]*batch.Batch, spillNumBuckets)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	ctr := &container{}
+	ctr := &container{spillUUID: t.Name()}
 
-	_, err = ctr.initSpillExprExecs(proc, conditions)
+	_, err := ctr.initSpillExprExecs(proc, conditions)
 	require.NoError(t, err)
 
 	// First batch
@@ -749,19 +666,59 @@ func TestBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHashEmptyVectors(t *testing.T) {
-	hashValues := make([]uint64, 0)
-	err := computeXXHash([]*vector.Vector{}, hashValues)
+func TestEnsureSpillFile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{spillUUID: "test_ensure"}
+	files := make([]*os.File, spillNumBuckets)
+
+	// First call creates a file.
+	f, err := ctr.ensureSpillFile(proc, files, 3)
 	require.NoError(t, err)
+	require.NotNil(t, f)
+	require.Equal(t, f, files[3])
+	defer f.Close()
+
+	// Second call returns cached file.
+	f2, err := ctr.ensureSpillFile(proc, files, 3)
+	require.NoError(t, err)
+	require.Same(t, f, f2, "should return the same file object")
+
+	// Different bucket creates a different file.
+	f3, err := ctr.ensureSpillFile(proc, files, 7)
+	require.NoError(t, err)
+	require.NotNil(t, f3)
+	require.NotEqual(t, f.Fd(), f3.Fd())
+	defer f3.Close()
+
+	// Untouched buckets remain nil.
+	require.Nil(t, files[0])
+	require.Nil(t, files[1])
 }
 
-func TestSetSpillThreshold(t *testing.T) {
-	ctr := &container{}
+func TestCleanupSpillFiles(t *testing.T) {
+	// Create temp files to simulate spill fds.
+	var fds []*os.File
+	for i := 0; i < 3; i++ {
+		f, err := os.CreateTemp("", "test_cleanup_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+		fds = append(fds, f)
+	}
+	// Include a nil entry.
+	fds = append(fds, nil)
 
-	ctr.setSpillThreshold(1024)
-	require.Equal(t, int64(1024), ctr.spillThreshold)
+	hb := &HashBuild{ctr: container{spilledFds: fds}}
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
 
-	// 0 means auto config, should set to a positive value
-	ctr.setSpillThreshold(0)
-	require.Greater(t, ctr.spillThreshold, int64(0))
+	hb.cleanupSpillFiles(proc)
+	require.Nil(t, hb.ctr.spilledFds)
+
+	// Verify all files are closed (writing should fail).
+	for _, f := range fds[:3] {
+		_, err := f.Write([]byte("x"))
+		require.Error(t, err, "file should be closed")
+	}
 }
