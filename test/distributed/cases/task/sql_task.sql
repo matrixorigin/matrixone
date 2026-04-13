@@ -225,7 +225,7 @@ show task runs for sql_task_validate limit 3;
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
 
--- @session:id=1&user=sql_task_tenant:admin:accountadmin&password=111
+-- @session:id=2&user=sql_task_tenant:admin:accountadmin&password=111
 create database if not exists tenant_task_case;
 use tenant_task_case;
 create table tenant_sink(v int primary key);
