@@ -1052,6 +1052,25 @@ func TestStGeomFromTextRejectNonFiniteCoordinates(t *testing.T) {
 	require.Contains(t, info, "invalid geometry payload")
 }
 
+func TestStGeomFromTextRejectMalformedStructure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{
+		"POINT(1",
+		"LINESTRING(0 0,1",
+		"GEOMETRYCOLLECTION(POINT(1 1),)",
+	} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+		fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+		s, info := fcTC.Run()
+		require.False(t, s, input)
+		require.Contains(t, info, "invalid geometry payload")
+	}
+}
+
 func TestStGeomFromTextWithSRID(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1069,6 +1088,20 @@ func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,Inf 1)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid geometry payload")
+}
+
+func TestStGeomFromTextWithSRIDRejectMalformedStructure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1"}, []bool{false}),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
 	}
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})

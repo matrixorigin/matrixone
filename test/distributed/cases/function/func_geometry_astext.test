@@ -5,6 +5,8 @@ select st_astext(cast(null as geometry)) as null_text;
 select st_astext(cast('INVALID' as geometry)) as invalid_geom;
 -- @regex("invalid geometry payload",true)
 select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
+-- @regex("invalid geometry payload",true)
+select st_astext(cast('POINT(1' as geometry)) as invalid_struct_geom;
 select st_geomfromtext('POINT(7 8)', 4326) as direct_geom;
 -- @regex("invalid geometry type",true)
 select cast('SRID=4326;POINT(9 9)' as geometry) as raw_payload_geom;

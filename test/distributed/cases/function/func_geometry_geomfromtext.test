@@ -7,6 +7,10 @@ select st_astext(st_geomfromtext(null)) as null_text;
 select st_geomfromtext('POINT(NaN 1)');
 -- @regex("invalid geometry payload",true)
 select st_geomfromtext('LINESTRING(0 0,Inf 1)');
+-- @regex("invalid geometry payload",true)
+select st_geomfromtext('POINT(1');
+-- @regex("invalid geometry payload",true)
+select st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 1),)');
 
 drop table if exists t1;
 create table t1(g geometry);

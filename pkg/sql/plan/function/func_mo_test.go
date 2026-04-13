@@ -102,3 +102,17 @@ func TestCastGeometryToSubtypeRejectNonFinite(t *testing.T) {
 	require.False(t, succeed)
 	require.Contains(t, info, "invalid geometry payload")
 }
+
+func TestCastGeometryToSubtypeRejectMalformedStructure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT"}, []bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1"}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+}

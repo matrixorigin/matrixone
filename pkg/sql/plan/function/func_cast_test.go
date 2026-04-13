@@ -2375,6 +2375,14 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:  true,
 			errMsg:   "invalid geometry payload",
 		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects malformed structure",
+			inputs:   []string{"POINT(1"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
 	}
 
 	for _, tt := range tests {

@@ -24,6 +24,12 @@ insert into geo_point_nan_bad values ('POINT(NaN 1)');
 -- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table geo_point_nan_bad;
+drop table if exists geo_point_struct_bad;
+create table geo_point_struct_bad(g point);
+insert into geo_point_struct_bad values ('POINT(1');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+drop table geo_point_struct_bad;
 drop table if exists geo_alter_bad;
 create table geo_alter_bad(g point);
 alter table geo_alter_bad modify column g linestring;

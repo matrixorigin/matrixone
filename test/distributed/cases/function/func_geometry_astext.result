@@ -13,6 +13,9 @@ invalid input: invalid geometry payload
 select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
 -- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
+select st_astext(cast('POINT(1' as geometry)) as invalid_struct_geom;
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
 select st_geomfromtext('POINT(7 8)', 4326) as direct_geom;
 ➤ direct_geom[-2,2147483647,0]  𝄀
 POINT(7 8)

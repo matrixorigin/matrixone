@@ -740,7 +740,7 @@ func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		if len(wkt) == 0 {
 			return nil, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		if _, err := geometryTypeNameFromText(wkt); err != nil {
+		if err := validateGeometryTextStructure(wkt); err != nil {
 			return nil, err
 		}
 		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
@@ -788,7 +788,7 @@ func StGeomFromTextWithSRID(ivecs []*vector.Vector, result vector.FunctionResult
 		if len(wkt) == 0 {
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
-		if _, err := geometryTypeNameFromText(wkt); err != nil {
+		if err := validateGeometryTextStructure(wkt); err != nil {
 			return err
 		}
 		if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {
@@ -895,10 +895,236 @@ func validateGeometryPayload(payload []byte) (wkt string, typeName string, srid 
 	if err != nil {
 		return "", "", 0, false, err
 	}
+	if err = validateGeometryTextStructure(wkt); err != nil {
+		return "", "", 0, false, err
+	}
 	if err = validateFiniteCoordinatesInGeometryText(wkt); err != nil {
 		return "", "", 0, false, err
 	}
 	return wkt, typeName, srid, sridDefined, nil
+}
+
+func validateGeometryTextStructure(wkt string) error {
+	return validateGeometryTextStructureWithDepth(wkt, 0)
+}
+
+func validateGeometryTextStructureWithDepth(wkt string, depth int) error {
+	s := strings.TrimSpace(wkt)
+	typeName, err := geometryTypeNameFromText(s)
+	if err != nil {
+		return err
+	}
+
+	if strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY") {
+		return nil
+	}
+
+	openIdx := strings.IndexByte(s, '(')
+	if openIdx <= 0 || s[len(s)-1] != ')' {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if strings.TrimSpace(strings.ToUpper(s[:openIdx])) != typeName {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+
+	content := strings.TrimSpace(s[openIdx+1 : len(s)-1])
+	switch typeName {
+	case "POINT":
+		return validatePointGeometryTextContent(content)
+	case "LINESTRING":
+		return validateLineStringGeometryTextContent(content)
+	case "POLYGON":
+		return validatePolygonGeometryTextContent(content)
+	case "MULTIPOINT":
+		return validateMultiPointGeometryTextContent(content, depth)
+	case "MULTILINESTRING":
+		return validateMultiLineStringGeometryTextContent(content)
+	case "MULTIPOLYGON":
+		return validateMultiPolygonGeometryTextContent(content)
+	case "GEOMETRYCOLLECTION":
+		return validateGeometryCollectionTextContent(content, depth)
+	case "GEOMETRY":
+		return validateGenericGeometryTextContent(content, depth)
+	default:
+		return moerr.NewInvalidInputNoCtx("invalid geometry type")
+	}
+}
+
+func validatePointGeometryTextContent(content string) error {
+	if content == "" {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	_, _, err := parseCoordinatePairWithError(content, "invalid geometry payload")
+	return err
+}
+
+func validateLineStringGeometryTextContent(content string) error {
+	points, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	if len(points) < 2 {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	for _, point := range points {
+		if _, _, err := parseCoordinatePairWithError(point, "invalid geometry payload"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePolygonGeometryTextContent(content string) error {
+	rings, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, ring := range rings {
+		ring = strings.TrimSpace(ring)
+		if len(ring) < 2 || ring[0] != '(' || ring[len(ring)-1] != ')' {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if err := validatePolygonRingTextContent(ring[1 : len(ring)-1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePolygonRingTextContent(content string) error {
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	if len(items) < 3 {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+
+	points := make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, err := parseCoordinatePairWithError(item, "invalid geometry payload")
+		if err != nil {
+			return err
+		}
+		points = append(points, geometryPoint2D{x: x, y: y})
+	}
+
+	if len(points) > 1 && sameGeometryPoint(points[0], points[len(points)-1]) {
+		points = points[:len(points)-1]
+	}
+	if len(points) < 3 {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return nil
+}
+
+func validateMultiPointGeometryTextContent(content string, depth int) error {
+	if content == "" {
+		return nil
+	}
+
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if itemType, err := geometryTypeNameFromText(item); err == nil {
+			if itemType != "POINT" {
+				return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+			if err := validateGeometryTextStructureWithDepth(item, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(item, "(") {
+			if len(item) < 2 || item[len(item)-1] != ')' {
+				return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+			}
+			if err := validatePointGeometryTextContent(strings.TrimSpace(item[1 : len(item)-1])); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := validatePointGeometryTextContent(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMultiLineStringGeometryTextContent(content string) error {
+	if content == "" {
+		return nil
+	}
+
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if err := validateLineStringGeometryTextContent(strings.TrimSpace(item[1 : len(item)-1])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMultiPolygonGeometryTextContent(content string) error {
+	if content == "" {
+		return nil
+	}
+
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if len(item) < 2 || item[0] != '(' || item[len(item)-1] != ')' {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if err := validatePolygonGeometryTextContent(strings.TrimSpace(item[1 : len(item)-1])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGeometryCollectionTextContent(content string, depth int) error {
+	if content == "" {
+		return nil
+	}
+
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err := validateGeometryTextStructureWithDepth(item, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGenericGeometryTextContent(content string, depth int) error {
+	items, err := splitTopLevelGeometryItemsStrict(content, "invalid geometry payload")
+	if err != nil {
+		return err
+	}
+	if len(items) != 1 {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return validateGeometryTextStructureWithDepth(items[0], depth+1)
 }
 
 func geometryTypeNameFromPayload(payload []byte) (string, error) {
@@ -999,6 +1225,41 @@ func splitTopLevelGeometryItems(content string) []string {
 		items = append(items, last)
 	}
 	return items
+}
+
+func splitTopLevelGeometryItemsStrict(content string, errMsg string) ([]string, error) {
+	items := make([]string, 0)
+	depth := 0
+	start := 0
+	for i, r := range content {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return nil, moerr.NewInvalidInputNoCtx(errMsg)
+			}
+		case ',':
+			if depth == 0 {
+				item := strings.TrimSpace(content[start:i])
+				if item == "" {
+					return nil, moerr.NewInvalidInputNoCtx(errMsg)
+				}
+				items = append(items, item)
+				start = i + 1
+			}
+		}
+	}
+	if depth != 0 {
+		return nil, moerr.NewInvalidInputNoCtx(errMsg)
+	}
+	last := strings.TrimSpace(content[start:])
+	if last == "" {
+		return nil, moerr.NewInvalidInputNoCtx(errMsg)
+	}
+	items = append(items, last)
+	return items, nil
 }
 
 const maxGeometryCollectionNestingDepth = 64

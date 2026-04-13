@@ -5378,7 +5378,7 @@ func strToStr(
 				continue
 			}
 			wkt := strings.TrimSpace(convertByteSliceToString(v))
-			if _, err := geometryTypeNameFromText(wkt); err != nil {
+			if err := validateGeometryTextStructure(wkt); err != nil {
 				return err
 			}
 			if err := validateFiniteCoordinatesInGeometryText(wkt); err != nil {

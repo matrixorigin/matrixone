@@ -19,6 +19,12 @@ invalid input: invalid geometry payload
 select st_geomfromtext('LINESTRING(0 0,Inf 1)');
 -- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
+select st_geomfromtext('POINT(1');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
+select st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 1),)');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values (st_geomfromtext('LINESTRING(0 0,1 1)')), (st_geomfromtext('POINT(3 4)'));
