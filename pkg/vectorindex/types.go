@@ -37,12 +37,28 @@ const (
 const (
 	HNSW    = "HNSW"
 	IVFFLAT = "IVFFLAT"
+	IVFPQ   = "IVFPQ"
+	CAGRA   = "CAGRA"
 )
 
 const (
 	CDC_INSERT = "I"
 	CDC_UPSERT = "U"
 	CDC_DELETE = "D"
+)
+
+type DistributionMode uint16
+
+const (
+	DistributionMode_SINGLE_GPU DistributionMode = iota
+	DistributionMode_SHARDED
+	DistributionMode_REPLICATED
+)
+
+const (
+	DistributionMode_SINGLE_GPU_Str = "SINGLE"
+	DistributionMode_SHARDED_Str    = "SHARDED"
+	DistributionMode_REPLICATED_Str = "REPLICATED"
 )
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
@@ -85,9 +101,24 @@ type HnswParam struct {
 
 // IVF specified parameters
 type IvfParam struct {
-	Lists  string `json:"lists"`
-	OpType string `json:"op_type"`
-	Async  string `json:"async"`
+	Lists        string `json:"lists"`
+	OpType       string `json:"op_type"`
+	Async        string `json:"async"`
+	Quantization string `json:"quantization"`
+	Distribution string `json:"distribution"`
+}
+
+// CAGRA specified parameters
+type CagraParam struct {
+	M                      string `json:"m"`
+	EfConstruction         string `json:"ef_construction"`
+	OpType                 string `json:"op_type"`
+	EfSearch               string `json:"ef_search"`
+	Async                  string `json:"async"`
+	Quantization           string `json:"quantization"`
+	Distribution           string `json:"distribution"`
+	IntermediateGraphDegee string `json:"intermediate_graph_degree"`
+	GraphDegee             string `json:"graph_degree"`
 }
 
 type IvfflatIndexConfig struct {
@@ -100,12 +131,37 @@ type IvfflatIndexConfig struct {
 	VectorType int32
 }
 
+type CuvsIvfIndexConfig struct {
+	Lists            uint
+	Metric           uint16
+	InitType         uint16
+	Dimensions       uint
+	Spherical        bool
+	Version          int64
+	VectorType       int32
+	Quantization     uint16
+	DistributionMode uint16
+}
+
+type CuvsCagraIndexConfig struct {
+	IntermediateGraphDegree uint64
+	GraphDegree             uint64
+	Metric                  uint16
+	Dimensions              uint
+	Version                 int64
+	VectorType              int32
+	Quantization            uint16
+	DistributionMode        uint16
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
-	Type    string
-	OpType  string
-	Usearch usearch.IndexConfig
-	Ivfflat IvfflatIndexConfig
+	Type      string
+	OpType    string
+	Usearch   usearch.IndexConfig
+	Ivfflat   IvfflatIndexConfig
+	CuvsIvf   CuvsIvfIndexConfig
+	CuvsCagra CuvsCagraIndexConfig
 }
 
 type RuntimeConfig struct {

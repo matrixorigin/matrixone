@@ -52,6 +52,24 @@ const (
 	Metric_TypeCount
 )
 
+type QuantizationType uint16
+
+const (
+	Quantization_F32 QuantizationType = iota
+	Quantization_F16
+	Quantization_INT8
+	Quantization_UINT8
+	Quantization_F64
+)
+
+const (
+	Quantization_F32_Str   = "F32"
+	Quantization_F64_Str   = "F64"
+	Quantization_F16_Str   = "F16"
+	Quantization_INT8_Str  = "I8"
+	Quantization_UINT8_Str = "UI8"
+)
+
 var (
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
@@ -104,6 +122,13 @@ var (
 		DistFn_InnerProduct:   Metric_InnerProduct,
 		DistFn_CosineDistance: Metric_CosineDistance,
 		DistFn_L1Distance:     Metric_L1Distance,
+	}
+
+	QuantizationNameToType = map[string]QuantizationType{
+		Quantization_F32_Str:   Quantization_F32,
+		Quantization_F64_Str:   Quantization_F64,
+		Quantization_INT8_Str:  Quantization_INT8,
+		Quantization_UINT8_Str: Quantization_UINT8,
 	}
 )
 

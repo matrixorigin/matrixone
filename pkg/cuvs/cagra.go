@@ -924,3 +924,39 @@ type SearchResult struct {
 	Neighbors []uint32
 	Distances []float32
 }
+
+// SaveToDir saves the index files to a directory using gpu_cagra_save_dir.
+// This is used by CagraModel to save to a directory before packing to tar.
+func (gi *GpuCagra[T]) SaveToDir(dirPath string) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	cDir := C.CString(dirPath)
+	defer C.free(unsafe.Pointer(cDir))
+	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// LoadFromDir loads index components from a directory using gpu_cagra_load_dir.
+// The index must already be initialized and started before calling LoadFromDir.
+func (gi *GpuCagra[T]) LoadFromDir(dirPath string) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	cDir := C.CString(dirPath)
+	defer C.free(unsafe.Pointer(cDir))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
