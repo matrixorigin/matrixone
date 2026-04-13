@@ -6597,21 +6597,53 @@ func TestStCrosses(t *testing.T) {
 }
 
 func TestStCrossesRejectInvalidInput(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("POLYGON((0 0,2 0,2 2,0 2,0 0))", 0, false)
+	crosses, err := geometryCrosses(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, crosses)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
 
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
-			[]bool{false}),
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,2 0,2 2,0 2,0 0))"},
-			[]bool{false}),
+func TestStCrossesWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection crosses line via member point",
+			left:  "GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))",
+			right: "LINESTRING(0 0,2 0)",
+			want:  true,
+		},
+		{
+			name:  "line crosses collection polygon member",
+			left:  "LINESTRING(-1 1,3 1)",
+			right: "GEOMETRYCOLLECTION(POINT(9 9),POLYGON((0 0,2 0,2 2,0 2,0 0)))",
+			want:  true,
+		},
+		{
+			name:  "nested collection crosses multipoint via nested line",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(LINESTRING(0 0,2 0)),POINT(8 8))",
+			right: "MULTIPOINT((1 0),(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not cross line at endpoint touch",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(8 8))",
+			right: "LINESTRING(0 0,2 0)",
+			want:  false,
+		},
 	}
-	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCrosses)
-	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_CROSSES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCrosses(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
 }
 
 func TestStCrossesWithPolygonHoleLines(t *testing.T) {
@@ -7562,8 +7594,8 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 			name:  "crosses",
 			fn:    StCrosses,
 			label: "ST_CROSSES",
-			left:  "SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))",
-			right: "SRID=3857;MULTILINESTRING((0 2,2 0),(5 0,6 0))",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))",
+			right: "SRID=3857;LINESTRING(0 0,2 0)",
 		},
 		{
 			name:  "overlaps",

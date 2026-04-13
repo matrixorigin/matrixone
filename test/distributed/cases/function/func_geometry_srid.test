@@ -43,7 +43,7 @@ select st_disjoint(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0
 -- @regex("different srids",true)
 select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
 -- @regex("different srids",true)
-select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 2),(3 0,4 0))', 4326), st_geomfromtext('MULTILINESTRING((0 2,2 0),(5 0,6 0))', 3857));
+select st_crosses(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))', 4326), st_geomfromtext('LINESTRING(0 0,2 0)', 3857));
 -- @regex("different srids",true)
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))', 4326), st_geomfromtext('LINESTRING(1 0,4 0)', 3857));
 -- @regex("different srids",true)

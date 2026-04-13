@@ -7871,7 +7871,7 @@ const (
 	stTouchesSupportedPairsError        = "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stOverlapsSupportedPairsError       = "ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stEqualsSupportedPairsError         = "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
-	stCrossesSupportedPairsError        = "ST_CROSSES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stCrossesSupportedPairsError        = "ST_CROSSES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	differentGeometrySRIDsErrorTemplate = "Binary geometry function %s given two geometries of different srids: %d and %d, which should have been identical."
 )
 
@@ -8677,6 +8677,9 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	}
 	if !isCrossesSupportedGeometryType(leftType) || !isCrossesSupportedGeometryType(rightType) {
 		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+	}
+	if leftType == "GEOMETRYCOLLECTION" || rightType == "GEOMETRYCOLLECTION" {
+		return geometryCollectionCrosses(left, right, leftType, rightType)
 	}
 
 	switch leftType {
@@ -10236,6 +10239,29 @@ func geometryCollectionEquals(left, right []byte, leftType, rightType string) (b
 	return true, nil
 }
 
+func geometryCollectionCrosses(left, right []byte, leftType, rightType string) (bool, error) {
+	leftItems, err := geometryCollectionTopLevelItems(left, leftType)
+	if err != nil {
+		return false, err
+	}
+	rightItems, err := geometryCollectionTopLevelItems(right, rightType)
+	if err != nil {
+		return false, err
+	}
+	for _, leftItem := range leftItems {
+		for _, rightItem := range rightItems {
+			crosses, err := geometryCrosses(leftItem, rightItem)
+			if err != nil {
+				return false, err
+			}
+			if crosses {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func geometryCollectionTopLevelItems(payload []byte, typeName string) ([][]byte, error) {
 	if typeName != "GEOMETRYCOLLECTION" {
 		return [][]byte{payload}, nil
@@ -10248,7 +10274,7 @@ func isTouchesSupportedGeometryType(typeName string) bool {
 }
 
 func isCrossesSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func isOverlapsSupportedGeometryType(typeName string) bool {
