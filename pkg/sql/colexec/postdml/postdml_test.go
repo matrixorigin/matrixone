@@ -15,6 +15,7 @@ package postdml
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -123,6 +125,105 @@ func TestFullText(t *testing.T) {
 	}
 	arg.Free(proc, false, nil)
 
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestFullTextV2(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnClient = txnClient
+	proc.Ctx = ctx
+	proc.Base.TxnOperator = txnOperator
+
+	params, err := json.Marshal(fulltext.FullTextParserParam{
+		Implementation: fulltext.FullTextImplV2Lite,
+		DocsTable:      "docs_tbl",
+		SegmentTable:   "segment_tbl",
+		DeltaTable:     "delta_tbl",
+	})
+	require.NoError(t, err)
+
+	arg := PostDml{
+		PostDmlCtx: &PostDmlCtx{
+			Ref: &plan.ObjectRef{
+				Obj:        0,
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+			PrimaryKeyIdx:  1,
+			PrimaryKeyName: "pk",
+			IsDelete:       true,
+			IsInsert:       true,
+			FullText: &PostDmlFullTextCtx{
+				SourceTableName: "src",
+				IndexTableName:  "fts_meta_tbl",
+				Parts:           []string{"body", "title"},
+				AlgoParams:      string(params),
+			},
+		},
+		ctr: container{},
+	}
+
+	resetChildren(&arg)
+	err = arg.Prepare(proc)
+	require.NoError(t, err)
+	_, err = vm.Exec(&arg, proc)
+	require.NoError(t, err)
+
+	require.Len(t, proc.Base.PostDmlSqlList.Values(), 5)
+	expectedDeletes := []string{
+		"DELETE FROM `testDb`.`segment_tbl` WHERE doc_id IN (1,1000)",
+		"DELETE FROM `testDb`.`delta_tbl` WHERE doc_id IN (1,1000)",
+		"DELETE FROM `testDb`.`docs_tbl` WHERE doc_id IN (1,1000)",
+	}
+	for i, sql := range expectedDeletes {
+		rs, ok := proc.Base.PostDmlSqlList.Get(i)
+		require.True(t, ok)
+		require.Equal(t, sql, rs)
+	}
+
+	rs, ok := proc.Base.PostDmlSqlList.Get(3)
+	require.True(t, ok)
+	require.Contains(t, rs, "INSERT INTO `testDb`.`docs_tbl` (`doc_id`, `doc_version`, `doc_len`, `is_deleted`)")
+	require.Contains(t, rs, "fulltext_index_tokenize('"+string(params)+"', src.pk, src.body, src.title)")
+	require.Contains(t, rs, "MAX(CASE WHEN f.`word` = '__DocLen' THEN f.`pos` ELSE 0 END)")
+
+	rs, ok = proc.Base.PostDmlSqlList.Get(4)
+	require.True(t, ok)
+	require.Contains(t, rs, "INSERT INTO `testDb`.`delta_tbl` (`word`, `doc_id`, `doc_version`, `tf`)")
+	require.Contains(t, rs, "AND f.`word` <> '__DocLen'")
+
+	arg.Free(proc, false, nil)
 	arg.Release()
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())

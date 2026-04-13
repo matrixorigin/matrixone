@@ -1584,22 +1584,30 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	}
 }
 
-// buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
-//
-// with the following schema
-// create __mo_secondary_xxx (
-//
-//	doc_id src_pk_type,
-//	word varchar,
-//	pos int,
-//	cluster by (word)
-//
-// )
-func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
-	}
+const (
+	experimentalFullTextV2IndexFlag = "experimental_fulltext_v2_index"
+	fullTextImplParam               = "implementation"
+	fullTextImplV2Lite              = "v2lite"
+)
 
+func experimentalFullTextV2Enabled(ctx CompilerContext) bool {
+	v, err := ctx.ResolveVariable(experimentalFullTextV2IndexFlag, true, false)
+	if err != nil || v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case int8:
+		return val == 1
+	case int64:
+		return val == 1
+	case bool:
+		return val
+	default:
+		return false
+	}
+}
+
+func validateFullTextIndexInfos(indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, ctx CompilerContext) error {
 	// check duplicate index
 	if len(existedIndexes) > 0 {
 		for _, existedIndex := range existedIndexes {
@@ -1627,7 +1635,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 	}
 
 	for _, indexInfo := range indexInfos {
-		// fulltext only support char, varchar and text
 		for _, keyPart := range indexInfo.KeyParts {
 			nameOrigin := keyPart.ColName.ColNameOrigin()
 			name := keyPart.ColName.ColName()
@@ -1641,60 +1648,98 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			}
 		}
 
-		// check parser
-		var parsername string
 		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
-			// set parser ngram
-			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
+			parsername := strings.ToLower(indexInfo.IndexOption.ParserName)
 			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
 			}
 		}
 	}
 
+	return nil
+}
+
+func buildFullTextIndexParts(indexInfo *tree.FullTextIndex) []string {
+	indexParts := make([]string, 0, len(indexInfo.KeyParts))
+	for _, keyPart := range indexInfo.KeyParts {
+		indexParts = append(indexParts, keyPart.ColName.ColName())
+	}
+	return indexParts
+}
+
+func buildFullTextIndexParams(indexInfo *tree.FullTextIndex, extra map[string]string) (string, error) {
+	params := make(map[string]string)
+	if raw, err := catalog.IndexParamsToJsonString(indexInfo); err != nil {
+		return "", err
+	} else if raw != "" {
+		params, err = catalog.IndexParamsStringToMap(raw)
+		if err != nil {
+			return "", err
+		}
+	}
+	for k, v := range extra {
+		params[k] = v
+	}
+	if len(params) == 0 {
+		return "", nil
+	}
+	return catalog.IndexParamsMapToJsonString(params)
+}
+
+func buildFullTextIndexDef(indexInfo *tree.FullTextIndex, indexTableName, indexAlgoTableType string, indexParts []string, params string) *plan.IndexDef {
+	indexDef := &plan.IndexDef{
+		Unique:             false,
+		IndexName:          indexInfo.Name,
+		IndexTableName:     indexTableName,
+		IndexAlgo:          tree.INDEX_TYPE_FULLTEXT.ToString(),
+		IndexAlgoTableType: indexAlgoTableType,
+		Parts:              indexParts,
+		TableExist:         true,
+		IndexAlgoParams:    params,
+	}
+	if indexInfo.IndexOption != nil {
+		if indexInfo.IndexOption.ParserName != "" {
+			indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
+		}
+		if indexInfo.IndexOption.Comment != "" {
+			indexDef.Comment = indexInfo.IndexOption.Comment
+		}
+	}
+	return indexDef
+}
+
+func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	}
+
+	if err := validateFullTextIndexInfos(indexInfos, colMap, existedIndexes, ctx); err != nil {
+		return err
+	}
+
+	if experimentalFullTextV2Enabled(ctx) {
+		return buildFullTextIndexTableV2(createTable, indexInfos, colMap, pkeyName, ctx)
+	}
+
+	return buildFullTextIndexTableV1(createTable, indexInfos, colMap, pkeyName, ctx)
+}
+
+func buildFullTextIndexTableV1(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	for _, indexInfo := range indexInfos {
-
-		// create index definition
-		indexDef := &plan.IndexDef{}
-
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
 			return err
 		}
 
-		indexParts := make([]string, 0)
-		for _, keyPart := range indexInfo.KeyParts {
-			name := keyPart.ColName.ColName()
-			indexParts = append(indexParts, name)
+		indexParts := buildFullTextIndexParts(indexInfo)
+		params, err := buildFullTextIndexParams(indexInfo, nil)
+		if err != nil {
+			return err
 		}
+		indexDef := buildFullTextIndexDef(indexInfo, indexTableName, "", indexParts, params)
 
-		indexDef.Unique = false
-		indexDef.IndexName = indexInfo.Name
-		indexDef.IndexTableName = indexTableName
-		indexDef.IndexAlgo = tree.INDEX_TYPE_FULLTEXT.ToString()
-		indexDef.IndexAlgoTableType = ""
-		indexDef.Parts = indexParts
-		indexDef.TableExist = true
-		if indexInfo.IndexOption != nil {
-			if indexInfo.IndexOption.ParserName != "" {
-				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
-				indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
-				if err != nil {
-					return err
-				}
-			}
-			if indexInfo.IndexOption.Comment != "" {
-				indexDef.Comment = indexInfo.IndexOption.Comment
-			}
-		}
+		tableDef := &TableDef{Name: indexTableName}
 
-		// create fulltext index hidden table definition
-		// doc_id, pos, word
-		tableDef := &TableDef{
-			Name: indexTableName,
-		}
-
-		// foreign primary key column
 		keyName := catalog.FullTextIndex_TabCol_Id
 		colDef := &ColDef{
 			Name: keyName,
@@ -1712,7 +1757,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
 
-		// position (int32)
 		keyName = catalog.FullTextIndex_TabCol_Position
 		colDef = &ColDef{
 			Name: keyName,
@@ -1730,7 +1774,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
 
-		// word (varchar)
 		keyName = catalog.FullTextIndex_TabCol_Word
 		colDef = &ColDef{
 			Name: keyName,
@@ -1772,28 +1815,224 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 			PkeyColName: keyName,
 		}
 
-		tableDef.ClusterBy = &ClusterByDef{
-			Name: "word",
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemIndexRel,
-			},
-		}
+		tableDef.ClusterBy = &ClusterByDef{Name: "word"}
+		properties := []*plan.Property{{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemIndexRel}}
 		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 
-		// append to createTable.IndexTables and createTable.TableDef
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
-
 	}
+	return nil
+}
+
+func buildFullTextIndexTableV2(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
+	for _, indexInfo := range indexInfos {
+		indexParts := buildFullTextIndexParts(indexInfo)
+		params, err := buildFullTextIndexParams(indexInfo, map[string]string{
+			fullTextImplParam: fullTextImplV2Lite,
+		})
+		if err != nil {
+			return err
+		}
+
+		metaTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return err
+		}
+		docsTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return err
+		}
+		segmentTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return err
+		}
+		deltaTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return err
+		}
+
+		metaIndexDef := buildFullTextIndexDef(indexInfo, metaTableName, catalog.FullTextV2_TblType_Metadata, indexParts, params)
+		docsIndexDef := buildFullTextIndexDef(indexInfo, docsTableName, catalog.FullTextV2_TblType_Docs, indexParts, params)
+		segmentIndexDef := buildFullTextIndexDef(indexInfo, segmentTableName, catalog.FullTextV2_TblType_Segment, indexParts, params)
+		deltaIndexDef := buildFullTextIndexDef(indexInfo, deltaTableName, catalog.FullTextV2_TblType_Delta, indexParts, params)
+
+		metaTableDef := &TableDef{
+			Name:      metaTableName,
+			TableType: catalog.FullTextV2_TblType_Metadata,
+			Cols:      make([]*ColDef, 2),
+		}
+		metaTableDef.Cols[0] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Metadata_Key,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Primary: true,
+			Default: &plan.Default{NullAbility: false},
+		}
+		metaTableDef.Cols[1] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Metadata_Val,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{NullAbility: false},
+		}
+		metaTableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FullTextV2_TblCol_Metadata_Key},
+			PkeyColName: catalog.FullTextV2_TblCol_Metadata_Key,
+		}
+		metaTableDef.Defs = append(metaTableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+					Key:   catalog.SystemRelAttr_Kind,
+					Value: catalog.FullTextV2_TblType_Metadata,
+				}}},
+			},
+		})
+
+		docsTableDef := &TableDef{
+			Name:      docsTableName,
+			TableType: catalog.FullTextV2_TblType_Docs,
+			Cols:      make([]*ColDef, 4),
+		}
+		docsTableDef.Cols[0] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Docs_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
+			Primary: true,
+			Default: &plan.Default{NullAbility: false},
+		}
+		docsTableDef.Cols[1] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Docs_Version,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{NullAbility: false},
+		}
+		docsTableDef.Cols[2] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Docs_Length,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int32),
+				Width: 32,
+				Scale: 0,
+			},
+			Default: &plan.Default{NullAbility: false},
+		}
+		docsTableDef.Cols[3] = &ColDef{
+			Name: catalog.FullTextV2_TblCol_Docs_Deleted,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_bool),
+				Width: 1,
+				Scale: 0,
+			},
+			Default: &plan.Default{NullAbility: false},
+		}
+		docsTableDef.Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.FullTextV2_TblCol_Docs_Id},
+			PkeyColName: catalog.FullTextV2_TblCol_Docs_Id,
+		}
+		docsTableDef.Defs = append(docsTableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+					Key:   catalog.SystemRelAttr_Kind,
+					Value: catalog.FullTextV2_TblType_Docs,
+				}}},
+			},
+		})
+
+		buildPostingTableDef := func(tableName, tableType string) *TableDef {
+			tableDef := &TableDef{
+				Name:      tableName,
+				TableType: tableType,
+				Cols:      make([]*ColDef, 5),
+			}
+			tableDef.Cols[0] = &ColDef{
+				Name: catalog.FullTextV2_TblCol_Posting_Word,
+				Alg:  plan.CompressType_Lz4,
+				Typ: Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+				},
+				Default: &plan.Default{NullAbility: false},
+			}
+			tableDef.Cols[1] = &ColDef{
+				Name: catalog.FullTextV2_TblCol_Posting_Id,
+				Alg:  plan.CompressType_Lz4,
+				Typ: Type{
+					Id:    colMap[pkeyName].Typ.Id,
+					Width: colMap[pkeyName].Typ.Width,
+					Scale: colMap[pkeyName].Typ.Scale,
+				},
+				Default: &plan.Default{NullAbility: false},
+			}
+			tableDef.Cols[2] = &ColDef{
+				Name: catalog.FullTextV2_TblCol_Posting_Version,
+				Alg:  plan.CompressType_Lz4,
+				Typ: Type{
+					Id:    int32(types.T_int64),
+					Width: 0,
+					Scale: 0,
+				},
+				Default: &plan.Default{NullAbility: false},
+			}
+			tableDef.Cols[3] = &ColDef{
+				Name: catalog.FullTextV2_TblCol_Posting_Tf,
+				Alg:  plan.CompressType_Lz4,
+				Typ: Type{
+					Id:    int32(types.T_int32),
+					Width: 32,
+					Scale: 0,
+				},
+				Default: &plan.Default{NullAbility: false},
+			}
+			tableDef.Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			tableDef.Cols[4].Alg = plan.CompressType_Lz4
+			tableDef.Cols[4].Primary = true
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names: []string{
+					catalog.FullTextV2_TblCol_Posting_Word,
+					catalog.FullTextV2_TblCol_Posting_Id,
+					catalog.FullTextV2_TblCol_Posting_Version,
+				},
+				PkeyColName: catalog.CPrimaryKeyColName,
+				CompPkeyCol: tableDef.Cols[4],
+			}
+			tableDef.ClusterBy = &ClusterByDef{Name: catalog.FullTextV2_TblCol_Posting_Word}
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+						Key:   catalog.SystemRelAttr_Kind,
+						Value: tableType,
+					}}},
+				},
+			})
+			return tableDef
+		}
+
+		segmentTableDef := buildPostingTableDef(segmentTableName, catalog.FullTextV2_TblType_Segment)
+		deltaTableDef := buildPostingTableDef(deltaTableName, catalog.FullTextV2_TblType_Delta)
+
+		createTable.IndexTables = append(createTable.IndexTables, metaTableDef, docsTableDef, segmentTableDef, deltaTableDef)
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, metaIndexDef, docsIndexDef, segmentIndexDef, deltaIndexDef)
+	}
+
 	return nil
 }
 

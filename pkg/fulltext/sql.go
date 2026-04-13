@@ -515,6 +515,334 @@ func genBM25SQL(sql string, idxTable string) string {
 	return fmt.Sprintf("select a.*, b.pos as doc_len from (%s) a left join %s b on a.doc_id = b.doc_id and b.word = '%s'", sql, idxTable, DOC_LEN_WORD)
 }
 
+func buildV2PostingSource(param FullTextParserParam) string {
+	if param.DeltaTable == "" {
+		return param.SegmentTable
+	}
+	return fmt.Sprintf(
+		"(SELECT `%s`, `%s`, `%s`, `%s` FROM %s UNION ALL SELECT `%s`, `%s`, `%s`, `%s` FROM %s)",
+		"word", "doc_id", "doc_version", "tf", param.SegmentTable,
+		"word", "doc_id", "doc_version", "tf", param.DeltaTable,
+	)
+}
+
+func buildV2SingleTokenDocSQL(p *Pattern, param FullTextParserParam) (string, error) {
+	postings := buildV2PostingSource(param)
+	switch p.Operator {
+	case TEXT:
+		return fmt.Sprintf(
+			"SELECT d.doc_id FROM %s p JOIN %s d ON d.doc_id = p.doc_id AND d.doc_version = p.doc_version "+
+				"WHERE d.is_deleted = false AND p.word = '%s' GROUP BY d.doc_id",
+			postings, param.DocsTable, escape(p.Text),
+		), nil
+	case STAR:
+		if p.Text[len(p.Text)-1] != '*' {
+			return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		}
+		prefix := p.Text[:len(p.Text)-1]
+		return fmt.Sprintf(
+			"SELECT d.doc_id FROM %s p JOIN %s d ON d.doc_id = p.doc_id AND d.doc_version = p.doc_version "+
+				"WHERE d.is_deleted = false AND prefix_eq(p.word, '%s') GROUP BY d.doc_id",
+			postings, param.DocsTable, escape(prefix),
+		), nil
+	default:
+		return "", moerr.NewInternalErrorNoCtx("fulltext v2 leaf operator not supported")
+	}
+}
+
+func buildV2SingleTokenDetailSQL(p *Pattern, param FullTextParserParam) (string, error) {
+	postings := buildV2PostingSource(param)
+	switch p.Operator {
+	case TEXT:
+		return fmt.Sprintf(
+			"SELECT d.doc_id, d.doc_len, CAST(SUM(p.tf) AS BIGINT) AS tf FROM %s p "+
+				"JOIN %s d ON d.doc_id = p.doc_id AND d.doc_version = p.doc_version "+
+				"WHERE d.is_deleted = false AND p.word = '%s' GROUP BY d.doc_id, d.doc_len",
+			postings, param.DocsTable, escape(p.Text),
+		), nil
+	case STAR:
+		if p.Text[len(p.Text)-1] != '*' {
+			return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		}
+		prefix := p.Text[:len(p.Text)-1]
+		return fmt.Sprintf(
+			"SELECT d.doc_id, d.doc_len, CAST(SUM(p.tf) AS BIGINT) AS tf FROM %s p "+
+				"JOIN %s d ON d.doc_id = p.doc_id AND d.doc_version = p.doc_version "+
+				"WHERE d.is_deleted = false AND prefix_eq(p.word, '%s') GROUP BY d.doc_id, d.doc_len",
+			postings, param.DocsTable, escape(prefix),
+		), nil
+	default:
+		return "", moerr.NewInternalErrorNoCtx("fulltext v2 leaf operator not supported")
+	}
+}
+
+func expandLeafPatternV2(p *Pattern, parser string) ([]*Pattern, error) {
+	if p.Operator == STAR || parser == "json_value" {
+		return []*Pattern{{Text: p.Text, Operator: p.Operator, Index: p.Index}}, nil
+	}
+	return ParsePatternInNLMode(p.Text)
+}
+
+func buildV2LeafDocSQL(p *Pattern, param FullTextParserParam) (string, error) {
+	ps, err := expandLeafPatternV2(p, param.Parser)
+	if err != nil {
+		return "", err
+	}
+	if len(ps) == 1 {
+		return buildV2SingleTokenDocSQL(ps[0], param)
+	}
+
+	tables := make([]string, 0, len(ps))
+	aliases := make([]string, 0, len(ps))
+	conds := make([]string, 0, len(ps)-1)
+	for i, tp := range ps {
+		alias := fmt.Sprintf("kw%d", i)
+		sql, err := buildV2SingleTokenDocSQL(tp, param)
+		if err != nil {
+			return "", err
+		}
+		aliases = append(aliases, alias)
+		tables = append(tables, fmt.Sprintf("(%s) %s", sql, alias))
+		if i > 0 {
+			conds = append(conds, fmt.Sprintf("%s.doc_id = %s.doc_id", aliases[0], alias))
+		}
+	}
+
+	return fmt.Sprintf("SELECT %s.doc_id FROM %s WHERE %s",
+		aliases[0], strings.Join(tables, ", "), strings.Join(conds, " AND ")), nil
+}
+
+func buildV2LeafDetailSQL(p *Pattern, param FullTextParserParam) (string, error) {
+	ps, err := expandLeafPatternV2(p, param.Parser)
+	if err != nil {
+		return "", err
+	}
+	if len(ps) == 1 {
+		return buildV2SingleTokenDetailSQL(ps[0], param)
+	}
+
+	tables := make([]string, 0, len(ps))
+	aliases := make([]string, 0, len(ps))
+	conds := make([]string, 0, len(ps))
+	for i, tp := range ps {
+		alias := fmt.Sprintf("kw%d", i)
+		sql, err := buildV2SingleTokenDocSQL(tp, param)
+		if err != nil {
+			return "", err
+		}
+		aliases = append(aliases, alias)
+		tables = append(tables, fmt.Sprintf("(%s) %s", sql, alias))
+		if i > 0 {
+			conds = append(conds, fmt.Sprintf("%s.doc_id = %s.doc_id", aliases[0], alias))
+		}
+	}
+	conds = append(conds, fmt.Sprintf("d.doc_id = %s.doc_id", aliases[0]))
+	conds = append(conds, "d.is_deleted = false")
+
+	return fmt.Sprintf(
+		"SELECT d.doc_id, d.doc_len, CAST(1 AS BIGINT) AS tf FROM %s, %s d WHERE %s GROUP BY d.doc_id, d.doc_len",
+		strings.Join(tables, ", "), param.DocsTable, strings.Join(conds, " AND "),
+	), nil
+}
+
+func genJoinPlusSqlV2(p *Pattern, mode int64, param FullTextParserParam) ([]*SqlNode, error) {
+	textps := findTextOrStarFromPattern(p, nil)
+	sqlns := make([]*SqlNode, 0, len(textps))
+	for _, tp := range textps {
+		alias := fmt.Sprintf("t%d", tp.Index)
+		docSQL, err := buildV2LeafDocSQL(tp, param)
+		if err != nil {
+			return nil, err
+		}
+		sqlnode := &SqlNode{IsJoin: true, Index: tp.Index, Label: alias}
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{
+			Index: tp.Index, Label: alias, IsJoin: true, Sql: fmt.Sprintf("%s AS (%s)", alias, docSQL),
+		})
+		sqlnode.Sql = fmt.Sprintf(
+			"SELECT %s.doc_id, CAST(%d as int), d.doc_len, CAST(1 AS BIGINT) FROM %s JOIN %s d ON d.doc_id = %s.doc_id WHERE d.is_deleted = false",
+			alias, sqlnode.Index, alias, param.DocsTable, alias,
+		)
+		sqlns = append(sqlns, sqlnode)
+	}
+	return sqlns, nil
+}
+
+func genJoinSqlV2(p *Pattern, mode int64, param FullTextParserParam) ([]*SqlNode, error) {
+	textps := findTextOrStarFromPattern(p, nil)
+	tables := make([]string, 0, len(textps))
+	oncond := make([]string, 0, len(textps)-1)
+	sqlnode := &SqlNode{IsJoin: true, Index: p.Index}
+	for i, tp := range textps {
+		alias := fmt.Sprintf("t%d%d", p.Index, i)
+		docSQL, err := buildV2LeafDocSQL(tp, param)
+		if err != nil {
+			return nil, err
+		}
+		tables = append(tables, alias)
+		sqlnode.Children = append(sqlnode.Children, &SqlNode{
+			Index: p.Index, Label: alias, IsJoin: true, Sql: fmt.Sprintf("%s AS (%s)", alias, docSQL),
+		})
+		if i > 0 {
+			oncond = append(oncond, fmt.Sprintf("%s.doc_id = %s.doc_id", tables[0], alias))
+		}
+	}
+
+	label := fmt.Sprintf("t%d", p.Index)
+	sqlnode.Children = append(sqlnode.Children, &SqlNode{
+		Index:  p.Index,
+		Label:  label,
+		IsJoin: true,
+		Sql: fmt.Sprintf("%s AS (SELECT %s.doc_id FROM %s WHERE %s)",
+			label, tables[0], strings.Join(tables, ", "), strings.Join(oncond, " AND ")),
+	})
+	sqlnode.Sql = fmt.Sprintf(
+		"SELECT %s.doc_id, CAST(%d as int), d.doc_len, CAST(1 AS BIGINT) FROM %s JOIN %s d ON d.doc_id = %s.doc_id WHERE d.is_deleted = false",
+		label, sqlnode.Index, label, param.DocsTable, label,
+	)
+	sqlnode.Label = label
+	return []*SqlNode{sqlnode}, nil
+}
+
+func genSqlV2(p *Pattern, mode int64, param FullTextParserParam, joinsql []*SqlNode, isJoin bool) ([]*SqlNode, error) {
+	if isJoin {
+		if p.Operator == JOIN {
+			return genJoinSqlV2(p, mode, param)
+		}
+		return genJoinPlusSqlV2(p, mode, param)
+	}
+
+	textps := findTextOrStarFromPattern(p, nil)
+	sqls := make([]*SqlNode, 0, len(textps))
+	if len(joinsql) == 0 {
+		for _, tp := range textps {
+			sql, err := buildV2LeafDetailSQL(tp, param)
+			if err != nil {
+				return nil, err
+			}
+			sqls = append(sqls, &SqlNode{
+				Index: tp.Index,
+				Label: fmt.Sprintf("t%d", tp.Index),
+				Sql:   fmt.Sprintf("SELECT q.doc_id, CAST(%d as int), q.doc_len, q.tf FROM (%s) q", tp.Index, sql),
+			})
+		}
+		return sqls, nil
+	}
+
+	for _, jn := range joinsql {
+		for _, tp := range textps {
+			alias := fmt.Sprintf("t%d", tp.Index)
+			docSQL, err := buildV2LeafDocSQL(tp, param)
+			if err != nil {
+				return nil, err
+			}
+			sqlnode := &SqlNode{Index: tp.Index, Label: alias}
+			sqlnode.Children = append(sqlnode.Children, &SqlNode{
+				Index: tp.Index, Label: alias, Sql: fmt.Sprintf("%s AS (%s)", alias, docSQL),
+			})
+			sqlnode.Sql = fmt.Sprintf(
+				"SELECT %s.doc_id, CAST(%d as int), d.doc_len, CAST(1 AS BIGINT) FROM %s, %s, %s d "+
+					"WHERE %s.doc_id = %s.doc_id AND d.doc_id = %s.doc_id AND d.is_deleted = false",
+				jn.Label, tp.Index, alias, jn.Label, param.DocsTable, jn.Label, alias, jn.Label,
+			)
+			sqls = append(sqls, sqlnode)
+		}
+	}
+	return sqls, nil
+}
+
+func SqlBooleanV2(ps []*Pattern, mode int64, param FullTextParserParam) (string, error) {
+	var err error
+	var join []*SqlNode
+	var sqls []*SqlNode
+
+	if len(ps) == 1 {
+		if ps[0].Operator == JOIN {
+			join, err = genSqlV2(ps[0], mode, param, nil, true)
+			if err != nil {
+				return "", err
+			}
+			sqls = append(sqls, join...)
+		} else {
+			s, err := genSqlV2(ps[0], mode, param, nil, false)
+			if err != nil {
+				return "", err
+			}
+			sqls = append(sqls, s...)
+		}
+	} else {
+		startidx := 0
+		if ps[0].Operator == JOIN || ps[0].Operator == PLUS {
+			join, err = genSqlV2(ps[0], mode, param, nil, true)
+			if err != nil {
+				return "", err
+			}
+			sqls = append(sqls, join...)
+			startidx++
+		}
+		for i := startidx; i < len(ps); i++ {
+			s, err := genSqlV2(ps[i], mode, param, join, false)
+			if err != nil {
+				return "", err
+			}
+			sqls = append(sqls, s...)
+		}
+	}
+
+	subsql := make([]string, 0)
+	union := make([]string, 0)
+	duplicate := make(map[string]bool)
+	for _, s := range sqls {
+		union = append(union, s.Sql)
+		for _, c := range s.Children {
+			if !duplicate[c.Label] {
+				subsql = append(subsql, c.Sql)
+				duplicate[c.Label] = true
+			}
+		}
+	}
+	ret := ""
+	if len(subsql) > 0 {
+		ret = "WITH " + strings.Join(subsql, ", ") + " "
+	}
+	ret += strings.Join(union, " UNION ALL ")
+	return ret, nil
+}
+
+func SqlNaturalV2(ps []*Pattern, mode int64, param FullTextParserParam) (string, error) {
+	sqls := make([]string, 0, len(ps))
+	for _, p := range ps {
+		leafs, err := genSqlV2(p, mode, param, nil, false)
+		if err != nil {
+			return "", err
+		}
+		for _, sqlnode := range leafs {
+			sqls = append(sqls, sqlnode.Sql)
+		}
+	}
+	return strings.Join(sqls, " UNION ALL "), nil
+}
+
+func PatternToSqlV2(ps []*Pattern, mode int64, param FullTextParserParam, algo FullTextScoreAlgo) (string, error) {
+	switch mode {
+	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
+		return SqlNaturalV2(ps, mode, param)
+	case int64(tree.FULLTEXT_BOOLEAN):
+		if ps[0].Operator == PHRASE {
+			return "", moerr.NewInternalErrorNoCtx("phrase search is not supported for fulltext v2")
+		}
+		for _, p := range ps {
+			if p.Operator == PHRASE {
+				return "", moerr.NewInternalErrorNoCtx("phrase search is not supported for fulltext v2")
+			}
+		}
+		return SqlBooleanV2(ps, mode, param)
+	case int64(tree.FULLTEXT_QUERY_EXPANSION), int64(tree.FULLTEXT_NL_QUERY_EXPANSION):
+		return "", moerr.NewInternalErrorNoCtx("Query Expansion mode not supported")
+	default:
+		return "", moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
+	}
+}
+
 func patternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):

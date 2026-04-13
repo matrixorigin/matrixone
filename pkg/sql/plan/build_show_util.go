@@ -170,14 +170,15 @@ func ConstructCreateTableSQL(
 		indexNames := make(map[string]bool)
 
 		for _, indexdef := range tableDef.Indexes {
-			// Index Name can be empty string when CREATE TABLE with index
-			// avoid duplicate only work when index name is not empty
-			if len(indexdef.IndexName) > 0 {
-				if _, ok := indexNames[indexdef.IndexName]; ok {
+			indexKey := indexdef.IndexName
+			if indexKey == "" && indexdef.IndexAlgoTableType != "" {
+				indexKey = fmt.Sprintf("%s#%s", strings.ToLower(indexdef.IndexAlgo), strings.Join(indexdef.Parts, ","))
+			}
+			if indexKey != "" {
+				if _, ok := indexNames[indexKey]; ok {
 					continue
-				} else {
-					indexNames[indexdef.IndexName] = true
 				}
+				indexNames[indexKey] = true
 			}
 
 			var indexStr string

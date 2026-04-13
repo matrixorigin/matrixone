@@ -37,7 +37,8 @@ import (
 )
 
 const (
-	countstar_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
+	countstar_sql    = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
+	countstar_sql_v2 = "SELECT COUNT(*), AVG(doc_len) from %s where is_deleted = false"
 )
 
 var ft_runSql = sqlexec.RunSql
@@ -331,10 +332,16 @@ func runWordStats(
 ) (result executor.Result, err error) {
 
 	var sql string
-	if sql, err = fulltext.PatternToSql(
-		s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo,
-	); err != nil {
-		return
+	if u.param.Implementation == fulltext.FullTextImplV2Lite {
+		if sql, err = fulltext.PatternToSqlV2(s.Pattern, s.Mode, u.param, s.ScoreAlgo); err != nil {
+			return
+		}
+	} else {
+		if sql, err = fulltext.PatternToSql(
+			s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo,
+		); err != nil {
+			return
+		}
 	}
 
 	result, err = ft_runSql_streaming(ctx, proc, sql, u.streamCh, u.errCh)
@@ -462,12 +469,15 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	bat := res.Batches[0]
 	defer res.Close()
 
-	if len(bat.Vecs) > 3 {
+	if len(bat.Vecs) > 4 {
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
-	needSetDocLen := len(bat.Vecs) == 3
+	needSetDocLen := len(bat.Vecs) >= 3
+	hasTf := len(bat.Vecs) == 4
 
 	u.nrows += bat.RowCount()
+	phraseCompat := u.param.Implementation != fulltext.FullTextImplV2Lite &&
+		(s.Mode == int64(tree.FULLTEXT_NL) || s.Pattern[0].Operator == fulltext.PHRASE)
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// doc_id any
@@ -489,7 +499,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 		widx := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[1], i)
 
 		var docvec []uint8
-		if s.Mode == int64(tree.FULLTEXT_NL) || s.Pattern[0].Operator == fulltext.PHRASE {
+		if phraseCompat {
 			// phrase search widx is dummy and fill in value 1 for all keywords
 			nwords := s.Nkeywords
 			addr, ok := u.agghtab[doc_id]
@@ -523,6 +533,17 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				}
 			}
 		} else {
+			tf := uint8(1)
+			if hasTf {
+				tf64 := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[3], i)
+				if tf64 > 255 {
+					tf = 255
+				} else if tf64 > 0 {
+					tf = uint8(tf64)
+				} else {
+					tf = 0
+				}
+			}
 
 			addr, ok := u.agghtab[doc_id]
 			if ok {
@@ -530,22 +551,26 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 				if err != nil {
 					return false, err
 				}
-				if docvec[widx] < 255 {
-					// limit doc count to 255 to fit uint8
-					docvec[widx]++
-				}
 			} else {
 				//docvec = make([]uint8, s.Nkeywords)
 				addr, docvec, err = u.mpool.NewItem()
 				if err != nil {
 					return false, err
 				}
-				docvec[widx] = 1
 				u.agghtab[doc_id] = addr
+			}
+			wasZero := docvec[widx] == 0
+			if tf > 0 && docvec[widx] < 255 {
+				next := int(docvec[widx]) + int(tf)
+				if next > 255 {
+					docvec[widx] = 255
+				} else {
+					docvec[widx] = uint8(next)
+				}
 			}
 
 			// update only once per doc_id
-			if docvec[widx] == 1 {
+			if wasZero && tf > 0 {
 				u.aggcnt[widx]++
 			}
 
@@ -558,8 +583,11 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 }
 
 // Run SQL to get number of records in source table
-func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
+func runCountStar(proc *process.Process, s *fulltext.SearchAccum, param fulltext.FullTextParserParam) (executor.Result, error) {
 	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
+	if param.Implementation == fulltext.FullTextImplV2Lite {
+		sql = fmt.Sprintf(countstar_sql_v2, param.DocsTable)
+	}
 
 	res, err := ft_runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
@@ -612,7 +640,7 @@ func fulltextIndexMatch(
 		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
-		res, err := runCountStar(proc, s)
+		res, err := runCountStar(proc, s, u.param)
 		if err != nil {
 			return err
 		}

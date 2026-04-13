@@ -381,6 +381,28 @@ const (
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
 
+	// FULLTEXT v2 Table Types
+	FullTextV2_TblType_Metadata = "fts_meta"
+	FullTextV2_TblType_Docs     = "fts_docs"
+	FullTextV2_TblType_Segment  = "fts_segment"
+	FullTextV2_TblType_Delta    = "fts_delta"
+
+	// FULLTEXT v2 Metadata table columns
+	FullTextV2_TblCol_Metadata_Key = "__mo_index_key"
+	FullTextV2_TblCol_Metadata_Val = "__mo_index_val"
+
+	// FULLTEXT v2 Docs table columns
+	FullTextV2_TblCol_Docs_Id      = FullTextIndex_TabCol_Id
+	FullTextV2_TblCol_Docs_Version = "doc_version"
+	FullTextV2_TblCol_Docs_Length  = "doc_len"
+	FullTextV2_TblCol_Docs_Deleted = "is_deleted"
+
+	// FULLTEXT v2 Posting table columns
+	FullTextV2_TblCol_Posting_Word    = FullTextIndex_TabCol_Word
+	FullTextV2_TblCol_Posting_Id      = FullTextIndex_TabCol_Id
+	FullTextV2_TblCol_Posting_Version = "doc_version"
+	FullTextV2_TblCol_Posting_Tf      = "tf"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

@@ -80,6 +80,13 @@ func getTruncateIndexTableNames(tableDef *plan.TableDef) []string {
 	return indexTableNames
 }
 
+func multiTableIndexKey(indexDef *plan.IndexDef) string {
+	if indexDef.IndexName != "" {
+		return indexDef.IndexName
+	}
+	return fmt.Sprintf("%s#%s", catalog.ToLower(indexDef.IndexAlgo), strings.Join(indexDef.Parts, ","))
+}
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -716,18 +723,31 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. Master index
 					err = s.handleMasterIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
-					// 3. FullText index
-					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					if indexDef.IndexAlgoTableType == "" {
+						// 4. FullText v1 single hidden table
+						err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					} else {
+						// 5. FullText v2 multi-table indexDefs are aggregated and handled later
+						key := multiTableIndexKey(indexDef)
+						if _, ok := multiTableIndexes[key]; !ok {
+							multiTableIndexes[key] = &MultiTableIndex{
+								IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+								IndexDefs: make(map[string]*plan.IndexDef),
+							}
+						}
+						multiTableIndexes[key].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+					}
 				} else if !indexDef.Unique &&
 					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. IVF and HNSW indexDefs are aggregated and handled later
-					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+					// 6. IVF and HNSW indexDefs are aggregated and handled later
+					key := multiTableIndexKey(indexDef)
+					if _, ok := multiTableIndexes[key]; !ok {
+						multiTableIndexes[key] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
 							IndexDefs: make(map[string]*plan.IndexDef),
 						}
 					}
-					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+					multiTableIndexes[key].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 
 				}
 				if err != nil {
@@ -740,6 +760,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+				case tree.INDEX_TYPE_FULLTEXT.ToString():
+					err = s.handleFullTextV2IndexTable(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -1986,16 +2008,29 @@ func (s *Scope) doCreateIndex(
 		} else if !indexDef.Unique &&
 			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo)) {
 			// 4. IVF indexDefs are aggregated and handled later
-			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+			key := multiTableIndexKey(indexDef)
+			if _, ok := multiTableIndexes[key]; !ok {
+				multiTableIndexes[key] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
 					IndexDefs: make(map[string]*plan.IndexDef),
 				}
 			}
-			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			multiTableIndexes[key].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
-			// 5. FullText index
-			err = s.handleFullTextIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			if indexDef.IndexAlgoTableType == "" {
+				// 5. FullText v1 single hidden table
+				err = s.handleFullTextIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			} else {
+				// 6. FullText v2 multi-table indexDefs are aggregated and handled later
+				key := multiTableIndexKey(indexDef)
+				if _, ok := multiTableIndexes[key]; !ok {
+					multiTableIndexes[key] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				multiTableIndexes[key].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			}
 		}
 		if err != nil {
 			return err
@@ -2008,6 +2043,8 @@ func (s *Scope) doCreateIndex(
 			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case tree.INDEX_TYPE_FULLTEXT.ToString():
+			err = s.handleFullTextV2IndexTable(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {

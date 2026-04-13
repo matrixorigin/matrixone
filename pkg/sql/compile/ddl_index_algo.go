@@ -32,7 +32,8 @@ import (
 )
 
 const (
-	hnswIndexFlag = "experimental_hnsw_index"
+	hnswIndexFlag       = "experimental_hnsw_index"
+	fullTextV2IndexFlag = "experimental_fulltext_v2_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -144,6 +145,55 @@ func (s *Scope) handleFullTextIndexTable(
 	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
 		err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) handleFullTextV2IndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
+	if ok, err := s.isExperimentalEnabled(c, fullTextV2IndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("experimental_fulltext_v2_index is not enabled")
+	}
+
+	requiredTypes := []string{
+		catalog.FullTextV2_TblType_Metadata,
+		catalog.FullTextV2_TblType_Docs,
+		catalog.FullTextV2_TblType_Segment,
+		catalog.FullTextV2_TblType_Delta,
+	}
+	if len(indexDefs) != len(requiredTypes) {
+		return moerr.NewInternalErrorNoCtx("invalid fulltext v2 index table definition")
+	}
+	for _, tableType := range requiredTypes {
+		if _, ok := indexDefs[tableType]; !ok {
+			return moerr.NewInternalErrorNoCtxf("fulltext v2 index definition %s not found", tableType)
+		}
+	}
+
+	if indexInfo != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
+				return err
+			}
+		}
+	}
+
+	insertSQLs := genInsertIndexTableSqlForFullTextIndexV2(originalTableDef, indexDefs, qryDatabase)
+	for _, insertSQL := range insertSQLs {
+		err := c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}

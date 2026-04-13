@@ -74,6 +74,12 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 	return catalog.IsSecondaryIndexTable(tableDef.Name)
 }
 
+func isDMLManagedIrregularIndex(idxDef *plan.IndexDef) bool {
+	return idxDef != nil &&
+		catalog.IsFullTextIndexAlgo(idxDef.IndexAlgo) &&
+		idxDef.IndexAlgoTableType != ""
+}
+
 func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrregularIndex bool) {
 	if tableDef == nil || len(tableDef.Indexes) == 0 {
 		return
@@ -81,6 +87,10 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 
 	for _, idxDef := range tableDef.Indexes {
 		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			if isDMLManagedIrregularIndex(idxDef) {
+				indexes = append(indexes, idxDef)
+				continue
+			}
 			hasIrregularIndex = true
 			continue
 		}

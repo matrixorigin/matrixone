@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,6 +100,14 @@ var (
 
 var (
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
+	insertIntoFullTextV2MetaTableFmt   = "INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('%s', '%s') ON DUPLICATE KEY UPDATE `%s` = '%s';"
+	insertIntoFullTextV2DocsTableFmt   = "INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) " +
+		"SELECT f.`%s`, 0, MAX(CASE WHEN f.`%s` = '%s' THEN f.`%s` ELSE 0 END), false " +
+		"FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f GROUP BY f.`%s`;"
+	insertIntoFullTextV2PostingTableFmt = "INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) " +
+		"SELECT f.`%s`, f.`%s`, 0, COUNT(*) " +
+		"FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f " +
+		"WHERE f.`%s` <> '%s' GROUP BY f.`%s`, f.`%s`;"
 )
 
 var (
@@ -535,6 +544,75 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		concat)
 
 	return []string{sql}
+}
+
+func genInsertIndexTableSqlForFullTextIndexV2(originalTableDef *plan.TableDef, indexDefs map[string]*plan.IndexDef, qryDatabase string) []string {
+	srcAlias := "src"
+	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	params := indexDefs[catalog.FullTextV2_TblType_Metadata].IndexAlgoParams
+
+	parts := make([]string, 0, len(indexDefs[catalog.FullTextV2_TblType_Metadata].Parts))
+	for _, p := range indexDefs[catalog.FullTextV2_TblType_Metadata].Parts {
+		parts = append(parts, srcAlias+"."+p)
+	}
+	concat := strings.Join(parts, ",")
+
+	metaTable := indexDefs[catalog.FullTextV2_TblType_Metadata].IndexTableName
+	docsTable := indexDefs[catalog.FullTextV2_TblType_Docs].IndexTableName
+	segmentTable := indexDefs[catalog.FullTextV2_TblType_Segment].IndexTableName
+
+	sqls := make([]string, 0, 4)
+	sqls = append(sqls,
+		fmt.Sprintf(insertIntoFullTextV2MetaTableFmt,
+			qryDatabase, metaTable,
+			catalog.FullTextV2_TblCol_Metadata_Key, catalog.FullTextV2_TblCol_Metadata_Val,
+			"version", "0",
+			catalog.FullTextV2_TblCol_Metadata_Val, "0",
+		),
+		fmt.Sprintf(insertIntoFullTextV2MetaTableFmt,
+			qryDatabase, metaTable,
+			catalog.FullTextV2_TblCol_Metadata_Key, catalog.FullTextV2_TblCol_Metadata_Val,
+			"active_segment", "0",
+			catalog.FullTextV2_TblCol_Metadata_Val, "0",
+		),
+		fmt.Sprintf(insertIntoFullTextV2DocsTableFmt,
+			qryDatabase, docsTable,
+			catalog.FullTextV2_TblCol_Docs_Id,
+			catalog.FullTextV2_TblCol_Docs_Version,
+			catalog.FullTextV2_TblCol_Docs_Length,
+			catalog.FullTextV2_TblCol_Docs_Deleted,
+			catalog.FullTextIndex_TabCol_Id,
+			catalog.FullTextIndex_TabCol_Word,
+			fulltext.DOC_LEN_WORD,
+			catalog.FullTextIndex_TabCol_Position,
+			qryDatabase, originalTableDef.Name,
+			srcAlias,
+			params,
+			pkColName,
+			concat,
+			catalog.FullTextIndex_TabCol_Id,
+		),
+		fmt.Sprintf(insertIntoFullTextV2PostingTableFmt,
+			qryDatabase, segmentTable,
+			catalog.FullTextV2_TblCol_Posting_Word,
+			catalog.FullTextV2_TblCol_Posting_Id,
+			catalog.FullTextV2_TblCol_Posting_Version,
+			catalog.FullTextV2_TblCol_Posting_Tf,
+			catalog.FullTextIndex_TabCol_Word,
+			catalog.FullTextIndex_TabCol_Id,
+			qryDatabase, originalTableDef.Name,
+			srcAlias,
+			params,
+			pkColName,
+			concat,
+			catalog.FullTextIndex_TabCol_Word,
+			fulltext.DOC_LEN_WORD,
+			catalog.FullTextIndex_TabCol_Word,
+			catalog.FullTextIndex_TabCol_Id,
+		),
+	)
+
+	return sqls
 }
 
 func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {

@@ -3615,6 +3615,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
+	"experimental_fulltext_v2_index": {
+		Name:              "experimental_fulltext_v2_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_fulltext_v2_index"),
+		Default:           int64(0),
+	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,
 		Scope:             ScopeBoth,

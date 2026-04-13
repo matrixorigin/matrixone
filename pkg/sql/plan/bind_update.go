@@ -61,7 +61,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		hasIrregularIndex := false
 		irregularIndexCols := make(map[string]bool)
 		for _, idxDef := range tableDef.Indexes {
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isDMLManagedIrregularIndex(idxDef) {
 				hasIrregularIndex = true
 				// Collect all columns in this irregular index
 				for _, part := range idxDef.Parts {

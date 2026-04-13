@@ -20,6 +20,7 @@ const BM25_K1 = 1.5
 const BM25_B = 0.75
 
 const DOC_LEN_WORD = "__DocLen" //
+const FullTextImplV2Lite = "v2lite"
 
 type FullTextScoreAlgo int
 
@@ -101,7 +102,12 @@ Run Eval() to get final answer and score
 
 // Parser parameters
 type FullTextParserParam struct {
-	Parser string `json:"parser"`
+	Parser         string `json:"parser"`
+	Implementation string `json:"implementation,omitempty"`
+	MetadataTable  string `json:"metadata_table,omitempty"`
+	DocsTable      string `json:"docs_table,omitempty"`
+	SegmentTable   string `json:"segment_table,omitempty"`
+	DeltaTable     string `json:"delta_table,omitempty"`
 }
 
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text

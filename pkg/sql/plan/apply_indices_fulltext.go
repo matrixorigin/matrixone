@@ -14,12 +14,15 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -248,7 +251,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
-		params := idxdef.IndexAlgoParams
+		params, err := builder.buildFullTextScanParams(scanNode, idxdef)
+		if err != nil {
+			return -1, nil, nil, err
+		}
 
 		var exprs tree.Exprs
 		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
@@ -450,6 +456,63 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 	}
 	return nil
+}
+
+func sameFullTextIndexGroup(lhs, rhs *plan.IndexDef) bool {
+	if lhs == nil || rhs == nil {
+		return false
+	}
+	if !catalog.IsFullTextIndexAlgo(lhs.IndexAlgo) || !catalog.IsFullTextIndexAlgo(rhs.IndexAlgo) {
+		return false
+	}
+	if len(lhs.Parts) != len(rhs.Parts) {
+		return false
+	}
+	for i := range lhs.Parts {
+		if !strings.EqualFold(lhs.Parts[i], rhs.Parts[i]) {
+			return false
+		}
+	}
+	if lhs.IndexName != "" || rhs.IndexName != "" {
+		return lhs.IndexName == rhs.IndexName
+	}
+	return true
+}
+
+func (builder *QueryBuilder) buildFullTextScanParams(scanNode *plan.Node, idxdef *plan.IndexDef) (string, error) {
+	params := idxdef.IndexAlgoParams
+	if idxdef.IndexAlgoTableType == "" {
+		return params, nil
+	}
+
+	var parsed fulltext.FullTextParserParam
+	if params != "" {
+		if err := json.Unmarshal([]byte(params), &parsed); err != nil {
+			return "", err
+		}
+	}
+	parsed.Implementation = fulltext.FullTextImplV2Lite
+	for _, candidate := range scanNode.TableDef.Indexes {
+		if !sameFullTextIndexGroup(idxdef, candidate) {
+			continue
+		}
+		fqName := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, candidate.IndexTableName)
+		switch candidate.IndexAlgoTableType {
+		case catalog.FullTextV2_TblType_Metadata:
+			parsed.MetadataTable = fqName
+		case catalog.FullTextV2_TblType_Docs:
+			parsed.DocsTable = fqName
+		case catalog.FullTextV2_TblType_Segment:
+			parsed.SegmentTable = fqName
+		case catalog.FullTextV2_TblType_Delta:
+			parsed.DeltaTable = fqName
+		}
+	}
+	buf, err := json.Marshal(parsed)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 // Get the filters that are fulltext_match() in ScanNode

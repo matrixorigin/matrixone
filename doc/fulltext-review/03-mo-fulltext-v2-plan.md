@@ -640,3 +640,112 @@ analyzer:
 3. **把“完全专用 engine-native FTS 存储”作为长期终态，而不是第一阶段交付目标。**
 
 从架构价值看，这不是“小优化”，而是一项值得单独立项、按阶段分解的基础能力升级。
+
+---
+
+## 15. 当前仓库内已落地的 FTS v2-lite 范围
+
+当前代码已经落地的是一条 **feature-flagged、并行于现有 FULLTEXT v1 的实验路径**：
+
+- 通过 `experimental_fulltext_v2_index` 控制
+- DDL 侧会为 FULLTEXT v2 创建 4 张隐藏表：
+  - `fts_meta`
+  - `fts_docs`
+  - `fts_segment`
+  - `fts_delta`
+- `CREATE INDEX / ALTER ADD FULLTEXT INDEX` 的初始 build：
+  - 回填 `fts_docs`
+  - 回填 `fts_segment`
+  - 初始化 metadata
+- 查询仍保持 `MATCH ... AGAINST` 语法，但 v2 路径会改写为读取 `docs + segment + delta`
+- DML 维护已支持 INSERT / UPDATE / DELETE：
+  - 删除旧 `docs / segment / delta`
+  - 再把新版本写入 `docs + delta`
+
+这次落地 **没有替换** 现有 v1 路径，也 **没有触碰** 现有向量检索单查路径。
+
+### 15.1 当前 v2-lite 的明确边界
+
+当前这批代码是可运行的 **FTS v2-lite 第一落地**，但仍保留以下边界：
+
+1. **还没有后台 merge / refresh / compact 任务**；当前查询直接同时读 `segment + delta`
+2. **v2 还没有 positions/proximity 存储**；因此显式 phrase 在 v2 路径下直接报不支持
+3. **查询执行仍复用当前 `fulltext_index_scan` table function 框架**，还不是最终目标中的专用原生 FTS 算子
+4. **DML 为低更新负载优化**；当前 update/delete 会直接按 doc_id 清理旧 postings，再写入新 delta
+
+换句话说，这个版本已经覆盖了：
+
+- 低并发、低更新
+- 约 500 req/min 量级
+- 不影响现有向量单查链路
+
+但它还不是文档前面描述的“带后台 merge、带 positions、带专用算子”的完整终态。
+
+---
+
+## 16. 测试方案
+
+建议按下面 5 组测试执行。
+
+### 16.1 DDL / build
+
+1. `set experimental_fulltext_v2_index = 1`
+2. 建普通表并创建 FULLTEXT 索引
+3. 验证产生 4 张隐藏表：`fts_meta / fts_docs / fts_segment / fts_delta`
+4. 验证初始 build 后：
+   - `fts_docs` 有 doc 行
+   - `fts_segment` 有 postings
+   - `fts_delta` 初始为空或仅保留增量写入
+
+### 16.2 查询正确性
+
+构造一批包含英文、中文、prefix 词项的数据，覆盖：
+
+1. `MATCH(...) AGAINST('matrix origin' IN BOOLEAN MODE)`
+2. `MATCH(...) AGAINST('+matrix +origin' IN BOOLEAN MODE)`
+3. `MATCH(...) AGAINST('matrix' IN NATURAL LANGUAGE MODE)`
+4. prefix 查询（如 `origin*`）
+
+重点验证：
+
+- v2 可以正常返回 doc_id 与排序分数
+- `EXPLAIN` 能看到 fulltext rewrite 生效
+- 查询会命中 `docs + segment + delta`，而不是旧单 token 表
+
+### 16.3 DML 维护
+
+在已有 v2 索引表上覆盖：
+
+1. INSERT 新文档后立即查询，确认能从 `delta` 命中
+2. UPDATE 已有文档内容后查询，确认旧词不再命中、新词能够命中
+3. DELETE 文档后查询，确认结果消失
+4. REPLACE / upsert 类路径，确认不会留下旧 postings
+
+### 16.4 与向量检索共存
+
+对同库同表或相邻 workload 执行：
+
+1. 纯向量查询
+2. 纯全文查询
+3. 交替执行
+
+验证：
+
+- 向量查询计划不因为 v2 fulltext 打开而改变
+- 向量单查耗时分布没有明显回退
+
+### 16.5 大一点的数据量 smoke
+
+不需要一开始就上极大规模，可以先做一组更现实的 smoke：
+
+1. 1000 万级文档或接近业务真实体量的数据子集
+2. 初始 build
+3. 少量增量写入
+4. 典型 top-k 查询
+
+关注指标：
+
+- 初始 build 时间
+- `fts_segment` 与 `fts_delta` 大小变化
+- top-k 查询延迟
+- UPDATE/DELETE 后索引可见性是否正确

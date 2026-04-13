@@ -230,3 +230,38 @@ func TestSqlNLBM25(t *testing.T) {
 		assert.Equal(t, c.expect, result)
 	}
 }
+
+func TestSqlBooleanV2(t *testing.T) {
+	param := FullTextParserParam{
+		Implementation: FullTextImplV2Lite,
+		DocsTable:      "`docs_tbl`",
+		SegmentTable:   "`segment_tbl`",
+		DeltaTable:     "`delta_tbl`",
+	}
+
+	s, err := NewSearchAccum("src", "index", "Matrix Origin", int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	require.NoError(t, err)
+
+	result, err := PatternToSqlV2(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), param, ALGO_TFIDF)
+	require.NoError(t, err)
+	assert.Contains(t, result, "SELECT q.doc_id, CAST(0 as int), q.doc_len, q.tf FROM (SELECT d.doc_id, d.doc_len, CAST(SUM(p.tf) AS BIGINT) AS tf")
+	assert.Contains(t, result, "FROM (SELECT `word`, `doc_id`, `doc_version`, `tf` FROM `segment_tbl` UNION ALL SELECT `word`, `doc_id`, `doc_version`, `tf` FROM `delta_tbl`) p JOIN `docs_tbl` d")
+	assert.Contains(t, result, "p.word = 'matrix'")
+	assert.Contains(t, result, "p.word = 'origin'")
+	assert.Contains(t, result, "GROUP BY d.doc_id, d.doc_len")
+}
+
+func TestSqlPhraseV2Unsupported(t *testing.T) {
+	param := FullTextParserParam{
+		Implementation: FullTextImplV2Lite,
+		DocsTable:      "`docs_tbl`",
+		SegmentTable:   "`segment_tbl`",
+		DeltaTable:     "`delta_tbl`",
+	}
+
+	s, err := NewSearchAccum("src", "index", "\"Matrix Origin\"", int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	require.NoError(t, err)
+
+	_, err = PatternToSqlV2(s.Pattern, int64(tree.FULLTEXT_BOOLEAN), param, ALGO_TFIDF)
+	require.ErrorContains(t, err, "phrase search is not supported for fulltext v2")
+}
