@@ -18,17 +18,29 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
+
+type pipelineFlushKeyType struct{}
+
+// PipelineFlushKey is the context key used to enable pipeline flush in Sinker.
+// Set the context value to true to enable pipeline flush for INSERT operations
+// (e.g., ALTER TABLE ADD PRIMARY KEY).
+var PipelineFlushKey = pipelineFlushKeyType{}
 
 type SinkerOption func(*Sinker)
 
@@ -66,6 +78,12 @@ func WithBuffer(buffer containers.IBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.buf.isOwner = isOwner
 		sinker.buf.buffers = buffer
+	}
+}
+
+func WithPipelineFlush() SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.pipe.enabled = true
 	}
 }
 
@@ -360,6 +378,20 @@ type Sinker struct {
 		buffers  containers.IBatchBuffer
 	}
 
+	pipe struct {
+		enabled bool
+		result  *pipelineResult
+	}
+
+	timing struct {
+		spillCount int64 // atomic
+		sortNs     int64 // atomic, nanoseconds
+		sinkNs     int64 // atomic, nanoseconds (sync path only)
+		syncNs     int64 // atomic, nanoseconds (sync path only)
+		waitNs     int64 // atomic, nanoseconds (main goroutine blocked on pool submit)
+		spillNs    int64 // atomic, nanoseconds (total wall time in trySpill)
+	}
+
 	mp *mpool.MPool
 	fs fileservice.FileService
 }
@@ -503,53 +535,120 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 	return nil
 }
 
+// pipelineSubmit submits sorted batches to the global sink pool for async
+// serialization + IO. Transfers batch ownership to the pool workers.
+func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) error {
+	if sinker.pipe.result == nil {
+		pctx, cancel := context.WithCancel(ctx)
+		sinker.pipe.result = &pipelineResult{
+			ctx:    pctx,
+			cancel: cancel,
+		}
+	}
+	waitStart := time.Now()
+	err := GetDefaultSinkPool().Submit(&poolSinkJob{
+		data:    data,
+		factory: sinker.fSinker.factory,
+		mp:      sinker.mp,
+		fs:      sinker.fs,
+		result:  sinker.pipe.result,
+	})
+	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
+	return err
+}
+
+// drainPipeline waits for all in-flight pipeline jobs to complete and returns
+// any accumulated error.
+func (sinker *Sinker) drainPipeline() error {
+	if sinker.pipe.result == nil {
+		return nil
+	}
+	sinker.pipe.result.pending.Wait()
+	return sinker.pipe.result.getError()
+}
+
 func (sinker *Sinker) trySpill(ctx context.Context) error {
+	spillStart := time.Now()
+	defer func() {
+		atomic.AddInt64(&sinker.timing.spillCount, 1)
+		atomic.AddInt64(&sinker.timing.spillNs, int64(time.Since(spillStart)))
+	}()
+
 	// sort all in memory data
+	sortStart := time.Now()
 	if err := sinker.trySortInMemoryStaged(ctx); err != nil {
 		return err
 	}
 
 	defer sinker.cleanupInMemoryStaged()
 
-	fSinker := sinker.getStageFileSinker()
-	defer sinker.resetFileSinker()
-
-	data := sinker.staged.inMemory
-
 	// merge sort
 	if sinker.schema.sortKeyIdx != -1 {
 		if sinker.config.dedupAll {
-			// dedup needs all sorted blocks present, so accumulate first.
-			if err := sinker.trySpillMergeSortAccumulate(
-				ctx, fSinker,
-			); err != nil {
+			fSinker := sinker.getStageFileSinker()
+			err := sinker.trySpillMergeSortAccumulate(ctx, fSinker)
+			if err != nil {
+				sinker.resetFileSinker()
 				return err
 			}
-			goto sync
-		}
-
-		// stream sorted blocks directly to fSinker, reusing one buffer.
-		if err := sinker.trySpillMergeSortStreaming(
-			ctx, fSinker,
-		); err != nil {
+			atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
+			err = sinker.syncFileSinker(ctx, fSinker)
+			sinker.resetFileSinker()
 			return err
 		}
-		goto sync
-	}
 
-	// no sort key: spill directly
-	for _, bat := range data {
-		if err := fSinker.Sink(ctx, bat); err != nil {
+		if sinker.pipe.enabled {
+			err := sinker.trySpillMergeSortPipeline(ctx)
+			atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
 			return err
 		}
-	}
 
-sync:
-	stats, err := fSinker.Sync(ctx)
-	if err != nil {
+		fSinker := sinker.getStageFileSinker()
+		err := sinker.trySpillMergeSortStreaming(ctx, fSinker)
+		if err != nil {
+			sinker.resetFileSinker()
+			return err
+		}
+		atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
+		err = sinker.syncFileSinker(ctx, fSinker)
+		sinker.resetFileSinker()
 		return err
 	}
 
+	atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
+
+	// no sort key: pipeline path — steal in-memory staged batches
+	if sinker.pipe.enabled {
+		jobData := make([]*batch.Batch, len(sinker.staged.inMemory))
+		copy(jobData, sinker.staged.inMemory)
+		for i := range sinker.staged.inMemory {
+			sinker.staged.inMemory[i] = nil
+		}
+		sinker.staged.inMemory = sinker.staged.inMemory[:0]
+		sinker.staged.inMemorySize = 0
+		return sinker.pipelineSubmit(ctx, jobData)
+	}
+
+	// no sort key: spill directly (sync path)
+	fSinker := sinker.getStageFileSinker()
+	for _, bat := range sinker.staged.inMemory {
+		if err := fSinker.Sink(ctx, bat); err != nil {
+			sinker.resetFileSinker()
+			return err
+		}
+	}
+	err := sinker.syncFileSinker(ctx, fSinker)
+	sinker.resetFileSinker()
+	return err
+}
+
+func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) error {
+	syncStart := time.Now()
+	stats, err := fSinker.Sync(ctx)
+	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
+	if err != nil {
+		return err
+	}
 	sinker.staged.persisted = append(sinker.staged.persisted, *stats)
 	return nil
 }
@@ -632,6 +731,39 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		}
 	}
 	return nil
+}
+
+// trySpillMergeSortPipeline merge-sorts staged data into accumulated batches,
+// then submits them to the pipeline for async serialization + IO.
+func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) error {
+	var sorted []*batch.Batch
+	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
+		sorted = append(sorted, data)
+		return sinker.fetchBuffer()
+	}
+
+	buffer, err := sinker.fetchBuffer()
+	if err != nil {
+		return err
+	}
+	buffer, err = mergeutil.MergeSortBatches(
+		sinker.staged.inMemory,
+		sinker.schema.sortKeyIdx,
+		buffer,
+		innersinker,
+		sinker.mp,
+		sinker.putBackOneInMemory,
+	)
+	sinker.putBackBuffer(buffer)
+	if err != nil {
+		for _, bat := range sorted {
+			sinker.putBackBuffer(bat)
+		}
+		return err
+	}
+
+	// submit accumulated sorted batches to pipeline (transfers ownership)
+	return sinker.pipelineSubmit(ctx, sorted)
 }
 
 func (sinker *Sinker) resetFileSinker() {
@@ -739,7 +871,13 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return context.Cause(ctx)
 	default:
 	}
-	if len(sinker.staged.persisted) == 0 && len(sinker.staged.inMemory) == 0 {
+	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		if err := sinker.pipe.result.getError(); err != nil {
+			return err
+		}
+	}
+	if len(sinker.staged.persisted) == 0 && len(sinker.staged.inMemory) == 0 &&
+		(!sinker.pipe.enabled || sinker.pipe.result == nil) {
 		return nil
 	}
 	// spill the remaining data
@@ -764,9 +902,39 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		sinker.clearInMemoryStaged()
 	}
 
+	// drain pipeline and collect results
+	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		if err := sinker.drainPipeline(); err != nil {
+			return err
+		}
+		sinker.pipe.result.mu.Lock()
+		sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
+		sinker.pipe.result.persisted = nil
+		sinker.pipe.result.mu.Unlock()
+	}
+
 	defer func() {
 		sinker.staged.persisted = sinker.staged.persisted[:0]
 	}()
+
+	spillCount := atomic.LoadInt64(&sinker.timing.spillCount)
+	if spillCount > 0 {
+		var poolSinkNs, poolSyncNs int64
+		if sinker.pipe.result != nil {
+			poolSinkNs = atomic.LoadInt64(&sinker.pipe.result.sinkNs)
+			poolSyncNs = atomic.LoadInt64(&sinker.pipe.result.syncNs)
+		}
+		logutil.Info("Sinker flush stats",
+			zap.Bool("pipeline", sinker.pipe.enabled),
+			zap.Int64("spills", spillCount),
+			zap.Duration("sortTime", time.Duration(atomic.LoadInt64(&sinker.timing.sortNs))),
+			zap.Duration("serializeTime", time.Duration(atomic.LoadInt64(&sinker.timing.sinkNs)+poolSinkNs)),
+			zap.Duration("ioTime", time.Duration(atomic.LoadInt64(&sinker.timing.syncNs)+poolSyncNs)),
+			zap.Duration("submitWaitTime", time.Duration(atomic.LoadInt64(&sinker.timing.waitNs))),
+			zap.Duration("totalSpillTime", time.Duration(atomic.LoadInt64(&sinker.timing.spillNs))),
+			zap.Int("objects", len(sinker.staged.persisted)),
+		)
+	}
 
 	// if there is only one file, it is sorted an deduped
 	if len(sinker.staged.persisted) == 1 {
@@ -779,13 +947,6 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 	panic("not implemented")
-	// TODO: merge the files and dedup
-	// newPersied, err := MergeSortedFilesAndDedup(sinker.staged.persisted)
-	// if err != nil {
-	// 	return err
-	// }
-	// sinker.results = append(sinker.results, newPersied...)
-	//return nil
 }
 
 func (sinker *Sinker) GetInMemoryThreshold() int {
@@ -820,6 +981,9 @@ func (sinker *Sinker) StagedSize() int {
 }
 
 func (sinker *Sinker) Close() error {
+	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		sinker.drainPipeline()
+	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
 		if sinker.buf.isOwner {
@@ -853,6 +1017,15 @@ func (sinker *Sinker) Close() error {
 // executor (and its arena), mpool, and fileservice references are all kept
 // alive so they can be reused without reallocation.
 func (sinker *Sinker) Reset() {
+	// Drain any in-flight pipeline jobs before clearing state, so pool
+	// workers don't race with the cleanup below. Clearing pipe.result
+	// ensures the next Write/Sync cycle gets a fresh pipelineResult and
+	// doesn't inherit stale errors or persisted stats.
+	if sinker.pipe.result != nil {
+		sinker.drainPipeline()
+		sinker.pipe.result = nil
+	}
+
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
 

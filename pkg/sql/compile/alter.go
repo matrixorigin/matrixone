@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -191,7 +192,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 6. copy the original table data to the temporary replica table
+	// Enable pipeline flush for the INSERT to parallelize serialization
+	origCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(origCtx, ioutil.PipelineFlushKey, true)
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+	c.proc.Ctx = origCtx
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", dbName),
