@@ -47,3 +47,49 @@ insert into geo_alter_add_point_srid_not_null values (1);
 alter table geo_alter_add_point_srid_not_null add column g point not null srid 4326;
 select id, st_astext(g) as point_text, st_srid(g) as point_srid from geo_alter_add_point_srid_not_null;
 drop table geo_alter_add_point_srid_not_null;
+
+drop table if exists geo_typed_suite;
+create table geo_typed_suite(
+    id int primary key,
+    l linestring,
+    p polygon,
+    mp multipoint,
+    ml multilinestring,
+    mpg multipolygon,
+    gc geometrycollection
+);
+insert into geo_typed_suite values (
+    1,
+    st_geomfromtext('LINESTRING(0 0,1 1)'),
+    st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'),
+    st_geomfromtext('MULTIPOINT((0 0),(1 1))'),
+    st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))'),
+    st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))'),
+    st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))')
+);
+select st_astext(l) as linestring_text, st_astext(p) as polygon_text from geo_typed_suite;
+select
+    st_astext(mp) as multipoint_text,
+    st_astext(ml) as multilinestring_text,
+    st_astext(mpg) as multipolygon_text,
+    st_astext(gc) as geometrycollection_text
+from geo_typed_suite;
+update geo_typed_suite
+set
+    l = st_geomfromtext('LINESTRING(1 1,2 2)'),
+    gc = st_geomfromtext('GEOMETRYCOLLECTION(POINT(2 2))')
+where id = 1;
+select st_astext(l) as linestring_text, st_astext(gc) as geometrycollection_text from geo_typed_suite;
+drop table geo_typed_suite;
+
+drop table if exists geo_multilinestring_bad;
+create table geo_multilinestring_bad(g multilinestring);
+-- @regex("cannot store LINESTRING in MULTILINESTRING column",true)
+insert into geo_multilinestring_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
+drop table geo_multilinestring_bad;
+
+drop table if exists geo_geometrycollection_bad;
+create table geo_geometrycollection_bad(g geometrycollection);
+-- @regex("cannot store POINT in GEOMETRYCOLLECTION column",true)
+insert into geo_geometrycollection_bad values (st_geomfromtext('POINT(0 0)'));
+drop table geo_geometrycollection_bad;
