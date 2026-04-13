@@ -206,17 +206,6 @@ func (idx *CagraModel[T]) saveToFile() error {
 		return nil
 	}
 
-	// Save CAGRA files to a temporary directory, then pack to tar.
-	tmpDir, err := os.MkdirTemp("", "cagra-save-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	if err = idx.Index.SaveToDir(tmpDir); err != nil {
-		return err
-	}
-
 	tarFile, err := os.CreateTemp("", "cagra")
 	if err != nil {
 		return err
@@ -224,7 +213,7 @@ func (idx *CagraModel[T]) saveToFile() error {
 	tarPath := tarFile.Name()
 	tarFile.Close()
 
-	if err = cuvs.Pack(tmpDir, tarPath); err != nil {
+	if err = idx.Index.Pack(tarPath); err != nil {
 		os.Remove(tarPath)
 		return err
 	}
@@ -491,17 +480,6 @@ func (idx *CagraModel[T]) LoadIndex(
 		return moerr.NewInternalError(sqlproc.GetContext(), "CagraModel: checksum mismatch")
 	}
 
-	// Extract tar to a temporary directory.
-	tmpDir, err := os.MkdirTemp("", "cagra-load-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	if _, err = cuvs.Unpack(idx.Path, tmpDir); err != nil {
-		return err
-	}
-
 	// Reconstruct the GpuCagra instance from configuration.
 	idx.Idxcfg = idxcfg
 	idx.NThread = uint32(nthread)
@@ -529,7 +507,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	if err = gi.LoadFromDir(tmpDir); err != nil {
+	if err = gi.Unpack(idx.Path); err != nil {
 		gi.Destroy()
 		return err
 	}
