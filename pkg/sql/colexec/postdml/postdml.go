@@ -33,12 +33,6 @@ var (
 	fulltextInsertSqlFmt    = "INSERT INTO %s SELECT f.* FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f WHERE %s IN (%s)"
 	fulltextDeleteSqlFmt    = "DELETE FROM %s WHERE doc_id IN (%s)"
 	fulltextDeleteAllSqlFmt = "DELETE FROM %s"
-	fulltextV2DocsInsertFmt = "INSERT INTO %s (`doc_id`, `doc_version`, `doc_len`, `is_deleted`) " +
-		"SELECT f.`doc_id`, 0, MAX(CASE WHEN f.`word` = '%s' THEN f.`pos` ELSE 0 END), false " +
-		"FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f WHERE %s IN (%s) GROUP BY f.`doc_id`"
-	fulltextV2PostingInsertFmt = "INSERT INTO %s (`word`, `doc_id`, `doc_version`, `tf`) " +
-		"SELECT f.`word`, f.`doc_id`, 0, COUNT(*) FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f " +
-		"WHERE %s IN (%s) AND f.`word` <> '%s' GROUP BY f.`word`, f.`doc_id`"
 )
 
 func qualifyFullTextTableName(dbname, tblname string) string {
@@ -138,48 +132,21 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			}
 		}
 
-		if param.Implementation == fulltext.FullTextImplV2Lite {
-			docsTbl := qualifyFullTextTableName(dbname, param.DocsTable)
-			segmentTbl := qualifyFullTextTableName(dbname, param.SegmentTable)
-			deltaTbl := qualifyFullTextTableName(dbname, param.DeltaTable)
+		if postdml.PostDmlCtx.IsDelete {
+			var sql string
+			if postdml.PostDmlCtx.IsDeleteWithoutFilters {
+				sql = fmt.Sprintf(fulltextDeleteAllSqlFmt, indextbl)
+			} else {
+				sql = fmt.Sprintf(fulltextDeleteSqlFmt, indextbl, values)
+			}
+			proc.Base.PostDmlSqlList.Append(sql)
+		}
 
-			if postdml.PostDmlCtx.IsDelete {
-				if postdml.PostDmlCtx.IsDeleteWithoutFilters {
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteAllSqlFmt, segmentTbl))
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteAllSqlFmt, deltaTbl))
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteAllSqlFmt, docsTbl))
-				} else {
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteSqlFmt, segmentTbl, values))
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteSqlFmt, deltaTbl, values))
-					proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextDeleteSqlFmt, docsTbl, values))
-				}
-			}
-
-			if postdml.PostDmlCtx.IsInsert {
-				proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextV2DocsInsertFmt, docsTbl, fulltext.DOC_LEN_WORD,
-					sourcetbl, alias, ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
-					pkcolname, values))
-				proc.Base.PostDmlSqlList.Append(fmt.Sprintf(fulltextV2PostingInsertFmt, deltaTbl,
-					sourcetbl, alias, ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
-					pkcolname, values, fulltext.DOC_LEN_WORD))
-			}
-		} else {
-			if postdml.PostDmlCtx.IsDelete {
-				var sql string
-				if postdml.PostDmlCtx.IsDeleteWithoutFilters {
-					sql = fmt.Sprintf(fulltextDeleteAllSqlFmt, indextbl)
-				} else {
-					sql = fmt.Sprintf(fulltextDeleteSqlFmt, indextbl, values)
-				}
-				proc.Base.PostDmlSqlList.Append(sql)
-			}
-
-			if postdml.PostDmlCtx.IsInsert {
-				sql := fmt.Sprintf(fulltextInsertSqlFmt, indextbl, sourcetbl, alias,
-					ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
-					pkcolname, values)
-				proc.Base.PostDmlSqlList.Append(sql)
-			}
+		if postdml.PostDmlCtx.IsInsert {
+			sql := fmt.Sprintf(fulltextInsertSqlFmt, indextbl, sourcetbl, alias,
+				ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
+				pkcolname, values)
+			proc.Base.PostDmlSqlList.Append(sql)
 		}
 	}
 

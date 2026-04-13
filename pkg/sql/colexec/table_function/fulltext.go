@@ -37,8 +37,7 @@ import (
 )
 
 const (
-	countstar_sql    = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
-	countstar_sql_v2 = "SELECT COUNT(*), AVG(doc_len) from %s where is_deleted = false"
+	countstar_sql = "SELECT COUNT(*), AVG(pos) from %s where word = '%s'"
 )
 
 var ft_runSql = sqlexec.RunSql
@@ -332,16 +331,10 @@ func runWordStats(
 ) (result executor.Result, err error) {
 
 	var sql string
-	if u.param.Implementation == fulltext.FullTextImplV2Lite {
-		if sql, err = fulltext.PatternToSqlV2(s.Pattern, s.Mode, u.param, s.ScoreAlgo); err != nil {
-			return
-		}
-	} else {
-		if sql, err = fulltext.PatternToSql(
-			s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo,
-		); err != nil {
-			return
-		}
+	if sql, err = fulltext.PatternToSql(
+		s.Pattern, s.Mode, s.TblName, u.param.Parser, s.ScoreAlgo,
+	); err != nil {
+		return
 	}
 
 	result, err = ft_runSql_streaming(ctx, proc, sql, u.streamCh, u.errCh)
@@ -476,8 +469,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	hasTf := len(bat.Vecs) == 4
 
 	u.nrows += bat.RowCount()
-	phraseCompat := u.param.Implementation != fulltext.FullTextImplV2Lite &&
-		(s.Mode == int64(tree.FULLTEXT_NL) || s.Pattern[0].Operator == fulltext.PHRASE)
+	phraseCompat := s.Mode == int64(tree.FULLTEXT_NL) || s.Pattern[0].Operator == fulltext.PHRASE
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// doc_id any
@@ -585,9 +577,6 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 // Run SQL to get number of records in source table
 func runCountStar(proc *process.Process, s *fulltext.SearchAccum, param fulltext.FullTextParserParam) (executor.Result, error) {
 	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
-	if param.Implementation == fulltext.FullTextImplV2Lite {
-		sql = fmt.Sprintf(countstar_sql_v2, param.DocsTable)
-	}
 
 	res, err := ft_runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {

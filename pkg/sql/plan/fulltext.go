@@ -153,9 +153,6 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 	if err != nil {
 		return "", err
 	}
-	if param.Implementation == fulltext.FullTextImplV2Lite {
-		return fulltext.PatternToSqlV2(ps, mode, param, scoreAlgo)
-	}
 	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser, scoreAlgo)
 }
 

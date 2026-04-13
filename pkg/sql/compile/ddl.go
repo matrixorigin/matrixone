@@ -760,8 +760,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
-				case tree.INDEX_TYPE_FULLTEXT.ToString():
-					err = s.handleFullTextV2IndexTable(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -2043,8 +2041,6 @@ func (s *Scope) doCreateIndex(
 			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
-		case tree.INDEX_TYPE_FULLTEXT.ToString():
-			err = s.handleFullTextV2IndexTable(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {

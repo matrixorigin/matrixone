@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -51,37 +49,6 @@ func multiTableDmlIndexKey(indexdef *plan.IndexDef) string {
 		return indexdef.IndexName
 	}
 	return fmt.Sprintf("%s#%s", catalog.ToLower(indexdef.IndexAlgo), strings.Join(indexdef.Parts, ","))
-}
-
-func buildFullTextV2PostDmlParams(indexDefs map[string]*plan.IndexDef) (string, error) {
-	metaDef := indexDefs[catalog.FullTextV2_TblType_Metadata]
-	if metaDef == nil {
-		return "", moerr.NewInternalErrorNoCtx("fulltext v2 metadata index definition not found")
-	}
-	var param fulltext.FullTextParserParam
-	if metaDef.IndexAlgoParams != "" {
-		if err := json.Unmarshal([]byte(metaDef.IndexAlgoParams), &param); err != nil {
-			return "", err
-		}
-	}
-	param.Implementation = fulltext.FullTextImplV2Lite
-	if def := indexDefs[catalog.FullTextV2_TblType_Metadata]; def != nil {
-		param.MetadataTable = def.IndexTableName
-	}
-	if def := indexDefs[catalog.FullTextV2_TblType_Docs]; def != nil {
-		param.DocsTable = def.IndexTableName
-	}
-	if def := indexDefs[catalog.FullTextV2_TblType_Segment]; def != nil {
-		param.SegmentTable = def.IndexTableName
-	}
-	if def := indexDefs[catalog.FullTextV2_TblType_Delta]; def != nil {
-		param.DeltaTable = def.IndexTableName
-	}
-	buf, err := json.Marshal(param)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
 }
 
 var dmlPlanCtxPool = sync.Pool{
@@ -3661,10 +3628,6 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 			if err != nil {
 				return err
 			}
-		case tree.INDEX_TYPE_FULLTEXT.ToString():
-			if err = buildPostInsertFullTextV2Index(ctx, builder, bindCtx, objRef, tableDef, sourceStep, multiTableIndex); err != nil {
-				return err
-			}
 		default:
 			return moerr.NewInvalidInputNoCtxf("Unsupported index algorithm: %s", multiTableIndex.IndexAlgo)
 		}
@@ -3819,10 +3782,6 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					return err
 				}
 				builder.appendStep(lastNodeId)
-			}
-		case tree.INDEX_TYPE_FULLTEXT.ToString():
-			if err = buildPostDeleteFullTextV2Index(ctx, builder, bindCtx, delCtx, multiTableIndex); err != nil {
-				return err
 			}
 		default:
 			return moerr.NewNYINoCtxf("unsupported index algorithm %s", multiTableIndex.IndexAlgo)
@@ -4959,66 +4918,4 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 
 	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, tableDef,
 		sourceStep, indexdef, idx, isDelete, isInsert, isDeleteWithoutFilters)
-}
-
-func buildFullTextV2IndexCarrier(multiTableIndex *MultiTableIndex) (*plan.IndexDef, error) {
-	metaDef := multiTableIndex.IndexDefs[catalog.FullTextV2_TblType_Metadata]
-	if metaDef == nil {
-		return nil, moerr.NewInternalErrorNoCtx("fulltext v2 metadata index definition not found")
-	}
-	for _, tableType := range []string{
-		catalog.FullTextV2_TblType_Docs,
-		catalog.FullTextV2_TblType_Segment,
-		catalog.FullTextV2_TblType_Delta,
-	} {
-		if multiTableIndex.IndexDefs[tableType] == nil {
-			return nil, moerr.NewInternalErrorNoCtxf("fulltext v2 index definition %s not found", tableType)
-		}
-	}
-	params, err := buildFullTextV2PostDmlParams(multiTableIndex.IndexDefs)
-	if err != nil {
-		return nil, err
-	}
-	return &plan.IndexDef{
-		IndexName:          metaDef.IndexName,
-		IndexTableName:     metaDef.IndexTableName,
-		IndexAlgo:          metaDef.IndexAlgo,
-		IndexAlgoTableType: metaDef.IndexAlgoTableType,
-		Parts:              metaDef.Parts,
-		IndexAlgoParams:    params,
-	}, nil
-}
-
-func buildPostInsertFullTextV2Index(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
-	sourceStep int32, multiTableIndex *MultiTableIndex) error {
-	carrier, err := buildFullTextV2IndexCarrier(multiTableIndex)
-	if err != nil {
-		return err
-	}
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, carrier.IndexTableName, nil)
-	if err != nil {
-		return err
-	}
-	if indexTableDef == nil {
-		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, carrier.IndexName)
-	}
-	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, tableDef,
-		sourceStep, carrier, 0, false, true, false)
-}
-
-func buildPostDeleteFullTextV2Index(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
-	multiTableIndex *MultiTableIndex) error {
-	carrier, err := buildFullTextV2IndexCarrier(multiTableIndex)
-	if err != nil {
-		return err
-	}
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, carrier.IndexTableName, nil)
-	if err != nil {
-		return err
-	}
-	if indexTableDef == nil {
-		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, carrier.IndexName)
-	}
-	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, delCtx.tableDef,
-		delCtx.sourceStep, carrier, 0, true, delCtx.updateColLength > 0, delCtx.isDeleteWithoutFilters)
 }

@@ -165,12 +165,7 @@ func TestFullTextV2(t *testing.T) {
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
 
-	params, err := json.Marshal(fulltext.FullTextParserParam{
-		Implementation: fulltext.FullTextImplV2Lite,
-		DocsTable:      "docs_tbl",
-		SegmentTable:   "segment_tbl",
-		DeltaTable:     "delta_tbl",
-	})
+	params, err := json.Marshal(fulltext.FullTextParserParam{})
 	require.NoError(t, err)
 
 	arg := PostDml{
@@ -186,7 +181,7 @@ func TestFullTextV2(t *testing.T) {
 			IsInsert:       true,
 			FullText: &PostDmlFullTextCtx{
 				SourceTableName: "src",
-				IndexTableName:  "fts_meta_tbl",
+				IndexTableName:  "fts_tbl",
 				Parts:           []string{"body", "title"},
 				AlgoParams:      string(params),
 			},
@@ -200,11 +195,9 @@ func TestFullTextV2(t *testing.T) {
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
-	require.Len(t, proc.Base.PostDmlSqlList.Values(), 5)
+	require.Len(t, proc.Base.PostDmlSqlList.Values(), 2)
 	expectedDeletes := []string{
-		"DELETE FROM `testDb`.`segment_tbl` WHERE doc_id IN (1,1000)",
-		"DELETE FROM `testDb`.`delta_tbl` WHERE doc_id IN (1,1000)",
-		"DELETE FROM `testDb`.`docs_tbl` WHERE doc_id IN (1,1000)",
+		"DELETE FROM `testDb`.`fts_tbl` WHERE doc_id IN (1,1000)",
 	}
 	for i, sql := range expectedDeletes {
 		rs, ok := proc.Base.PostDmlSqlList.Get(i)
@@ -212,16 +205,11 @@ func TestFullTextV2(t *testing.T) {
 		require.Equal(t, sql, rs)
 	}
 
-	rs, ok := proc.Base.PostDmlSqlList.Get(3)
+	rs, ok := proc.Base.PostDmlSqlList.Get(1)
 	require.True(t, ok)
-	require.Contains(t, rs, "INSERT INTO `testDb`.`docs_tbl` (`doc_id`, `doc_version`, `doc_len`, `is_deleted`)")
+	require.Contains(t, rs, "INSERT INTO `testDb`.`fts_tbl`")
 	require.Contains(t, rs, "fulltext_index_tokenize('"+string(params)+"', src.pk, src.body, src.title)")
-	require.Contains(t, rs, "MAX(CASE WHEN f.`word` = '__DocLen' THEN f.`pos` ELSE 0 END)")
-
-	rs, ok = proc.Base.PostDmlSqlList.Get(4)
-	require.True(t, ok)
-	require.Contains(t, rs, "INSERT INTO `testDb`.`delta_tbl` (`word`, `doc_id`, `doc_version`, `tf`)")
-	require.Contains(t, rs, "AND f.`word` <> '__DocLen'")
+	require.Contains(t, rs, "SELECT f.*")
 
 	arg.Free(proc, false, nil)
 	arg.Release()

@@ -247,12 +247,11 @@ func TestBuildLockTables(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestBuildFullTextIndexTableV2(t *testing.T) {
+func TestBuildFullTextIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ctx := NewMockCompilerContext2(ctrl)
-	ctx.EXPECT().ResolveVariable(experimentalFullTextV2IndexFlag, true, false).Return(int8(1), nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 
 	createTable := &plan.CreateTable{TableDef: &TableDef{}}
@@ -279,34 +278,10 @@ func TestBuildFullTextIndexTableV2(t *testing.T) {
 
 	err := buildFullTextIndexTable(createTable, indexInfos, colMap, nil, "id", ctx)
 	require.NoError(t, err)
-	require.Len(t, createTable.IndexTables, 4)
-	require.Len(t, createTable.TableDef.Indexes, 4)
-
-	tableTypes := make(map[string]*TableDef)
-	for _, tbl := range createTable.IndexTables {
-		tableTypes[tbl.TableType] = tbl
-	}
-	require.Contains(t, tableTypes, catalog.FullTextV2_TblType_Metadata)
-	require.Contains(t, tableTypes, catalog.FullTextV2_TblType_Docs)
-	require.Contains(t, tableTypes, catalog.FullTextV2_TblType_Segment)
-	require.Contains(t, tableTypes, catalog.FullTextV2_TblType_Delta)
-	require.Equal(t, catalog.FullTextV2_TblCol_Docs_Id, tableTypes[catalog.FullTextV2_TblType_Docs].Pkey.PkeyColName)
-	require.Equal(t, catalog.FullTextV2_TblCol_Posting_Word, tableTypes[catalog.FullTextV2_TblType_Segment].ClusterBy.Name)
-
-	algoTableTypes := make(map[string]bool)
-	for _, idxDef := range createTable.TableDef.Indexes {
-		algoTableTypes[idxDef.IndexAlgoTableType] = true
-		require.Equal(t, tree.INDEX_TYPE_FULLTEXT.ToString(), idxDef.IndexAlgo)
-		require.Equal(t, []string{"body"}, idxDef.Parts)
-
-		var params map[string]string
-		require.NoError(t, json.Unmarshal([]byte(idxDef.IndexAlgoParams), &params))
-		require.Equal(t, fullTextImplV2Lite, params[fullTextImplParam])
-	}
-	require.Contains(t, algoTableTypes, catalog.FullTextV2_TblType_Metadata)
-	require.Contains(t, algoTableTypes, catalog.FullTextV2_TblType_Docs)
-	require.Contains(t, algoTableTypes, catalog.FullTextV2_TblType_Segment)
-	require.Contains(t, algoTableTypes, catalog.FullTextV2_TblType_Delta)
+	require.Len(t, createTable.IndexTables, 1)
+	require.Len(t, createTable.TableDef.Indexes, 1)
+	require.Equal(t, tree.INDEX_TYPE_FULLTEXT.ToString(), createTable.TableDef.Indexes[0].IndexAlgo)
+	require.Equal(t, []string{"body"}, createTable.TableDef.Indexes[0].Parts)
 }
 
 func TestBuildCreateTable(t *testing.T) {

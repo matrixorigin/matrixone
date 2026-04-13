@@ -73,6 +73,32 @@ ES 真正值得 MO 学的，不是它的 REST DSL，而是这些底层机制：
 - analyzer pipeline
 - top-k / ranking 作为一等公民
 
+### 2.4 ClickHouse text index / MergeTree
+
+ClickHouse 代表的是另一条很值得 MO 参考的路：
+
+- **全文/文本索引尽量挂到存储 part 的生命周期上**
+- insert 先形成 immutable part
+- 后台 merge 统一整理
+- 更偏向**批量写、分析型、低更新** workload 的稳定运行
+
+它的优点不在于“比 Lucene 更先进”，而在于：
+
+- 不需要外部独立搜索集群
+- 索引、merge、恢复都跟着数据库自己的存储对象走
+- 对日更、批量导入、分析查询这类场景很稳
+
+但它也不等于完整搜索引擎：
+
+- analyzer 生态通常不如 Lucene 丰富
+- relevance / phrase / slop / search UX 不一定做到专用搜索引擎的成熟度
+
+所以对 MO 来说，更合理的学习方式不是“二选一”，而是：
+
+- **检索内核借 Lucene/ES**
+- **存储生命周期借 ClickHouse / MergeTree**
+- **系统集成层保持数据库原生**
+
 ---
 
 ## 3. 横向对比
@@ -232,7 +258,7 @@ PostgreSQL 的文本检索语义是清楚的：
 
 对 MO 来说，最合理的是一条混合路线：
 
-1. **架构层借 Lucene/ES**
+1. **检索内核借 Lucene/ES**
    - segment
    - refresh
    - merge
@@ -240,7 +266,12 @@ PostgreSQL 的文本检索语义是清楚的：
    - BM25
    - analyzer pipeline
 
-2. **系统集成层借 MySQL / PostgreSQL**
+2. **存储生命周期借 ClickHouse / MergeTree**
+   - part-local / object-local 辅助索引
+   - immutable data part + background merge
+   - append new version + async compaction
+
+3. **系统集成层借 MySQL / PostgreSQL**
    - SQL 原生语法
    - 数据库内元数据与权限体系
    - explain / optimizer / 事务联动
@@ -258,7 +289,6 @@ PostgreSQL 的文本检索语义是清楚的：
 
 而是：
 
-- **MO 内部做一个借鉴 Lucene/ES 结构的 FTS v2**
-- **必要时再额外提供与 ES 的外部同步 / 联邦搜索能力**
+- **MO 内部做一个检索内核借鉴 Lucene/ES、存储生命周期借鉴 ClickHouse 的 FTS v2**
 
 这样既能保住数据库内置全文的一体化体验，也能真正跨过当前实现的大规模瓶颈。

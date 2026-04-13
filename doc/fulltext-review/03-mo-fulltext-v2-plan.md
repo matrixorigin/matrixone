@@ -440,27 +440,30 @@ analyzer:
 - 需要更多 storage/executor/metadata 新能力
 - 不适合作为“下一个大用户快要上量时”的第一交付方案
 
-### 方向 B：隐藏系统表 + segment 对象（第一阶段最推荐）
+### 方向 B：与 base object / part 生命周期绑定的 FTS segment 对象（修正后更推荐）
 
-把 segment 数据组织成系统表/对象，但列里存：
+把 searchable segment 组织成**附着在 base data object / part 上的本地辅助对象**，由 metadata 维护：
 
+- segment manifest
 - term dictionary blob
 - posting blob
 - position blob
 - stats blob
+- delete bitmap / tombstone metadata
 
 优点：
 
-- 更容易复用 MO 现有对象管理、元数据、后台任务体系
-- 能自然承载第一阶段推荐的 `delta + segment` 架构
-- 比“完全专用 FTS 存储对象”更容易落地
-- 已经能把当前的逐 token 行模型升级为 segment/postings 模型
-- 更适合作为 native FTS 的第一代可生产方案
+- 更容易复用 MO 现有 flush / checkpoint / compaction / object 管理体系
+- 更新和删除可以先写 tombstone / 新版本 delta，而不是同步按 `doc_id` 清理大段 posting
+- 日更批处理更容易做成“append + async merge”，系统行为更稳
+- 查询一致性、快照恢复、可观测性都比独立隐藏全文表更自然
+- 很接近 ClickHouse 的 part-local index 生命周期，同时又能保留 Lucene 风格的 postings/positions/BM25 执行
 
 缺点：
 
-- 终态性能天花板可能低于完全专用 FTS 存储对象
-- 后续若继续深挖极致性能，仍可能需要二次下沉
+- 对存储层和 compaction 生命周期的侵入更深
+- 第一阶段交付难度高于当前 hidden-table v2-lite
+- 如果后续继续追求极致压缩/编码，仍可能需要再下沉一层
 
 ## 8.2 建议的数据粒度
 
@@ -605,15 +608,16 @@ analyzer:
 4. slop / proximity ranking
 5. snippet / highlight
 
-## Phase 4：外部生态桥接
+## Phase 4：storage-coupled hardening
 
-目标：补齐超大规模搜索平台能力。
+目标：把 native FTS 打磨成长期可维护、适合日更的内部能力。
 
 建议项：
 
-1. ES 同步器
-2. 双写/异步同步策略
-3. 联邦查询或 fallback
+1. 让 FTS segment 完全跟随 base object / part 的 flush / compaction 生命周期
+2. 完善 delete bitmap / tombstone 与 version-aware compaction
+3. 增加 daily refresh / bulk rebuild / throttle 策略
+4. 补 repair / inspect / observability 工具
 
 ---
 

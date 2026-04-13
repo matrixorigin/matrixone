@@ -14,7 +14,6 @@
 package plan
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -480,39 +478,7 @@ func sameFullTextIndexGroup(lhs, rhs *plan.IndexDef) bool {
 }
 
 func (builder *QueryBuilder) buildFullTextScanParams(scanNode *plan.Node, idxdef *plan.IndexDef) (string, error) {
-	params := idxdef.IndexAlgoParams
-	if idxdef.IndexAlgoTableType == "" {
-		return params, nil
-	}
-
-	var parsed fulltext.FullTextParserParam
-	if params != "" {
-		if err := json.Unmarshal([]byte(params), &parsed); err != nil {
-			return "", err
-		}
-	}
-	parsed.Implementation = fulltext.FullTextImplV2Lite
-	for _, candidate := range scanNode.TableDef.Indexes {
-		if !sameFullTextIndexGroup(idxdef, candidate) {
-			continue
-		}
-		fqName := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, candidate.IndexTableName)
-		switch candidate.IndexAlgoTableType {
-		case catalog.FullTextV2_TblType_Metadata:
-			parsed.MetadataTable = fqName
-		case catalog.FullTextV2_TblType_Docs:
-			parsed.DocsTable = fqName
-		case catalog.FullTextV2_TblType_Segment:
-			parsed.SegmentTable = fqName
-		case catalog.FullTextV2_TblType_Delta:
-			parsed.DeltaTable = fqName
-		}
-	}
-	buf, err := json.Marshal(parsed)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
+	return idxdef.IndexAlgoParams, nil
 }
 
 // Get the filters that are fulltext_match() in ScanNode
