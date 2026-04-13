@@ -4282,15 +4282,13 @@ func decimal64ToDecimal64(
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	fromtype := from.GetType()
 	totype := to.GetType()
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
 		if totype.Width < fromtype.Width {
-			for i = 0; i < l; i++ {
+			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 				if v[i].Sign() {
 					fromdec.B64_127 = ^fromdec.B64_127
@@ -4307,17 +4305,19 @@ func decimal64ToDecimal128Array(
 		} else {
 			if totype.Scale == fromtype.Scale {
 				// Fast path: direct slice write with branchless sign extension.
-				// Bypasses AppendMustValue per-element overhead. The result
-				// vector length is already set by PreExtendAndReset.
+				// BCE hints + int index eliminate bounds checks in the inner loop.
 				dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
-				for i = 0; i < l; i++ {
+				_ = v[length-1]
+				_ = dst[length-1]
+				for i := 0; i < length; i++ {
+					s := int64(v[i]) >> 63
 					dst[i] = types.Decimal128{
 						B0_63:   uint64(v[i]),
-						B64_127: uint64(int64(v[i]) >> 63),
+						B64_127: uint64(s),
 					}
 				}
 			} else {
-				for i = 0; i < l; i++ {
+				for i := 0; i < length; i++ {
 					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 					if v[i].Sign() {
 						fromdec.B64_127 = ^fromdec.B64_127
@@ -4342,16 +4342,19 @@ func decimal64ToDecimal128Array(
 			rsVec.GetNulls().Or(srcVec.GetNulls())
 			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
 			v := vector.MustFixedColWithTypeCheck[types.Decimal64](srcVec)
-			for i = 0; i < l; i++ {
+			_ = v[length-1]
+			_ = dst[length-1]
+			for i := 0; i < length; i++ {
+				s := int64(v[i]) >> 63
 				dst[i] = types.Decimal128{
 					B0_63:   uint64(v[i]),
-					B64_127: uint64(int64(v[i]) >> 63),
+					B64_127: uint64(s),
 				}
 			}
 		} else {
 			var dft types.Decimal128
-			for i = 0; i < l; i++ {
-				v, null := from.GetValue(i)
+			for i := 0; i < length; i++ {
+				v, null := from.GetValue(uint64(i))
 				if null {
 					if err := to.Append(dft, true); err != nil {
 						return err
