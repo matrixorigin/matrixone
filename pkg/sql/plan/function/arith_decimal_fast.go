@@ -1325,6 +1325,16 @@ func d128Mod(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 	return nil
 }
 
+// d64AllFitInt32 checks whether every D64 element fits in int32 range [-2^31, 2^31-1].
+// Uses OR-reduce: shift the offset value right by 32; non-zero means out of range.
+func d64AllFitInt32(vs []types.Decimal64) bool {
+	var or uint64
+	for _, v := range vs {
+		or |= (uint64(v) + 0x80000000) >> 32
+	}
+	return or == 0
+}
+
 // d256AllFitInt64 checks whether every D256 element fits in int64 range.
 // True when B64_127, B128_191, B192_255 are all sign extension of B0_63 bit 63.
 func d256AllFitInt64(vs []types.Decimal256, n int) bool {
@@ -1335,6 +1345,18 @@ func d256AllFitInt64(vs []types.Decimal256, n int) bool {
 		}
 	}
 	return true
+}
+
+// d256AllFitInt32 checks whether every D256 element fits in int32 range [-2^31, 2^31-1].
+// Uses OR-reduce: upper limbs must be sign extension AND B0_63 must fit in int32.
+func d256AllFitInt32(vs []types.Decimal256, n int) bool {
+	var or uint64
+	for i := 0; i < n; i++ {
+		signExt := uint64(int64(vs[i].B0_63) >> 63)
+		or |= vs[i].B64_127 ^ signExt | vs[i].B128_191 ^ signExt | vs[i].B192_255 ^ signExt
+		or |= (vs[i].B0_63 + 0x80000000) >> 32
+	}
+	return or == 0
 }
 
 // d128AllFitInt64 checks whether every element fits in int64 range [-2^63, 2^63-1].
@@ -2538,7 +2560,98 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 		bmp = rsnull.GetBitmap()
 	}
 
-	// Prescan: if all values fit in int64, use inline bits.Mul64 — skips the
+	// Tier 1 prescan: if all values fit in int32, products fit in int64 →
+	// single 64-bit multiply + single 64÷64 division per scale step.
+	// Saves one DIV instruction per element vs the int64 tier.
+	if d256AllFitInt32(v1, len1) && d256AllFitInt32(v2, len2) {
+		needScale := scaleAdj < 0
+		negScaleAdj := -scaleAdj
+		pow10a, twoStep, pow10b := scalePow10Factors(negScaleAdj)
+		d := pow10a
+		halfD := (d + 1) >> 1
+		halfB := (pow10b + 1) >> 1
+		if len1 == len2 {
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := int64(v1[i].B0_63) * int64(v2[i].B0_63)
+				if needScale {
+					sign := uint64(p >> 63)
+					abs := uint64((p ^ int64(sign)) - int64(sign))
+					q, rem := bits.Div64(0, abs, d)
+					_, borrow := bits.Sub64(rem, halfD, 0)
+					q += 1 - borrow
+					if twoStep {
+						q, rem = bits.Div64(0, q, pow10b)
+						_, borrow = bits.Sub64(rem, halfB, 0)
+						q += 1 - borrow
+					}
+					signedQ := int64((q ^ sign) - sign)
+					se := uint64(signedQ >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(signedQ), B64_127: se, B128_191: se, B192_255: se}
+				} else {
+					se := uint64(p >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(p), B64_127: se, B128_191: se, B192_255: se}
+				}
+			}
+		} else if len1 == 1 {
+			x := int64(v1[0].B0_63)
+			for i := 0; i < len2; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := x * int64(v2[i].B0_63)
+				if needScale {
+					sign := uint64(p >> 63)
+					abs := uint64((p ^ int64(sign)) - int64(sign))
+					q, rem := bits.Div64(0, abs, d)
+					_, borrow := bits.Sub64(rem, halfD, 0)
+					q += 1 - borrow
+					if twoStep {
+						q, rem = bits.Div64(0, q, pow10b)
+						_, borrow = bits.Sub64(rem, halfB, 0)
+						q += 1 - borrow
+					}
+					signedQ := int64((q ^ sign) - sign)
+					se := uint64(signedQ >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(signedQ), B64_127: se, B128_191: se, B192_255: se}
+				} else {
+					se := uint64(p >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(p), B64_127: se, B128_191: se, B192_255: se}
+				}
+			}
+		} else {
+			y := int64(v2[0].B0_63)
+			for i := 0; i < len1; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := int64(v1[i].B0_63) * y
+				if needScale {
+					sign := uint64(p >> 63)
+					abs := uint64((p ^ int64(sign)) - int64(sign))
+					q, rem := bits.Div64(0, abs, d)
+					_, borrow := bits.Sub64(rem, halfD, 0)
+					q += 1 - borrow
+					if twoStep {
+						q, rem = bits.Div64(0, q, pow10b)
+						_, borrow = bits.Sub64(rem, halfB, 0)
+						q += 1 - borrow
+					}
+					signedQ := int64((q ^ sign) - sign)
+					se := uint64(signedQ >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(signedQ), B64_127: se, B128_191: se, B192_255: se}
+				} else {
+					se := uint64(p >> 63)
+					rs[i] = types.Decimal256{B0_63: uint64(p), B64_127: se, B128_191: se, B192_255: se}
+				}
+			}
+		}
+		return nil
+	}
+
+	// Tier 2 prescan: if all values fit in int64, use inline bits.Mul64 — skips the
 	// 10-multiply schoolbook in d256MulInline (cost >> 80, never inlines).
 	// When scaleAdj < 0, fuse scale-down into the loop (d128DivPow10 on
 	// the unsigned 128-bit product) to avoid a second pass over the array.
@@ -3933,7 +4046,7 @@ func d64Mul(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 	return nil
 }
 
-// d64MulScaled handles the rare case where scaleAdj != 0.
+// d64MulScaled handles the case where scaleAdj != 0 (need to scale down after multiply).
 
 func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int32, rsnull *nulls.Nulls) error {
 	n := len(rs)
@@ -3944,6 +4057,62 @@ func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int3
 	}
 	negAdj := -scaleAdj
 	pow10a, twoStep, pow10b := scalePow10Factors(negAdj)
+
+	// Prescan: if all values fit in int32, products fit in int64 → single
+	// 64-bit multiply + single 64÷64 division, replacing bits.Mul64 →
+	// d128Abs → 2×bits.Div64 → d128Negate (saves one DIV per element).
+	// For D64 mul, negAdj ≤ 18 so twoStep is always false.
+	if d64AllFitInt32(v1) && d64AllFitInt32(v2) {
+		d := pow10a
+		halfD := (d + 1) >> 1
+		if len(v1) == 1 {
+			x := int64(v1[0])
+			for i := 0; i < n; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := x * int64(v2[i])
+				sign := uint64(p >> 63)
+				abs := uint64((p ^ int64(sign)) - int64(sign))
+				q, rem := bits.Div64(0, abs, d)
+				_, borrow := bits.Sub64(rem, halfD, 0)
+				q += 1 - borrow
+				signedQ := int64((q ^ sign) - sign)
+				rs[i] = types.Decimal128{B0_63: uint64(signedQ), B64_127: uint64(signedQ >> 63)}
+			}
+		} else if len(v2) == 1 {
+			y := int64(v2[0])
+			for i := 0; i < n; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := int64(v1[i]) * y
+				sign := uint64(p >> 63)
+				abs := uint64((p ^ int64(sign)) - int64(sign))
+				q, rem := bits.Div64(0, abs, d)
+				_, borrow := bits.Sub64(rem, halfD, 0)
+				q += 1 - borrow
+				signedQ := int64((q ^ sign) - sign)
+				rs[i] = types.Decimal128{B0_63: uint64(signedQ), B64_127: uint64(signedQ >> 63)}
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				if hasNull && bmp.Contains(uint64(i)) {
+					continue
+				}
+				p := int64(v1[i]) * int64(v2[i])
+				sign := uint64(p >> 63)
+				abs := uint64((p ^ int64(sign)) - int64(sign))
+				q, rem := bits.Div64(0, abs, d)
+				_, borrow := bits.Sub64(rem, halfD, 0)
+				q += 1 - borrow
+				signedQ := int64((q ^ sign) - sign)
+				rs[i] = types.Decimal128{B0_63: uint64(signedQ), B64_127: uint64(signedQ >> 63)}
+			}
+		}
+		return nil
+	}
+
 	if len(v1) == 1 {
 		x := v1[0]
 		for i := 0; i < n; i++ {
