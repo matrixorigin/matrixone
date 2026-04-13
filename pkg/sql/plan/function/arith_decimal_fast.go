@@ -447,19 +447,6 @@ func d128ScaleUp(x *types.Decimal128, n int32) bool {
 	return ok
 }
 
-// d128ScaleUpPow10 scales a signed D128 by pre-computed pow10 factor(s).
-// For n ≤ 19: pass (Pow10[n], false, 0). For n > 19: pass (Pow10[19], true, Pow10[n-19]).
-// Eliminates d128ScaleUp→d128MulPow10 wrapper chain; d128Abs/d128Mul1Limb/d128Negate inline.
-func d128ScaleUpPow10(x *types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) bool {
-	sign := d128Abs(x)
-	ok := d128Mul1Limb(x, pow10a)
-	if ok && twoStep {
-		ok = d128Mul1Limb(x, pow10b)
-	}
-	d128Negate(x, sign)
-	return ok
-}
-
 // d128ScaleIntoRs scales vec[i] * 10^scaleDiff into rs[i], respecting nulls.
 // Hoists pow10 factor outside the loop so d128Abs/d128Mul1Limb/d128Negate all inline.
 func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
