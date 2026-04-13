@@ -82,7 +82,7 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				ikeys, idists, err2 := subindex[j].Search(query, limit)
+				ikeys, idists, err2 := subindex[j].Search(query, uint32(limit))
 				if err2 != nil {
 					return err2
 				}
@@ -110,6 +110,12 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 			metric.DistFuncNameToMetricType[rt.OrigFuncName],
 			metric.MetricType(s.Idxcfg.CuvsCagra.Metric),
 		))
+	}
+
+	// Reverse to get ascending order (nearest first)
+	for i, j := 0, len(reskeys)-1; i < j; i, j = i+1, j-1 {
+		reskeys[i], reskeys[j] = reskeys[j], reskeys[i]
+		resdistances[i], resdistances[j] = resdistances[j], resdistances[i]
 	}
 
 	return reskeys, resdistances, nil
