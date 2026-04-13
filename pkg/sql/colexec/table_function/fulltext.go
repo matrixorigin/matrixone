@@ -57,6 +57,7 @@ type fulltextState struct {
 	mpool       *fulltext.FixedBytePool
 	param       fulltext.FullTextParserParam
 	docLenMap   map[any]int32
+	nativeOwned map[any]struct{}
 	minheap     vectorindex.SearchResultHeap
 	resbuf      []*vectorindex.SearchResultAnyKey
 	ranking     bool
@@ -483,6 +484,10 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 			doc_id = key
 		}
 
+		if _, ok := u.nativeOwned[doc_id]; ok {
+			continue
+		}
+
 		if needSetDocLen {
 			docLen := vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[2], i)
 			u.docLenMap[doc_id] = docLen
@@ -628,6 +633,7 @@ func fulltextIndexMatch(
 		u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)
 		u.agghtab = make(map[any]uint64, 1024)
 		u.aggcnt = make([]int64, s.Nkeywords)
+		u.nativeOwned = make(map[any]struct{}, 1024)
 		u.sacc = s
 	}
 

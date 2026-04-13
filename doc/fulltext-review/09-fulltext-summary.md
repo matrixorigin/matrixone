@@ -138,18 +138,18 @@ type Posting struct {
 MATCH ... AGAINST
   → planner 改写为 fulltext_index_scan
   → 检查是否满足 native 条件
-    → 所有 visible persisted object 都有 sidecar
     → 查询模式被 native 支持（NL / boolean / phrase）
-  → 满足：走 native 路径
-    → 枚举所有 visible object 的 sidecar
-    → 汇总 persisted sidecar 的 DocCount / TokenSum（不再执行 runCountStar）
+  → 满足：先走 native 路径
+    → 枚举所有有 sidecar 的 visible persisted object
+    → 完整覆盖时直接汇总 persisted sidecar 的 DocCount / TokenSum（不再执行 runCountStar）
     → 通过 `Relation.Ranges + BuildReaders` 读取 committed in-memory / uncommitted tail
     → 把 tail rows 构建成一个临时 native segment，并把它和 persisted sidecar 一起参与召回
     → 在 sidecar / tail segment 中 lookup term → 收集 postings
     → 对 persisted sidecar 命中做 tombstone 过滤（tail segment 由 reader 自身保证可见性）
     → 布尔交并 / phrase 位置校验
     → 填充到 v1 的打分框架做 BM25 / top-k
-  → 不满足：fallback 到 v1 路径（和之前完全一样）
+    → 如果仍有未覆盖 persisted object，则再走一次 v1 hidden-table，把剩余 persisted object 补齐，并在 groupby 阶段按 PK 去重
+  → datalink / 不支持模式：fallback 到 v1 路径
 ```
 
 代码位置：`pkg/sql/colexec/table_function/fulltext_native.go`
@@ -201,7 +201,7 @@ object file
 | sidecar 生成失败（merge） | 记日志，标记 nativeObjectFailed，merge 正常完成 |
 | schema 解析失败（merge） | 标记 nativeIndexingClosed，后续所有 object 跳过 sidecar |
 | 查询时有 appendable / in-memory / uncommitted tail | 通过 query-time tail segment 纳入 native 结果 |
-| 查询时某个 object 缺 sidecar | 整体 fallback 到 v1 |
+| 查询时某个 object 缺 sidecar | native 先处理已覆盖 object，v1 再补未覆盖 persisted object |
 | 查询模式不被 native 支持 | fallback 到 v1 |
 | GC 时 locator 缺失/损坏 | object 正常删除，sidecar 清理 best-effort |
 
@@ -238,9 +238,8 @@ object file
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| persisted object 仍是 all-or-nothing | 只要一个 visible persisted object 缺 sidecar，就整表 fallback v1 | P1 |
 | locator 只接到了 GC best-effort | replay / inspect / repair 还不完整 | P1 |
-| fallback 是全表级的 | 一个 object 缺 sidecar 就整表退化 | P1 |
+| mixed-query 仍是执行期双路径拼合 | 未覆盖 persisted object 还要走一次 v1 streaming/groupby | P1 |
 | segment 全量反序列化到内存 | 大 object 场景内存和性能瓶颈 | P1 |
 | postings 没有压缩 | 存储和 I/O 开销偏大 | P1 |
 | 查询路径仍主要靠 deterministic path | locator 价值还没完全释放 | P1 |
@@ -252,8 +251,8 @@ object file
 ### 4.2 推荐的下一步
 
 1. **locator / replay / inspect 继续补强**：把 locator 从 GC 起点继续扩展到 inspect / repair / replay
-2. **更细粒度的 mixed query**：有 sidecar 的 persisted object 走 native，没有的走 v1，合并结果
-3. **segment 按需加载**：头部加 term index，查询时只读目标 term 的 postings
+2. **segment 按需加载**：头部加 term index，查询时只读目标 term 的 postings
+3. **继续扩大 native mode 覆盖**：把更多模式和场景从 mixed/v1 收回 native
 
 这三件事做完，native FTS 就从"能跑通"变成"能跑稳"。
 

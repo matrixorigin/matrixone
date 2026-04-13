@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -450,4 +451,60 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 
 	bat.SetRowCount(nitem)
 	return bat
+}
+
+func TestGroupBySkipsNativeOwnedDocs(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src_table", "index_table", "apple", int64(tree.FULLTEXT_BOOLEAN), "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+
+	u := &fulltextState{
+		streamCh:    make(chan executor.Result, 1),
+		errCh:       make(chan error, 1),
+		mpool:       fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
+		agghtab:     make(map[any]uint64, 2),
+		aggcnt:      make([]int64, s.Nkeywords),
+		docLenMap:   make(map[any]int32, 2),
+		nativeOwned: map[any]struct{}{int32(1): {}},
+	}
+	defer u.mpool.Close()
+
+	addr, docvec, err := u.mpool.NewItem()
+	require.NoError(t, err)
+	docvec[0] = 3
+	u.agghtab[int32(1)] = addr
+	u.docLenMap[int32(1)] = 42
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	vector.AppendFixed[int32](bat.Vecs[0], 1, false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[1], 0, false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[2], 99, false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[3], 5, false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[0], 2, false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[1], 0, false, proc.Mp())
+	vector.AppendFixed[int32](bat.Vecs[2], 7, false, proc.Mp())
+	vector.AppendFixed[int64](bat.Vecs[3], 2, false, proc.Mp())
+	bat.SetRowCount(2)
+
+	u.streamCh <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{bat}}
+	streamClosed, err := groupby(u, proc, s)
+	require.NoError(t, err)
+	require.False(t, streamClosed)
+
+	nativeDocvec, err := u.mpool.GetItem(addr)
+	require.NoError(t, err)
+	require.Equal(t, uint8(3), nativeDocvec[0])
+	require.Equal(t, int32(42), u.docLenMap[int32(1)])
+	require.Equal(t, int64(1), u.aggcnt[0])
+
+	addr2, ok := u.agghtab[int32(2)]
+	require.True(t, ok)
+	docvec2, err := u.mpool.GetItem(addr2)
+	require.NoError(t, err)
+	require.Equal(t, uint8(2), docvec2[0])
+	require.Equal(t, int32(7), u.docLenMap[int32(2)])
 }

@@ -39,6 +39,7 @@ type nativePreparedScan struct {
 	pkType      types.T
 	indexTable  string
 	objects     []nativeObjectSegment
+	complete    bool
 	tombstones  engine.Tombstoner
 	snapshot    types.TS
 	fs          fileservice.FileService
@@ -80,19 +81,21 @@ func fulltextIndexMatchNative(
 		return false, nil
 	}
 
-	scan, ok, err := prepareNativeScan(proc, srctbl, tblname, u.param)
-	if err != nil || !ok {
-		return ok, err
+	scan, err := prepareNativeScan(proc, srctbl, tblname, u.param)
+	if err != nil || scan == nil {
+		return false, err
 	}
-	applyNativeSegmentStats(u, s, scan)
+	if scan.complete {
+		applyNativeSegmentStats(u, s, scan)
+	}
 
 	if s.Mode == int64(tree.FULLTEXT_NL) {
-		return true, populatePhraseCompat(u, proc, s, scan, s.Pattern)
+		return scan.complete, populatePhraseCompat(u, proc, s, scan, s.Pattern)
 	}
 	if len(s.Pattern) == 1 && s.Pattern[0].Operator == fulltext.PHRASE {
-		return true, populatePhraseCompat(u, proc, s, scan, s.Pattern[0].Children)
+		return scan.complete, populatePhraseCompat(u, proc, s, scan, s.Pattern[0].Children)
 	}
-	return true, populateBooleanNative(u, proc, s, scan)
+	return scan.complete, populateBooleanNative(u, proc, s, scan)
 }
 
 func nativeQuerySupported(s *fulltext.SearchAccum) bool {
@@ -136,37 +139,37 @@ func prepareNativeScan(
 	proc *process.Process,
 	srctbl, tblname string,
 	param fulltext.FullTextParserParam,
-) (*nativePreparedScan, bool, error) {
+) (*nativePreparedScan, error) {
 	if len(param.Parts) == 0 {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	dbName, tableName, err := parseQualifiedTableName(srctbl)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	_, indexTableName, err := parseQualifiedTableName(tblname)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	db, err := e.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	rel, err := db.Relation(proc.Ctx, tableName, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	tableDef := rel.GetTableDef(proc.Ctx)
 	if hasDatalinkPart(tableDef, param.Parts) {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	visibleInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, param.Parts[0], false)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	visible := make(map[string]struct{}, len(visibleInfos))
 	for _, info := range visibleInfos {
@@ -175,29 +178,30 @@ func prepareNativeScan(
 
 	stats, err := rel.GetNonAppendableObjectStats(proc.Ctx)
 	if err != nil {
-		return nil, false, err
-	}
-	if len(visible) != len(stats) {
-		return nil, false, nil
+		return nil, err
 	}
 
 	objects := make([]nativeObjectSegment, 0, len(stats))
 	totalDocs := int64(0)
 	totalTokens := int64(0)
+	incomplete := false
 	for i := range stats {
 		name := stats[i].ObjectName()
-		if _, ok := visible[name.String()]; !ok {
-			return nil, false, nil
+		nameStr := name.String()
+		if _, ok := visible[nameStr]; !ok {
+			continue
 		}
+		delete(visible, nameStr)
 		seg, exists, err := ftnative.ReadSidecar(proc.Ctx, proc.Base.FileService, name, indexTableName)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		if !exists {
-			return nil, false, nil
+			incomplete = true
+			continue
 		}
 		objects = append(objects, nativeObjectSegment{
-			key:             name.String(),
+			key:             nameStr,
 			name:            name,
 			segment:         seg,
 			applyTombstones: true,
@@ -205,10 +209,13 @@ func prepareNativeScan(
 		totalDocs += seg.DocCount
 		totalTokens += seg.TokenSum
 	}
+	if len(visible) > 0 {
+		incomplete = true
+	}
 
 	tailSeg, err := buildNativeTailSegment(proc, rel, tableDef, param)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if tailSeg != nil && tailSeg.DocCount > 0 {
 		objects = append(objects, nativeObjectSegment{
@@ -219,27 +226,31 @@ func prepareNativeScan(
 		totalDocs += tailSeg.DocCount
 		totalTokens += tailSeg.TokenSum
 	}
+	if len(objects) == 0 {
+		return nil, nil
+	}
 
 	tombstones, err := rel.CollectTombstones(proc.Ctx, 0, engine.Policy_CollectAllTombstones)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	pkColIdx, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	if !ok {
-		return nil, false, moerr.NewInternalErrorNoCtx("native fulltext scan missing primary key column")
+		return nil, moerr.NewInternalErrorNoCtx("native fulltext scan missing primary key column")
 	}
 	return &nativePreparedScan{
 		rel:         rel,
 		pkType:      types.T(tableDef.Cols[pkColIdx].Typ.Id),
 		indexTable:  indexTableName,
 		objects:     objects,
+		complete:    !incomplete,
 		tombstones:  tombstones,
 		snapshot:    types.TimestampToTS(proc.GetTxnOperator().SnapshotTS()),
 		fs:          proc.Base.FileService,
 		totalDocs:   totalDocs,
 		totalTokens: totalTokens,
-	}, true, nil
+	}, nil
 }
 
 func applyNativeSegmentStats(u *fulltextState, s *fulltext.SearchAccum, scan *nativePreparedScan) {
@@ -296,6 +307,7 @@ func populatePhraseCompat(
 			pk := decodeNativePK(match.Ref.PK, scan.pkType)
 			u.agghtab[pk] = addr
 			u.docLenMap[pk] = match.DocLen
+			markNativeOwned(u, pk)
 			count++
 		}
 	}
@@ -401,8 +413,16 @@ func populateBooleanNative(
 		}
 		u.agghtab[state.pk] = addr
 		u.docLenMap[state.pk] = state.docLen
+		markNativeOwned(u, state.pk)
 	}
 	return nil
+}
+
+func markNativeOwned(u *fulltextState, pk any) {
+	if u.nativeOwned == nil {
+		u.nativeOwned = make(map[any]struct{}, 1024)
+	}
+	u.nativeOwned[pk] = struct{}{}
 }
 
 func collectNativePatterns(patterns []*fulltext.Pattern, leafs map[int32]*fulltext.Pattern, phrases *[]*fulltext.Pattern) {

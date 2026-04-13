@@ -22,7 +22,7 @@
 8. [08-second-review-and-architecture-fit.md](./08-second-review-and-architecture-fit.md): 第二/三轮 Review、架构适配性分析、风险评估
 9. [09-fulltext-summary.md](./09-fulltext-summary.md): **总结文档 — 旧版本问题、新版本原理与优势、已知限制、风险评估**
 10. [10-industry-engines-vs-mo-native-fts.md](./10-industry-engines-vs-mo-native-fts.md): **主流全文引擎实现原理对比与 MO native FTS 定位分析**
-11. [11-test-plan-and-cases.md](./11-test-plan-and-cases.md): **Native FTS 测试方案、用例矩阵与 CI 集成建议**
+11. [11-test-plan-and-cases.md](./11-test-plan-and-cases.md): **Native FTS 测试方案、nightly FULLTEXT job 分析、单机脚本与 CI 集成建议**
 
 ## 推荐阅读顺序
 

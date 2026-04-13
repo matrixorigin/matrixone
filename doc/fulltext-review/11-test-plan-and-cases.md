@@ -53,7 +53,43 @@ go test ./pkg/sql/colexec/table_function/... -v -count=1 -run TestFulltext
 ./mo-tester -p test/distributed/cases/fulltext/
 ```
 
-### 2.3 现有测试回归
+### 2.3 单机版验证脚本（推荐给 10.222.1.50）
+
+当前仓库已经补了一个单机验证脚本：
+
+```bash
+scripts/test_fulltext_single_node.sh
+```
+
+它不是只跑一个 SQL 文件，而是分成三段：
+
+1. **nightly-compatible**：复刻当前 `mo-nightly-regression` 的 FULLTEXT job 形状  
+   `load data -> create fulltext index -> MATCH/DELETE/UPDATE`
+2. **native-ready**：为单机 native 路径专门设计  
+   `create index first -> load after index -> query tail -> checkpoint -> query persisted sidecar`
+3. **mixed-coverage**：模拟 rollout 过渡表  
+   `old persisted rows before index + new rows after index`
+
+推荐在单机 MO 已经启动后执行：
+
+```bash
+MO_HOST=10.222.1.50 \
+MO_PORT=6001 \
+MO_USER=dump \
+MO_PASSWORD=111 \
+MO_DATA_DIR=/path/to/mo-data \
+bash scripts/test_fulltext_single_node.sh
+```
+
+脚本会生成 Markdown 报告，默认输出到当前目录：
+
+```bash
+fulltext_single_node_report.md
+```
+
+如果设置了 `MO_DATA_DIR`，脚本还会统计 `*.fts.*.seg` 和 `*.fts.locator` 的增量，用来辅助确认 sidecar / locator 确实被写出来。
+
+### 2.4 现有测试回归
 
 必须确保以下现有测试全部通过：
 
@@ -104,9 +140,48 @@ go test ./pkg/sql/colexec/table_function/... -v -count=1 -run TestFulltext
 
 ---
 
-## 4. 接入 nightly regression 的建议
+## 4. 当前 nightly FULLTEXT job 分析
 
-### 4.1 CI 集成
+用户当前提到的 job：
+
+- workflow run: `24309229789`
+- job: `70999366143`
+- 名称：`FULLTEXT INDEX TEST`
+
+从 workflow 与 job step 可以看出，这条 job 当前做的是：
+
+1. 建表
+2. 先 `LOAD DATA`
+3. 再 `CREATE FULLTEXT INDEX`
+4. 跑 `MATCH`
+5. 跑 delete / update / boolean 查询
+
+按 step 时间看，这次运行大致是：
+
+| Step | 用时 |
+|------|------|
+| Load data into table | ~8s |
+| Select before create fulltext index | ~1s |
+| Create fulltext index on table column | ~39s |
+| Select after create fulltext index | ~1s |
+| Delete test on fulltext index table | ~6s |
+| Update test on fulltext index table | ~2s |
+
+这个 job 的定位应该明确成：
+
+- **它是 FULLTEXT 功能回归 / 兼容性回归**
+- **它不是 native sidecar 路径覆盖验证**
+
+原因很简单：它的数据先落进表，再建索引；这种形状主要覆盖的是当前用户语义与 v1 hidden-table 行为。要在单机上稳定看到 native sidecar 的效果，必须至少满足下面一种：
+
+1. **先建 FULLTEXT 索引，再导入数据，再 checkpoint**
+2. **或让数据在索引创建后重新经历 flush / merge，产出 sidecar**
+
+---
+
+## 5. 接入 nightly regression 的建议
+
+### 5.1 CI 集成
 
 在 nightly regression workflow 中加入：
 
@@ -117,7 +192,15 @@ go test ./pkg/sql/colexec/table_function/... -v -count=1 -run TestFulltext
     ./mo-tester -p test/distributed/cases/fulltext/fulltext_tae_regression.sql
 ```
 
-### 4.2 性能基准（可选，后续加入）
+### 5.2 单机 / 预发环境建议
+
+建议把 `scripts/test_fulltext_single_node.sh` 放到单机或预发环境的 smoke test 里，原因是：
+
+1. 它能同时覆盖 nightly-compatible 回归和 native-ready 路径
+2. 它可以输出一份可读的 Markdown 报告
+3. 它支持通过 `MO_DATA_DIR` 直接观察 sidecar / locator 文件增量
+
+### 5.3 性能基准（可选，后续加入）
 
 建议后续加入性能基准测试：
 
@@ -131,7 +214,7 @@ go test ./pkg/sql/colexec/table_function/... -v -count=1 -run TestFulltext
 
 ---
 
-## 5. 测试通过标准
+## 6. 测试通过标准
 
 1. **所有现有 fulltext 测试通过**（fulltext.sql / fulltext_bm25.sql / fulltext1.sql / fulltext2.sql / jsonvalue.sql / datalink.sql）
 2. **新增 native 测试通过**（fulltext_native.sql）
