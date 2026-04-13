@@ -15,7 +15,7 @@
      - `term -> postings(block,row,pk,positions,doc_len)`；
      - term lookup / prefix scan 组合、AND、phrase offset match；
      - deterministic sidecar path；
-     - binary codec。
+      - binary codec（当前写 V3 extensible header，兼容读取 V1 / V2 legacy sidecar）。
 4. **storage-coupled sidecar 生成已经接到 object 生命周期**：
    - flush object 后生成 per-object native sidecar；
    - merge / compaction 输出新 object 时同步重建 sidecar。
@@ -55,7 +55,8 @@
 4. **datalink 列不在 storage path 直接取外部文本**  
    这类 FULLTEXT index 当前不产 native sidecar，查询会回退 v1。
 5. **sidecar 生命周期的显式 GC / replay 元数据**  
-   旧 object sidecar 因为对象不可见而不会参与查询，但还没有独立的 sidecar 元数据治理机制。
+   旧 object sidecar 因为对象不可见而不会参与查询，但还没有独立的 sidecar 元数据治理机制。  
+   结合 MO 当前实现，这条更适合通过 **显式 locator / GC 元数据** 来补，而不是在 flat object namespace 上靠逐个 object 列目录扫描 sidecar。
 
 ## 3. 当前实现的核心取舍
 
@@ -109,10 +110,11 @@
    - `default / ngram / json / json_value`
    - native 与 `fulltext_index_tokenize` 一致
 2. **segment / sidecar codec**
-   - 单文档
-   - 多文档
-   - prefix / repeated term
-   - phrase positions
+    - 单文档
+    - 多文档
+    - prefix / repeated term
+    - phrase positions
+    - V1 / V2 / V3 兼容读取
 
 ### 5.2 object 生命周期
 

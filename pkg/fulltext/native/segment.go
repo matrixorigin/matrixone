@@ -19,6 +19,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +29,10 @@ import (
 var (
 	segmentMagicV1 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '1', 0}
 	segmentMagicV2 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '2', 0}
+	segmentMagicV3 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '3', 0}
 )
+
+const segmentHeaderLenV3 = uint32(16)
 
 type RowRef struct {
 	Block uint16
@@ -304,7 +308,10 @@ func (s *Segment) MarshalBinary() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := buf.Write(segmentMagicV2[:]); err != nil {
+	if _, err := buf.Write(segmentMagicV3[:]); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, segmentHeaderLenV3); err != nil {
 		return nil, err
 	}
 	if err := binary.Write(&buf, binary.LittleEndian, s.DocCount); err != nil {
@@ -366,6 +373,10 @@ func UnmarshalBinary(data []byte) (*Segment, error) {
 		return nil, err
 	}
 	switch magic {
+	case segmentMagicV3:
+		if err := readSegmentHeaderV3(reader, segment); err != nil {
+			return nil, err
+		}
 	case segmentMagicV2:
 		if err := binary.Read(reader, binary.LittleEndian, &segment.DocCount); err != nil {
 			return nil, err
@@ -385,6 +396,31 @@ func UnmarshalBinary(data []byte) (*Segment, error) {
 		segment.rebuildStats()
 	}
 	return segment, nil
+}
+
+func readSegmentHeaderV3(reader *bytes.Reader, segment *Segment) error {
+	var headerLen uint32
+	if err := binary.Read(reader, binary.LittleEndian, &headerLen); err != nil {
+		return err
+	}
+	if headerLen < segmentHeaderLenV3 {
+		return moerr.NewInternalErrorNoCtx("invalid native fulltext segment header length")
+	}
+	if int(headerLen) > reader.Len() {
+		return moerr.NewInternalErrorNoCtx("native fulltext segment header exceeds payload")
+	}
+	header := make([]byte, headerLen)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return err
+	}
+	headerReader := bytes.NewReader(header)
+	if err := binary.Read(headerReader, binary.LittleEndian, &segment.DocCount); err != nil {
+		return err
+	}
+	if err := binary.Read(headerReader, binary.LittleEndian, &segment.TokenSum); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readSegmentTerms(reader *bytes.Reader, segment *Segment) error {

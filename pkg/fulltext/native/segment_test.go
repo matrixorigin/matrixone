@@ -115,7 +115,7 @@ func TestSegmentUnmarshalLegacyRebuildsStats(t *testing.T) {
 	}))
 	segment := builder.Build()
 
-	data, err := marshalLegacySegment(segment)
+	data, err := marshalLegacyV1Segment(segment)
 	require.NoError(t, err)
 
 	decoded, err := UnmarshalBinary(data)
@@ -125,10 +125,56 @@ func TestSegmentUnmarshalLegacyRebuildsStats(t *testing.T) {
 	require.Equal(t, segment.Lookup("matrix"), decoded.Lookup("matrix"))
 }
 
-func marshalLegacySegment(s *Segment) ([]byte, error) {
+func TestSegmentUnmarshalLegacyV2Stats(t *testing.T) {
+	builder := NewBuilder(fulltext.FullTextParserParam{}, nil)
+	require.NoError(t, builder.Add(Document{
+		Block: 2,
+		Row:   1,
+		PK:    []byte("pk-1"),
+		Values: []fulltext.IndexValue{
+			{Text: "matrix origin", Type: types.T_text},
+		},
+	}))
+	require.NoError(t, builder.Add(Document{
+		Block: 2,
+		Row:   2,
+		PK:    []byte("pk-2"),
+		Values: []fulltext.IndexValue{
+			{Text: "native search", Type: types.T_text},
+		},
+	}))
+	segment := builder.Build()
+
+	data, err := marshalLegacyV2Segment(segment)
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalBinary(data)
+	require.NoError(t, err)
+	require.Equal(t, segment.DocCount, decoded.DocCount)
+	require.Equal(t, segment.TokenSum, decoded.TokenSum)
+	require.Equal(t, segment.Lookup("native"), decoded.Lookup("native"))
+}
+
+func marshalLegacyV1Segment(s *Segment) ([]byte, error) {
+	return marshalLegacySegmentWithMagic(s, segmentMagicV1, false)
+}
+
+func marshalLegacyV2Segment(s *Segment) ([]byte, error) {
+	return marshalLegacySegmentWithMagic(s, segmentMagicV2, true)
+}
+
+func marshalLegacySegmentWithMagic(s *Segment, magic [8]byte, includeStats bool) ([]byte, error) {
 	var buf bytes.Buffer
-	if _, err := buf.Write(segmentMagicV1[:]); err != nil {
+	if _, err := buf.Write(magic[:]); err != nil {
 		return nil, err
+	}
+	if includeStats {
+		if err := binary.Write(&buf, binary.LittleEndian, s.DocCount); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, binary.LittleEndian, s.TokenSum); err != nil {
+			return nil, err
+		}
 	}
 	terms := make([]string, 0, len(s.Terms))
 	for term := range s.Terms {
