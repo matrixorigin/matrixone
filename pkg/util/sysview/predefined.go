@@ -178,7 +178,11 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"(case when length(mc.attr_enum) > 0 then upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
+		"(case when length(mc.attr_enum) > 0 then "+
+		"  (case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' then "+
+		"    upper(case when upper(split_part(mc.attr_enum, ';', 1)) like 'SRID=%%' then 'GEOMETRY' else split_part(mc.attr_enum, ';', 1) end) "+
+		"  else upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) end) "+
+		" else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
@@ -192,7 +196,8 @@ var (
 		"'select,insert,update,references' as `PRIVILEGES`,"+
 		"mc.att_comment as COLUMN_COMMENT,"+
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
-		"if(true, NULL, 0) as SRS_ID "+
+		"(case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' and upper(mc.attr_enum) like '%%SRID=%%' "+
+		" then cast(split_part(upper(mc.attr_enum), 'SRID=', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
 		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s'",

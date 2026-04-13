@@ -9,7 +9,23 @@ create table geo_srid_show (
 show create table geo_srid_show;
 desc geo_srid_show;
 show columns from geo_srid_show;
+select data_type, column_type, srs_id
+from information_schema.columns
+where table_schema = database()
+  and table_name = 'geo_srid_show'
+  and column_name = 'location';
 drop table geo_srid_show;
+
+drop table if exists geo_srid_show_any;
+create table geo_srid_show_any (
+    g geometry srid 0
+);
+select data_type, column_type, srs_id
+from information_schema.columns
+where table_schema = database()
+  and table_name = 'geo_srid_show_any'
+  and column_name = 'g';
+drop table geo_srid_show_any;
 
 drop table if exists geo_srid_value_ok;
 create table geo_srid_value_ok(g point not null srid 4326);
