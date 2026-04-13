@@ -67,6 +67,17 @@ const (
 	AllColumns = "*"
 )
 
+func getObjectMetaFileService(fs fileservice.FileService) (fileservice.FileService, error) {
+	shared, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+	if err == nil {
+		return shared, nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNoService) {
+		return fs, nil
+	}
+	return nil, err
+}
+
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
@@ -356,9 +367,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 
 	var meta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
-	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.Base.FileService,
-		defines.SharedFileServiceName)
+	fs, err := getObjectMetaFileService(tbl.getTxn().proc.Base.FileService)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -441,9 +450,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		}
 	}
 
-	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.getTxn().proc.Base.FileService,
-		defines.SharedFileServiceName)
+	fs, err := getObjectMetaFileService(tbl.getTxn().proc.Base.FileService)
 	if err != nil {
 		return nil, err
 	}
