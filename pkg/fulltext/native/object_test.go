@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -103,4 +104,68 @@ func TestObjectIndexerBuildAndReadSidecar(t *testing.T) {
 	require.Len(t, locator.Entries, 1)
 	require.Equal(t, "__idx_body", locator.Entries[0].IndexTable)
 	require.Equal(t, SidecarPath(objName.String(), "__idx_body"), locator.Entries[0].FilePath)
+}
+
+func TestAppendQueryBatchBuildsSyntheticSegment(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	idVec := vector.NewVec(types.T_int64.ToType())
+	bodyVec := vector.NewVec(types.T_varchar.ToType())
+	defer idVec.Free(mp)
+	defer bodyVec.Free(mp)
+	require.NoError(t, vector.AppendFixed[int64](idVec, 10, false, mp))
+	require.NoError(t, vector.AppendFixed[int64](idVec, 11, false, mp))
+	require.NoError(t, vector.AppendBytes(bodyVec, []byte("appendable native"), false, mp))
+	require.NoError(t, vector.AppendBytes(bodyVec, []byte("tail builder"), false, mp))
+
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{"id", "body"}
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = bodyVec
+	bat.SetRowCount(2)
+
+	builder := NewBuilder(fulltext.FullTextParserParam{}, nil)
+	nextDoc, err := AppendQueryBatch(builder, bat, "id", types.T_int64, []string{"body"}, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), nextDoc)
+
+	seg := builder.Build()
+	require.Equal(t, int64(2), seg.DocCount)
+	require.Equal(t, int64(4), seg.TokenSum)
+	require.Len(t, seg.Lookup("appendable"), 1)
+	require.Len(t, seg.Lookup("tail"), 1)
+}
+
+func TestAppendQueryBatchKeepsSyntheticRefsUniqueAcrossCalls(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	buildBatch := func(id int64, body string) *batch.Batch {
+		idVec := vector.NewVec(types.T_int64.ToType())
+		bodyVec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendFixed[int64](idVec, id, false, mp))
+		require.NoError(t, vector.AppendBytes(bodyVec, []byte(body), false, mp))
+
+		bat := batch.NewWithSize(2)
+		bat.Attrs = []string{"id", "body"}
+		bat.Vecs[0] = idVec
+		bat.Vecs[1] = bodyVec
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	bat1 := buildBatch(1, "shared token")
+	bat2 := buildBatch(2, "shared token")
+	defer bat1.Clean(mp)
+	defer bat2.Clean(mp)
+
+	builder := NewBuilder(fulltext.FullTextParserParam{}, nil)
+	nextDoc, err := AppendQueryBatch(builder, bat1, "id", types.T_int64, []string{"body"}, 0)
+	require.NoError(t, err)
+	nextDoc, err = AppendQueryBatch(builder, bat2, "id", types.T_int64, []string{"body"}, nextDoc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), nextDoc)
+
+	postings := builder.Build().Lookup("shared")
+	require.Len(t, postings, 2)
+	require.NotEqual(t, postings[0].Ref.Row, postings[1].Ref.Row)
 }

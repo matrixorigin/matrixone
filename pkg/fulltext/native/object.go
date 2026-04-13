@@ -17,6 +17,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -226,6 +227,65 @@ func ReadSidecar(ctx context.Context, fs fileservice.FileService, objName object
 		return nil, false, err
 	}
 	return seg, true, nil
+}
+
+func AppendQueryBatch(
+	builder *Builder,
+	bat *batch.Batch,
+	pkName string,
+	pkType types.T,
+	parts []string,
+	nextDoc uint64,
+) (uint64, error) {
+	if builder == nil || bat == nil || bat.RowCount() == 0 {
+		return nextDoc, nil
+	}
+
+	attrMap := make(map[string]int, len(bat.Attrs))
+	for i, attr := range bat.Attrs {
+		attrMap[strings.ToLower(attr)] = i
+	}
+	pkIdx, ok := attrMap[strings.ToLower(pkName)]
+	if !ok {
+		return nextDoc, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing primary key column in batch")
+	}
+
+	partIdxes := make([]int, 0, len(parts))
+	partTypes := make([]types.T, 0, len(parts))
+	for _, part := range parts {
+		colIdx, ok := attrMap[strings.ToLower(part)]
+		if !ok {
+			return nextDoc, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing indexed column in batch")
+		}
+		partIdxes = append(partIdxes, colIdx)
+		partTypes = append(partTypes, bat.Vecs[colIdx].GetType().Oid)
+	}
+
+	for row := 0; row < bat.RowCount(); row++ {
+		block := nextDoc / objectio.BlockMaxRows
+		if block > math.MaxUint16 {
+			return nextDoc, moerr.NewInternalErrorNoCtx("native fulltext tail scan exceeded synthetic block range")
+		}
+		values, ok, err := collectIndexValues(bat, row, partIdxes, partTypes)
+		if err != nil {
+			return nextDoc, err
+		}
+		if !ok {
+			nextDoc++
+			continue
+		}
+		pkBytes := types.EncodeValue(vector.GetAny(bat.Vecs[pkIdx], row, true), pkType)
+		if err := builder.Add(Document{
+			Block:  uint16(block),
+			Row:    uint32(nextDoc % objectio.BlockMaxRows),
+			PK:     pkBytes,
+			Values: values,
+		}); err != nil {
+			return nextDoc, err
+		}
+		nextDoc++
+	}
+	return nextDoc, nil
 }
 
 func parseIndexParam(idx *plan.IndexDef) (fulltext.FullTextParserParam, error) {

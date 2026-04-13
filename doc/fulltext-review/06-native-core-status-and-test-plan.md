@@ -22,16 +22,17 @@
    - sidecar 构建失败只记日志并跳过 sidecar，不阻塞 flush / merge 主流程。
    - sidecar 成功落盘后会额外写一个 per-object locator 文件，记录该 object 对应的 sidecar 路径。
 5. **`MATCH ... AGAINST` 已接入 native 查询分支**：
-   - 当当前快照下所有 visible object 都是 non-appendable，且 sidecar 覆盖完整时，走 native sidecar；
-   - 否则显式回退到 v1 hidden-table 路径。
-   - native 查询直接汇总 sidecar 中的 `DocCount` / `TokenSum`，不再额外执行 `runCountStar()`。
+   - 当前快照下 persisted visible object 的 sidecar 覆盖完整时，走 native sidecar；
+   - 查询期还会额外通过 `Relation.Ranges + BuildReaders` 读取 committed in-memory / uncommitted tail，构建临时 native segment 并和 persisted sidecar 一起参与召回；
+   - datalink、persisted object sidecar 缺失、或当前模式不适合 native 时，显式回退到 v1 hidden-table 路径。
+   - native 查询直接汇总 sidecar 和 tail segment 中的 `DocCount` / `TokenSum`，不再额外执行 `runCountStar()`。
 6. **native 查询已经接 tombstone 过滤**：
    - native postings 命中的 `(block,row)` 会结合 `CollectTombstones()` 做删除可见性过滤。
 7. **sidecar GC 已有显式 metadata 起点**：
    - GC 删除 object 时会 best-effort 读取 locator，并把存在的 sidecar 一起加入删除列表；
    - locator 读取失败不会阻塞 object GC，只会退化为 sidecar 泄漏。
 
-这意味着当前不是“只有内核，没有用户路径”，而是已经有 **steady-state native 查询路径**，只是 appendable tail 仍然通过 fallback 保证正确性。
+这意味着当前不是“只有内核，没有用户路径”，而是已经有 **steady-state native 查询路径 + query-time tail delta**；当前主要剩下的是 persisted mixed-query、locator replay/inspect、以及 segment 按需加载。
 
 ## 2. 当前边界：哪些已经完成，哪些还没有
 
@@ -44,19 +45,20 @@
 5. merge / compaction sidecar 重建已接入。
 6. native query 已接回 `fulltext_index_scan`。
 7. native query 已接 visible object 枚举与 tombstone 过滤。
-8. native query 对 sidecar 覆盖不全、appendable object 存在、或当前模式不支持时，会明确回退 v1。
+8. native query 对 sidecar 覆盖不全、datalink、或当前模式不支持时，会明确回退 v1。
 9. flush / merge 的 sidecar 生成失败不再放大成主数据写入失败。
 10. sidecar 已持久化 indexed doc count / token sum，native 查询不再先跑全局 count。
 11. per-object locator metadata 已落地，GC 会基于 locator 做 best-effort sidecar 清理。
+12. appendable / in-memory / uncommitted tail 已可在查询期通过 reader path 构建临时 native segment。
 
 ### 2.2 仍未完成
 
-1. **appendable tail native delta**  
-   还没有单独实现 native tail/delta；当前依赖 “覆盖不完整则回退 v1”。
+1. **persisted mixed-query**  
+   当前 persisted object 仍然是 all-or-nothing：只要某个 visible persisted object 缺 sidecar，就整表回退 v1。
 2. **显式 locator 元数据**  
    per-object locator 文件已经落地并可用于 GC，但查询路径仍主要依赖 deterministic sidecar path；更深的 replay / inspect / repair 还没接完。
 3. **query mode 覆盖仍是分阶段的**  
-   当前 native 查询主要覆盖 steady-state 的 NL / phrase / boolean persisted-object 路径；不适合的模式会回退 v1。
+   当前 native 查询已经覆盖 persisted steady-state + query-time tail 的 NL / phrase / boolean 主路径；不适合的模式会回退 v1。
 4. **datalink 列不在 storage path 直接取外部文本**  
    这类 FULLTEXT index 当前不产 native sidecar，查询会回退 v1。
 5. **sidecar 生命周期的显式 GC / replay 元数据**  
@@ -68,18 +70,19 @@
 这轮实现没有冒进到“强行让所有查询全量切 native”，而是采取了更稳的策略：
 
 1. **persisted steady-state 走 native**
-2. **appendable / sidecar 缺失 / 不支持模式 走 v1 fallback**
-3. **flush / merge 期间 sidecar 与 object 同生命周期生成**
-4. **查询时只从当前 visible object 枚举 sidecar，不依赖额外桥接表**
-5. **sidecar 失败降级为“少一个 native sidecar”，而不是“整个 flush / merge 失败”**
+2. **appendable / in-memory / uncommitted tail 走 query-time native builder**
+3. **persisted sidecar 缺失 / datalink / 不支持模式 走 v1 fallback**
+4. **flush / merge 期间 sidecar 与 object 同生命周期生成**
+5. **查询时只从当前 visible object 枚举 sidecar，不依赖额外桥接表**
+6. **sidecar 失败降级为“少一个 native sidecar”，而不是“整个 flush / merge 失败”**
 
 这样做的好处是：
 
-1. 不会因为 appendable tail 尚未 native 化就牺牲正确性。
+1. appendable tail 不再在常见 disttae 路径上把整表直接打回 v1。
 2. 不会把 flush / merge 路径绑到外部模块或外部引擎。
 3. merge 后旧 object sidecar 即使还在文件服务里，也不会再被查询枚举到。
 4. vector-only 路径没有被接入或改写，不影响现有向量查询链路。
-5. native steady-state 查询少了一次额外的全局 count 开销。
+5. native 查询少了一次额外的全局 count 开销。
 
 ## 4. 当前可执行测试
 
@@ -138,7 +141,8 @@
 3. **phrase**
 4. **top-k / score**
 5. **sidecar 覆盖完整时 native 命中**
-6. **appendable object 或缺 sidecar 时自动回退 v1**
+6. **appendable / in-memory / uncommitted tail 会进入 query-time native segment**
+7. **persisted object 缺 sidecar 时自动回退 v1**
 
 ### 5.4 删除与可见性
 
@@ -162,10 +166,10 @@
 ## 6. 现阶段结论
 
 当前仓库已经不再沿着 hidden-table v2-lite 往前推，而是进入了 **native sidecar 为主、v1 为 fallback 的可运行阶段**。  
-对用户语义来说，steady-state persisted 数据已经可以走 storage-coupled native 路线；对系统正确性来说，appendable tail、datalink、以及 sidecar 覆盖不完整的情况仍然由 v1 路径兜底。
+对用户语义来说，steady-state persisted 数据已经可以走 storage-coupled native 路线；appendable / in-memory / uncommitted tail 也已经能在查询期被纳入 native segment。当前仍然由 v1 兜底的，主要是 datalink、persisted sidecar 覆盖不完整、以及尚未扩展到 native 的模式。
 
 下一阶段如果继续推进，优先级应该是：
 
-1. native tail/delta
+1. persisted mixed-query
 2. sidecar locator / replay / inspect 元数据继续补强
-3. 扩大 native query mode 覆盖面
+3. segment 按需加载与更完整的 native query mode 覆盖
