@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -76,6 +77,10 @@ type Command struct {
 	InsertAtmBatch *AtomicBatch
 	DeleteAtmBatch *AtomicBatch
 
+	// Mp is the mpool used to allocate InsertBatch (snapshot).
+	// Needed for proper cleanup via batch.Clean(mp).
+	Mp *mpool.MPool
+
 	// Metadata for the command
 	Meta CommandMetadata
 }
@@ -112,10 +117,11 @@ func NewRollbackCommand() *Command {
 }
 
 // NewInsertBatchCommand creates a command to insert a batch of rows
-func NewInsertBatchCommand(bat *batch.Batch, fromTs, toTs types.TS) *Command {
+func NewInsertBatchCommand(bat *batch.Batch, mp *mpool.MPool, fromTs, toTs types.TS) *Command {
 	return &Command{
 		Type:        CmdInsertBatch,
 		InsertBatch: bat,
+		Mp:          mp,
 		Meta: CommandMetadata{
 			FromTs: fromTs,
 			ToTs:   toTs,
@@ -221,5 +227,28 @@ func (c *Command) Validate() error {
 
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown command type: %v", c.Type))
+	}
+}
+
+// Close releases batch resources held by the command.
+// Must be called after the command is processed (or skipped) to avoid memory leaks.
+func (c *Command) Close() {
+	if c == nil {
+		return
+	}
+	if c.InsertBatch != nil {
+		if c.Mp != nil {
+			c.InsertBatch.Clean(c.Mp)
+		}
+		c.InsertBatch = nil
+		c.Mp = nil
+	}
+	if c.InsertAtmBatch != nil {
+		c.InsertAtmBatch.Close()
+		c.InsertAtmBatch = nil
+	}
+	if c.DeleteAtmBatch != nil {
+		c.DeleteAtmBatch.Close()
+		c.DeleteAtmBatch = nil
 	}
 }
