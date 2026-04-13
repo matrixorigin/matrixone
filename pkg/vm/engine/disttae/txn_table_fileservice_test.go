@@ -45,6 +45,6 @@ func TestGetObjectMetaFileServiceFallbackToDefault(t *testing.T) {
 
 	got, err := getObjectMetaFileService(fs)
 	require.NoError(t, err)
-	require.Same(t, fs, got)
 	require.Equal(t, defines.LocalFileServiceName, got.Name())
+	require.Same(t, local, got)
 }

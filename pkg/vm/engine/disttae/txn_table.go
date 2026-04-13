@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -68,14 +67,12 @@ const (
 )
 
 func getObjectMetaFileService(fs fileservice.FileService) (fileservice.FileService, error) {
-	shared, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
-	if err == nil {
-		return shared, nil
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: fs,
+		},
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrNoService) {
-		return fs, nil
-	}
-	return nil, err
+	return colexec.GetObjectFSFromProc(proc)
 }
 
 var traceFilterExprInterval atomic.Uint64

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -113,11 +114,43 @@ const (
 )
 
 func GetSharedFSFromProc(proc *process.Process) (fs fileservice.FileService, err error) {
-	fs, err = fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	fs, err = getNamedFSFromProc(proc, defines.SharedFileServiceName)
 	if err != nil {
 		logutil.Error("get shared fs from proc failed", zap.Error(err))
 		return nil, err
 	}
 
 	return fs, nil
+}
+
+func GetObjectFSFromProc(proc *process.Process) (fileservice.FileService, error) {
+	shared, err := getNamedFSFromProc(proc, defines.SharedFileServiceName)
+	if err == nil {
+		return shared, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrNoService) {
+		return nil, err
+	}
+
+	local, localErr := getNamedFSFromProc(proc, defines.LocalFileServiceName)
+	if localErr == nil {
+		return local, nil
+	}
+	if !moerr.IsMoErrCode(localErr, moerr.ErrNoService) {
+		return nil, localErr
+	}
+
+	if proc != nil {
+		if fs := proc.GetFileService(); fs != nil && fs.Name() != "" {
+			return fs, nil
+		}
+	}
+	return nil, err
+}
+
+func getNamedFSFromProc(proc *process.Process, name string) (fileservice.FileService, error) {
+	if proc == nil || proc.GetFileService() == nil {
+		return nil, moerr.NewNoServiceNoCtx(name)
+	}
+	return fileservice.Get[fileservice.FileService](proc.GetFileService(), name)
 }

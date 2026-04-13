@@ -590,3 +590,43 @@ func TestGetSharedFSFromProc(t *testing.T) {
 		require.Nil(t, fs)
 	}
 }
+
+func TestGetObjectFSFromProc(t *testing.T) {
+	{
+		proc := testutil.NewProc(t)
+		fs, err := GetObjectFSFromProc(proc)
+		require.NoError(t, err)
+		require.NotNil(t, fs)
+		require.Equal(t, defines.SharedFileServiceName, fs.Name())
+	}
+
+	{
+		local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		bus, err := fileservice.NewFileServices("", local)
+		require.NoError(t, err)
+
+		proc := &process.Process{
+			Base: &process.BaseProcess{
+				FileService: bus,
+			},
+		}
+		fs, err := GetObjectFSFromProc(proc)
+		require.NoError(t, err)
+		require.Equal(t, defines.LocalFileServiceName, fs.Name())
+	}
+
+	{
+		local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+
+		proc := &process.Process{
+			Base: &process.BaseProcess{
+				FileService: local,
+			},
+		}
+		fs, err := GetObjectFSFromProc(proc)
+		require.NoError(t, err)
+		require.Same(t, local, fs)
+	}
+}

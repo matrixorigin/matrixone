@@ -29,6 +29,7 @@ import (
 	ftnative "github.com/matrixorigin/matrixone/pkg/fulltext/native"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -166,6 +167,10 @@ func prepareNativeScan(
 	if hasDatalinkPart(tableDef, param.Parts) {
 		return nil, nil
 	}
+	objectFS, err := colexec.GetObjectFSFromProc(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	visibleInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, param.Parts[0], false)
 	if err != nil {
@@ -192,7 +197,7 @@ func prepareNativeScan(
 			continue
 		}
 		delete(visible, nameStr)
-		seg, exists, err := ftnative.ReadSidecar(proc.Ctx, proc.Base.FileService, name, indexTableName)
+		seg, exists, err := ftnative.ReadSidecar(proc.Ctx, objectFS, name, indexTableName)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +252,7 @@ func prepareNativeScan(
 		complete:    !incomplete,
 		tombstones:  tombstones,
 		snapshot:    types.TimestampToTS(proc.GetTxnOperator().SnapshotTS()),
-		fs:          proc.Base.FileService,
+		fs:          objectFS,
 		totalDocs:   totalDocs,
 		totalTokens: totalTokens,
 	}, nil
