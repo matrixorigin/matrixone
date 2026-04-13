@@ -18,6 +18,10 @@
 4. [04-path-selection-and-confidence.md](./04-path-selection-and-confidence.md): 路线选择、实现难度、把握和针对大数据用户的建议
 5. [05-current-vs-v2lite-vs-native.md](./05-current-vs-v2lite-vs-native.md): 当前实现、hidden-table FTS v2-lite、storage-coupled native FTS 的原理与优劣对照
 6. [06-native-core-status-and-test-plan.md](./06-native-core-status-and-test-plan.md): 当前 native 代码已落地范围、未完成边界与测试方案
+7. [07-code-review-and-improvement-proposals.md](./07-code-review-and-improvement-proposals.md): 第一轮代码级 Review 与改进建议
+8. [08-second-review-and-architecture-fit.md](./08-second-review-and-architecture-fit.md): 第二/三轮 Review、架构适配性分析、风险评估
+9. [09-fulltext-summary.md](./09-fulltext-summary.md): **总结文档 — 旧版本问题、新版本原理与优势、已知限制、风险评估**
+10. [10-industry-engines-vs-mo-native-fts.md](./10-industry-engines-vs-mo-native-fts.md): **主流全文引擎实现原理对比与 MO native FTS 定位分析**
 
 ## 推荐阅读顺序
 

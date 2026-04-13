@@ -20,12 +20,16 @@
    - flush object 后生成 per-object native sidecar；
    - merge / compaction 输出新 object 时同步重建 sidecar。
    - sidecar 构建失败只记日志并跳过 sidecar，不阻塞 flush / merge 主流程。
+   - sidecar 成功落盘后会额外写一个 per-object locator 文件，记录该 object 对应的 sidecar 路径。
 5. **`MATCH ... AGAINST` 已接入 native 查询分支**：
    - 当当前快照下所有 visible object 都是 non-appendable，且 sidecar 覆盖完整时，走 native sidecar；
    - 否则显式回退到 v1 hidden-table 路径。
    - native 查询直接汇总 sidecar 中的 `DocCount` / `TokenSum`，不再额外执行 `runCountStar()`。
 6. **native 查询已经接 tombstone 过滤**：
    - native postings 命中的 `(block,row)` 会结合 `CollectTombstones()` 做删除可见性过滤。
+7. **sidecar GC 已有显式 metadata 起点**：
+   - GC 删除 object 时会 best-effort 读取 locator，并把存在的 sidecar 一起加入删除列表；
+   - locator 读取失败不会阻塞 object GC，只会退化为 sidecar 泄漏。
 
 这意味着当前不是“只有内核，没有用户路径”，而是已经有 **steady-state native 查询路径**，只是 appendable tail 仍然通过 fallback 保证正确性。
 
@@ -43,20 +47,21 @@
 8. native query 对 sidecar 覆盖不全、appendable object 存在、或当前模式不支持时，会明确回退 v1。
 9. flush / merge 的 sidecar 生成失败不再放大成主数据写入失败。
 10. sidecar 已持久化 indexed doc count / token sum，native 查询不再先跑全局 count。
+11. per-object locator metadata 已落地，GC 会基于 locator 做 best-effort sidecar 清理。
 
 ### 2.2 仍未完成
 
 1. **appendable tail native delta**  
    还没有单独实现 native tail/delta；当前依赖 “覆盖不完整则回退 v1”。
 2. **显式 locator 元数据**  
-   sidecar 仍然通过 deterministic path 定位，没有扩展 catalog/checkpoint 显式记录 locator。
+   per-object locator 文件已经落地并可用于 GC，但查询路径仍主要依赖 deterministic sidecar path；更深的 replay / inspect / repair 还没接完。
 3. **query mode 覆盖仍是分阶段的**  
    当前 native 查询主要覆盖 steady-state 的 NL / phrase / boolean persisted-object 路径；不适合的模式会回退 v1。
 4. **datalink 列不在 storage path 直接取外部文本**  
    这类 FULLTEXT index 当前不产 native sidecar，查询会回退 v1。
 5. **sidecar 生命周期的显式 GC / replay 元数据**  
-   旧 object sidecar 因为对象不可见而不会参与查询，但还没有独立的 sidecar 元数据治理机制。  
-   结合 MO 当前实现，这条更适合通过 **显式 locator / GC 元数据** 来补，而不是在 flat object namespace 上靠逐个 object 列目录扫描 sidecar。
+   旧 object sidecar 已可通过 locator 做 best-effort GC，但还没有 catalog/checkpoint 级 replay / inspect 元数据。  
+   结合 MO 当前实现，这条仍然更适合继续沿 **显式 locator / GC 元数据** 往前补，而不是在 flat object namespace 上靠逐个 object 列目录扫描 sidecar。
 
 ## 3. 当前实现的核心取舍
 
@@ -162,5 +167,5 @@
 下一阶段如果继续推进，优先级应该是：
 
 1. native tail/delta
-2. sidecar locator / replay / GC 元数据
+2. sidecar locator / replay / inspect 元数据继续补强
 3. 扩大 native query mode 覆盖面

@@ -32,7 +32,10 @@ var (
 	segmentMagicV3 = [8]byte{'M', 'O', 'F', 'T', 'S', 'N', '3', 0}
 )
 
-const segmentHeaderLenV3 = uint32(16)
+const (
+	segmentHeaderLenV3  = uint32(16)
+	segmentMaxHeaderLen = uint32(1 << 20)
+)
 
 type RowRef struct {
 	Block uint16
@@ -405,6 +408,9 @@ func readSegmentHeaderV3(reader *bytes.Reader, segment *Segment) error {
 	}
 	if headerLen < segmentHeaderLenV3 {
 		return moerr.NewInternalErrorNoCtx("invalid native fulltext segment header length")
+	}
+	if headerLen > segmentMaxHeaderLen {
+		return moerr.NewInternalErrorNoCtx("native fulltext segment header too large")
 	}
 	if int(headerLen) > reader.Len() {
 		return moerr.NewInternalErrorNoCtx("native fulltext segment header exceeds payload")

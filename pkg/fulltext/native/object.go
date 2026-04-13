@@ -178,6 +178,7 @@ func (o *ObjectIndexer) Write(ctx context.Context, fs fileservice.FileService, o
 	if o.Empty() {
 		return nil
 	}
+	entries := make([]SidecarLocatorEntry, 0, len(o.builders))
 	for _, idx := range o.indexes {
 		builder, ok := o.builders[idx.TableName]
 		if !ok {
@@ -198,8 +199,12 @@ func (o *ObjectIndexer) Write(ctx context.Context, fs fileservice.FileService, o
 		}); err != nil {
 			return err
 		}
+		entries = append(entries, SidecarLocatorEntry{
+			IndexTable: idx.TableName,
+			FilePath:   SidecarPath(objName.String(), idx.TableName),
+		})
 	}
-	return nil
+	return WriteSidecarLocator(ctx, fs, objName.String(), entries)
 }
 
 func ReadSidecar(ctx context.Context, fs fileservice.FileService, objName objectio.ObjectName, indexTableName string) (*Segment, bool, error) {

@@ -96,4 +96,11 @@ func TestObjectIndexerBuildAndReadSidecar(t *testing.T) {
 	require.Equal(t, int64(7), seg.TokenSum)
 	require.Len(t, seg.Lookup("native"), 2)
 	require.Len(t, seg.Lookup("matrix"), 1)
+
+	locator, ok, err := ReadSidecarLocator(context.Background(), fs, objName.String())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, locator.Entries, 1)
+	require.Equal(t, "__idx_body", locator.Entries[0].IndexTable)
+	require.Equal(t, SidecarPath(objName.String(), "__idx_body"), locator.Entries[0].FilePath)
 }

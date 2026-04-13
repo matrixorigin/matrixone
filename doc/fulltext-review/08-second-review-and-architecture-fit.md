@@ -546,12 +546,86 @@ if u.param.UseNative() {
 
 ---
 
-## 8. 总结
+---
 
-上一轮 review 提出的两个 P0 问题（sidecar 失败阻塞 flush/merge、全局统计持久化）都已经正确修复，修复质量很好——flush 和 merge 都做了降级处理，V2 格式做了向后兼容，测试覆盖了 legacy 格式。
+## 8. 第三轮 Review：V3 extensible header
 
-当前实现的方向是对的，per-object sidecar 是目前最适合 MO 的 native FTS 实现路线。它不是终态，但它是一个正确的起点，后续的每一步改进都可以在这个基础上独立推进。
+### 8.1 变化范围
 
-对 TAE flush / merge / GC 的改动风险极低——所有改动都在主流程之后追加，失败只降级不阻塞，对没有全文索引的表零影响。这是因为 sidecar 被设计成纯加速层而非正确性依赖。
+本轮只改了一件事：**segment 序列化格式从 V2 升级到 V3，加入 extensible header。**
 
-最关键的下一步不是追求更复杂的架构，而是把当前方案的几个实际短板补上：sidecar GC、混合查询、按需加载。这三件事做完，native FTS 就可以在生产环境中稳定运行了。
+改动文件：
+- `pkg/fulltext/native/segment.go` — MarshalBinary 写 V3，UnmarshalBinary 兼容读 V1/V2/V3
+- `pkg/fulltext/native/segment_test.go` — 新增 V2 legacy 测试，重构 legacy marshal helper
+
+**TAE 代码零改动。** flush/merge 钩子不变，查询逻辑不变。
+
+### 8.2 V3 格式
+
+```
+[magic V3 8B] [headerLen uint32 4B] [DocCount int64 8B] [TokenSum int64 8B] [terms...]
+```
+
+`segmentHeaderLenV3 = 16`（DocCount 8B + TokenSum 8B）。
+
+关键设计：`readSegmentHeaderV3` 先读 `headerLen`，然后读取 `headerLen` 字节到 buffer，只解析已知字段，多余字节自动跳过。这意味着：
+
+- **后续加字段只需增大 `segmentHeaderLenV3` 常量，不需要再升 V4**
+- 老版本代码读到新格式时，会跳过不认识的尾部字段，不会报错
+- 解决了上一轮 review 提出的"V2 没有预留扩展字段"问题
+
+### 8.3 向后兼容
+
+读取时按 magic 分支：
+- V3：读 headerLen → 读 header buffer → 解析已知字段
+- V2：直接读 DocCount + TokenSum（无 headerLen）
+- V1：跳过 header，读完 terms 后调用 `rebuildStats()` 从 postings 重建统计
+
+测试覆盖了 V1/V2/V3 三种格式的反序列化，包括 legacy 格式的 round-trip 验证。
+
+### 8.4 TAE 稳定性影响
+
+**无。** TAE 的 flush/merge 调用的是 `indexer.Write()`，这个接口没变，只是内部写出的二进制格式从 V2 变成了 V3。对 TAE 完全透明。
+
+### 8.5 小建议
+
+`readSegmentHeaderV3` 中 `headerLen` 没有上限检查。如果 sidecar 文件损坏导致 `headerLen` 是一个极大值，`make([]byte, headerLen)` 会尝试分配大量内存。实际风险极低（sidecar 是自己生成的），但可以加一行防御：
+
+```go
+if headerLen > 1<<20 { // 1MB，远超任何合理 header
+    return moerr.NewInternalErrorNoCtx("native fulltext segment header too large")
+}
+```
+
+### 8.6 方向偏离检查
+
+没有偏离。这是一次纯粹的格式演进——不改 TAE、不改查询、不改 flush/merge 钩子，只改 sidecar 自己的序列化层。
+
+---
+
+## 9. 总结
+
+### 三轮 Review 的修复追踪
+
+| 轮次 | 提出的问题 | 修复状态 |
+|------|-----------|---------|
+| 第一轮 | sidecar 生成失败阻塞 flush/merge | ✅ 第二轮确认修复，降级 + 日志 + 两级状态机 |
+| 第一轮 | 全局统计没有持久化 | ✅ 第二轮确认修复，V2 sidecar 持久化 DocCount/TokenSum |
+| 第二轮 | V2 格式没有预留扩展字段 | ✅ 第三轮确认修复，V3 extensible header |
+| 第二轮 | applyNativeSegmentStats 没扣除 tombstone 文档数 | 未修复，影响较小 |
+| 第一轮 | segment 全量反序列化到内存 map | 未修复，P1 |
+| 第一轮 | postings 没有压缩 | 未修复，P1 |
+| 第一轮 | sidecar 没有显式元数据 / GC | 未修复，P1 |
+| 第一轮 | fallback 判断过于保守 | 未修复，P1 |
+| 第一轮 | merge 时重新切词而非合并 sidecar | 未修复，P2 |
+| 第一轮 | prefix 查询 O(N) 遍历 map | 未修复，P2 |
+| 第一轮 | sidecar 串行读取 | 未修复，P2 |
+| 第一轮 | tombstone 逐行检查 | 未修复，P2 |
+| 第一轮 | native 查询复用 v1 打分框架 | 未修复，P2 |
+
+### 核心结论
+
+1. **方向正确**：per-object sidecar 是当前最适合 MO 的 native FTS 路线。
+2. **TAE 稳定性无风险**：所有 TAE 改动都在主流程之后追加，失败只降级不阻塞，对没有全文索引的表零影响。sidecar 是纯加速层，不是正确性依赖。
+3. **格式演进健康**：V1 → V2 → V3 每一步都保持向后兼容，V3 的 extensible header 设计让后续扩展不再需要改 magic。
+4. **最优先的下一步**：sidecar GC、更细粒度的 native/v1 混合查询、segment 按需加载。这三件事做完，native FTS 就从"能跑通"变成"能跑稳"。
