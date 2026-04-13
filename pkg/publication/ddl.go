@@ -1520,47 +1520,39 @@ func canDoColumnChangesInplace(oldCols, newCols map[string]*columnInfo) bool {
 		return false
 	}
 
-	// Check if all columns in old table exist in new table (possibly renamed)
-	// and their types/defaults/nullable are the same
+	// First pass: check columns that exist by name in both old and new.
+	// They must keep the same position and compatible types.
 	for oldName, oldCol := range oldCols {
-		// Try to find matching column by position or by name
-		found := false
-		for newName, newCol := range newCols {
-			if oldName == newName {
-				// Same name but different position - not inplace
-				if oldCol.position != newCol.position {
-					return false
-				}
-				// Same name, same position, check if types match
-				if oldCol.typ != newCol.typ ||
-					oldCol.defaultVal != newCol.defaultVal ||
-					oldCol.nullable != newCol.nullable {
-					return false
-				}
-				found = true
-				break
-			} else if oldCol.position == newCol.position {
-				// Same position, different name (rename), check if types match
-				if oldCol.typ != newCol.typ ||
-					oldCol.defaultVal != newCol.defaultVal ||
-					oldCol.nullable != newCol.nullable {
-					return false
-				}
-				found = true
-				break
+		if newCol, ok := newCols[oldName]; ok {
+			if oldCol.position != newCol.position {
+				return false
+			}
+			if oldCol.typ != newCol.typ ||
+				oldCol.defaultVal != newCol.defaultVal ||
+				oldCol.nullable != newCol.nullable {
+				return false
 			}
 		}
-		if !found {
-			// Check if column was renamed (same position, different name, same type)
-			for _, newCol := range newCols {
-				if oldCol.position == newCol.position {
-					if oldCol.typ == newCol.typ &&
-						oldCol.defaultVal == newCol.defaultVal &&
-						oldCol.nullable == newCol.nullable {
-						found = true
-						break
-					}
-				}
+	}
+
+	// Second pass: for columns that were removed by name, check if they
+	// were renamed (same position, different name, compatible type).
+	for oldName, oldCol := range oldCols {
+		if _, ok := newCols[oldName]; ok {
+			continue
+		}
+		found := false
+		for newName, newCol := range newCols {
+			if _, ok := oldCols[newName]; ok {
+				// this new column already matched an old column by name
+				continue
+			}
+			if oldCol.position == newCol.position &&
+				oldCol.typ == newCol.typ &&
+				oldCol.defaultVal == newCol.defaultVal &&
+				oldCol.nullable == newCol.nullable {
+				found = true
+				break
 			}
 		}
 		if !found {

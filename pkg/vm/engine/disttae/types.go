@@ -23,7 +23,6 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,11 +97,6 @@ var (
 // of a write entry, since there is no dedicated field for this purpose.
 // Format: "soft_delete_object:<is_tombstone>"
 const softDeleteObjectPrefix = "soft_delete_object:"
-
-// isSoftDeleteEntry checks if a fileName encodes a soft-delete object operation.
-func isSoftDeleteEntry(fileName string) bool {
-	return strings.HasPrefix(fileName, softDeleteObjectPrefix)
-}
 
 // makeSoftDeleteFileName encodes a soft-delete object intent into a fileName string.
 func makeSoftDeleteFileName(isTombstone bool) string {
