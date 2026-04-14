@@ -3462,22 +3462,23 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// GPU offload: intercept /*+ GPU */ hint before normal processing.
-		// If sidecar is not configured, silently fall through to normal MO execution.
-		if isGPUOffloadQuery(query) {
+		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
+		// before normal processing. If sidecar is not configured, silently
+		// fall through to normal MO execution.
+		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			err = handleGPUOffload(ses, execCtx, query)
+			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
-			if err != errGPUNotConfigured {
+			if err != errSidecarNotConfigured {
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
 			}
-			// errGPUNotConfigured: strip hint and fall through to normal execution
-			query = stripGPUHint(query)
+			// errSidecarNotConfigured: strip hint and fall through to normal execution
+			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}
