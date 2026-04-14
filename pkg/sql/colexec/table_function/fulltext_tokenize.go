@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/bytedance/sonic"
@@ -146,10 +147,10 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	switch u.param.Parser {
 	case "", "ngram", "default":
 
-		var c string
+		var content bytes.Buffer
 		for i := 1; i < vlen; i++ {
 			if i > 1 {
-				c += "\n"
+				content.WriteByte('\n')
 			}
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 
@@ -167,13 +168,13 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 					return err
 				}
 
-				c += string(b)
+				content.Write(b)
 			} else {
-				c += data
+				content.WriteString(data)
 			}
 		}
 
-		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
+		tok, _ := tokenizer.NewSimpleTokenizer(content.Bytes())
 		for t := range tok.Tokenize() {
 
 			slen := t.TokenBytes[0]
@@ -203,9 +204,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
-				value := string(t.TokenBytes[1 : jslen+1])
 				// tokenize the value
-				tok, _ := tokenizer.NewSimpleTokenizer([]byte(value))
+				tok, _ := tokenizer.NewSimpleTokenizer(t.TokenBytes[1 : jslen+1])
 				for tt := range tok.Tokenize() {
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
@@ -238,8 +238,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
-				value := string(t.TokenBytes[1 : jslen+1])
-				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: string(t.TokenBytes[1 : jslen+1]), Pos: joffset + voffset})
 				voffset += int32(jslen)
 			}
 

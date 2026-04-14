@@ -114,6 +114,7 @@ type SearchAccum struct {
 	Params     string
 	Nrow       int64
 	Nkeywords  int
+	AnyPlus    bool
 
 	ScoreAlgo FullTextScoreAlgo
 	AvgDocLen float64

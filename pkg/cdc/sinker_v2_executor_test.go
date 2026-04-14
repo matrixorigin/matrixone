@@ -683,3 +683,31 @@ func TestExecutor_TransactionCleanupOnError(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestExecutor_RecordTxnSQL_Cap(t *testing.T) {
+	executor := &Executor{}
+	executor.debugTxnRecorder.doRecord = true
+
+	// Fill up to the cap
+	for i := 0; i < maxDebugTxnSQLEntries; i++ {
+		sqlBuf := make([]byte, v2SQLBufReserved+10)
+		copy(sqlBuf[v2SQLBufReserved:], []byte("SELECT 1;"))
+		executor.recordTxnSQL(sqlBuf)
+	}
+	assert.Equal(t, maxDebugTxnSQLEntries, len(executor.debugTxnRecorder.txnSQL))
+
+	// One more should be dropped
+	sqlBuf := make([]byte, v2SQLBufReserved+20)
+	copy(sqlBuf[v2SQLBufReserved:], []byte("SELECT overflow;"))
+	executor.recordTxnSQL(sqlBuf)
+	assert.Equal(t, maxDebugTxnSQLEntries, len(executor.debugTxnRecorder.txnSQL))
+
+	t.Run("RecordDisabled", func(t *testing.T) {
+		e := &Executor{}
+		e.debugTxnRecorder.doRecord = false
+		sqlBuf := make([]byte, v2SQLBufReserved+10)
+		copy(sqlBuf[v2SQLBufReserved:], []byte("SELECT 1;"))
+		e.recordTxnSQL(sqlBuf)
+		assert.Equal(t, 0, len(e.debugTxnRecorder.txnSQL))
+	})
+}

@@ -472,6 +472,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 				}
 			}
 		}
+
+		builder.stabilizeExactVectorSort(vecCtx)
 	}
 END0:
 	// 2. Regular Index Check

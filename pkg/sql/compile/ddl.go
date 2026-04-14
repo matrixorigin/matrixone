@@ -2926,7 +2926,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			// a table refer to it?
 			// the FOREIGN_KEY_CHECKS disabled !!!
 			// so this inexistence is expected, no need to return an error.
-			if strings.Contains(err.Error(), "can not find table by id") {
+			if isMissingTableForFkCleanup(err) {
 				logutil.Warn(
 					"cannot find the referred table when drop table",
 					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
@@ -2954,6 +2954,16 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
+			if isMissingTableForFkCleanup(err) {
+				logutil.Warn(
+					"cannot find child table when drop table fk cleanup",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
+					zap.Int("child table id", int(childTblId)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
