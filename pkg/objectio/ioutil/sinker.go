@@ -631,12 +631,14 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// no sort key: spill directly (sync path)
 	fSinker := sinker.getStageFileSinker()
+	sinkStart := time.Now()
 	for _, bat := range sinker.staged.inMemory {
 		if err := fSinker.Sink(ctx, bat); err != nil {
 			sinker.resetFileSinker()
 			return err
 		}
 	}
+	atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 	err := sinker.syncFileSinker(ctx, fSinker)
 	sinker.resetFileSinker()
 	return err
@@ -664,9 +666,11 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		return err
 	}
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
+		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
 			return nil, err
 		}
+		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
 		return data, nil
 	}
@@ -725,11 +729,13 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		return err
 	}
 
+	sinkStart := time.Now()
 	for _, bat := range sorted {
 		if err := fSinker.Sink(ctx, bat); err != nil {
 			return err
 		}
 	}
+	atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 	return nil
 }
 

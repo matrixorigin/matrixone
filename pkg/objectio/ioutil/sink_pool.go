@@ -45,7 +45,8 @@ type SinkPool struct {
 	sinkWg sync.WaitGroup
 	syncWg sync.WaitGroup
 
-	done chan struct{}
+	done    chan struct{}
+	closeMu sync.RWMutex // protects sinkChan from concurrent Send+Close
 }
 
 type poolSinkJob struct {
@@ -198,6 +199,34 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 		return err
 	}
 	r.pending.Add(1)
+
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
+
+	// Fast path: if the pool is already closed (p.done is closed), sinkChan
+	// may also be closed. Return immediately to avoid send-on-closed-channel.
+	// This check under RLock is safe because Close() cannot close sinkChan
+	// while any RLock is held.
+	select {
+	case <-p.done:
+		r.pending.Done()
+		freeBatches(job.data, job.mp)
+		return context.Canceled
+	default:
+	}
+
+	// Fast path: if the pipeline context is already cancelled, don't enqueue.
+	select {
+	case <-r.ctx.Done():
+		r.pending.Done()
+		freeBatches(job.data, job.mp)
+		if err := r.getError(); err != nil {
+			return err
+		}
+		return context.Cause(r.ctx)
+	default:
+	}
+
 	select {
 	case p.sinkChan <- job:
 		return nil
@@ -218,7 +247,11 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 // Close shuts down the pool, waiting for all workers to finish.
 func (p *SinkPool) Close() {
 	close(p.done)
+	// Wait for all in-flight Submit calls to finish before closing sinkChan,
+	// preventing send-on-closed-channel panics.
+	p.closeMu.Lock()
 	close(p.sinkChan)
+	p.closeMu.Unlock()
 	p.sinkWg.Wait()
 	close(p.syncChan)
 	p.syncWg.Wait()

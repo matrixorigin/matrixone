@@ -607,6 +607,48 @@ func TestSinker_WithPipelineFlush_Reset(t *testing.T) {
 	require.NoError(t, sinker.Close())
 }
 
+func TestSinkPool_SubmitCloseRace(t *testing.T) {
+	mp, err := mpool.NewMPool("test_race", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	typs := []types.Type{types.T_int32.ToType()}
+
+	// Run multiple iterations to increase chance of exposing races.
+	for iter := 0; iter < 50; iter++ {
+		pool := NewSinkPool(2, 1)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		r := &pipelineResult{ctx: ctx, cancel: cancel}
+
+		var submitWg sync.WaitGroup
+		const goroutines = 4
+
+		for g := 0; g < goroutines; g++ {
+			submitWg.Add(1)
+			go func() {
+				defer submitWg.Done()
+				for i := 0; i < 10; i++ {
+					bat := containers.MockBatch(typs, 5, 0, nil)
+					cnBat := containers.ToCNBatch(bat)
+					_ = pool.Submit(&poolSinkJob{
+						data:    []*batch.Batch{cnBat},
+						factory: mockFactory(nil, nil),
+						mp:      mp,
+						fs:      nil,
+						result:  r,
+					})
+				}
+			}()
+		}
+
+		// Close concurrently with submitters
+		pool.Close()
+		submitWg.Wait()
+		r.pending.Wait()
+		cancel()
+	}
+}
+
 func TestSinker_PipelineFlushKey(t *testing.T) {
 	ctx := context.Background()
 
