@@ -1246,3 +1246,23 @@ func TestRemoveFkeysRelationshipsSkipsDeletedParentTableIds(t *testing.T) {
 	s := &Scope{}
 	require.NoError(t, s.removeFkeysRelationships(c, "acc_test02"))
 }
+
+func TestIsMissingTableForFkCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	// ErrNoSuchTable should match
+	require.True(t, isMissingTableForFkCleanup(
+		moerr.NewNoSuchTable(ctx, "db1", "t1")))
+
+	// ErrInternal with "can not find table by id" should match
+	require.True(t, isMissingTableForFkCleanup(
+		moerr.NewInternalError(ctx, "can not find table by id : accountId: 0")))
+
+	// ErrInternal without the specific message should not match
+	require.False(t, isMissingTableForFkCleanup(
+		moerr.NewInternalError(ctx, "some other internal error")))
+
+	// A different error type should not match
+	require.False(t, isMissingTableForFkCleanup(
+		moerr.NewBadDB(ctx, "db1")))
+}
