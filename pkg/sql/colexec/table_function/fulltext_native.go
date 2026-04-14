@@ -150,6 +150,7 @@ func prepareNativeScan(
 	param fulltext.FullTextParserParam,
 ) (*nativePreparedScan, error) {
 	if len(param.Parts) == 0 {
+		logutil.Infof("[FTS-DEBUG] prepareNativeScan: Parts is empty")
 		return nil, nil
 	}
 
@@ -173,6 +174,7 @@ func prepareNativeScan(
 	}
 	tableDef := rel.GetTableDef(proc.Ctx)
 	if hasDatalinkPart(tableDef, param.Parts) {
+		logutil.Infof("[FTS-DEBUG] prepareNativeScan: hasDatalinkPart=true")
 		return nil, nil
 	}
 	objectFS, err := colexec.GetObjectFSFromProc(proc)
@@ -240,6 +242,8 @@ func prepareNativeScan(
 		totalTokens += tailSeg.TokenSum
 	}
 	if len(objects) == 0 {
+		logutil.Infof("[FTS-DEBUG] prepareNativeScan: objects=0, stats=%d, visible_remaining=%d, incomplete=%v, tailSeg=%v",
+			len(stats), len(visible), incomplete, tailSeg != nil)
 		return nil, nil
 	}
 
