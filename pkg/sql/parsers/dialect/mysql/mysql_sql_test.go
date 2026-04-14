@@ -92,6 +92,7 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.True(t, diffStmt.OutputOpt.Summary)
 	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
 
 	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
 	require.NoError(t, err)
@@ -101,6 +102,91 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+}
+
+func TestDataBranchPick(t *testing.T) {
+	// Single PK value list
+	stmt, err := ParseOne(context.TODO(), "data branch pick db1.src into db2.dst keys (1, 2, 3)", 1)
+	require.NoError(t, err)
+	pickStmt, ok := stmt.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.Equal(t, "src", string(pickStmt.SrcTable.ObjectName))
+	require.Equal(t, "dst", string(pickStmt.DstTable.ObjectName))
+	require.NotNil(t, pickStmt.Keys)
+	require.Equal(t, tree.PickKeysValues, pickStmt.Keys.Type)
+	require.Len(t, pickStmt.Keys.KeyExprs, 3)
+	require.Nil(t, pickStmt.ConflictOpt)
+
+	// With conflict option
+	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (1, 2) when conflict skip", 1)
+	require.NoError(t, err)
+	pickStmt, ok = stmt.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.NotNil(t, pickStmt.ConflictOpt)
+	require.Equal(t, tree.CONFLICT_SKIP, pickStmt.ConflictOpt.Opt)
+
+	// Subquery keys
+	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (select pk from t1 where id > 10)", 1)
+	require.NoError(t, err)
+	pickStmt, ok = stmt.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.NotNil(t, pickStmt.Keys)
+	require.Equal(t, tree.PickKeysSubquery, pickStmt.Keys.Type)
+	require.NotNil(t, pickStmt.Keys.Select)
+
+	// WHEN CONFLICT ACCEPT
+	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict accept", 1)
+	require.NoError(t, err)
+	pickStmt, ok = stmt.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.NotNil(t, pickStmt.ConflictOpt)
+	require.Equal(t, tree.CONFLICT_ACCEPT, pickStmt.ConflictOpt.Opt)
+
+	// WHEN CONFLICT FAIL
+	stmt, err = ParseOne(context.TODO(), "data branch pick src into dst keys (100) when conflict fail", 1)
+	require.NoError(t, err)
+	pickStmt, ok = stmt.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.NotNil(t, pickStmt.ConflictOpt)
+	require.Equal(t, tree.CONFLICT_FAIL, pickStmt.ConflictOpt.Opt)
 }
 
 var (

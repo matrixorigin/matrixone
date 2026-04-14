@@ -1,0 +1,202 @@
+drop database if exists test;
+create database test;
+use test;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1),(3,3),(5,5);
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,1),(2,2),(4,4);
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t2  ¦  INSERT  ¦  2  ¦  2  𝄀
+t1  ¦  INSERT  ¦  3  ¦  3  𝄀
+t2  ¦  INSERT  ¦  4  ¦  4  𝄀
+t1  ¦  INSERT  ¦  5  ¦  5
+data branch pick t2 into t1 keys(2);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+5  ¦  5
+data branch pick t2 into t1 keys(4);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t1  ¦  INSERT  ¦  3  ¦  3  𝄀
+t1  ¦  INSERT  ¦  5  ¦  5
+drop table t1;
+drop table t2;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2),(3,3);
+data branch create table t1 from t0;
+insert into t1 values (4,4);
+data branch create table t2 from t0;
+insert into t2 values (5,5),(6,6),(7,7);
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t1  ¦  INSERT  ¦  4  ¦  4  𝄀
+t2  ¦  INSERT  ¦  5  ¦  5  𝄀
+t2  ¦  INSERT  ¦  6  ¦  6  𝄀
+t2  ¦  INSERT  ¦  7  ¦  7
+data branch pick t2 into t1 keys(5,7);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+7  ¦  7
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t1  ¦  INSERT  ¦  4  ¦  4  𝄀
+t2  ¦  INSERT  ¦  6  ¦  6
+drop table t0;
+drop table t1;
+drop table t2;
+create table t1 (a int, b int, primary key(a));
+insert into t1 values (1,1),(2,2);
+data branch create table t2 from t1;
+insert into t2 values (3,3),(4,4),(5,5);
+data branch pick t2 into t1 keys(3);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t2  ¦  INSERT  ¦  4  ¦  4  𝄀
+t2  ¦  INSERT  ¦  5  ¦  5
+drop table t1;
+drop table t2;
+create table t2 (a int, b int, primary key(a));
+insert into t2 values (1,1),(2,2);
+data branch create table t1 from t2;
+insert into t1 values (3,3),(4,4);
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t1  ¦  INSERT  ¦  3  ¦  3  𝄀
+t1  ¦  INSERT  ¦  4  ¦  4
+data branch pick t2 into t1 keys(99);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+drop table t1;
+drop table t2;
+drop snapshot if exists sp_src;
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2),(3,3);
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 values (4,4),(5,5);
+create snapshot sp_src for account sys;
+update t2 set b = 50 where a = 5;
+insert into t2 values (6,6);
+data branch pick t2{snapshot=sp_src} into t1 keys(4,5,6);
+select * from t1 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
+drop snapshot sp_src;
+drop table t0;
+drop table t1;
+drop table t2;
+create table t0 (a int, b varchar(20), primary key(a));
+insert into t0 select *, 'base' from generate_series(1, 50) g;
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+insert into t2 select *, 'new' from generate_series(51, 100) g;
+update t2 set b = 'changed' where a <= 10;
+data branch pick t2 into t1 keys(55,60,65,70,75,80,85,90,95,100);
+select count(*) from t1;
+➤ count(*)[-5,64,0]  𝄀
+60
+data branch pick t2 into t1 keys(5);
+select * from t1 where a = 5;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+5  ¦  changed
+data branch diff t2 against t1;
+➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[12,0,0]  𝄀
+t2  ¦  UPDATE  ¦  1  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  2  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  3  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  4  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  6  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  7  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  8  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  9  ¦  changed  𝄀
+t2  ¦  UPDATE  ¦  10  ¦  changed  𝄀
+t2  ¦  INSERT  ¦  51  ¦  new  𝄀
+t2  ¦  INSERT  ¦  52  ¦  new  𝄀
+t2  ¦  INSERT  ¦  53  ¦  new  𝄀
+t2  ¦  INSERT  ¦  54  ¦  new  𝄀
+t2  ¦  INSERT  ¦  56  ¦  new  𝄀
+t2  ¦  INSERT  ¦  57  ¦  new  𝄀
+t2  ¦  INSERT  ¦  58  ¦  new  𝄀
+t2  ¦  INSERT  ¦  59  ¦  new  𝄀
+t2  ¦  INSERT  ¦  61  ¦  new  𝄀
+t2  ¦  INSERT  ¦  62  ¦  new  𝄀
+t2  ¦  INSERT  ¦  63  ¦  new  𝄀
+t2  ¦  INSERT  ¦  64  ¦  new  𝄀
+t2  ¦  INSERT  ¦  66  ¦  new  𝄀
+t2  ¦  INSERT  ¦  67  ¦  new  𝄀
+t2  ¦  INSERT  ¦  68  ¦  new  𝄀
+t2  ¦  INSERT  ¦  69  ¦  new  𝄀
+t2  ¦  INSERT  ¦  71  ¦  new  𝄀
+t2  ¦  INSERT  ¦  72  ¦  new  𝄀
+t2  ¦  INSERT  ¦  73  ¦  new  𝄀
+t2  ¦  INSERT  ¦  74  ¦  new  𝄀
+t2  ¦  INSERT  ¦  76  ¦  new  𝄀
+t2  ¦  INSERT  ¦  77  ¦  new  𝄀
+t2  ¦  INSERT  ¦  78  ¦  new  𝄀
+t2  ¦  INSERT  ¦  79  ¦  new  𝄀
+t2  ¦  INSERT  ¦  81  ¦  new  𝄀
+t2  ¦  INSERT  ¦  82  ¦  new  𝄀
+t2  ¦  INSERT  ¦  83  ¦  new  𝄀
+t2  ¦  INSERT  ¦  84  ¦  new  𝄀
+t2  ¦  INSERT  ¦  86  ¦  new  𝄀
+t2  ¦  INSERT  ¦  87  ¦  new  𝄀
+t2  ¦  INSERT  ¦  88  ¦  new  𝄀
+t2  ¦  INSERT  ¦  89  ¦  new  𝄀
+t2  ¦  INSERT  ¦  91  ¦  new  𝄀
+t2  ¦  INSERT  ¦  92  ¦  new  𝄀
+t2  ¦  INSERT  ¦  93  ¦  new  𝄀
+t2  ¦  INSERT  ¦  94  ¦  new  𝄀
+t2  ¦  INSERT  ¦  96  ¦  new  𝄀
+t2  ¦  INSERT  ¦  97  ¦  new  𝄀
+t2  ¦  INSERT  ¦  98  ¦  new  𝄀
+t2  ¦  INSERT  ¦  99  ¦  new
+drop table t0;
+drop table t1;
+drop table t2;
+drop snapshot if exists sp_freeze;
+create table t1 (a int, b int, primary key(a));
+insert into t1 select *, result * 10 from generate_series(1, 30) g;
+create snapshot sp_freeze for account sys;
+delete from t1 where a > 25;
+update t1 set b = 999 where a = 1;
+create table t2 (a int, b int, primary key(a));
+data branch pick t1{snapshot=sp_freeze} into t2 keys(1,10,20,30);
+select * from t2 order by a asc;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  𝄀
+10  ¦  100  𝄀
+20  ¦  200  𝄀
+30  ¦  300
+drop snapshot sp_freeze;
+drop table t1;
+drop table t2;
+drop database test;

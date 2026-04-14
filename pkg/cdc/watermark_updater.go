@@ -346,6 +346,7 @@ func NewCDCWatermarkUpdater(
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
 		committingBuffer:        make([]*UpdaterJob, 0, 100),
+		committingErrMsgBuffer:  make([]*UpdaterJob, 0, 100),
 		readKeysBuffer:          make(map[WatermarkKey]WatermarkResult, 100),
 	}
 	for _, opt := range opts {

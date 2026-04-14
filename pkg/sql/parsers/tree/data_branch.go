@@ -71,6 +71,16 @@ func init() {
 		reuse.DefaultOptions[DataBranchMerge](),
 	)
 
+	reuse.CreatePool[DataBranchPick](
+		func() *DataBranchPick {
+			return &DataBranchPick{}
+		},
+		func(c *DataBranchPick) {
+			c.reset()
+		},
+		reuse.DefaultOptions[DataBranchPick](),
+	)
+
 }
 
 type DataBranchType int
@@ -306,6 +316,7 @@ type DataBranchDiff struct {
 
 	TargetTable TableName
 	BaseTable   TableName
+	Columns     IdentifierList // optional column projection; nil means all columns
 	OutputOpt   *DiffOutputOpt
 }
 
@@ -394,4 +405,105 @@ func (s *DataBranchMerge) GetQueryType() string {
 
 func (s *DataBranchMerge) Free() {
 	reuse.Free[DataBranchMerge](s, nil)
+}
+
+// PickKeysType distinguishes how the user specified the key set.
+type PickKeysType int
+
+const (
+	PickKeysValues   PickKeysType = iota // KEYS (1, 2, 3) or KEYS ((1,'a'), (2,'b'))
+	PickKeysSubquery                     // KEYS (SELECT pk FROM ...)
+)
+
+// PickKeys represents the KEYS clause of a PICK statement.
+type PickKeys struct {
+	Type     PickKeysType
+	KeyExprs []Expr  // for PickKeysValues: literal expressions
+	Select   *Select // for PickKeysSubquery
+}
+
+// DataBranchPick represents:
+//
+//	DATA BRANCH PICK <src_table> INTO <dst_table>
+//	  [ KEYS ( <value_list> | <subquery> ) ]
+//	  [ BETWEEN SNAPSHOT sp1 AND sp2 ]
+//	  [WHEN CONFLICT FAIL|SKIP|ACCEPT]
+type DataBranchPick struct {
+	statementImpl
+	SrcTable    TableName
+	DstTable    TableName
+	Keys        *PickKeys
+	BetweenFrom string // snapshot name for BETWEEN SNAPSHOT sp1 AND sp2
+	BetweenTo   string // snapshot name for BETWEEN SNAPSHOT sp1 AND sp2
+	ConflictOpt *ConflictOpt
+}
+
+func (s *DataBranchPick) TypeName() string {
+	return "DataBranchPick"
+}
+
+func (s *DataBranchPick) reset() {
+	*s = DataBranchPick{}
+}
+
+func NewDataBranchPick() *DataBranchPick {
+	return reuse.Alloc[DataBranchPick](nil)
+}
+
+func (s *DataBranchPick) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (s *DataBranchPick) Format(ctx *FmtCtx) {
+	ctx.WriteString("data branch pick ")
+	s.SrcTable.Format(ctx)
+	ctx.WriteString(" into ")
+	s.DstTable.Format(ctx)
+	if s.BetweenFrom != "" && s.BetweenTo != "" {
+		ctx.WriteString(" between snapshot ")
+		ctx.WriteString(s.BetweenFrom)
+		ctx.WriteString(" and ")
+		ctx.WriteString(s.BetweenTo)
+	}
+	if s.Keys != nil {
+		ctx.WriteString(" keys (")
+		if s.Keys.Type == PickKeysSubquery && s.Keys.Select != nil {
+			s.Keys.Select.Format(ctx)
+		} else {
+			for i, e := range s.Keys.KeyExprs {
+				if i > 0 {
+					ctx.WriteString(", ")
+				}
+				e.Format(ctx)
+			}
+		}
+		ctx.WriteByte(')')
+	}
+	if s.ConflictOpt != nil {
+		ctx.WriteString(" when conflict ")
+		switch s.ConflictOpt.Opt {
+		case CONFLICT_FAIL:
+			ctx.WriteString("fail")
+		case CONFLICT_SKIP:
+			ctx.WriteString("skip")
+		case CONFLICT_ACCEPT:
+			ctx.WriteString("accept")
+		}
+	}
+}
+
+func (s *DataBranchPick) String() string {
+	return s.GetStatementType()
+}
+
+func (s *DataBranchPick) GetStatementType() string {
+	return "branch pick"
+}
+
+func (s *DataBranchPick) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *DataBranchPick) Free() {
+	reuse.Free[DataBranchPick](s, nil)
 }
