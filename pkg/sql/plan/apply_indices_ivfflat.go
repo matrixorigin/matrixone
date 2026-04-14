@@ -194,6 +194,15 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+		return nil, nil
+	}
+
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
 	// Check if vector pre-filter pushdown should be enabled by default
 	// This session variable changes the default vector search behavior
 	var enableVectorPrefilterByDefault bool
@@ -498,38 +507,31 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// When there are filters, over-fetch to get more candidates
 	// This ensures we have enough candidates after filtering
 	limitExpr := DeepCopyExpr(limit)
-	if len(scanNode.FilterList) > 0 {
+	if len(scanNode.FilterList) > 0 && !ivfCtx.pushdownEnabled {
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 
-			// Choose over-fetch strategy based on mode
-			var overFetchFactor float64
-			if ivfCtx.isAutoMode {
-				// Auto mode: use enhanced over-fetch strategy
-				overFetchFactor = calculateAutoModeOverFetchFactor(
-					originalLimit,
-					scanNode.Stats,
-				)
+			// Filtered post mode needs a larger candidate budget than the historical
+			// default, but we keep it as fixed buckets so the plan is predictable.
+			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 
-				// Log auto mode over-fetch calculation
+			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+
+			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
 					originalLimit, overFetchFactor, len(scanNode.FilterList),
 				)
-			} else {
-				// Non-auto mode: use conservative default strategy
-				overFetchFactor = calculatePostFilterOverFetchFactor(originalLimit)
-			}
-
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
-
-			// Log final over-fetch result for auto mode
-			if ivfCtx.isAutoMode {
 				logutil.Debugf(
 					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
 					originalLimit, newLimit,
+				)
+			} else {
+				logutil.Debugf(
+					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
+					originalLimit, overFetchFactor, len(scanNode.FilterList), newLimit,
 				)
 			}
 

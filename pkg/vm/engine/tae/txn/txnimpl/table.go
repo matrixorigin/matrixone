@@ -21,9 +21,10 @@ import (
 	"runtime/trace"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -51,9 +52,17 @@ import (
 )
 
 const (
-	TransferSinkerBufferSize          = common.Const1MBytes * 5
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
+
+// debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
+// TransferDeletes is skipped during the Freeze phase so that the
+// PrePrepare phase is the only transfer pass. This makes vector
+// reallocation bugs observable in a single-pass transfer.
+var debugSkipFreezePhaseTransfer atomic.Bool
+
+func EnableDebugSkipFreezePhaseTransfer()  { debugSkipFreezePhaseTransfer.Store(true) }
+func DisableDebugSkipFreezePhaseTransfer() { debugSkipFreezePhaseTransfer.Store(false) }
 
 type txnEntries struct {
 	entries []txnif.TxnEntry
@@ -139,6 +148,9 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 func (tbl *txnTable) PrePreareTransfer(
 	ctx context.Context, phase string, ts types.TS,
 ) (err error) {
+	if debugSkipFreezePhaseTransfer.Load() && phase == txnif.FreezePhase {
+		return
+	}
 	err = tbl.TransferDeletes(ctx, ts, phase)
 	tbl.transferedTS = ts
 	return
@@ -367,7 +379,6 @@ func (tbl *txnTable) TransferDeletes(
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs,
-						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
 						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
@@ -404,8 +415,9 @@ func (tbl *txnTable) TransferDeletes(
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
 	pkVec := deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
+	rowidVec := deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr)
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](
-		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		rowidVec.GetDownstreamVector(),
 	)
 	var pkType *types.Type
 	for i, end := 0, len(rowids); i < end; i++ {
@@ -445,6 +457,12 @@ func (tbl *txnTable) TransferDeletes(
 		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
+		// TransferDeleteRows may append to the same anode, which can
+		// trigger mpool.Grow and reallocate the underlying buffer.
+		// Refresh the rowids slice to avoid reading freed memory.
+		rowids = vector.MustFixedColNoTypeCheck[types.Rowid](
+			rowidVec.GetDownstreamVector(),
+		)
 	}
 	if transferd.IsEmpty() {
 		return

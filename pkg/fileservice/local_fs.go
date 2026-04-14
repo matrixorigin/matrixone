@@ -63,6 +63,11 @@ type LocalFS struct {
 
 var _ FileService = new(LocalFS)
 
+// RootPath returns the absolute filesystem path of this LocalFS root directory.
+func (l *LocalFS) RootPath() string {
+	return l.rootPath
+}
+
 func NewLocalFS(
 	ctx context.Context,
 	name string,

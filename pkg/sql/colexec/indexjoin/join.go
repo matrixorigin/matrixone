@@ -42,7 +42,7 @@ func (indexJoin *IndexJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if indexJoin.ctr.buf == nil {
-		indexJoin.ctr.buf = batch.NewWithSize(len(indexJoin.ResultCols))
+		indexJoin.ctr.buf = batch.NewOffHeapWithSize(len(indexJoin.ResultCols))
 	}
 	return err
 }
@@ -75,7 +75,7 @@ func (indexJoin *IndexJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, pos := range ap.ResultCols {
 				srcVec := bat.Vecs[pos]
 				if ctr.buf.Vecs[i] == nil {
-					ctr.buf.Vecs[i] = vector.NewVec(*srcVec.GetType())
+					ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*srcVec.GetType())
 				}
 				if err = vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(ctr.buf.Vecs[i], srcVec); err != nil {
 					return result, err

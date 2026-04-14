@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -286,8 +287,19 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	oldServerConn := t.mu.serverConn
+
+	// Flush and preserve bufDst before closing old connection.
+	// bufDst wraps the client conn (unchanged), so it stays valid.
+	var savedBufDst *bufio.Writer
+	if oldServerConn != nil && oldServerConn.msgBuf != nil && oldServerConn.msgBuf.bufDst != nil {
+		_ = oldServerConn.flushBufDst()
+		savedBufDst = oldServerConn.msgBuf.bufDst
+		oldServerConn.msgBuf.bufDst = nil // detach before close
+	}
+
 	// close the old ones.
-	_ = t.mu.serverConn.Close()
+	_ = oldServerConn.Close()
 	_ = t.mu.sc.Close()
 
 	// set the new ones.
@@ -297,6 +309,10 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
 		t.mu.scp.src = t.mu.serverConn
+		// Transfer the write buffer to the new server conn's msgBuf.
+		if savedBufDst != nil {
+			t.mu.serverConn.msgBuf.bufDst = savedBufDst
+		}
 	} else {
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
@@ -571,6 +587,12 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 		tun:    t,
 	}
 	p.mu.cond = sync.NewCond(&p.mu)
+	// Enable write batching for the server-to-client direction.
+	// Result sets flow s2c and generate many small write syscalls;
+	// bufDst accumulates them and flushes when the read buffer drains.
+	if name == pipeServerToClient {
+		src.msgBuf.bufDst = bufio.NewWriterSize(dst.Conn, writeBufLen)
+	}
 	return p
 }
 
@@ -594,6 +616,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		return false, nil
 	}
 	finish := func() {
+		// Best-effort flush of buffered writes before shutting down.
+		if p.src != nil && p.src.msgBuf != nil {
+			_ = p.src.flushBufDst()
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if e != nil {

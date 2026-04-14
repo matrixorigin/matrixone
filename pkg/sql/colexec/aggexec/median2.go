@@ -88,8 +88,17 @@ func (exec *medianExec) SetExtraInformation(partialResult any, groupIndex int) e
 	return nil
 }
 
-func (exec *medianExec) Flush() ([]*vector.Vector, error) {
+func (exec *medianExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
 	for i, st := range exec.state {
 		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {

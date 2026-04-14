@@ -1640,3 +1640,135 @@ func TestGlobalStats_ShouldEnqueue(t *testing.T) {
 		gs.updatingMu.Unlock()
 	})
 }
+
+func TestCleanMemoryTableWithTable(t *testing.T) {
+	t.Run("removes_partition_and_stats", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			dbId, tblId := uint64(100), uint64(1001)
+
+			// Insert a fake partition (nil is valid; delete works on nil values)
+			e.Lock()
+			e.partitions[[2]uint64{dbId, tblId}] = nil
+			e.Unlock()
+
+			// Insert a stats entry for the same table
+			k := statsinfo.StatsInfoKey{DatabaseID: dbId, TableID: tblId, TableName: "t"}
+			e.globalStats.mu.Lock()
+			e.globalStats.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			e.globalStats.mu.Unlock()
+
+			// Call cleanMemoryTableWithTable
+			e.cleanMemoryTableWithTable(dbId, tblId)
+
+			// Verify partition removed
+			e.Lock()
+			_, partOk := e.partitions[[2]uint64{dbId, tblId}]
+			e.Unlock()
+			assert.False(t, partOk, "partition should be removed")
+
+			// Verify stats entry removed via RemoveTid
+			e.globalStats.mu.Lock()
+			_, statsOk := e.globalStats.mu.statsInfoMap[k]
+			e.globalStats.mu.Unlock()
+			assert.False(t, statsOk, "stats entry should be removed")
+		})
+	})
+
+	t.Run("no_panic_on_missing_partition", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			// Calling with non-existent partition should not panic
+			e.cleanMemoryTableWithTable(999, 888)
+		})
+	})
+}
+
+func TestRemoveTid(t *testing.T) {
+	t.Run("remove_existing_entries", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			// Insert entries for two tables
+			k1 := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+			k2 := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1_alt"}
+			k3 := statsinfo.StatsInfoKey{DatabaseID: 200, TableID: 2001, TableName: "t2"}
+
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k1] = plan2.NewStatsInfo()
+			gs.mu.statsInfoMap[k2] = nil // simulate failed update
+			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
+			gs.mu.Unlock()
+
+			// Remove table 1001 entries
+			gs.RemoveTid(1001)
+
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			_, ok1 := gs.mu.statsInfoMap[k1]
+			_, ok2 := gs.mu.statsInfoMap[k2]
+			_, ok3 := gs.mu.statsInfoMap[k3]
+			assert.False(t, ok1, "k1 should be removed")
+			assert.False(t, ok2, "k2 should be removed")
+			assert.True(t, ok3, "k3 should not be removed")
+		})
+	})
+
+	t.Run("remove_nonexistent_table", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			k := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001}
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			gs.mu.Unlock()
+
+			// Remove a non-existent table — should not panic
+			gs.RemoveTid(9999)
+
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			_, ok := gs.mu.statsInfoMap[k]
+			assert.True(t, ok, "existing entry should remain")
+		})
+	})
+
+	t.Run("remove_wakes_waiting_goroutines", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			// Set up: goroutine will cond.Wait() on a key, RemoveTid should broadcast
+			targetKey := statsinfo.StatsInfoKey{TableID: 42, DatabaseID: 1}
+
+			woken := make(chan bool, 1)
+			gs.mu.Lock()
+			go func() {
+				gs.mu.Lock()
+				defer gs.mu.Unlock()
+				// Block on cond.Wait() like production GlobalStats.Get does
+				for {
+					if _, ok := gs.mu.statsInfoMap[targetKey]; ok {
+						break
+					}
+					// cond.Wait releases the lock and waits for Broadcast
+					gs.mu.cond.Wait()
+					// After Broadcast, check if our condition changed
+					break
+				}
+				woken <- true
+			}()
+			gs.mu.Unlock()
+
+			// Small sleep to let goroutine enter cond.Wait()
+			time.Sleep(50 * time.Millisecond)
+
+			// RemoveTid broadcasts to cond, which should wake the waiting goroutine
+			gs.RemoveTid(999)
+
+			select {
+			case <-woken:
+				// ok — goroutine was woken by Broadcast
+			case <-time.After(2 * time.Second):
+				t.Fatal("RemoveTid did not wake goroutine blocked on cond.Wait()")
+			}
+		})
+	})
+}

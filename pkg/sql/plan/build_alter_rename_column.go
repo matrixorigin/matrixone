@@ -86,6 +86,11 @@ func updateRenameColumnInTableDef(
 		return nil, nil
 	}
 
+	// Renaming a referenced column would leave dependent generated expressions stale.
+	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+		return nil, err
+	}
+
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
 		return nil, err

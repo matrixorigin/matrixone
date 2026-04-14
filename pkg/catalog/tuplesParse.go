@@ -332,6 +332,12 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 			return nil, err
 		}
 	}
+	if row[MO_COLUMNS_ATT_HAS_GENERATED_IDX].(int8) == 1 {
+		attr.GeneratedCol = new(plan.GeneratedCol)
+		if err := types.Decode(row[MO_COLUMNS_ATT_GENERATED_IDX].([]byte), attr.GeneratedCol); err != nil {
+			return nil, err
+		}
+	}
 	attr.Comment = string(row[MO_COLUMNS_ATT_COMMENT_IDX].([]byte))
 	attr.IsHidden = row[MO_COLUMNS_ATT_IS_HIDDEN_IDX].(int8) == 1
 	attr.AutoIncrement = row[MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8) == 1

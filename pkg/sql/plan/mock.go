@@ -21,12 +21,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -408,6 +410,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
 			{"attr_seqnum", types.T_int8, false, 0, 0},
 			{"attr_enum", types.T_varchar, false, 2048, 0},
+			{"attr_has_generated", types.T_int8, false, 0, 0},
+			{"attr_generated", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -688,6 +692,107 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks:    []int{0},
 		outcnt: 4,
 	}
+
+	/*
+		create table fake_pk_t (
+			a int,
+			b varchar(64),
+			unique key(a)
+		);
+		-- table with no real PK, only a unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{2}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-t-uk-a",
+				parts:     []string{"a"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-t-uk-a"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table self_ref (
+			id int primary key,
+			parent_id int,
+			name varchar(64),
+			foreign key (parent_id) references self_ref(id) on delete restrict on update restrict
+		);
+		-- self-referencing FK table for testing REPLACE FK constraint checks
+	*/
+	constraintTestSchema["self_ref"] = &Schema{
+		tblId: 99999,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},            // ColId=0
+			{"parent_id", types.T_int32, true, 32, 0},     // ColId=1
+			{"name", types.T_varchar, true, 64, 0},        // ColId=2
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0}, // ColId=3
+		},
+		pks: []int{0}, // primary key "id"
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_parent",
+				Cols:        []uint64{1}, // parent_id (ColId=1)
+				ForeignTbl:  0,           // 0 = self-referencing
+				ForeignCols: []uint64{0}, // id (ColId=0)
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 10,
+	}
+
+	/*
+		create table self_ref_cascade (
+			id int primary key,
+			parent_id int,
+			foreign key (parent_id) references self_ref_cascade(id) on delete cascade
+		);
+		-- self-referencing FK with CASCADE (should NOT generate assert checks)
+	*/
+	constraintTestSchema["self_ref_cascade"] = &Schema{
+		tblId: 99998,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_id", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 10,
+	}
+
 	/*
 		create table products (
 			pid int not null,
@@ -1008,6 +1113,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
 			for idx, col := range table.cols {
+				isFakePK := col.Name == catalog.FakePrimaryKeyColName
 				colDefs = append(colDefs, &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
@@ -1015,11 +1121,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
+						AutoIncr:    isFakePK,
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,
 					Primary:    idx == 0,
-					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
+					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName || isFakePK,
 					Pkidx:      1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
@@ -1274,7 +1381,14 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
-	return testutil.NewProc(nil)
+	proc := testutil.NewProc(nil)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+	)
+	return proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

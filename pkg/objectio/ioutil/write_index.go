@@ -66,7 +66,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector,
 		return
 	}
 	if b.sks[idx] == nil {
-		b.sks[idx] = hll.New()
+		b.sks[idx] = hll.NewNoSparse()
 	}
 	if vec.GetDownstreamVector().IsConstNull() {
 		return

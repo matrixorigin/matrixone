@@ -213,6 +213,10 @@ func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	return w.sinker.Write(ctx, bat)
 }
 
+func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
+	return w.sinker.WriteOwned(ctx, bat)
+}
+
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
@@ -238,6 +242,20 @@ func (w *CNS3Writer) Close() (err error) {
 	}
 
 	return nil
+}
+
+// Reset discards any buffered or staged data accumulated since the last
+// Sync, without tearing down the underlying sinker. Call this when the
+// enclosing pipeline execution is being reset so that stale data is not
+// carried into the next execution. The sinker's buffer pool and arena
+// are kept alive for efficient reuse.
+func (w *CNS3Writer) Reset() {
+	if w.sinker != nil {
+		w.sinker.Reset()
+	}
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.CleanOnlyData()
+	}
 }
 
 func ExpandObjectStatsToBatch(

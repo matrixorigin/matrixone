@@ -912,11 +912,16 @@ func (exec *valueWindowExec) Size() int64 {
 	return size
 }
 
-func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 	// LAG returns the value from the previous row in the partition
 	// For LAG with default offset=1, we want the value at position (currentRowPosition - 1)
 
 	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -960,11 +965,16 @@ func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 	// LEAD returns the value from the next row in the partition
 	// For LEAD with default offset=1, we want the value at position (currentRowPosition + 1)
 
 	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -1008,10 +1018,15 @@ func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error) {
 	// FIRST_VALUE returns the first value in the window frame
 
 	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for _, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
@@ -1037,10 +1052,15 @@ func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
 	return []*vector.Vector{result}, nil
 }
 
-func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
+func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error) {
 	// LAST_VALUE returns the last value in the window frame
 
 	result := vector.NewOffHeapVecWithType(exec.retType)
+	defer func() {
+		if retErr != nil {
+			result.Free(exec.mp)
+		}
+	}()
 	for _, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL

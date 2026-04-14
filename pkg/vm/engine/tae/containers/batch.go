@@ -20,7 +20,7 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -238,6 +238,10 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
+	if bat.DataRelease != nil {
+		bat.DataRelease()
+		bat.DataRelease = nil
+	}
 	for i, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Close()

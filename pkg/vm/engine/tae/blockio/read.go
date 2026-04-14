@@ -189,7 +189,7 @@ func BlockDataReadNoCopy(
 			outputBat.Vecs[outputColPos] = &cacheVectors[loadedColumnPos]
 			loadedColumnPos++
 		} else {
-			outputBat.Vecs[outputColPos] = vector.NewVec(objectio.RowidType)
+			outputBat.Vecs[outputColPos] = vector.NewOffHeapVecWithType(objectio.RowidType)
 			if err = buildRowidColumn(
 				info, outputBat.Vecs[phyAddrColumnPos], nil, mp,
 			); err != nil {
