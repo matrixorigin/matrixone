@@ -104,12 +104,20 @@ type FullTextParserParam struct {
 	Parser         string   `json:"parser"`
 	Implementation string   `json:"implementation,omitempty"`
 	Parts          []string `json:"parts,omitempty"`
+	NativeOnlyMode bool     `json:"native_only,omitempty"`
 }
 
 const FullTextImplementationNative = "native"
 
 func (p FullTextParserParam) UseNative() bool {
 	return strings.EqualFold(p.Implementation, FullTextImplementationNative)
+}
+
+// NativeOnly returns true when the native sidecar path should be the sole
+// query and DML path, completely bypassing v1 hidden-table maintenance and
+// fallback queries.
+func (p FullTextParserParam) NativeOnly() bool {
+	return p.NativeOnlyMode && p.UseNative()
 }
 
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text

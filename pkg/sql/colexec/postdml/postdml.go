@@ -113,6 +113,19 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 	if postdml.PostDmlCtx.FullText != nil {
 		ftctx := postdml.PostDmlCtx.FullText
 
+		// In native-only mode, skip v1 hidden-table maintenance entirely.
+		// UPDATE/DELETE correctness is handled by MO-native tombstones;
+		// INSERT visibility is handled by sidecar generation on flush.
+		var param fulltext.FullTextParserParam
+		if ftctx.AlgoParams != "" {
+			if err := json.Unmarshal([]byte(ftctx.AlgoParams), &param); err != nil {
+				return err
+			}
+		}
+		if param.NativeOnly() {
+			return nil
+		}
+
 		dbname := postdml.PostDmlCtx.Ref.GetSchemaName()
 
 		alias := "src"
@@ -123,13 +136,6 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		var parts []string
 		for _, p := range ftctx.Parts {
 			parts = append(parts, fmt.Sprintf("%s.%s", alias, p))
-		}
-
-		var param fulltext.FullTextParserParam
-		if ftctx.AlgoParams != "" {
-			if err := json.Unmarshal([]byte(ftctx.AlgoParams), &param); err != nil {
-				return err
-			}
 		}
 
 		if postdml.PostDmlCtx.IsDelete {

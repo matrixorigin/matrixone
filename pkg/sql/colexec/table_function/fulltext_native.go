@@ -86,6 +86,9 @@ func fulltextIndexMatchNative(
 	if err != nil || scan == nil {
 		return false, err
 	}
+	if u.param.NativeOnly() {
+		scan.complete = true
+	}
 	if scan.complete {
 		applyNativeSegmentStats(u, s, scan)
 	}

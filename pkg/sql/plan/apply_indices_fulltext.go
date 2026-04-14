@@ -487,6 +487,7 @@ func (builder *QueryBuilder) buildFullTextScanParams(scanNode *plan.Node, idxdef
 		}
 	}
 	param.Implementation = fulltext.FullTextImplementationNative
+	param.NativeOnlyMode = true
 	param.Parts = append(param.Parts[:0], idxdef.Parts...)
 	buf, err := sonic.Marshal(param)
 	if err != nil {
