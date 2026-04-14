@@ -132,4 +132,8 @@ create external table extable1(n1 int)infile{"filepath"='$resources/external_tab
 desc extable1;
 show create table extable1;
 -----------------------------------------------------------------------------------------------------
+CREATE TABLE t_check (id BIGINT NOT NULL AUTO_INCREMENT, c_age INT NULL, c_score DECIMAL(5,2) NULL, PRIMARY KEY (id), CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)), CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+show create table t_check;
+-----------------------------------------------------------------------------------------------------
 drop database if exists db1;
