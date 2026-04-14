@@ -145,6 +145,32 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 	}
 }
 
+func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
+	const sql = `CREATE TABLE t_numeric_types (
+		id BIGINT NOT NULL AUTO_INCREMENT,
+		c_age INT NULL,
+		c_score DECIMAL(5,2) NULL,
+		PRIMARY KEY (id),
+		CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)),
+		CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		t.Fatalf("build create table failed: %+v", err)
+	}
+	tableDef.Createsql = sql
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	if err != nil {
+		t.Fatalf("construct show create failed: %+v", err)
+	}
+	if showSQL != sql {
+		t.Fatalf("expected stored create sql to be reused\nexpected: %s\nactual: %s", sql, showSQL)
+	}
+}
+
 func Test_SingleShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string

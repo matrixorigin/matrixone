@@ -43,6 +43,18 @@ func ConstructCreateTableSQL(
 	var err error
 	var createStr string
 
+	// CHECK constraints are preserved in rel_createsql, but the resolved table
+	// metadata does not currently reconstruct them back into tableDef.Checks.
+	// Prefer the stored DDL for SHOW CREATE TABLE so named CHECK constraints are
+	// not silently dropped from the output.
+	if !useDbName && shouldUseStoredCreateSQL(tableDef) {
+		if ctx == nil {
+			return tableDef.Createsql, nil, nil
+		}
+		stmt, err := getRewriteSQLStmt(ctx, tableDef.Createsql)
+		return tableDef.Createsql, stmt, err
+	}
+
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
 	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
@@ -581,6 +593,15 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, createStr)
 	}
 	return createStr, stmt, err
+}
+
+func shouldUseStoredCreateSQL(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
+		return false
+	}
+
+	createSQLUpper := strings.ToUpper(tableDef.Createsql)
+	return strings.Contains(createSQLUpper, " CHECK (") || strings.Contains(createSQLUpper, " CONSTRAINT ")
 }
 
 // FormatColType Get the formatted description of the column type.
