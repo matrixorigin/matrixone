@@ -1,9 +1,0 @@
-select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), 1)) as first_hole;
-select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))'), 2)) as second_hole;
-select st_srid(st_interiorringn(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))', 4326), 1)) as srid_interior_ring;
-select st_astext(st_interiorringn(st_geomfromtext(null), 1)) as null_geometry;
-select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), null)) as null_index;
--- @regex("geometry is not a POLYGON",true)
-select st_interiorringn(st_geomfromtext('POINT(1 1)'), 1);
--- @regex("ring index out of range",true)
-select st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), 2);

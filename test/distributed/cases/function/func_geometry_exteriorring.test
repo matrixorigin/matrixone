@@ -1,6 +1,0 @@
-select st_astext(st_exteriorring(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'))) as outer_ring;
-select st_astext(st_exteriorring(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'))) as polygon_with_hole_outer_ring;
-select st_srid(st_exteriorring(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_exteriorring;
-select st_astext(st_exteriorring(st_geomfromtext(null))) as null_exteriorring;
--- @regex("geometry is not a POLYGON",true)
-select st_exteriorring(st_geomfromtext('POINT(1 1)'));

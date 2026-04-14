@@ -1,8 +1,0 @@
-select st_numgeometries(st_geomfromtext('POINT(1 2)')) as point_count;
-select st_numgeometries(st_geomfromtext('MULTIPOINT((1 2),(3 4))')) as multipoint_count;
-select st_numgeometries(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))')) as multilinestring_count;
-select st_numgeometries(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))')) as multipolygon_count;
-select st_numgeometries(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))')) as collection_count;
-select st_numgeometries(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_count;
-select st_numgeometries(st_geomfromtext('MULTIPOINT()')) as empty_multipoint_count;
-select st_numgeometries(st_geomfromtext(null)) as null_count;

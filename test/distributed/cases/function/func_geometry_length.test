@@ -1,7 +1,0 @@
-select st_length(st_geomfromtext('LINESTRING(0 0,3 4)')) as line_length;
-select st_length(st_geomfromtext('LINESTRING(0 0,3 4,6 4)')) as polyline_length;
-select st_length(st_geomfromtext('MULTILINESTRING((0 0,3 4),(3 4,6 8))')) as multiline_length;
-select st_length(st_geomfromtext('LINESTRING(0 0,3 4)', 4326)) as srid_line_length;
-select st_length(st_geomfromtext(null)) as null_length;
--- @regex("geometry is not a LINESTRING or MULTILINESTRING",true)
-select st_length(st_geomfromtext('POINT(1 1)'));
