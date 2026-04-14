@@ -303,11 +303,16 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	rtprobe := probe
 	queries := [][]T{query}
 	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
+	logutil.Infof("IVFFLAT START: Find Centroids probe=%d query_dim=%d", rtprobe, len(query))
+	logutil.Infof("IVFFLAT START: Centroid Search probe=%d", rtprobe)
 	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
 	if err != nil {
 		return nil, err
 	}
-	return keys.([]int64), nil
+	centroidIDs := keys.([]int64)
+	logutil.Infof("IVFFLAT END: Centroid Search probe=%d centroid_count=%d", rtprobe, len(centroidIDs))
+	logutil.Infof("IVFFLAT END: Find Centroids probe=%d centroid_count=%d", rtprobe, len(centroidIDs))
+	return centroidIDs, nil
 }
 
 /*
@@ -407,10 +412,12 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}()
 
 	if len(idx.BloomFilters) == 0 {
+		logutil.Infof("IVFFLAT START: Build Runtime BloomFilter centroid_count=%d mode=sql", len(centroids_ids))
 
 		sum := idx.getCentroidsSum(centroids_ids, idxcfg.Ivfflat.Lists)
 		if uint64(keyvec.Length()) < sum {
 			// unique join keys size is smaller than entries in centroids
+			logutil.Infof("IVFFLAT END: Build Runtime BloomFilter centroid_count=%d mode=skip_unique_key", len(centroids_ids))
 			return buildBloomFilterWithUniqueJoinKeys(keyvec)
 		}
 
@@ -454,9 +461,11 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		for _, bat := range res.Batches {
 			bf.AddVector(bat.Vecs[0])
 		}
+		logutil.Infof("IVFFLAT END: Build Runtime BloomFilter centroid_count=%d mode=sql entry_rows=%d", len(centroids_ids), rowCount)
 
 	} else {
 		// use preload bloomfilter
+		logutil.Infof("IVFFLAT START: Build Runtime BloomFilter centroid_count=%d mode=merge_preload", len(centroids_ids))
 		bf = bloomfilter.NewCBloomFilterWithSeed(idx.Meta.Nbits, idx.Meta.K, idx.Meta.Seed)
 		for _, c := range centroids_ids {
 			err = bf.Merge(idx.BloomFilters[c])
@@ -464,6 +473,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 				return
 			}
 		}
+		logutil.Infof("IVFFLAT END: Build Runtime BloomFilter centroid_count=%d mode=merge_preload", len(centroids_ids))
 	}
 
 	exists := bf.TestVector(keyvec, nil)
@@ -524,6 +534,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	if err != nil {
 		return
 	}
+	logutil.Infof("IVFFLAT SEARCH: Selected centroids count=%d limit=%d probe=%d", len(centroids_ids), rt.Limit, rt.Probe)
 
 	var instr string
 	for i, c := range centroids_ids {
@@ -589,6 +600,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//os.Stderr.WriteString(sql)
 	//os.Stderr.WriteString("\n")
 
+	queryPath := "centroid"
+	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+		queryPath = "exact_pk"
+	}
+	logutil.Infof("IVFFLAT START: Search Entries path=%s centroid_count=%d limit=%d", queryPath, len(centroids_ids), rt.Limit)
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -625,6 +641,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			distances = append(distances, dist)
 		}
 	}
+	logutil.Infof("IVFFLAT END: Search Entries path=%s centroid_count=%d result_rows=%d", queryPath, len(centroids_ids), rowCount)
 
 	return resid, distances, nil
 }
