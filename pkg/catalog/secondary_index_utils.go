@@ -260,7 +260,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 			}
 		case tree.INDEX_TYPE_HNSW:
-			if idx.IndexOption.HnswM < 0 {
+			if idx.IndexOption.AlgoParamM < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
 			}
 			if idx.IndexOption.HnswEfConstruction < 0 {
@@ -271,8 +271,8 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			}
 
 			// hnswM or HnswEfConstruction == 0, use usearch default value
-			if idx.IndexOption.HnswM > 0 {
-				res[HnswM] = strconv.FormatInt(idx.IndexOption.HnswM, 10)
+			if idx.IndexOption.AlgoParamM > 0 {
+				res[HnswM] = strconv.FormatInt(idx.IndexOption.AlgoParamM, 10)
 			}
 			if idx.IndexOption.HnswEfConstruction > 0 {
 				res[HnswEfConstruction] = strconv.FormatInt(idx.IndexOption.HnswEfConstruction, 10)
