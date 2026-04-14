@@ -98,7 +98,7 @@ func fulltextIndexMatchNative(
 		applyNativeSegmentStats(u, s, scan)
 	}
 
-	if s.Mode == int64(tree.FULLTEXT_NL) {
+	if s.Mode == int64(tree.FULLTEXT_DEFAULT) || s.Mode == int64(tree.FULLTEXT_NL) {
 		return scan.complete, populatePhraseCompat(u, proc, s, scan, s.Pattern)
 	}
 	if len(s.Pattern) == 1 && s.Pattern[0].Operator == fulltext.PHRASE {
@@ -109,7 +109,7 @@ func fulltextIndexMatchNative(
 
 func nativeQuerySupported(s *fulltext.SearchAccum) bool {
 	switch s.Mode {
-	case int64(tree.FULLTEXT_NL):
+	case int64(tree.FULLTEXT_DEFAULT), int64(tree.FULLTEXT_NL):
 		for _, p := range s.Pattern {
 			if p.Operator != fulltext.TEXT {
 				return false
