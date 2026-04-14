@@ -85,10 +85,12 @@ func (idx *CagraModel[T]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.C
 		err = moerr.NewInternalErrorNoCtx("CagraModel: unsupported metric type")
 		return
 	}
-	bp = cuvs.CagraBuildParams{
-		IntermediateGraphDegree: cfg.IntermediateGraphDegree,
-		GraphDegree:             cfg.GraphDegree,
-		AttachDatasetOnBuild:    true,
+	bp = cuvs.DefaultCagraBuildParams()
+	if cfg.IntermediateGraphDegree > 0 {
+		bp.IntermediateGraphDegree = cfg.IntermediateGraphDegree
+	}
+	if cfg.GraphDegree > 0 {
+		bp.GraphDegree = cfg.GraphDegree
 	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
