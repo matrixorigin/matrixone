@@ -2627,3 +2627,117 @@ func emptySliceForCastTarget(oid types.T) any {
 		return []int64{}
 	}
 }
+
+// TestDecimal64ToDecimal128FastPaths tests the optimized decimal64→128 cast
+// paths added in the decimal-perf PR.
+func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Negative decimal64 value (sign extension matters).
+	neg100 := types.Decimal64(^uint64(99)) // -100
+
+	cases := []tcTemp{
+		{
+			info: "d64→d128 same-scale with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{100, 200, 300, 400},
+					[]bool{false, true, false, true}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 2),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 2), false,
+				[]types.Decimal128{{B0_63: 100}, {}, {B0_63: 300}, {}},
+				[]bool{false, true, false, true}),
+		},
+		{
+			info: "d64→d128 same-scale negative values with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{neg100, 50},
+					[]bool{false, false}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{B0_63: ^uint64(99), B64_127: ^uint64(0)}, {B0_63: 50}},
+				nil),
+		},
+		{
+			info: "d64→d128 diff-scale no nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{12345},
+					nil),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{B0_63: 1234500}},
+				nil),
+		},
+		{
+			info: "d64→d128 diff-scale with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{12345, 67890},
+					[]bool{true, false}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{}, {B0_63: 6789000}},
+				[]bool{true, false}),
+		},
+		{
+			info: "d64→d128 narrowing width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{123456789},
+					nil),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 10, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 10, 4), false,
+				[]types.Decimal128{{B0_63: 123456789}},
+				nil),
+		},
+		{
+			info: "d64→d128 narrowing width with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{123456789, 987654321},
+					[]bool{false, true}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 10, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 10, 4), false,
+				[]types.Decimal128{{B0_63: 123456789}, {}},
+				[]bool{false, true}),
+		},
+	}
+
+	for _, tc := range cases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
