@@ -81,6 +81,22 @@ MO_DATA_DIR=/path/to/mo-data \
 bash scripts/test_fulltext_single_node.sh
 ```
 
+如果要验证**默认配置**是否已经足够支持新版 FULLTEXT（不额外 `set global experimental_fulltext_index=1`，并且建索引时省略 `WITH PARSER`），可以显式这样运行：
+
+```bash
+AUTO_ENABLE_FULLTEXT_INDEX=0 \
+TEXT_PARSER= \
+MO_HOST=10.222.1.50 \
+MO_PORT=6001 \
+MO_USER=root \
+MO_PASSWORD=111 \
+ROW_COUNT=1000000 \
+MIXED_PRE_ROWS=400000 \
+MIXED_POST_ROWS=200000 \
+WAIT_SECONDS=10 \
+bash scripts/test_fulltext_single_node.sh
+```
+
 脚本会生成 Markdown 报告，默认输出到当前目录：
 
 ```bash

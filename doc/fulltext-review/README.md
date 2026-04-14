@@ -23,6 +23,7 @@
 9. [09-fulltext-summary.md](./09-fulltext-summary.md): **总结文档 — 旧版本问题、新版本原理与优势、已知限制、风险评估**
 10. [10-industry-engines-vs-mo-native-fts.md](./10-industry-engines-vs-mo-native-fts.md): **主流全文引擎实现原理对比与 MO native FTS 定位分析**
 11. [11-test-plan-and-cases.md](./11-test-plan-and-cases.md): **Native FTS 测试方案、nightly FULLTEXT job 分析、单机脚本与 CI 集成建议**
+12. [12-benchmark-1m-report.md](./12-benchmark-1m-report.md): **1M 行 Benchmark 测试报告（含发现的 Boolean mode BUG）**
 
 ## 推荐阅读顺序
 
