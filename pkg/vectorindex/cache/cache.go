@@ -61,6 +61,7 @@ type VectorIndexSearchIf interface {
 	// outKeys and outDists must be pre-allocated to nQueries*rt.Limit elements.
 	// GPU implementations write float32 distances directly; CPU implementations convert on write.
 	SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error
+	SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error
 	Load(*sqlexec.SqlProcess) error
 	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()

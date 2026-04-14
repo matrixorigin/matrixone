@@ -59,14 +59,14 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	limit := rt.Limit
 
 	if len(s.Indexes) == 0 {
-		return []int64{}, []float64{}, nil
+		return []uint32{}, []float64{}, nil
 	}
 
 	// FastMaxHeapSafe keeps the K (=limit) nearest neighbours across all sub-indexes.
-	// CAGRA distances are float32, so we use that type directly to avoid boxing.
-	keysBuf := make([]int64, limit)
+	// CAGRA distances are float32 and keys are uint32, matching the native CAGRA ID type.
+	keysBuf := make([]uint32, limit)
 	distsBuf := make([]float32, limit)
-	h := vectorindex.NewFastMaxHeapSafe[float32](int(limit), keysBuf, distsBuf)
+	h := vectorindex.NewFastMaxHeapSafe[float32, uint32](int(limit), keysBuf, distsBuf)
 
 	nthread := int(vectorindex.GetConcurrency(0))
 	if nthread > len(s.Indexes) {
@@ -87,7 +87,7 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 					return err2
 				}
 				for k := range ikeys {
-					h.Push(ikeys[k], idists[k])
+					h.Push(uint32(ikeys[k]), idists[k])
 				}
 			}
 			return nil
@@ -96,7 +96,7 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		return nil, nil, err
 	}
 
-	reskeys := make([]int64, 0, limit)
+	reskeys := make([]uint32, 0, limit)
 	resdistances := make([]float64, 0, limit)
 
 	for {
@@ -121,9 +121,14 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	return reskeys, resdistances, nil
 }
 
-// SearchFloat32 implements cache.VectorIndexSearchIf.
-// Writes results directly into caller-provided slices to avoid heap allocation.
+// SearchFloat32 implements cache.VectorIndexSearchIf (int64 key variant — not used by CAGRA).
 func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	return moerr.NewInternalErrorNoCtx("CagraSearch: use SearchFloat32WithKeyUint32 for uint32 keys")
+}
+
+// SearchFloat32WithKeyUint32 implements cache.VectorIndexSearchIf.
+// Writes results directly into caller-provided slices to avoid heap allocation.
+func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)
 	if err != nil {
 		return err
@@ -131,16 +136,11 @@ func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 	if keys == nil {
 		return nil
 	}
-	switch ks := keys.(type) {
-	case []int64:
-		copy(outKeys, ks)
-	case []any:
-		for i, k := range ks {
-			outKeys[i] = k.(int64)
-		}
-	default:
+	ks, ok := keys.([]uint32)
+	if !ok {
 		return moerr.NewInternalErrorNoCtx("CagraSearch: unknown keys type")
 	}
+	copy(outKeys, ks)
 	for i, d := range dists {
 		outDists[i] = float32(d)
 	}

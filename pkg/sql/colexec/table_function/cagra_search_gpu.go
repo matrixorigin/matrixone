@@ -25,16 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type cagraSearchState struct {
@@ -46,25 +46,28 @@ type cagraSearchState struct {
 	limit     uint64
 	keys      []uint32
 	distances []float64
-	// holding one call batch, tokenizedState owns it.
+	// holding one call batch, cagraSearchState owns it.
 	batch *batch.Batch
 }
 
-// stub function
+// newCagraAlgo is the factory used by the search; it can be replaced in tests.
 var newCagraAlgo = newCagraAlgoFn
 
 func newCagraAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	switch idxcfg.Usearch.Quantization {
-	case usearch.F32:
-		return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
-	case usearch.F64:
-		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
+	devices, _ := cuvs.GetGpuDeviceList()
+	switch metric.QuantizationType(idxcfg.CuvsCagra.Quantization) {
+	case metric.Quantization_F16:
+		return cagraPkg.NewCagraSearch[cuvs.Float16](idxcfg, tblcfg, devices)
+	case metric.Quantization_INT8:
+		return cagraPkg.NewCagraSearch[int8](idxcfg, tblcfg, devices)
+	case metric.Quantization_UINT8:
+		return cagraPkg.NewCagraSearch[uint8](idxcfg, tblcfg, devices)
+	default: // Quantization_F32 and unknown
+		return cagraPkg.NewCagraSearch[float32](idxcfg, tblcfg, devices)
 	}
-	panic("invalid quantization")
 }
 
 func (u *cagraSearchState) end(tf *TableFunction, proc *process.Process) error {
-
 	return nil
 }
 
@@ -75,27 +78,21 @@ func (u *cagraSearchState) reset(tf *TableFunction, proc *process.Process) {
 }
 
 func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-
 	u.batch.CleanOnlyData()
 
 	nkeys := len(u.keys)
 	n := 0
-
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
+		vector.AppendFixed[uint32](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
 		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
-
 	u.offset += n
-
 	u.batch.SetRowCount(n)
 
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
-
-	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
@@ -123,94 +120,95 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	}
 
 	return st, err
-
 }
 
-// start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
-// always return one batch per nthRow.
+// start is called once per query vector row.
 func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-
 	if !u.inited {
+		// ---- parse Params ----
 		if len(tf.Params) > 0 {
-			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
+			if err = sonic.Unmarshal([]byte(tf.Params), &u.param); err != nil {
 				return err
 			}
 		}
 
-		if len(u.param.M) > 0 {
-			val, err := strconv.Atoi(u.param.M)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Usearch.Connectivity = uint(val)
-		}
-
-		// default L2Sq
-		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
+		// metric
+		metricType, ok := metric.OpTypeToIvfMetric[u.param.OpType]
 		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
+			return moerr.NewInternalError(proc.Ctx, "invalid op_type for CAGRA")
 		}
+		u.idxcfg.CuvsCagra.Metric = uint16(metricType)
 		u.idxcfg.OpType = u.param.OpType
-		u.idxcfg.Usearch.Metric = metrictype
 
-		if len(u.param.EfConstruction) > 0 {
-			val, err := strconv.Atoi(u.param.EfConstruction)
+		// intermediate_graph_degree
+		if len(u.param.IntermediateGraphDegee) > 0 {
+			val, err := strconv.ParseUint(u.param.IntermediateGraphDegee, 10, 64)
 			if err != nil {
 				return err
 			}
-			u.idxcfg.Usearch.ExpansionAdd = uint(val)
+			u.idxcfg.CuvsCagra.IntermediateGraphDegree = val
 		}
-		// ef_search
-		if len(u.param.EfSearch) > 0 {
-			val, err := strconv.Atoi(u.param.EfSearch)
+
+		// graph_degree
+		if len(u.param.GraphDegee) > 0 {
+			val, err := strconv.ParseUint(u.param.GraphDegee, 10, 64)
 			if err != nil {
 				return err
 			}
-			u.idxcfg.Usearch.ExpansionSearch = uint(val)
+			u.idxcfg.CuvsCagra.GraphDegree = val
 		}
 
-		// IndexTableConfig
+		// distribution mode
+		switch u.param.Distribution {
+		case vectorindex.DistributionMode_REPLICATED_Str:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_REPLICATED)
+		case vectorindex.DistributionMode_SHARDED_Str:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SHARDED)
+		default:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
+		}
+
+		// quantization
+		switch u.param.Quantization {
+		case metric.Quantization_F16_Str:
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
+		case metric.Quantization_INT8_Str:
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_INT8)
+		case metric.Quantization_UINT8_Str:
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_UINT8)
+		default:
+			u.idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F32)
+		}
+
+		// ---- IndexTableConfig ----
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			return moerr.NewInvalidInput(proc.Ctx, "first argument (IndexTableConfig) must be a string")
 		}
 		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a string constant")
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
+		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
 			return err
 		}
 
-		// array vector
+		// ---- vector argument ----
 		faVec := tf.ctr.argVecs[1]
-
-		// quantization
-		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
-		if err != nil {
-			return err
-		}
-
-		// dimension
-		dimension := faVec.GetType().Width
-		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = vectorindex.HNSW
+		u.idxcfg.CuvsCagra.Dimensions = uint(faVec.GetType().Width)
+		u.idxcfg.Type = vectorindex.CAGRA
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
 
-	// reset slice
+	// ---- per-row search ----
 	u.offset = 0
 	u.keys = nil
 	u.distances = nil
-
-	// cleanup the batch
 	u.batch.CleanOnlyData()
 
 	faVec := tf.ctr.argVecs[1]
@@ -220,22 +218,13 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	veccache.Cache.Once()
 
-	switch u.idxcfg.Usearch.Quantization {
-	case usearch.F32:
-		return runHnswSearch[float32](proc, u, faVec, nthRow)
-	case usearch.F64:
-		return runHnswSearch[float64](proc, u, faVec, nthRow)
-	default:
-		// should not go here
-		panic("invalid Quantization")
-	}
+	return runCagraSearch[float32](proc, u, faVec, nthRow)
 }
 
 func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchState, faVec *vector.Vector, nthRow int) (err error) {
-
 	fa := types.BytesToArray[T](faVec.GetBytesAt(nthRow))
-	if uint(len(fa)) != u.idxcfg.Usearch.Dimensions {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(fa)))
+	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsCagra.Dimensions, len(fa)))
 	}
 
 	algo := newCagraAlgo(u.idxcfg, u.tblcfg)
@@ -251,9 +240,9 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 	}
 
 	var ok bool
-	u.keys, ok = keys.([]int64)
+	u.keys, ok = keys.([]uint32)
 	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
+		return moerr.NewInternalError(proc.Ctx, "keys is not []uint32")
 	}
 	return nil
 }

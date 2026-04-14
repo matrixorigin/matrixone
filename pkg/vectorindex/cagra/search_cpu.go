@@ -42,6 +42,10 @@ func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 	return errGPURequired
 }
 
+func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
+	return errGPURequired
+}
+
 func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return errGPURequired
 }

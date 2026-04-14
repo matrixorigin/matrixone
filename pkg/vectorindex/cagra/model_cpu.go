@@ -51,11 +51,11 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 	return errGPURequired
 }
 
-func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64) error {
+func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) error {
 	return errGPURequired
 }
 
-func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
+func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []uint32) error {
 	return errGPURequired
 }
 

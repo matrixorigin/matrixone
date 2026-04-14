@@ -26,65 +26,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 var cagra_runSql = sqlexec.RunSql
 
 type cagraCreateState struct {
 	inited   bool
-	buildf32 *hnsw.HnswBuild[float32]
-	buildf64 *hnsw.HnswBuild[float64]
-	param    vectorindex.HnswParam
+	buildf32 *cagraPkg.CagraBuild[float32]
+	buildf16 *cagraPkg.CagraBuild[cuvs.Float16]
+	buildi8  *cagraPkg.CagraBuild[int8]
+	buildui8 *cagraPkg.CagraBuild[uint8]
+	param    vectorindex.CagraParam
 	tblcfg   vectorindex.IndexTableConfig
 	idxcfg   vectorindex.IndexConfig
 	offset   int
 
-	// holding one call batch, tokenizedState owns it.
+	// holding one call batch, cagraCreateState owns it.
 	batch *batch.Batch
 }
 
 func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
-
 	var (
 		sqls []string
 		err  error
 	)
 
-	switch u.idxcfg.Usearch.Quantization {
-	case usearch.F32:
-		if u.buildf32 == nil {
-			return nil
-		}
-		sqls, err = u.buildf32.ToInsertSql(time.Now().UnixMicro())
-		if err != nil {
-			return err
-		}
-	case usearch.F64:
-		if u.buildf64 == nil {
-			return nil
-		}
-		sqls, err = u.buildf64.ToInsertSql(time.Now().UnixMicro())
-		if err != nil {
-			return err
-		}
+	ts := time.Now().UnixMicro()
+	switch {
+	case u.buildf32 != nil:
+		sqls, err = u.buildf32.ToInsertSql(ts)
+	case u.buildf16 != nil:
+		sqls, err = u.buildf16.ToInsertSql(ts)
+	case u.buildi8 != nil:
+		sqls, err = u.buildi8.ToInsertSql(ts)
+	case u.buildui8 != nil:
+		sqls, err = u.buildui8.ToInsertSql(ts)
+	default:
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 
 	for _, s := range sqls {
-		res, err := hnsw_runSql(sqlexec.NewSqlProcess(proc), s)
+		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}
 		res.Close()
 	}
-
 	return nil
 }
 
@@ -95,14 +93,10 @@ func (u *cagraCreateState) reset(tf *TableFunction, proc *process.Process) {
 }
 
 func (u *cagraCreateState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
-
 	u.batch.CleanOnlyData()
-
 	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
-
-	// write the batch
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
 
@@ -110,12 +104,17 @@ func (u *cagraCreateState) free(tf *TableFunction, proc *process.Process, pipeli
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
-
 	if u.buildf32 != nil {
 		u.buildf32.Destroy()
 	}
-	if u.buildf64 != nil {
-		u.buildf64.Destroy()
+	if u.buildf16 != nil {
+		u.buildf16.Destroy()
+	}
+	if u.buildi8 != nil {
+		u.buildi8.Destroy()
+	}
+	if u.buildui8 != nil {
+		u.buildui8.Destroy()
 	}
 }
 
@@ -127,149 +126,153 @@ func cagraCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
 	return st, err
-
 }
 
-// start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
-// always return one batch per nthRow.
+// start is called once per input row.  On the first call the index builder is initialised;
+// subsequent calls append one vector to the builder.
 func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-
 	if !u.inited {
-
+		// ---- parse Params ----
 		if len(tf.Params) > 0 {
-			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
+			if err = sonic.Unmarshal([]byte(tf.Params), &u.param); err != nil {
 				return err
 			}
 		}
 
-		if len(u.param.M) > 0 {
-			val, err := strconv.Atoi(u.param.M)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Usearch.Connectivity = uint(val)
-		}
-
-		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
+		// metric
+		metricType, ok := metric.OpTypeToIvfMetric[u.param.OpType]
 		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
+			return moerr.NewInternalError(proc.Ctx, "invalid op_type for CAGRA")
 		}
+		u.idxcfg.CuvsCagra.Metric = uint16(metricType)
 		u.idxcfg.OpType = u.param.OpType
-		u.idxcfg.Usearch.Metric = metrictype
 
-		if len(u.param.EfConstruction) > 0 {
-			val, err := strconv.Atoi(u.param.EfConstruction)
+		// intermediate_graph_degree
+		if len(u.param.IntermediateGraphDegee) > 0 {
+			val, err := strconv.ParseUint(u.param.IntermediateGraphDegee, 10, 64)
 			if err != nil {
 				return err
 			}
-			u.idxcfg.Usearch.ExpansionAdd = uint(val)
+			u.idxcfg.CuvsCagra.IntermediateGraphDegree = val
 		}
 
-		// ef_search
-		if len(u.param.EfSearch) > 0 {
-			val, err := strconv.Atoi(u.param.EfSearch)
+		// graph_degree
+		if len(u.param.GraphDegee) > 0 {
+			val, err := strconv.ParseUint(u.param.GraphDegee, 10, 64)
 			if err != nil {
 				return err
 			}
-			u.idxcfg.Usearch.ExpansionSearch = uint(val)
+			u.idxcfg.CuvsCagra.GraphDegree = val
 		}
 
-		// IndexTableConfig
+		// distribution mode
+		switch u.param.Distribution {
+		case vectorindex.DistributionMode_REPLICATED_Str:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_REPLICATED)
+		case vectorindex.DistributionMode_SHARDED_Str:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SHARDED)
+		default:
+			u.idxcfg.CuvsCagra.DistributionMode = uint16(vectorindex.DistributionMode_SINGLE_GPU)
+		}
+
+		// quantization
+		var qt metric.QuantizationType
+		switch u.param.Quantization {
+		case metric.Quantization_F16_Str:
+			qt = metric.Quantization_F16
+		case metric.Quantization_INT8_Str:
+			qt = metric.Quantization_INT8
+		case metric.Quantization_UINT8_Str:
+			qt = metric.Quantization_UINT8
+		default:
+			qt = metric.Quantization_F32
+		}
+		u.idxcfg.CuvsCagra.Quantization = uint16(qt)
+
+		// ---- IndexTableConfig ----
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			return moerr.NewInvalidInput(proc.Ctx, "first argument (IndexTableConfig) must be a string")
 		}
 		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a string constant")
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
+		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
 			return err
 		}
-
 		if u.tblcfg.IndexCapacity <= 0 {
-			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
+			return moerr.NewInvalidInput(proc.Ctx, "index capacity must be greater than 0")
 		}
 
+		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_int64 {
-			return moerr.NewInvalidInput(proc.Ctx, "Second argument (pkid must be a bigint")
+		if idVec.GetType().Oid != types.T_uint32 {
+			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be a uint32")
 		}
 
 		faVec := tf.ctr.argVecs[2]
-		// quantization
-		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
-		if err != nil {
-			return err
+		if faVec.GetType().Oid != types.T_array_float32 {
+			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 array")
 		}
 
 		// dimension
-		dimension := faVec.GetType().Width
+		u.idxcfg.CuvsCagra.Dimensions = uint(faVec.GetType().Width)
+		u.idxcfg.Type = vectorindex.CAGRA
 
-		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = vectorindex.HNSW
+		// ---- GPU devices ----
+		devices, _ := cuvs.GetGpuDeviceList()
 
+		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 
-		switch u.idxcfg.Usearch.Quantization {
-		case usearch.F32:
-			u.buildf32, err = hnsw.NewHnswBuild[float32](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
-		case usearch.F64:
-			u.buildf64, err = hnsw.NewHnswBuild[float64](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+		// ---- create builder ----
+		switch qt {
+		case metric.Quantization_F16:
+			u.buildf16, err = cagraPkg.NewCagraBuild[cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case metric.Quantization_INT8:
+			u.buildi8, err = cagraPkg.NewCagraBuild[int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		case metric.Quantization_UINT8:
+			u.buildui8, err = cagraPkg.NewCagraBuild[uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+		default:
+			u.buildf32, err = cagraPkg.NewCagraBuild[float32](uid, u.idxcfg, u.tblcfg, nthread, devices)
 		}
 		if err != nil {
 			return err
 		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
 
-	// reset slice
+	// ---- per-row: append one vector ----
 	u.offset = 0
-
-	// cleanup the batch
 	u.batch.CleanOnlyData()
-
-	idVec := tf.ctr.argVecs[1]
-	id := vector.GetFixedAtNoTypeCheck[int64](idVec, nthRow)
 
 	faVec := tf.ctr.argVecs[2]
 	if faVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
 
-	switch u.idxcfg.Usearch.Quantization {
-	case usearch.F32:
-		f32a := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
+	id := vector.GetFixedAtNoTypeCheck[uint32](tf.ctr.argVecs[1], nthRow)
+	fa := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 
-		if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
-			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-		}
-
-		err = u.buildf32.Add(id, f32a)
-		if err != nil {
-			return err
-		}
-		return nil
-	case usearch.F64:
-		f64a := types.BytesToArray[float64](faVec.GetBytesAt(nthRow))
-
-		if uint(len(f64a)) != u.idxcfg.Usearch.Dimensions {
-			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-		}
-
-		err = u.buildf64.Add(id, f64a)
-		if err != nil {
-			return err
-		}
-		return nil
-	default:
-		// should not go here
-		panic("invalid quantization")
+	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
+		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 	}
+
+	switch {
+	case u.buildf32 != nil:
+		err = u.buildf32.AddFloat(id, fa)
+	case u.buildf16 != nil:
+		err = u.buildf16.AddFloat(id, fa)
+	case u.buildi8 != nil:
+		err = u.buildi8.AddFloat(id, fa)
+	case u.buildui8 != nil:
+		err = u.buildui8.AddFloat(id, fa)
+	}
+	return err
 }

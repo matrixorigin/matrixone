@@ -237,7 +237,7 @@ func multiGpuSearch[T VectorType](
 	for q := uint64(0); q < numQueries; q++ {
 		keysBuf := make([]int64, limit)
 		distsBuf := make([]float32, limit)
-		heap := vectorindex.NewFastMaxHeap(int(limit), keysBuf, distsBuf)
+		heap := vectorindex.NewFastMaxHeap[float32, int64](int(limit), keysBuf, distsBuf)
 
 		for i := 0; i < len(jobs); i++ {
 			offset := q * uint64(limit)

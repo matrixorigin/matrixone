@@ -715,6 +715,10 @@ func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt
 	return nil
 }
 
+func (s *IvfflatSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
+	return moerr.NewInternalErrorNoCtx("IvfflatSearch: does not support SearchFloat32WithKeyUint32")
+}
+
 func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
