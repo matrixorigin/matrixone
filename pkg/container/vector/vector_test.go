@@ -2125,6 +2125,11 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 	require.Equal(t, "POINT(2 2)", dst.RowToString(1))
 	require.Equal(t, []byte("POINT(3 3)"), GetAny(dst, 0, false).([]byte))
 
+	var shuffleBuf []byte
+	err = dst.ShuffleWithBuf([]int64{1, 0}, mp, &shuffleBuf)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(dst))
+
 	sf := GetConstSetFunction(types.T_geometry.ToType(), mp)
 	constVec := NewConstNull(types.T_geometry.ToType(), 0, mp)
 	err = sf(constVec, src, 2, 1)
