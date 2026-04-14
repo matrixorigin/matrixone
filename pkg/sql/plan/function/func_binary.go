@@ -9017,30 +9017,6 @@ func geometryCoveredBy(candidate, container []byte) (bool, error) {
 	}
 }
 
-func polygonContainsPointFromText(wkt string, px, py float64) (bool, error) {
-	polygon, err := polygonGeometryFromText(wkt)
-	if err != nil {
-		return false, err
-	}
-	return pointInPolygonGeometry(polygon, px, py), nil
-}
-
-func polygonSingleRingPointsFromPayload(payload []byte) ([]geometryPoint2D, error) {
-	typeName, err := geometryTypeNameFromPayload(payload)
-	if err != nil {
-		return nil, err
-	}
-	if typeName != "POLYGON" {
-		return nil, moerr.NewInvalidInputNoCtx("geometry is not a POLYGON")
-	}
-
-	wkt, _, _, err := decodeGeometryPayload(payload)
-	if err != nil {
-		return nil, err
-	}
-	return parseSinglePolygonRingFromText(wkt)
-}
-
 func polygonGeometryFromPayload(payload []byte) (geometryPolygon2D, error) {
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
@@ -9092,27 +9068,6 @@ func polygonGeometryFromText(wkt string) (geometryPolygon2D, error) {
 		polygon.holes = append(polygon.holes, hole)
 	}
 	return polygon, nil
-}
-
-func parseSinglePolygonRingFromText(wkt string) ([]geometryPoint2D, error) {
-	openIdx := strings.IndexByte(wkt, '(')
-	closeIdx := strings.LastIndexByte(wkt, ')')
-	if openIdx < 0 || closeIdx <= openIdx {
-		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-
-	content := strings.TrimSpace(wkt[openIdx+1 : closeIdx])
-	if content == "" {
-		return nil, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-
-	rings := splitTopLevelGeometryItems(content)
-	if len(rings) != 1 {
-		return nil, moerr.NewInvalidInputNoCtx("polygons with holes are not supported")
-	}
-
-	ring := strings.TrimSpace(rings[0])
-	return parsePolygonTextRing(ring)
 }
 
 func parsePolygonTextRing(ring string) ([]geometryPoint2D, error) {
@@ -9200,24 +9155,6 @@ func lineStringCrossesLineString(left, right []geometryPoint2D) bool {
 	return false
 }
 
-func lineStringCrossesPolygon(line, polygon []geometryPoint2D) bool {
-	if !lineStringIntersectsPolygon(line, polygon) {
-		return false
-	}
-
-	hasInside := false
-	hasOutside := false
-	for i := 0; i < len(line)-1; i++ {
-		segmentInside, segmentOutside, boundaryOverlap := lineSegmentPolygonLocationFlags(line[i], line[i+1], polygon)
-		if boundaryOverlap {
-			return false
-		}
-		hasInside = hasInside || segmentInside
-		hasOutside = hasOutside || segmentOutside
-	}
-	return hasInside && hasOutside
-}
-
 func lineStringCrossesPolygonGeometry(line []geometryPoint2D, polygon geometryPolygon2D) bool {
 	if !lineStringIntersectsPolygonGeometry(line, polygon) {
 		return false
@@ -9237,51 +9174,6 @@ func lineStringCrossesPolygonGeometry(line []geometryPoint2D, polygon geometryPo
 		hasOutside = hasOutside || segmentOutside
 	}
 	return hasInside && hasOutside
-}
-
-func lineSegmentPolygonLocationFlags(start, end geometryPoint2D, polygon []geometryPoint2D) (bool, bool, bool) {
-	params := []float64{0, 1}
-	for i := 0; i < len(polygon); i++ {
-		next := (i + 1) % len(polygon)
-		if !lineSegmentsIntersect(start, end, polygon[i], polygon[next]) {
-			continue
-		}
-		if collinearSegmentsOverlapWithLength(start, end, polygon[i], polygon[next]) {
-			return false, false, true
-		}
-		points := segmentIntersectionPoints(start, end, polygon[i], polygon[next])
-		if len(points) == 0 {
-			point, ok := segmentIntersectionPoint(start, end, polygon[i], polygon[next])
-			if !ok {
-				continue
-			}
-			params = append(params, segmentParameter(start, end, point))
-			continue
-		}
-		for _, point := range points {
-			params = append(params, segmentParameter(start, end, point))
-		}
-	}
-
-	sort.Float64s(params)
-	params = dedupeSegmentParameters(params)
-
-	hasInside := false
-	hasOutside := false
-	for i := 0; i < len(params)-1; i++ {
-		if sameGeometryCoordinate(params[i], params[i+1]) {
-			continue
-		}
-		point := interpolateSegmentPoint(start, end, (params[i]+params[i+1])/2)
-		if pointInPolygon(polygon, point.x, point.y) {
-			hasInside = true
-			continue
-		}
-		if !pointOnPolygonBoundary(polygon, point.x, point.y) {
-			hasOutside = true
-		}
-	}
-	return hasInside, hasOutside, false
 }
 
 func lineSegmentPolygonLocationFlagsGeometry(start, end geometryPoint2D, polygon geometryPolygon2D) (bool, bool, bool, bool) {
@@ -9397,33 +9289,6 @@ func interpolateSegmentPoint(start, end geometryPoint2D, param float64) geometry
 	}
 }
 
-func lineStringOverlapsLineString(left, right []geometryPoint2D) bool {
-	if !hasLineStringLinearOverlap(left, right) {
-		return false
-	}
-	if lineStringCoveredByLineString(left, right) || lineStringCoveredByLineString(right, left) {
-		return false
-	}
-	return true
-}
-
-func polygonOverlapsPolygon(leftPayload, rightPayload []byte, left, right []geometryPoint2D) (bool, error) {
-	if !polygonIntersectsPolygon(left, right) {
-		return false, nil
-	}
-	touches, err := polygonTouchesPolygon(leftPayload, rightPayload, left, right)
-	if err != nil {
-		return false, err
-	}
-	if touches {
-		return false, nil
-	}
-	if polygonCoveredByPolygon(left, right) || polygonCoveredByPolygon(right, left) {
-		return false, nil
-	}
-	return true, nil
-}
-
 func hasLineStringLinearOverlap(left, right []geometryPoint2D) bool {
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
@@ -9433,36 +9298,6 @@ func hasLineStringLinearOverlap(left, right []geometryPoint2D) bool {
 		}
 	}
 	return false
-}
-
-func lineStringCoveredByLineString(line, other []geometryPoint2D) bool {
-	for i := 0; i < len(line)-1; i++ {
-		if sameGeometryPoint(line[i], line[i+1]) {
-			continue
-		}
-		if !lineSegmentCoveredByLineString(line[i], line[i+1], other) {
-			return false
-		}
-	}
-	return true
-}
-
-func lineStringCoveredByPolygon(line, polygon []geometryPoint2D) bool {
-	for _, point := range line {
-		if !pointIntersectsPolygon(point, polygon) {
-			return false
-		}
-	}
-	for i := 0; i < len(line)-1; i++ {
-		if sameGeometryPoint(line[i], line[i+1]) {
-			continue
-		}
-		_, hasOutside, _ := lineSegmentPolygonLocationFlags(line[i], line[i+1], polygon)
-		if hasOutside {
-			return false
-		}
-	}
-	return true
 }
 
 func lineStringCoveredByPolygonGeometry(line []geometryPoint2D, polygon geometryPolygon2D) bool {
@@ -9502,22 +9337,6 @@ func polygonRingCoveredByPolygonGeometry(ring []geometryPoint2D, polygon geometr
 	return true
 }
 
-func polygonCoveredByPolygon(candidate, container []geometryPoint2D) bool {
-	for _, point := range candidate {
-		if !pointInPolygon(container, point.x, point.y) && !pointOnPolygonBoundary(container, point.x, point.y) {
-			return false
-		}
-	}
-	for i := 0; i < len(candidate); i++ {
-		next := (i + 1) % len(candidate)
-		_, hasOutside, _ := lineSegmentPolygonLocationFlags(candidate[i], candidate[next], container)
-		if hasOutside {
-			return false
-		}
-	}
-	return true
-}
-
 func polygonCoveredByPolygonGeometry(candidatePayload []byte, candidate, container geometryPolygon2D) (bool, error) {
 	if err := validatePolygonGeometry(candidate); err != nil {
 		return false, err
@@ -9549,18 +9368,6 @@ func polygonCoveredByPolygonGeometry(candidatePayload []byte, candidate, contain
 		}
 	}
 	return true, nil
-}
-
-func lineSegmentCoveredByLineString(start, end geometryPoint2D, line []geometryPoint2D) bool {
-	intervals := make([]geometryParamInterval, 0, len(line))
-	for i := 0; i < len(line)-1; i++ {
-		interval, ok := segmentOverlapParameterInterval(start, end, line[i], line[i+1])
-		if !ok {
-			continue
-		}
-		intervals = append(intervals, interval)
-	}
-	return parameterIntervalsCoverSegment(intervals)
 }
 
 func segmentOverlapParameterInterval(start, end, otherStart, otherEnd geometryPoint2D) (geometryParamInterval, bool) {
@@ -9617,41 +9424,6 @@ func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
 	return coveredEnd >= 1-1e-9
 }
 
-func lineStringTouchesPolygon(line, polygon []geometryPoint2D) bool {
-	if !lineStringIntersectsPolygon(line, polygon) {
-		return false
-	}
-
-	touchedBoundary := false
-	for _, point := range line {
-		if pointInPolygon(polygon, point.x, point.y) {
-			return false
-		}
-		if pointOnPolygonBoundary(polygon, point.x, point.y) {
-			touchedBoundary = true
-		}
-	}
-	for i := 0; i < len(line)-1; i++ {
-		midpoint := geometryPoint2D{
-			x: (line[i].x + line[i+1].x) / 2,
-			y: (line[i].y + line[i+1].y) / 2,
-		}
-		if pointInPolygon(polygon, midpoint.x, midpoint.y) {
-			return false
-		}
-		if pointOnPolygonBoundary(polygon, midpoint.x, midpoint.y) {
-			touchedBoundary = true
-		}
-		for j := 0; j < len(polygon); j++ {
-			next := (j + 1) % len(polygon)
-			if lineSegmentsIntersect(line[i], line[i+1], polygon[j], polygon[next]) {
-				touchedBoundary = true
-			}
-		}
-	}
-	return touchedBoundary
-}
-
 func lineStringTouchesPolygonGeometry(line []geometryPoint2D, polygon geometryPolygon2D) bool {
 	if !lineStringIntersectsPolygonGeometry(line, polygon) {
 		return false
@@ -9679,60 +9451,6 @@ func lineStringTouchesPolygonGeometry(line []geometryPoint2D, polygon geometryPo
 		}
 	}
 	return touchedBoundary
-}
-
-func polygonTouchesPolygon(leftPayload, rightPayload []byte, left, right []geometryPoint2D) (bool, error) {
-	if !polygonIntersectsPolygon(left, right) {
-		return false, nil
-	}
-
-	leftInterior, err := polygonInteriorPointFromPayload(leftPayload)
-	if err != nil {
-		return false, err
-	}
-	if pointInPolygon(right, leftInterior.x, leftInterior.y) {
-		return false, nil
-	}
-
-	rightInterior, err := polygonInteriorPointFromPayload(rightPayload)
-	if err != nil {
-		return false, err
-	}
-	if pointInPolygon(left, rightInterior.x, rightInterior.y) {
-		return false, nil
-	}
-
-	leftArea, _, _, err := polygonRingAreaAndCentroid(left)
-	if err != nil {
-		return false, err
-	}
-	rightArea, _, _, err := polygonRingAreaAndCentroid(right)
-	if err != nil {
-		return false, err
-	}
-
-	touched := false
-	for i := 0; i < len(left); i++ {
-		leftNext := (i + 1) % len(left)
-		for j := 0; j < len(right); j++ {
-			rightNext := (j + 1) % len(right)
-			if !lineSegmentsIntersect(left[i], left[leftNext], right[j], right[rightNext]) {
-				continue
-			}
-			if collinearSegmentsOverlapWithLength(left[i], left[leftNext], right[j], right[rightNext]) {
-				if polygonEdgesInteriorSameSide(left[i], left[leftNext], leftArea, right[j], right[rightNext], rightArea) {
-					return false, nil
-				}
-				touched = true
-				continue
-			}
-			if len(segmentIntersectionPoints(left[i], left[leftNext], right[j], right[rightNext])) == 0 {
-				return false, nil
-			}
-			touched = true
-		}
-	}
-	return touched, nil
 }
 
 func polygonTouchesPolygonGeometry(leftPayload, rightPayload []byte, left, right geometryPolygon2D) (bool, error) {
@@ -9861,21 +9579,6 @@ func polygonRingText(ring []geometryPoint2D) string {
 	}
 	builder.WriteByte(')')
 	return builder.String()
-}
-
-func polygonEdgesInteriorSameSide(leftStart, leftEnd geometryPoint2D, leftArea float64, rightStart, rightEnd geometryPoint2D, rightArea float64) bool {
-	leftNormal := polygonEdgeInteriorNormal(leftStart, leftEnd, leftArea)
-	rightNormal := polygonEdgeInteriorNormal(rightStart, rightEnd, rightArea)
-	return leftNormal.x*rightNormal.x+leftNormal.y*rightNormal.y > 1e-9
-}
-
-func polygonEdgeInteriorNormal(start, end geometryPoint2D, signedArea float64) geometryPoint2D {
-	dx := end.x - start.x
-	dy := end.y - start.y
-	if signedArea > 0 {
-		return geometryPoint2D{x: -dy, y: dx}
-	}
-	return geometryPoint2D{x: dy, y: -dx}
 }
 
 func lineStringPointIsBoundary(line []geometryPoint2D, point geometryPoint2D) bool {

@@ -221,9 +221,11 @@ func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 func buildSpatialIndexColMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTableDef *plan.TableDef) map[[2]int32]*plan.Expr {
 	partColPos := node.TableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
 	pkColPos := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+	partKey := [2]int32{node.BindingTags[0], partColPos}
+	pkKey := [2]int32{node.BindingTags[0], pkColPos}
 	return map[[2]int32]*plan.Expr{
-		[2]int32{node.BindingTags[0], partColPos}: GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
-		[2]int32{node.BindingTags[0], pkColPos}:   GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1),
+		partKey: GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
+		pkKey:   GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1),
 	}
 }
 
