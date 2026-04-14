@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -166,8 +167,32 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if showSQL != sql {
-		t.Fatalf("expected stored create sql to be reused\nexpected: %s\nactual: %s", sql, showSQL)
+	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
+	}
+	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
+	}
+	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
+		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
+	}
+}
+
+func Test_extractTopLevelCheckDefs(t *testing.T) {
+	tableDef := &plan.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE t1 (id int, note varchar(20) comment 'constraint check', CONSTRAINT chk_id CHECK(id > 0), CHECK(score>0), CONSTRAINT fk1 FOREIGN KEY (id) REFERENCES t2(id)) ENGINE=InnoDB",
+	}
+
+	checks := extractTopLevelCheckDefs(tableDef)
+	if len(checks) != 2 {
+		t.Fatalf("expected 2 top-level check defs, got %d: %#v", len(checks), checks)
+	}
+	if checks[0] != "CONSTRAINT chk_id CHECK(id > 0)" {
+		t.Fatalf("unexpected first check def: %s", checks[0])
+	}
+	if checks[1] != "CHECK(score>0)" {
+		t.Fatalf("unexpected second check def: %s", checks[1])
 	}
 }
 

@@ -214,5 +214,5 @@ extable1    CREATE EXTERNAL TABLE `extable1` (\n  `n1` int DEFAULT NULL\n) INFIL
 CREATE TABLE t_check (id BIGINT NOT NULL AUTO_INCREMENT, c_age INT NULL, c_score DECIMAL(5,2) NULL, PRIMARY KEY (id), CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)), CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 show create table t_check;
 Table    Create Table
-t_check    CREATE TABLE t_check (id BIGINT NOT NULL AUTO_INCREMENT, c_age INT NULL, c_score DECIMAL(5,2) NULL, PRIMARY KEY (id), CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)), CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+t_check    CREATE TABLE `t_check` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `c_age` int DEFAULT NULL,\n  `c_score` decimal(5,2) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200)),\n  CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))\n)
 drop database if exists db1;
