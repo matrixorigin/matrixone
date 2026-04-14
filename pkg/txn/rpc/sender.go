@@ -31,6 +31,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
+)
+
+var (
+	defaultWaitTimeOnRetryBackendSend = 300 * time.Millisecond
+	// Keep backend send retries bounded so rollback/catalog RPCs fail in finite
+	// time instead of stretching broken explicit txns for hours.
+	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
 )
 
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
@@ -90,6 +98,10 @@ func NewSender(
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
 		morpc.WithBackendStreamBufferSize(10000),
 		morpc.WithBackendReadTimeout(time.Second*30))
+	s.cfg.ClientOptions = append(s.cfg.ClientOptions,
+		// Bound morpc's initial backend auto-create wait so sender-side retry budget
+		// can stop broken TN/backend sends in finite time.
+		morpc.WithClientAutoCreateWaitTimeout(getBackendAutoCreateWaitTimeout()))
 	client, err := s.cfg.NewClient(
 		s.rt.ServiceUUID(),
 		"txn-client",
@@ -175,6 +187,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	}
 
 	var f *morpc.Future
+	var lastBackendErr error
 	reqFn := func() error {
 		var err error
 		start := time.Now()
@@ -188,16 +201,33 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return nil
 	}
 
+	retryState := backendRetryState{}
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return txn.TxnResponse{}, getBackendRetryExitError(ctxErr, lastBackendErr)
+		}
+
 		err := reqFn()
 		if err != nil {
 			// These errors are retriable error. Retry to send request to TN.
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
-				time.Sleep(time.Millisecond * 300)
+			if isBackendConnectRetryError(err) {
+				lastBackendErr = err
+				wait, ok := getBackendRetryWaitDuration(&retryState)
+				if !ok {
+					s.logBackendRetryStop(err, tn, request, retryState)
+					return txn.TxnResponse{}, err
+				}
+				if !waitToRetrySend(ctx, wait) {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						// Preserve the backend failure so upper layers can tear down an
+						// explicit txn instead of leaving it alive on a raw context error.
+						return txn.TxnResponse{}, err
+					}
+					return txn.TxnResponse{}, err
+				}
 				continue
 			}
-			return txn.TxnResponse{}, err
+			return txn.TxnResponse{}, getBackendRetryExitError(err, lastBackendErr)
 		}
 		break
 	}
@@ -222,6 +252,90 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	return *(v.(*txn.TxnResponse)), nil
 }
 
+type backendRetryState struct {
+	deadline time.Time
+}
+
+func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, bool) {
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return 0, false
+	}
+
+	now := time.Now()
+	if retryState.deadline.IsZero() {
+		retryState.deadline = now.Add(defaultMaxWaitTimeOnRetryBackendSend)
+	}
+	if !retryState.deadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.deadline)
+	if remaining < defaultWaitTimeOnRetryBackendSend {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryBackendSend, true
+}
+
+func getBackendAutoCreateWaitTimeout() time.Duration {
+	if defaultWaitTimeOnRetryBackendSend <= 0 {
+		if defaultMaxWaitTimeOnRetryBackendSend > 0 {
+			return defaultMaxWaitTimeOnRetryBackendSend
+		}
+		return time.Millisecond
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	if defaultWaitTimeOnRetryBackendSend < defaultMaxWaitTimeOnRetryBackendSend {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	return defaultMaxWaitTimeOnRetryBackendSend
+}
+
+func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// request whose caller has already given up.
+		return ctx.Err() == nil
+	}
+}
+
+func isBackendConnectRetryError(err error) bool {
+	// A closed backend can come back during TN/backend restart or address refresh,
+	// so we retry it for the same bounded window as the other backend-availability
+	// errors instead of waiting indefinitely.
+	return moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
+}
+
+func (s *sender) logBackendRetryStop(
+	err error,
+	tn metadata.TNShard,
+	request txn.TxnRequest,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.String("txn-id", hex.EncodeToString(request.Txn.ID)),
+		zap.String("method", request.Method.String()),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender backend retry budget exhausted", fields...)
+}
+
 func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {
 	if s.options.localDispatch != nil {
 		if h := s.options.localDispatch(tn); h != nil {
@@ -230,7 +344,66 @@ func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(ctx, tn.Address, false)
+
+	retryState := backendRetryState{}
+	var lastBackendErr error
+	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, getBackendRetryExitError(ctxErr, lastBackendErr)
+		}
+
+		st, err := s.client.NewStream(ctx, tn.Address, false)
+		if err == nil {
+			return st, nil
+		}
+		if isBackendConnectRetryError(err) {
+			lastBackendErr = err
+		}
+		if !isBackendConnectRetryError(err) {
+			return nil, getBackendRetryExitError(err, lastBackendErr)
+		}
+
+		wait, ok := getBackendRetryWaitDuration(&retryState)
+		if !ok {
+			s.logBackendStreamRetryStop(err, tn, size, retryState)
+			return nil, err
+		}
+		if !waitToRetrySend(ctx, wait) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, err
+			}
+			return nil, err
+		}
+	}
+}
+
+func getBackendRetryExitError(err error, lastBackendErr error) error {
+	if lastBackendErr != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return lastBackendErr
+	}
+	return err
+}
+
+func (s *sender) logBackendStreamRetryStop(
+	err error,
+	tn metadata.TNShard,
+	size int,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.Uint64("shard-id", tn.ShardID),
+		zap.Int("batch-size", size),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender stream backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender stream backend retry budget exhausted", fields...)
 }
 
 func (s *sender) acquireLocalStream() *localStream {
