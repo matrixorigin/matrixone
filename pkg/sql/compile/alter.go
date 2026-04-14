@@ -195,8 +195,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// Enable pipeline flush for the INSERT to parallelize serialization
 	origCtx := c.proc.Ctx
 	c.proc.Ctx = context.WithValue(origCtx, ioutil.PipelineFlushKey, true)
+	defer func() {
+		c.proc.Ctx = origCtx
+	}()
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
-	c.proc.Ctx = origCtx
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", dbName),

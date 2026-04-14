@@ -298,29 +298,19 @@ func TestSinkPool_SubmitContextCancelled(t *testing.T) {
 
 	typs := []types.Type{types.T_int32.ToType()}
 
-	// Fill the sink channel to force blocking
-	// With capacity 1, we need 1 (capacity) + 1 (worker) + 1 (blocking) = 3 jobs
-	// to actually block on submit
-	var submitted int
-	for i := 0; i < 10; i++ {
-		bat := containers.MockBatch(typs, 10, 0, nil)
-		cnBat := containers.ToCNBatch(bat)
-		err = pool.Submit(&poolSinkJob{
-			data:    []*batch.Batch{cnBat},
-			factory: mockFactory(nil, nil),
-			mp:      mp,
-			fs:      nil,
-			result:  r,
-		})
-		if err != nil {
-			break
-		}
-		submitted++
-	}
-	// at least some should succeed, the cancelled context will cause workers
-	// to short circuit
+	bat := containers.MockBatch(typs, 10, 0, nil)
+	cnBat := containers.ToCNBatch(bat)
+
+	err = pool.Submit(&poolSinkJob{
+		data:    []*batch.Batch{cnBat},
+		factory: mockFactory(nil, nil),
+		mp:      mp,
+		fs:      nil,
+		result:  r,
+	})
+	require.Error(t, err)
+
 	r.pending.Wait()
-	_ = submitted
 }
 
 // ---------- Sink worker skips job on error ----------

@@ -215,7 +215,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		opts := []ioutil.SinkerOption{
 			ioutil.WithBuffer(writer.insertFreeLists[i], false),
 		}
-		if v := proc.Ctx.Value(ioutil.PipelineFlushKey); v != nil {
+		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
 		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(

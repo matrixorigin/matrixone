@@ -924,7 +924,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			poolSinkNs = atomic.LoadInt64(&sinker.pipe.result.sinkNs)
 			poolSyncNs = atomic.LoadInt64(&sinker.pipe.result.syncNs)
 		}
-		logutil.Info("Sinker flush stats",
+		logutil.Debug("Sinker flush stats",
 			zap.Bool("pipeline", sinker.pipe.enabled),
 			zap.Int64("spills", spillCount),
 			zap.Duration("sortTime", time.Duration(atomic.LoadInt64(&sinker.timing.sortNs))),
@@ -981,8 +981,9 @@ func (sinker *Sinker) StagedSize() int {
 }
 
 func (sinker *Sinker) Close() error {
+	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
-		sinker.drainPipeline()
+		drainErr = sinker.drainPipeline()
 	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -1008,7 +1009,7 @@ func (sinker *Sinker) Close() error {
 	sinker.fSinker.factory = nil
 	sinker.mp = nil
 	sinker.fs = nil
-	return nil
+	return drainErr
 }
 
 // Reset discards all staged and result data without tearing down the sinker.

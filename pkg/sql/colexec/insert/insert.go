@@ -56,7 +56,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		// If the target is not partition table, you only need to operate the main table
 		var sinkerOpts []ioutil.SinkerOption
-		if v := proc.Ctx.Value(ioutil.PipelineFlushKey); v != nil {
+		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
 		s3Writer := colexec.NewCNS3DataWriter(

@@ -103,7 +103,7 @@ func GetDefaultSinkPool() *SinkPool {
 func NewSinkPool(sinkWorkers, syncWorkers int) *SinkPool {
 	pool := &SinkPool{
 		sinkChan: make(chan *poolSinkJob, sinkWorkers),
-		syncChan: make(chan *poolSyncJob, sinkWorkers),
+		syncChan: make(chan *poolSyncJob, syncWorkers),
 		done:     make(chan struct{}),
 	}
 	for i := 0; i < sinkWorkers; i++ {
@@ -152,9 +152,11 @@ func (p *SinkPool) runSinkWorker() {
 		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r}:
 		case <-r.ctx.Done():
 			fSinker.Close()
+			r.setError(context.Cause(r.ctx))
 			r.pending.Done()
 		case <-p.done:
 			fSinker.Close()
+			r.setError(context.Canceled)
 			r.pending.Done()
 		}
 	}
@@ -202,7 +204,10 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	case <-r.ctx.Done():
 		r.pending.Done()
 		freeBatches(job.data, job.mp)
-		return r.getError()
+		if err := r.getError(); err != nil {
+			return err
+		}
+		return context.Cause(r.ctx)
 	case <-p.done:
 		r.pending.Done()
 		freeBatches(job.data, job.mp)
