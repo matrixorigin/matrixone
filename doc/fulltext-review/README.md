@@ -24,6 +24,11 @@
 10. [10-industry-engines-vs-mo-native-fts.md](./10-industry-engines-vs-mo-native-fts.md): **主流全文引擎实现原理对比与 MO native FTS 定位分析**
 11. [11-test-plan-and-cases.md](./11-test-plan-and-cases.md): **Native FTS 测试方案、nightly FULLTEXT job 分析、单机脚本与 CI 集成建议**
 12. [12-benchmark-1m-report.md](./12-benchmark-1m-report.md): **1M 行 Benchmark 测试报告（含发现的 Boolean mode BUG）**
+13. [13-current-issues-analysis.md](./13-current-issues-analysis.md): 当前问题分析（UPDATE 残留根因、tail segment、混合查询）
+14. [14-native-only-switch-plan.md](./14-native-only-switch-plan.md): native-only 开关方案设计
+15. [15-native-only-change-record.md](./15-native-only-change-record.md): native-only 修改记录（4 文件 +25/-7 行）
+16. [16-native-only-test-report.md](./16-native-only-test-report.md): native-only 2M 行测试报告
+17. [17-production-roadmap.md](./17-production-roadmap.md): **商用路线图 — 三档优先级、时间线、已完成清单**
 
 ## 推荐阅读顺序
 
