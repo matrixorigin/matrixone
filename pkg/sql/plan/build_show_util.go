@@ -42,6 +42,7 @@ func ConstructCreateTableSQL(
 
 	var err error
 	var createStr string
+	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -418,6 +419,10 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
+	for _, checkDef := range checkDefs {
+		createStr += ",\n  " + checkDef
+	}
+
 	if rowCount != 0 {
 		createStr += "\n"
 	}
@@ -581,6 +586,222 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, createStr)
 	}
 	return createStr, stmt, err
+}
+
+func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+		return nil
+	}
+
+	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
+	if !ok {
+		return nil
+	}
+
+	segments := splitTopLevelDefs(defsSection)
+	checks := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if isTopLevelCheckDef(segment) {
+			checks = append(checks, segment)
+		}
+	}
+	return checks
+}
+
+func extractCreateTableDefsSection(createSQL string) (string, bool) {
+	start := findTopLevelByte(createSQL, '(')
+	if start == -1 {
+		return "", false
+	}
+
+	end := findMatchingParen(createSQL, start)
+	if end == -1 || end <= start {
+		return "", false
+	}
+	return createSQL[start+1 : end], true
+}
+
+func splitTopLevelDefs(defs string) []string {
+	parts := make([]string, 0, 8)
+	start := 0
+	depth := 0
+	for i := 0; i < len(defs); i++ {
+		switch defs[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(defs, i)
+		case '#':
+			i = skipLineComment(defs, i)
+		case '-':
+			if i+1 < len(defs) && defs[i+1] == '-' {
+				i = skipLineComment(defs, i+1)
+			}
+		case '/':
+			if i+1 < len(defs) && defs[i+1] == '*' {
+				i = skipBlockComment(defs, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, defs[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, defs[start:])
+	return parts
+}
+
+func isTopLevelCheckDef(def string) bool {
+	if def == "" {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(def)
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, "CHECK") {
+		return true
+	}
+	if !strings.HasPrefix(upper, "CONSTRAINT") {
+		return false
+	}
+	return containsKeywordOutsideQuotes(trimmed, "CHECK")
+}
+
+func containsKeywordOutsideQuotes(s string, keyword string) bool {
+	upper := strings.ToUpper(s)
+	for i := 0; i < len(upper); i++ {
+		switch upper[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(upper, i)
+		case '#':
+			i = skipLineComment(upper, i)
+		case '-':
+			if i+1 < len(upper) && upper[i+1] == '-' {
+				i = skipLineComment(upper, i+1)
+			}
+		case '/':
+			if i+1 < len(upper) && upper[i+1] == '*' {
+				i = skipBlockComment(upper, i)
+			}
+		default:
+			if hasKeywordAt(upper, keyword, i) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasKeywordAt(s string, keyword string, pos int) bool {
+	end := pos + len(keyword)
+	if end > len(s) || s[pos:end] != keyword {
+		return false
+	}
+	prevIsIdent := pos > 0 && isIdentChar(s[pos-1])
+	nextIsIdent := end < len(s) && isIdentChar(s[end])
+	return !prevIsIdent && !nextIsIdent
+}
+
+func isIdentChar(ch byte) bool {
+	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+}
+
+func findTopLevelByte(s string, target byte) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		default:
+			if s[i] == target {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func findMatchingParen(s string, start int) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func skipQuoted(s string, start int) int {
+	quote := s[start]
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && quote != '`' {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote && quote != '`' {
+			i++
+			continue
+		}
+		return i
+	}
+	return len(s) - 1
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\n' {
+			return i
+		}
+	}
+	return len(s) - 1
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start + 2; i < len(s); i++ {
+		if s[i-1] == '*' && s[i] == '/' {
+			return i
+		}
+	}
+	return len(s) - 1
 }
 
 // FormatColType Get the formatted description of the column type.
