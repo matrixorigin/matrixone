@@ -287,6 +287,7 @@ func (am *aObjMerger[T]) Merge(ctx context.Context) ([]*batch.Batch, func(), []i
 		am.mapping[am.accRowCnt[blkIdx]+rowIdx] = k
 		k++
 		bufferRowCnt++
+		batches[blkCnt].SetRowCount(bufferRowCnt)
 		// write new block
 		if bufferRowCnt == int(am.toLayout[blkCnt]) {
 			bufferRowCnt = 0

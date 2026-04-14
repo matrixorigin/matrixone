@@ -140,6 +140,7 @@ func TestAObjMerge(t *testing.T) {
 	ret, releaseF, mapping, err := MergeAObj(context.Background(), testPool, batches, 0, toLayout)
 	require.NoError(t, err)
 	for i := 0; i < batCnt; i++ {
+		require.Equal(t, int(toLayout[i]), ret[i].RowCount())
 		for j := 0; j < vecCnt; j++ {
 			t.Log(vector.MustFixedColWithTypeCheck[int32](ret[i].Vecs[j]))
 			require.True(t, slices.IsSorted(vector.MustFixedColWithTypeCheck[int32](ret[i].Vecs[j])))
@@ -176,6 +177,7 @@ func TestAObjMergeContainsNull(t *testing.T) {
 	ret, releaseF, mapping, err := MergeAObj(context.Background(), testPool, batches, 0, toLayout)
 	require.NoError(t, err)
 	for _, bat := range ret {
+		require.Equal(t, rowCnt, bat.RowCount())
 		for _, vec := range bat.Vecs {
 			s := vector.MustFixedColWithTypeCheck[int32](vec)
 			for i := range s {
