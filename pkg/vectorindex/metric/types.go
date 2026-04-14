@@ -63,12 +63,26 @@ const (
 )
 
 const (
-	Quantization_F32_Str   = "F32"
-	Quantization_F64_Str   = "F64"
-	Quantization_F16_Str   = "F16"
-	Quantization_INT8_Str  = "I8"
-	Quantization_UINT8_Str = "UI8"
+	Quantization_F32_Str   = "float32"
+	Quantization_F16_Str   = "float16"
+	Quantization_INT8_Str  = "int8"
+	Quantization_UINT8_Str = "uint8"
+	Quantization_F64_Str   = "float64"
 )
+
+func ValidQuantization(val string) bool {
+	qlists := []string{Quantization_F32_Str,
+		Quantization_F16_Str,
+		Quantization_INT8_Str,
+		Quantization_UINT8_Str}
+
+	for _, q := range qlists {
+		if val == q {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	DistFuncOpTypes = map[string]string{

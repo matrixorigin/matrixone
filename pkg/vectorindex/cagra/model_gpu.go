@@ -290,9 +290,9 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 func (idx *CagraModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id))
+		cfg.DbName, cfg.IndexTable, catalog.Cagra_TblCol_Storage_Index_Id, idx.Id))
 	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.MetadataTable, catalog.Hnsw_TblCol_Metadata_Index_Id, idx.Id))
+		cfg.DbName, cfg.MetadataTable, catalog.Cagra_TblCol_Metadata_Index_Id, idx.Id))
 	return sqls, nil
 }
 

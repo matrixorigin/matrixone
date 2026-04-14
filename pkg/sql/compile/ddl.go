@@ -762,8 +762,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. FullText index
 					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
 				} else if !indexDef.Unique &&
-					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. IVF and HNSW indexDefs are aggregated and handled later
+					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+						catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo)) {
+					// 4. IVF, CAGRA, IVFPQ and HNSW indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -783,6 +784,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+
+				case catalog.MoIndexCagraAlgo.ToString():
+					err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+
+				case catalog.MoIndexIvfpqAlgo.ToString():
+					err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
 
 				if err != nil {
@@ -924,6 +931,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 							}
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
+					case catalog.MoIndexCagraAlgo.ToString():
+					case catalog.MoIndexIvfpqAlgo.ToString():
 						// PASS
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
@@ -946,8 +955,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
 				case catalog.MoIndexHnswAlgo.ToString():
-					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+				case catalog.MoIndexCagraAlgo.ToString():
+					err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+				case catalog.MoIndexIvfpqAlgo.ToString():
+					err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
 				}
 
 				if err != nil {
@@ -2074,7 +2086,8 @@ func (s *Scope) doCreateIndex(
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique &&
-			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo)) {
+			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo) ||
+				catalog.IsIvfpqIndexAlgo(indexAlgo) || catalog.IsCagraIndexAlgo(indexAlgo)) {
 			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
@@ -2098,6 +2111,10 @@ func (s *Scope) doCreateIndex(
 			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MoIndexCagraAlgo.ToString():
+			err = s.handleVectorCagraIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		case catalog.MoIndexIvfpqAlgo.ToString():
+			err = s.handleVectorIvfpqIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {

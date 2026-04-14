@@ -104,6 +104,10 @@ var (
 	insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
 )
 
+var (
+	insertIntoCagraIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY cagra_create('%s', '%s', %s, %s) AS f;"
+)
+
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
 	// insert data into index table
@@ -436,6 +440,7 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 						}
 					}
 				}
+				// TODO: CAGRA AND IVFPQ
 
 			}
 
@@ -600,6 +605,80 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	part := src_alias + "." + idxdef_index.Parts[0]
 
 	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
+		qryDatabase, originalTableDef.Name,
+		src_alias,
+		params,
+		string(cfgbytes),
+		pkColName,
+		part)
+
+	return []string{sql}, nil
+}
+
+func genDeleteCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	idxdef_meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
+	}
+
+	idxdef_index, ok := indexDefs[catalog.Cagra_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
+	}
+
+	sqls := make([]string, 0, 2)
+
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName)
+	sqls = append(sqls, sql)
+	sql = fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName)
+	sqls = append(sqls, sql)
+
+	return sqls, nil
+
+}
+
+func genBuildCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	var cfg vectorindex.IndexTableConfig
+	src_alias := "src"
+	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
+
+	idxdef_meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
+	}
+	cfg.MetadataTable = idxdef_meta.IndexTableName
+
+	idxdef_index, ok := indexDefs[catalog.Cagra_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
+	}
+	cfg.IndexTable = idxdef_index.IndexTableName
+	cfg.DbName = qryDatabase
+	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = idxdef_index.Parts[0]
+	val, err := proc.GetResolveVariableFunc()("cagra_threads_build", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ThreadsBuild = val.(int64)
+
+	idxcap, err := proc.GetResolveVariableFunc()("cagra_max_index_capacity", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.IndexCapacity = idxcap.(int64)
+
+	params := idxdef_index.IndexAlgoParams
+
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	part := src_alias + "." + idxdef_index.Parts[0]
+
+	sql := fmt.Sprintf(insertIntoCagraIndexTableFormat,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params,

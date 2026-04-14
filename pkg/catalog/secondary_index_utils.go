@@ -23,6 +23,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -34,6 +35,8 @@ const (
 	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
 	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
 	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
+	MoIndexCagraAlgo    = tree.INDEX_TYPE_CAGRA    // used for CAGRA Index on Vector/Array columns
+	MoIndexIvfpqAlgo    = tree.INDEX_TYPE_IVFPQ    // used for IVFPQ Index on Vector/Array columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -77,18 +80,32 @@ func IsHnswIndexAlgo(algo string) bool {
 	return _algo == MoIndexHnswAlgo.ToString()
 }
 
+func IsCagraIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexCagraAlgo.ToString()
+}
+
+func IsIvfpqIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexIvfpqAlgo.ToString()
+}
+
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists  = "lists"
-	IndexAlgoParamOpType = "op_type"
-	HnswM                = "m"
-	HnswEfConstruction   = "ef_construction"
-	HnswQuantization     = "quantization"
-	HnswEfSearch         = "ef_search"
-	Async                = "async"
-	AutoUpdate           = "auto_update"
-	Day                  = "day"
-	Hour                 = "hour"
+	IndexAlgoParamLists     = "lists"
+	IndexAlgoParamOpType    = "op_type"
+	HnswM                   = "m"
+	HnswEfConstruction      = "ef_construction"
+	HnswEfSearch            = "ef_search"
+	Async                   = "async"
+	AutoUpdate              = "auto_update"
+	Day                     = "day"
+	Hour                    = "hour"
+	DistributionMode        = "distribution_mode"
+	Quantization            = "quantization"
+	BitsPerCode             = "bits_per_code"
+	IntermediateGraphDegree = "intermediate_graph_degree"
+	GraphDegree             = "graph_degree"
 )
 
 /* 1. ToString Functions */
@@ -148,6 +165,25 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
 	}
 
+	if val, ok := result[Quantization]; ok {
+		res += fmt.Sprintf(" %s = %s ", Quantization, val)
+	}
+
+	if val, ok := result[DistributionMode]; ok {
+		res += fmt.Sprintf(" %s = %s ", DistributionMode, val)
+	}
+
+	if val, ok := result[BitsPerCode]; ok {
+		res += fmt.Sprintf(" %s = %s ", BitsPerCode, val)
+	}
+
+	if val, ok := result[IntermediateGraphDegree]; ok {
+		res += fmt.Sprintf(" %s = %s ", IntermediateGraphDegree, val)
+	}
+
+	if val, ok := result[GraphDegree]; ok {
+		res += fmt.Sprintf(" %s = %s ", GraphDegree, val)
+	}
 	return res, nil
 }
 
@@ -294,6 +330,54 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if idx.IndexOption.Async {
 				res[Async] = "true"
 			}
+		case tree.INDEX_TYPE_CAGRA:
+			if idx.IndexOption.IntermediateGraphDegree < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid intermediate_graph_degree. cagra.intermediate_graph_degree must be > 0")
+			}
+			if idx.IndexOption.GraphDegree < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid graph_degree. cagra.graph_degree must be > 0")
+			}
+
+			if idx.IndexOption.IntermediateGraphDegree > 0 {
+				res[IntermediateGraphDegree] = strconv.FormatInt(idx.IndexOption.IntermediateGraphDegree, 10)
+			}
+			if idx.IndexOption.GraphDegree > 0 {
+				res[GraphDegree] = strconv.FormatInt(idx.IndexOption.GraphDegree, 10)
+			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
+			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
+			}
+			if len(idx.IndexOption.Quantization) > 0 {
+				quantize := ToLower(idx.IndexOption.Quantization)
+				if !metric.ValidQuantization(quantize) {
+					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
+				}
+				res[Quantization] = quantize
+			} else {
+				res[Quantization] = metric.Quantization_F32_Str
+			}
+
+			if len(idx.IndexOption.DistributionMode) > 0 {
+				mode := ToLower(idx.IndexOption.DistributionMode)
+				if !vectorindex.ValidDistributionMode(mode) {
+					return nil, moerr.NewInternalErrorNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
+				}
+				res[DistributionMode] = mode
+			} else {
+				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
+			}
+
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
 		}

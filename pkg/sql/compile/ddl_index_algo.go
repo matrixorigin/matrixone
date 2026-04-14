@@ -35,7 +35,9 @@ import (
 )
 
 const (
-	hnswIndexFlag = "experimental_hnsw_index"
+	hnswIndexFlag  = "experimental_hnsw_index"
+	cagraIndexFlag = "experimental_cagra_index"
+	ivfpqIndexFlag = "experimental_ivfpq_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -701,5 +703,88 @@ func (s *Scope) handleVectorHnswIndex(
 		}
 	}
 
+	return nil
+}
+
+func (s *Scope) handleVectorCagraIndex(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
+	/*
+		if ok, err := s.isExperimentalEnabled(c, cagraIndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
+		}
+	*/
+
+	// 1. static check
+	if len(indexDefs) != 2 {
+		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
+	}
+	if len(indexDefs[catalog.Cagra_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
+				return err
+			}
+		}
+	}
+
+	// clear the cache (it only work in standalone mode though)
+	key := indexDefs[catalog.Cagra_TblType_Storage].IndexTableName
+	cache.Cache.Remove(key)
+
+	// delete old data first
+	{
+		sqls, err := genDeleteCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+
+		for _, sql := range sqls {
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. build hnsw index
+	sqls, err := genBuildCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	for _, sql := range sqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Scope) handleVectorIvfpqIndex(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	return nil
 }

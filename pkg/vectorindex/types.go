@@ -56,10 +56,23 @@ const (
 )
 
 const (
-	DistributionMode_SINGLE_GPU_Str = "SINGLE"
-	DistributionMode_SHARDED_Str    = "SHARDED"
-	DistributionMode_REPLICATED_Str = "REPLICATED"
+	DistributionMode_SINGLE_GPU_Str = "single"
+	DistributionMode_SHARDED_Str    = "sharded"
+	DistributionMode_REPLICATED_Str = "replicated"
 )
+
+func ValidDistributionMode(val string) bool {
+	lists := []string{DistributionMode_SINGLE_GPU_Str,
+		DistributionMode_SHARDED_Str,
+		DistributionMode_REPLICATED_Str}
+
+	for _, mode := range lists {
+		if mode == val {
+			return true
+		}
+	}
+	return false
+}
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
 // can use the same IndexTableConfig struct
