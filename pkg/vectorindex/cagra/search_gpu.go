@@ -17,9 +17,6 @@
 package cagra
 
 import (
-	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -35,6 +32,7 @@ type CagraSearch[T cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*CagraModel[T]
+	MultiIndex    *cuvs.MultiGpuCagra[T] // built once in Load; nil until indexes are loaded
 	Devices       []int
 	ThreadsSearch int64
 }
@@ -51,71 +49,37 @@ func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg ve
 
 // Search implements cache.VectorIndexSearchIf.
 func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	query, ok := anyquery.([]T)
+	query, ok := anyquery.([]float32)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("CagraSearch: query type mismatch")
 	}
 
 	limit := rt.Limit
 
-	if len(s.Indexes) == 0 {
+	if s.MultiIndex == nil {
 		return []uint32{}, []float64{}, nil
 	}
 
-	// FastMaxHeapSafe keeps the K (=limit) nearest neighbours across all sub-indexes.
-	// CAGRA distances are float32 and keys are uint32, matching the native CAGRA ID type.
-	keysBuf := make([]uint32, limit)
-	distsBuf := make([]float32, limit)
-	h := vectorindex.NewFastMaxHeapSafe[float32, uint32](int(limit), keysBuf, distsBuf)
-
-	nthread := int(vectorindex.GetConcurrency(0))
-	if nthread > len(s.Indexes) {
-		nthread = len(s.Indexes)
-	}
-
-	exec := concurrent.NewThreadPoolExecutor(nthread)
-	err = exec.Execute(sqlproc.GetContext(),
-		len(s.Indexes),
-		func(ctx context.Context, thread_id int, start, end int) error {
-			subindex := s.Indexes[start:end]
-			for j := range subindex {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				ikeys, idists, err2 := subindex[j].Search(query, uint32(limit))
-				if err2 != nil {
-					return err2
-				}
-				for k := range ikeys {
-					h.Push(uint32(ikeys[k]), idists[k])
-				}
-			}
-			return nil
-		})
+	dim := uint32(s.Idxcfg.CuvsCagra.Dimensions)
+	sp := cuvs.DefaultCagraSearchParams()
+	neighbors64, dists32, err := s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// multiGpuSearch returns results in ascending order (nearest first); -1 marks empty slots.
 	reskeys := make([]uint32, 0, limit)
 	resdistances := make([]float64, 0, limit)
-
-	for {
-		key, dist, ok2 := h.Pop()
-		if !ok2 {
-			break
+	for i, k := range neighbors64 {
+		if k == -1 {
+			continue
 		}
-		reskeys = append(reskeys, key)
+		reskeys = append(reskeys, uint32(k))
 		resdistances = append(resdistances, metric.DistanceTransformIvfflat(
-			float64(dist),
+			float64(dists32[i]),
 			metric.DistFuncNameToMetricType[rt.OrigFuncName],
 			metric.MetricType(s.Idxcfg.CuvsCagra.Metric),
 		))
-	}
-
-	// Reverse to get ascending order (nearest first)
-	for i, j := 0, len(reskeys)-1; i < j; i, j = i+1, j-1 {
-		reskeys[i], reskeys[j] = reskeys[j], reskeys[i]
-		resdistances[i], resdistances[j] = resdistances[j], resdistances[i]
 	}
 
 	return reskeys, resdistances, nil
@@ -160,7 +124,28 @@ func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	s.Indexes = indexes
+	s.MultiIndex = s.buildMultiIndex()
 	return nil
+}
+
+// buildMultiIndex assembles a MultiGpuCagra from the loaded indexes.
+// Returns nil when no indexes are ready (empty or all Index fields are nil).
+func (s *CagraSearch[T]) buildMultiIndex() *cuvs.MultiGpuCagra[T] {
+	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsCagra.Metric)]
+	if !ok {
+		return nil
+	}
+	gpuIndices := make([]*cuvs.GpuCagra[T], 0, len(s.Indexes))
+	for _, model := range s.Indexes {
+		if model.Index != nil {
+			gpuIndices = append(gpuIndices, model.Index)
+		}
+	}
+	if len(gpuIndices) == 0 {
+		return nil
+	}
+	dim := uint32(s.Idxcfg.CuvsCagra.Dimensions)
+	return cuvs.NewMultiGpuCagra(gpuIndices, nil, dim, cuvsMetric)
 }
 
 // loadIndexes loads each model's index data from the database.
@@ -180,6 +165,7 @@ func (s *CagraSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*Cag
 
 // Destroy implements cache.VectorIndexSearchIf.
 func (s *CagraSearch[T]) Destroy() {
+	s.MultiIndex = nil // does not own GPU resources; GpuCagra instances are owned by Indexes
 	for _, idx := range s.Indexes {
 		idx.Destroy()
 	}
