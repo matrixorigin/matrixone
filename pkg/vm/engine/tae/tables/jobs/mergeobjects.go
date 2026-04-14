@@ -227,6 +227,14 @@ func (task *mergeObjectsTask) OnObjectSynced(ctx context.Context, stats *objecti
 	if err := task.nativeIndexer.Write(ctx, task.rt.Fs, stats.ObjectName()); err != nil {
 		task.nativeObjectFailed = true
 		task.logNativeSidecarError("merge-write", err)
+	} else {
+		logutil.Infof(
+			"[FTS-DEBUG] merge sidecar written: table=%s schema_version=%d object=%s active_builders=%d",
+			task.schema.Name,
+			task.schema.Version,
+			stats.ObjectName().String(),
+			task.nativeIndexer.ActiveIndexCount(),
+		)
 	}
 	return nil
 }
@@ -243,6 +251,23 @@ func (task *mergeObjectsTask) resetNativeIndexer() {
 		task.nativeIndexingClosed = true
 		task.logNativeSidecarError("merge-init", err)
 		return
+	}
+	logutil.Infof(
+		"[FTS-DEBUG] merge sidecar init: table=%s schema_version=%d constraint_len=%d index_defs=%d active_builders=%d",
+		task.schema.Name,
+		task.schema.Version,
+		len(task.schema.Constraint),
+		indexer.IndexCount(),
+		indexer.ActiveIndexCount(),
+	)
+	if indexer.Empty() {
+		logutil.Infof(
+			"[FTS-DEBUG] merge sidecar skipped: table=%s schema_version=%d constraint_len=%d index_defs=%d",
+			task.schema.Name,
+			task.schema.Version,
+			len(task.schema.Constraint),
+			indexer.IndexCount(),
+		)
 	}
 	task.nativeIndexer = indexer
 }

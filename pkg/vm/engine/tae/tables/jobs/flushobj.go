@@ -143,18 +143,47 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		return err
 	}
 	if !task.meta.IsTombstone {
-		indexer, idxErr := ftnative.NewObjectIndexer(task.meta.GetSchema())
+		schema := task.meta.GetSchema()
+		indexer, idxErr := ftnative.NewObjectIndexer(schema)
 		if idxErr != nil {
 			task.logNativeSidecarError("flush-init", idxErr)
-		} else if !indexer.Empty() {
-			blockRows := make([]uint32, len(task.blocks))
-			for i, block := range task.blocks {
-				blockRows[i] = block.GetRows()
-			}
-			if idxErr = indexer.AddBatch(cnBatch, blockRows); idxErr != nil {
-				task.logNativeSidecarError("flush-add", idxErr)
-			} else if idxErr = indexer.Write(ctx, task.fs, task.name); idxErr != nil {
-				task.logNativeSidecarError("flush-write", idxErr)
+		} else {
+			logutil.Infof(
+				"[FTS-DEBUG] flush sidecar init: table=%s schema_version=%d constraint_len=%d index_defs=%d active_builders=%d object=%s",
+				schema.Name,
+				schema.Version,
+				len(schema.Constraint),
+				indexer.IndexCount(),
+				indexer.ActiveIndexCount(),
+				task.name.String(),
+			)
+			if !indexer.Empty() {
+				blockRows := make([]uint32, len(task.blocks))
+				for i, block := range task.blocks {
+					blockRows[i] = block.GetRows()
+				}
+				if idxErr = indexer.AddBatch(cnBatch, blockRows); idxErr != nil {
+					task.logNativeSidecarError("flush-add", idxErr)
+				} else if idxErr = indexer.Write(ctx, task.fs, task.name); idxErr != nil {
+					task.logNativeSidecarError("flush-write", idxErr)
+				} else {
+					logutil.Infof(
+						"[FTS-DEBUG] flush sidecar written: table=%s schema_version=%d object=%s active_builders=%d",
+						schema.Name,
+						schema.Version,
+						task.name.String(),
+						indexer.ActiveIndexCount(),
+					)
+				}
+			} else {
+				logutil.Infof(
+					"[FTS-DEBUG] flush sidecar skipped: table=%s schema_version=%d constraint_len=%d index_defs=%d object=%s",
+					schema.Name,
+					schema.Version,
+					len(schema.Constraint),
+					indexer.IndexCount(),
+					task.name.String(),
+				)
 			}
 		}
 	}

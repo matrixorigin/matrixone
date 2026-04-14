@@ -212,6 +212,14 @@ func prepareNativeScan(
 			return nil, err
 		}
 		if !exists {
+			logutil.Infof(
+				"[FTS-DEBUG] query sidecar missing: src=%s index_table=%s object=%s stats=%d visible_remaining=%d",
+				srctbl,
+				indexTableName,
+				nameStr,
+				len(stats),
+				len(visible),
+			)
 			incomplete = true
 			continue
 		}

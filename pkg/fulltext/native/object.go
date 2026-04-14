@@ -122,6 +122,14 @@ func (o *ObjectIndexer) Empty() bool {
 	return len(o.builders) == 0
 }
 
+func (o *ObjectIndexer) IndexCount() int {
+	return len(o.indexes)
+}
+
+func (o *ObjectIndexer) ActiveIndexCount() int {
+	return len(o.builders)
+}
+
 func (o *ObjectIndexer) AddBatch(bat *batch.Batch, blockRows []uint32) error {
 	if o.Empty() || bat == nil || bat.RowCount() == 0 {
 		return nil
