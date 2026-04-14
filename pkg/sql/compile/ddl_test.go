@@ -1266,3 +1266,53 @@ func TestIsMissingTableForFkCleanup(t *testing.T) {
 	require.False(t, isMissingTableForFkCleanup(
 		moerr.NewBadDB(ctx, "db1")))
 }
+
+func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	mockRel := mock_frontend.NewMockRelation(ctrl)
+	mockRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+	mockRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan2.TableDef{}).AnyTimes()
+
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().Relation(gomock.Any(), "test_tbl", gomock.Any()).Return(mockRel, nil).AnyTimes()
+	mockDb.EXPECT().Delete(gomock.Any(), "test_tbl").Return(nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(mockDb, nil).AnyTimes()
+	// FK parent table not found → covers line 2929 (isMissingTableForFkCleanup in ForeignTbl loop)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(42)).
+		Return("", "", nil, moerr.NewNoSuchTable(ctx, "db", "parent_tbl")).
+		Times(1)
+	// FK child table not found → covers lines 2957, 2965 (isMissingTableForFkCleanup in FkChildTblsReferToMe loop)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(43)).
+		Return("", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d", 43)).
+		Times(1)
+
+	c := NewCompile("test", "test", "drop table test_tbl", "", "", eng, proc, nil, false, nil, time.Now())
+	c.disableLock = true
+	s := &Scope{}
+	err := s.dropTableSingle(c, &plan2.DropTable{
+		Database:             catalog.MO_CATALOG,
+		Table:                "test_tbl",
+		TableId:              1,
+		IsView:               true,
+		TableDef:             &plan2.TableDef{},
+		ForeignTbl:           []uint64{42},
+		FkChildTblsReferToMe: []uint64{43},
+	})
+	require.NoError(t, err)
+}
