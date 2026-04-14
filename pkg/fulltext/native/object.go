@@ -350,13 +350,16 @@ func collectIndexValues(bat *batch.Batch, row int, partIdxes []int, partTypes []
 	for i, partIdx := range partIdxes {
 		vec := bat.Vecs[partIdx]
 		if vec.IsNull(uint64(row)) {
-			return nil, false, nil
+			continue
 		}
 		values = append(values, fulltext.IndexValue{
 			Text: vec.GetStringAt(row),
 			Raw:  vec.GetRawBytesAt(row),
 			Type: partTypes[i],
 		})
+	}
+	if len(values) == 0 {
+		return nil, false, nil
 	}
 	return values, true, nil
 }
