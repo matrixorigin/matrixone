@@ -592,6 +592,9 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
 	}
+	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+		return nil
+	}
 
 	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
 	if !ok {
