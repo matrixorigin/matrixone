@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -123,8 +124,11 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			}
 		}
 		if param.NativeOnly() {
+			logutil.Infof("[FTS-DEBUG] postdml: NativeOnly=true, skipping v1 hidden-table maintenance")
 			return nil
 		}
+		logutil.Infof("[FTS-DEBUG] postdml: NativeOnly=false, running v1 hidden-table maintenance. Implementation=%q, NativeOnlyMode=%v",
+			param.Implementation, param.NativeOnlyMode)
 
 		dbname := postdml.PostDmlCtx.Ref.GetSchemaName()
 

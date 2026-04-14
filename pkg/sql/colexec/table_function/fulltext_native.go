@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	ftnative "github.com/matrixorigin/matrixone/pkg/fulltext/native"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -79,13 +80,17 @@ func fulltextIndexMatchNative(
 	srctbl, tblname string,
 ) (bool, error) {
 	if !nativeQuerySupported(s) {
+		logutil.Infof("[FTS-DEBUG] nativeQuerySupported=false, mode=%d", s.Mode)
 		return false, nil
 	}
 
 	scan, err := prepareNativeScan(proc, srctbl, tblname, u.param)
 	if err != nil || scan == nil {
+		logutil.Infof("[FTS-DEBUG] prepareNativeScan returned nil or err, UseNative=%v, NativeOnly=%v", u.param.UseNative(), u.param.NativeOnly())
 		return false, err
 	}
+	logutil.Infof("[FTS-DEBUG] prepareNativeScan: objects=%d, complete=%v, UseNative=%v, NativeOnly=%v, totalDocs=%d",
+		len(scan.objects), scan.complete, u.param.UseNative(), u.param.NativeOnly(), scan.totalDocs)
 	if u.param.NativeOnly() {
 		scan.complete = true
 	}

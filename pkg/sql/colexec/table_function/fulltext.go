@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -643,8 +644,12 @@ func fulltextIndexMatch(
 			return err
 		}
 		if used {
+			logutil.Infof("[FTS-DEBUG] native path used, skipping v1")
 			return nil
 		}
+		logutil.Infof("[FTS-DEBUG] native path NOT used, falling back to v1")
+	} else {
+		logutil.Infof("[FTS-DEBUG] UseNative()=false, going v1 directly. Implementation=%q", u.param.Implementation)
 	}
 
 	if !u.statsLoaded {
