@@ -32,19 +32,58 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func TestIsGPUOffloadQuery(t *testing.T) {
-	assert.True(t, isGPUOffloadQuery("/*+ GPU */ SELECT * FROM t"))
-	assert.True(t, isGPUOffloadQuery("  /*+ GPU */ SELECT * FROM t"))
-	assert.True(t, isGPUOffloadQuery("/*+ gpu */ SELECT * FROM t"))
-	assert.False(t, isGPUOffloadQuery("SELECT * FROM t"))
-	assert.False(t, isGPUOffloadQuery("/*+ HASH_JOIN */ SELECT * FROM t"))
-	assert.False(t, isGPUOffloadQuery(""))
+func TestIsSidecarQuery(t *testing.T) {
+	// /*+ SIDECAR */ — CPU mode
+	isSidecar, useGPU := isSidecarQuery("/*+ SIDECAR */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.False(t, useGPU)
+
+	isSidecar, useGPU = isSidecarQuery("  /*+ SIDECAR */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.False(t, useGPU)
+
+	isSidecar, useGPU = isSidecarQuery("/*+ sidecar */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.False(t, useGPU)
+
+	// /*+ SIDECAR GPU */ — GPU mode
+	isSidecar, useGPU = isSidecarQuery("/*+ SIDECAR GPU */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.True(t, useGPU)
+
+	isSidecar, useGPU = isSidecarQuery("  /*+ sidecar gpu */ SELECT * FROM t")
+	assert.True(t, isSidecar)
+	assert.True(t, useGPU)
+
+	// Non-sidecar queries
+	isSidecar, _ = isSidecarQuery("SELECT * FROM t")
+	assert.False(t, isSidecar)
+
+	isSidecar, _ = isSidecarQuery("/*+ HASH_JOIN */ SELECT * FROM t")
+	assert.False(t, isSidecar)
+
+	isSidecar, _ = isSidecarQuery("")
+	assert.False(t, isSidecar)
 }
 
-func TestStripGPUHint(t *testing.T) {
-	assert.Equal(t, "SELECT * FROM t", stripGPUHint("/*+ GPU */ SELECT * FROM t"))
-	assert.Equal(t, "SELECT * FROM t", stripGPUHint("  /*+ GPU */ SELECT * FROM t"))
-	assert.Equal(t, "SELECT * FROM t", stripGPUHint("SELECT * FROM t"))
+func TestStripSidecarHint(t *testing.T) {
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("/*+ SIDECAR */ SELECT * FROM t"))
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("  /*+ SIDECAR */ SELECT * FROM t"))
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("/*+ SIDECAR GPU */ SELECT * FROM t"))
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("  /*+ sidecar gpu */ SELECT * FROM t"))
+	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
+}
+
+func TestWrapForGPUExecution(t *testing.T) {
+	// Simple query
+	assert.Equal(t,
+		"SELECT * FROM gpu_execution('SELECT 1')",
+		wrapForGPUExecution("SELECT 1"))
+
+	// Query with single quotes — they should be doubled
+	assert.Equal(t,
+		"SELECT * FROM gpu_execution('SELECT * FROM tae_scan(''http://localhost:8888/debug/tae/manifest?table=db.t'')')",
+		wrapForGPUExecution("SELECT * FROM tae_scan('http://localhost:8888/debug/tae/manifest?table=db.t')"))
 }
 
 func TestGetManifestBaseURL(t *testing.T) {
@@ -592,9 +631,9 @@ func TestSendToSidecar_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to parse sidecar response")
 }
 
-func TestExecRequest_GPUOffloadNotConfigured(t *testing.T) {
-	// When gpu_sidecar_url is not set and debugHTTPAddr is empty,
-	// handleGPUOffload returns errGPUNotConfigured → ExecRequest strips
+func TestExecRequest_SidecarNotConfigured(t *testing.T) {
+	// When sidecar_url is not set and debugHTTPAddr is empty,
+	// handleSidecarOffload returns errSidecarNotConfigured → ExecRequest strips
 	// the hint and falls through to normal COM_QUERY processing.
 	saved := debugHTTPAddr
 	defer func() { debugHTTPAddr = saved }()
@@ -608,14 +647,18 @@ func TestExecRequest_GPUOffloadNotConfigured(t *testing.T) {
 
 	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
 
-	// handleGPUOffload should return errGPUNotConfigured
-	err := handleGPUOffload(ses, execCtx, "/*+ GPU */ SELECT 1")
-	assert.Equal(t, errGPUNotConfigured, err)
+	// handleSidecarOffload should return errSidecarNotConfigured (CPU mode)
+	err := handleSidecarOffload(ses, execCtx, "/*+ SIDECAR */ SELECT 1", false)
+	assert.Equal(t, errSidecarNotConfigured, err)
+
+	// Same for GPU mode
+	err = handleSidecarOffload(ses, execCtx, "/*+ SIDECAR GPU */ SELECT 1", true)
+	assert.Equal(t, errSidecarNotConfigured, err)
 }
 
-func TestExecRequest_GPUOffloadSidecarError(t *testing.T) {
-	// When sidecar URL is set but returns an error, handleGPUOffload
-	// returns a real error (not errGPUNotConfigured).
+func TestExecRequest_SidecarError(t *testing.T) {
+	// When sidecar URL is set but returns an error, handleSidecarOffload
+	// returns a real error (not errSidecarNotConfigured).
 	saved := debugHTTPAddr
 	defer func() { debugHTTPAddr = saved }()
 	debugHTTPAddr = ":8888"
@@ -633,19 +676,19 @@ func TestExecRequest_GPUOffloadSidecarError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := ses.SetSessionSysVar(context.Background(), "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(context.Background(), "sidecar_url", srv.URL)
 	require.NoError(t, err)
 
 	ses.SetDatabaseName("testdb")
 	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
 
-	err = handleGPUOffload(ses, execCtx, "/*+ GPU */ SELECT 1 AS x FROM testdb.t1")
+	err = handleSidecarOffload(ses, execCtx, "/*+ SIDECAR */ SELECT 1 AS x FROM testdb.t1", false)
 	assert.Error(t, err)
-	assert.NotEqual(t, errGPUNotConfigured, err)
+	assert.NotEqual(t, errSidecarNotConfigured, err)
 	assert.Contains(t, err.Error(), "sidecar error (500)")
 }
 
-func TestExecRequest_GPUOffloadSuccess(t *testing.T) {
+func TestExecRequest_SidecarSuccess(t *testing.T) {
 	// Full end-to-end: sidecar URL set + mock sidecar → result set built.
 	saved := debugHTTPAddr
 	defer func() { debugHTTPAddr = saved }()
@@ -664,13 +707,14 @@ func TestExecRequest_GPUOffloadSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := ses.SetSessionSysVar(context.Background(), "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(context.Background(), "sidecar_url", srv.URL)
 	require.NoError(t, err)
 
 	ses.SetDatabaseName("testdb")
 	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
 
-	err = handleGPUOffload(ses, execCtx, "/*+ GPU */ SELECT 42 AS x FROM testdb.t1")
+	// CPU mode
+	err = handleSidecarOffload(ses, execCtx, "/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1", false)
 	assert.NoError(t, err)
 
 	// Verify result set was built correctly
