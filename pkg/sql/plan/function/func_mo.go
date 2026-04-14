@@ -1185,9 +1185,13 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 			valueSRID = 0
 		}
 		if valueSRID != columnSRID {
+			columnLabel := columnSubtype
+			if columnLabel == "" {
+				columnLabel = "GEOMETRY"
+			}
 			return nil, moerr.NewInvalidInputNoCtxf(
 				"The SRID of the geometry does not match the SRID of the column '%s'. The SRID of the geometry is %d, but the SRID of the column is %d. Consider changing the SRID of the geometry or the SRID property of the column.",
-				columnSubtype,
+				columnLabel,
 				valueSRID,
 				columnSRID,
 			)
