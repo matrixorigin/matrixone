@@ -160,16 +160,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			task.logNativeSidecarError("flush-init", idxErr)
 		} else {
 			sidecarObjectName := flushSidecarObjectName(task.name, &task.stats)
-			logutil.Infof(
-				"[FTS-DEBUG] flush sidecar init: table=%s schema_version=%d constraint_len=%d index_defs=%d active_builders=%d object=%s source_object=%s",
-				schema.Name,
-				schema.Version,
-				len(schema.Constraint),
-				indexer.IndexCount(),
-				indexer.ActiveIndexCount(),
-				sidecarObjectName.String(),
-				task.name.String(),
-			)
 			if !indexer.Empty() {
 				blockRows := make([]uint32, len(task.blocks))
 				for i, block := range task.blocks {
@@ -179,26 +169,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 					task.logNativeSidecarError("flush-add", idxErr)
 				} else if idxErr = indexer.Write(ctx, task.fs, sidecarObjectName); idxErr != nil {
 					task.logNativeSidecarError("flush-write", idxErr)
-				} else {
-					logutil.Infof(
-						"[FTS-DEBUG] flush sidecar written: table=%s schema_version=%d object=%s source_object=%s active_builders=%d",
-						schema.Name,
-						schema.Version,
-						sidecarObjectName.String(),
-						task.name.String(),
-						indexer.ActiveIndexCount(),
-					)
 				}
-			} else {
-				logutil.Infof(
-					"[FTS-DEBUG] flush sidecar skipped: table=%s schema_version=%d constraint_len=%d index_defs=%d object=%s source_object=%s",
-					schema.Name,
-					schema.Version,
-					len(schema.Constraint),
-					indexer.IndexCount(),
-					sidecarObjectName.String(),
-					task.name.String(),
-				)
 			}
 		}
 	}
@@ -242,7 +213,7 @@ func (task *flushObjTask) release() {
 
 func (task *flushObjTask) logNativeSidecarError(phase string, err error) {
 	logutil.Error(
-		"[NATIVE-FTS-SIDECAR-SKIP]",
+		"native fulltext sidecar skipped",
 		zap.String("phase", phase),
 		zap.String("table", task.meta.GetSchema().Name),
 		common.AnyField("obj", task.meta.ID().ShortStringEx()),

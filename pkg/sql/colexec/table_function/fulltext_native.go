@@ -16,9 +16,11 @@ package table_function
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	ftnative "github.com/matrixorigin/matrixone/pkg/fulltext/native"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -73,6 +74,18 @@ type nativeDeleteCache struct {
 	deleted  map[string]map[uint32]bool
 }
 
+type nativeTailBatchAttrs struct {
+	rowIDIdx  int
+	pkIdx     int
+	partIdxes []int
+	partTypes []types.T
+}
+
+type nativeTailSegmentBuilder struct {
+	name    objectio.ObjectName
+	builder *ftnative.Builder
+}
+
 func fulltextIndexMatchNative(
 	u *fulltextState,
 	proc *process.Process,
@@ -80,17 +93,13 @@ func fulltextIndexMatchNative(
 	srctbl, tblname string,
 ) (bool, error) {
 	if !nativeQuerySupported(s) {
-		logutil.Infof("[FTS-DEBUG] nativeQuerySupported=false, mode=%d", s.Mode)
 		return false, nil
 	}
 
 	scan, err := prepareNativeScan(proc, srctbl, tblname, u.param)
 	if err != nil || scan == nil {
-		logutil.Infof("[FTS-DEBUG] prepareNativeScan returned nil or err, UseNative=%v, NativeOnly=%v", u.param.UseNative(), u.param.NativeOnly())
 		return false, err
 	}
-	logutil.Infof("[FTS-DEBUG] prepareNativeScan: objects=%d, complete=%v, UseNative=%v, NativeOnly=%v, totalDocs=%d",
-		len(scan.objects), scan.complete, u.param.UseNative(), u.param.NativeOnly(), scan.totalDocs)
 	if u.param.NativeOnly() {
 		scan.complete = true
 	}
@@ -150,7 +159,6 @@ func prepareNativeScan(
 	param fulltext.FullTextParserParam,
 ) (*nativePreparedScan, error) {
 	if len(param.Parts) == 0 {
-		logutil.Infof("[FTS-DEBUG] prepareNativeScan: Parts is empty")
 		return nil, nil
 	}
 
@@ -174,7 +182,6 @@ func prepareNativeScan(
 	}
 	tableDef := rel.GetTableDef(proc.Ctx)
 	if hasDatalinkPart(tableDef, param.Parts) {
-		logutil.Infof("[FTS-DEBUG] prepareNativeScan: hasDatalinkPart=true")
 		return nil, nil
 	}
 	objectFS, err := colexec.GetObjectFSFromProc(proc)
@@ -212,14 +219,6 @@ func prepareNativeScan(
 			return nil, err
 		}
 		if !exists {
-			logutil.Infof(
-				"[FTS-DEBUG] query sidecar missing: src=%s index_table=%s object=%s stats=%d visible_remaining=%d",
-				srctbl,
-				indexTableName,
-				nameStr,
-				len(stats),
-				len(visible),
-			)
 			incomplete = true
 			continue
 		}
@@ -236,22 +235,16 @@ func prepareNativeScan(
 		incomplete = true
 	}
 
-	tailSeg, err := buildNativeTailSegment(proc, rel, tableDef, param)
+	tailObjects, tailDocs, tailTokens, err := buildNativeTailSegments(proc, rel, tableDef, param)
 	if err != nil {
 		return nil, err
 	}
-	if tailSeg != nil && tailSeg.DocCount > 0 {
-		objects = append(objects, nativeObjectSegment{
-			key:             "__tail_delta__",
-			segment:         tailSeg,
-			applyTombstones: false,
-		})
-		totalDocs += tailSeg.DocCount
-		totalTokens += tailSeg.TokenSum
+	if len(tailObjects) > 0 {
+		objects = append(objects, tailObjects...)
+		totalDocs += tailDocs
+		totalTokens += tailTokens
 	}
 	if len(objects) == 0 {
-		logutil.Infof("[FTS-DEBUG] prepareNativeScan: objects=0, stats=%d, visible_remaining=%d, incomplete=%v, tailSeg=%v",
-			len(stats), len(visible), incomplete, tailSeg != nil)
 		return nil, nil
 	}
 
@@ -608,15 +601,15 @@ func isNativeDeleted(
 	return deleted, nil
 }
 
-func buildNativeTailSegment(
+func buildNativeTailSegments(
 	proc *process.Process,
 	rel engine.Relation,
 	tableDef *pbplan.TableDef,
 	param fulltext.FullTextParserParam,
-) (*ftnative.Segment, error) {
+) ([]nativeObjectSegment, int64, int64, error) {
 	readAttrs, colTypes, pkType, err := buildNativeTailReadAttrs(tableDef, param.Parts)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	relData, err := rel.Ranges(proc.Ctx, engine.RangesParam{
 		PreAllocBlocks:     2,
@@ -625,7 +618,7 @@ func buildNativeTailSegment(
 		DontSupportRelData: false,
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	readers, err := rel.BuildReaders(
 		proc.Ctx,
@@ -639,16 +632,21 @@ func buildNativeTailSegment(
 		engine.FilterHint{},
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 
-	builder := ftnative.NewBuilder(param, nil)
-	nextDoc := uint64(0)
+	builders := make(map[string]*nativeTailSegmentBuilder)
 	for _, reader := range readers {
 		readBatch := batch.NewWithSize(len(readAttrs))
 		readBatch.SetAttributes(readAttrs)
 		for i := range readAttrs {
 			readBatch.Vecs[i] = vector.NewVec(colTypes[i])
+		}
+		resolved, err := resolveNativeTailBatchAttrs(readBatch, tableDef.Pkey.PkeyColName, param.Parts)
+		if err != nil {
+			readBatch.Clean(proc.Mp())
+			reader.Close()
+			return nil, 0, 0, err
 		}
 		func() {
 			defer readBatch.Clean(proc.Mp())
@@ -666,13 +664,12 @@ func buildNativeTailSegment(
 					readBatch.CleanOnlyData()
 					continue
 				}
-				nextDoc, readErr = ftnative.AppendQueryBatch(
-					builder,
+				readErr = appendNativeTailBatch(
+					builders,
 					readBatch,
-					tableDef.Pkey.PkeyColName,
+					resolved,
 					pkType,
-					param.Parts,
-					nextDoc,
+					param,
 				)
 				readBatch.CleanOnlyData()
 				if readErr != nil {
@@ -682,15 +679,11 @@ func buildNativeTailSegment(
 			}
 		}()
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 	}
-
-	seg := builder.Build()
-	if seg.DocCount == 0 {
-		return nil, nil
-	}
-	return seg, nil
+	objects, totalDocs, totalTokens := buildNativeTailSegmentsFromBuilders(builders)
+	return objects, totalDocs, totalTokens, nil
 }
 
 func buildNativeTailReadAttrs(
@@ -702,9 +695,9 @@ func buildNativeTailReadAttrs(
 		return nil, nil, 0, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing primary key column")
 	}
 	pkType := types.T(tableDef.Cols[pkIdx].Typ.Id)
-	readAttrs := make([]string, 0, len(parts)+1)
-	colTypes := make([]types.Type, 0, len(parts)+1)
-	seen := make(map[string]struct{}, len(parts)+1)
+	readAttrs := make([]string, 0, len(parts)+2)
+	colTypes := make([]types.Type, 0, len(parts)+2)
+	seen := make(map[string]struct{}, len(parts)+2)
 	appendAttr := func(name string, typ types.Type) {
 		key := strings.ToLower(name)
 		if _, ok := seen[key]; ok {
@@ -714,6 +707,7 @@ func buildNativeTailReadAttrs(
 		readAttrs = append(readAttrs, name)
 		colTypes = append(colTypes, typ)
 	}
+	appendAttr(catalog.Row_ID, types.T_Rowid.ToType())
 	appendAttr(
 		tableDef.Pkey.PkeyColName,
 		types.New(
@@ -737,6 +731,139 @@ func buildNativeTailReadAttrs(
 		)
 	}
 	return readAttrs, colTypes, pkType, nil
+}
+
+func resolveNativeTailBatchAttrs(
+	bat *batch.Batch,
+	pkName string,
+	parts []string,
+) (nativeTailBatchAttrs, error) {
+	attrMap := make(map[string]int, len(bat.Attrs))
+	for i, attr := range bat.Attrs {
+		attrMap[strings.ToLower(attr)] = i
+	}
+
+	rowIDIdx, ok := attrMap[strings.ToLower(catalog.Row_ID)]
+	if !ok {
+		return nativeTailBatchAttrs{}, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing rowid column in batch")
+	}
+	pkIdx, ok := attrMap[strings.ToLower(pkName)]
+	if !ok {
+		return nativeTailBatchAttrs{}, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing primary key column in batch")
+	}
+
+	partIdxes := make([]int, 0, len(parts))
+	partTypes := make([]types.T, 0, len(parts))
+	for _, part := range parts {
+		colIdx, ok := attrMap[strings.ToLower(part)]
+		if !ok {
+			return nativeTailBatchAttrs{}, moerr.NewInternalErrorNoCtx("native fulltext tail scan missing indexed column in batch")
+		}
+		partIdxes = append(partIdxes, colIdx)
+		partTypes = append(partTypes, bat.Vecs[colIdx].GetType().Oid)
+	}
+
+	return nativeTailBatchAttrs{
+		rowIDIdx:  rowIDIdx,
+		pkIdx:     pkIdx,
+		partIdxes: partIdxes,
+		partTypes: partTypes,
+	}, nil
+}
+
+func appendNativeTailBatch(
+	builders map[string]*nativeTailSegmentBuilder,
+	bat *batch.Batch,
+	resolved nativeTailBatchAttrs,
+	pkType types.T,
+	param fulltext.FullTextParserParam,
+) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	for row := 0; row < bat.RowCount(); row++ {
+		values, ok := collectNativeTailIndexValues(bat, row, resolved.partIdxes, resolved.partTypes)
+		if !ok {
+			continue
+		}
+		rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](bat.Vecs[resolved.rowIDIdx], row)
+		objName := objectio.BuildObjectNameWithObjectID(rowID.BorrowObjectID())
+		objKey := objName.String()
+		tailBuilder := builders[objKey]
+		if tailBuilder == nil {
+			tailBuilder = &nativeTailSegmentBuilder{
+				name:    objName,
+				builder: ftnative.NewBuilder(param, nil),
+			}
+			builders[objKey] = tailBuilder
+		}
+		pkBytes := types.EncodeValue(vector.GetAny(bat.Vecs[resolved.pkIdx], row, true), pkType)
+		if err := tailBuilder.builder.Add(ftnative.Document{
+			Block:  rowID.GetBlockOffset(),
+			Row:    rowID.GetRowOffset(),
+			PK:     pkBytes,
+			Values: values,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectNativeTailIndexValues(
+	bat *batch.Batch,
+	row int,
+	partIdxes []int,
+	partTypes []types.T,
+) ([]fulltext.IndexValue, bool) {
+	values := make([]fulltext.IndexValue, 0, len(partIdxes))
+	for i, partIdx := range partIdxes {
+		vec := bat.Vecs[partIdx]
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		values = append(values, fulltext.IndexValue{
+			Text: vec.GetStringAt(row),
+			Raw:  vec.GetRawBytesAt(row),
+			Type: partTypes[i],
+		})
+	}
+	if len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
+func buildNativeTailSegmentsFromBuilders(
+	builders map[string]*nativeTailSegmentBuilder,
+) ([]nativeObjectSegment, int64, int64) {
+	if len(builders) == 0 {
+		return nil, 0, 0
+	}
+	keys := make([]string, 0, len(builders))
+	for key := range builders {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	objects := make([]nativeObjectSegment, 0, len(keys))
+	totalDocs := int64(0)
+	totalTokens := int64(0)
+	for _, key := range keys {
+		seg := builders[key].builder.Build()
+		if seg.DocCount == 0 {
+			continue
+		}
+		objects = append(objects, nativeObjectSegment{
+			key:             key,
+			name:            builders[key].name,
+			segment:         seg,
+			applyTombstones: true,
+		})
+		totalDocs += seg.DocCount
+		totalTokens += seg.TokenSum
+	}
+	return objects, totalDocs, totalTokens
 }
 
 func hasDatalinkPart(tableDef *pbplan.TableDef, parts []string) bool {

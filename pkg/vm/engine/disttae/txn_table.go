@@ -75,26 +75,6 @@ func getObjectMetaFileService(fs fileservice.FileService) (fileservice.FileServi
 	return colexec.GetObjectFSFromProc(proc)
 }
 
-func collectFullTextIndexDebugNames(c *engine.ConstraintDef) []string {
-	if c == nil {
-		return nil
-	}
-	names := make([]string, 0, 4)
-	for _, ct := range c.Cts {
-		idxDef, ok := ct.(*engine.IndexDef)
-		if !ok {
-			continue
-		}
-		for _, idx := range idxDef.Indexes {
-			if idx == nil || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
-				continue
-			}
-			names = append(names, idx.IndexName+"->"+idx.IndexTableName)
-		}
-	}
-	return names
-}
-
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
@@ -1411,15 +1391,6 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if c != nil {
 		if tbl.constraint, err = c.MarshalBinary(); err != nil {
 			return err
-		}
-		if names := collectFullTextIndexDebugNames(c); len(names) > 0 {
-			logutil.Infof(
-				"[FTS-DEBUG] alter update constraint: table=%s table_id=%d constraint_len=%d fulltext_indexes=%v",
-				tbl.tableName,
-				tbl.tableId,
-				len(tbl.constraint),
-				names,
-			)
 		}
 	}
 
