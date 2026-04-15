@@ -22,9 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 //@todo add test case: only insert hidden table
@@ -144,6 +146,16 @@ func (update *MultiUpdate) insert_table(
 	if rowCount > 0 {
 		insertBatch.SetRowCount(rowCount)
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		if shouldLogFullTextMainTableBatch(updateCtx, tableType, rowCount) {
+			firstPK, lastPK := debugBatchPKRange(insertBatch, updateCtx.TableDef.Pkey.PkeyColName)
+			logutil.Info(
+				"[FULLTEXT-MULTIUPDATE-INSERT-BATCH]",
+				zap.String("table", debugObjectRefName(updateCtx.ObjRef)),
+				zap.Int("rows", rowCount),
+				zap.String("first-pk", firstPK),
+				zap.String("last-pk", lastPK),
+			)
+		}
 		update.addInsertAffectRows(tableType, uint64(rowCount))
 		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 

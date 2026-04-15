@@ -19,8 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (update *MultiUpdate) delete_table(
@@ -76,6 +78,18 @@ func (update *MultiUpdate) delete_table(
 	if rowCount > 0 {
 		deleteBatch.SetRowCount(rowCount)
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		if shouldLogFullTextMainTableBatch(updateCtx, tableType, rowCount) {
+			firstPK, lastPK := debugBatchPKRange(deleteBatch, "pk")
+			logutil.Info(
+				"[FULLTEXT-MULTIUPDATE-DELETE-BATCH]",
+				zap.String("table", debugObjectRefName(updateCtx.ObjRef)),
+				zap.Int("rows", rowCount),
+				zap.String("first-rowid", vector.GetFixedAtNoTypeCheck[types.Rowid](deleteBatch.Vecs[0], 0).String()),
+				zap.String("last-rowid", vector.GetFixedAtNoTypeCheck[types.Rowid](deleteBatch.Vecs[0], rowCount-1).String()),
+				zap.String("first-pk", firstPK),
+				zap.String("last-pk", lastPK),
+			)
+		}
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
 		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
