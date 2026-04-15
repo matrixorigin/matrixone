@@ -537,6 +537,11 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 
 // pipelineSubmit submits sorted batches to the global sink pool for async
 // serialization + IO. Transfers batch ownership to the pool workers.
+//
+// The pipelineResult context is derived from the first caller's ctx. This
+// assumes all Write calls within a single Sinker lifecycle share the same
+// parent context (e.g., ALTER TABLE's process context). If the parent
+// context is cancelled, all in-flight pipeline operations will be aborted.
 func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) error {
 	if sinker.pipe.result == nil {
 		pctx, cancel := context.WithCancel(ctx)
@@ -644,6 +649,9 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	return err
 }
 
+// syncFileSinker persists the file sinker's data. On error, the caller is
+// responsible for cleanup via resetFileSinker(); the executor is eventually
+// closed in Sinker.Close().
 func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) error {
 	syncStart := time.Now()
 	stats, err := fSinker.Sync(ctx)
@@ -739,12 +747,14 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	return nil
 }
 
-// trySpillMergeSortPipeline merge-sorts staged data into accumulated batches,
-// then submits them to the pipeline for async serialization + IO.
+// trySpillMergeSortPipeline merge-sorts staged data and submits each sorted
+// block to the pipeline as it is produced, avoiding accumulating all sorted
+// batches in memory (which would double peak memory usage).
 func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) error {
-	var sorted []*batch.Batch
-	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
-		sorted = append(sorted, data)
+	streamSubmit := func(data *batch.Batch) (*batch.Batch, error) {
+		if err := sinker.pipelineSubmit(ctx, []*batch.Batch{data}); err != nil {
+			return nil, err
+		}
 		return sinker.fetchBuffer()
 	}
 
@@ -756,20 +766,12 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) error {
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
 		buffer,
-		innersinker,
+		streamSubmit,
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
 	sinker.putBackBuffer(buffer)
-	if err != nil {
-		for _, bat := range sorted {
-			sinker.putBackBuffer(bat)
-		}
-		return err
-	}
-
-	// submit accumulated sorted batches to pipeline (transfers ownership)
-	return sinker.pipelineSubmit(ctx, sorted)
+	return err
 }
 
 func (sinker *Sinker) resetFileSinker() {

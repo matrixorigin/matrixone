@@ -68,7 +68,7 @@ type pipelineResult struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	persisted []objectio.ObjectStats
 	err       error
 
@@ -97,6 +97,17 @@ func GetDefaultSinkPool() *SinkPool {
 		defaultPool = NewSinkPool(sinkWorkers, 2)
 	})
 	return defaultPool
+}
+
+// CloseDefaultSinkPool drains and closes the global sink pool, allowing
+// a new one to be created on the next GetDefaultSinkPool call.
+// Safe to call during process shutdown or between tests for isolation.
+func CloseDefaultSinkPool() {
+	if defaultPool != nil {
+		defaultPool.Close()
+		defaultPool = nil
+		defaultPoolOnce = sync.Once{}
+	}
 }
 
 // NewSinkPool creates a new worker pool with the given number of
@@ -258,14 +269,14 @@ func (p *SinkPool) Close() {
 }
 
 func (r *pipelineResult) hasError() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.err != nil
 }
 
 func (r *pipelineResult) getError() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.err
 }
 
