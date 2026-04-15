@@ -143,6 +143,7 @@ func TestT_String(t *testing.T) {
 	require.Equal(t, "SMALLINT", T_int16.String())
 	require.Equal(t, "INT", T_int32.String())
 	require.Equal(t, "BIT", T_bit.String())
+	require.Equal(t, "GEOMETRY", T_geometry.String())
 }
 
 func TestT_OidString(t *testing.T) {
@@ -160,6 +161,17 @@ func TestT_OidString(t *testing.T) {
 	require.Equal(t, "T_float64", T_float64.OidString())
 
 	require.Equal(t, "T_bit", T_bit.OidString())
+	require.Equal(t, "T_geometry", T_geometry.OidString())
+}
+
+func TestT_GeometryVarlen(t *testing.T) {
+	typ := T_geometry.ToType()
+	require.Equal(t, int32(VarlenaSize), typ.Size)
+	require.Equal(t, VarlenaSize, T_geometry.TypeLen())
+	require.Equal(t, -24, T_geometry.FixedLength())
+	require.True(t, typ.IsVarlen())
+	require.Equal(t, uint8(1), CharsetType(T_geometry))
+	require.Equal(t, uint8(1), New(T_geometry, 0, 0).Charset)
 }
 
 func sliceCopy(a, b []float64) {
