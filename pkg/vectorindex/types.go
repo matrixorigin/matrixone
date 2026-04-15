@@ -121,7 +121,7 @@ type IvfParam struct {
 	OpType       string `json:"op_type"`
 	Async        string `json:"async"`
 	Quantization string `json:"quantization"`
-	Distribution string `json:"distribution"`
+	Distribution string `json:"distribution_mode"`
 }
 
 // CAGRA specified parameters
@@ -132,7 +132,7 @@ type CagraParam struct {
 	EfSearch               string `json:"ef_search"`
 	Async                  string `json:"async"`
 	Quantization           string `json:"quantization"`
-	Distribution           string `json:"distribution"`
+	Distribution           string `json:"distribution_mode"`
 	IntermediateGraphDegee string `json:"intermediate_graph_degree"`
 	GraphDegee             string `json:"graph_degree"`
 }
