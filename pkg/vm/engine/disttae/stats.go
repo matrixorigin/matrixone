@@ -166,6 +166,9 @@ type GlobalStats struct {
 	statsUpdater func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool
 	// for test only currently.
 	approxObjectNumUpdater func() int64
+
+	// beforeCacheRemoteInfo is for test only.
+	beforeCacheRemoteInfo func(pb.StatsInfoKey)
 }
 
 func NewGlobalStats(
@@ -234,6 +237,34 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 	return gs.triggerUpdate(wrapkey, false)
 }
 
+func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
+	key pb.StatsInfoKey,
+	remoteInfo *pb.StatsInfo,
+) *pb.StatsInfo {
+	if remoteInfo == nil {
+		return nil
+	}
+
+	gs.engine.pClient.subscribed.mutex.Lock()
+	defer gs.engine.pClient.subscribed.mutex.Unlock()
+
+	currentEnt, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || currentEnt.DBID != key.DatabaseID || currentEnt.SubState != Subscribed {
+		return nil
+	}
+
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok && info != nil {
+		return info
+	}
+
+	gs.mu.statsInfoMap[key] = remoteInfo
+	return remoteInfo
+}
+
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
@@ -286,6 +317,15 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 
+	if remoteInfo != nil {
+		if gs.beforeCacheRemoteInfo != nil {
+			gs.beforeCacheRemoteInfo(key)
+		}
+		if info = gs.cacheRemoteInfoIfSubscribed(key, remoteInfo); info != nil {
+			return info
+		}
+	}
+
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
@@ -293,12 +333,6 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	info, ok = gs.mu.statsInfoMap[key]
 	if ok && info != nil {
 		return info
-	}
-
-	if remoteInfo != nil {
-		// If we get stats info from remote node, update local stats info.
-		gs.mu.statsInfoMap[key] = remoteInfo
-		return remoteInfo
 	}
 
 	ok = false
