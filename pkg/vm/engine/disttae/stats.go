@@ -344,18 +344,18 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
 	}
 
+	gs.mu.Lock()
 	info, ok := gs.mu.statsInfoMap[key]
 	if ok && info != nil {
+		gs.mu.Unlock()
 		return info
 	}
+	gs.mu.Unlock()
 
 	// after checking first potential patched cache
 	// we check the approx to avoid taking a place in statInfo map
@@ -371,6 +371,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		return nil
 	}
 
+	var remoteInfo *pb.StatsInfo
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
 		start := time.Now()
@@ -389,13 +390,24 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", "", err, resp)
 			} else if resp.GetStatsInfoResponse != nil {
 				defer client.Release(resp)
-
-				info := resp.GetStatsInfoResponse.StatsInfo
-				// If we get stats info from remote node, update local stats info.
-				gs.mu.statsInfoMap[key] = info
-				return info
+				remoteInfo = resp.GetStatsInfoResponse.StatsInfo
 			}
 		}
+	}
+
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	// Recheck local cache after lock reacquired, another goroutine may have updated it.
+	info, ok = gs.mu.statsInfoMap[key]
+	if ok && info != nil {
+		return info
+	}
+
+	if remoteInfo != nil {
+		// If we get stats info from remote node, update local stats info.
+		gs.mu.statsInfoMap[key] = remoteInfo
+		return remoteInfo
 	}
 
 	ok = false
