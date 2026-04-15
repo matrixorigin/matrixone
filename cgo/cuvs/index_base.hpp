@@ -250,6 +250,26 @@ public:
     // Released immediately after build_internal() completes to free host RAM.
     std::vector<T> flattened_host_dataset;
 
+    // ---- Deferred float buffer for quantizer training (1-byte types only) ----
+    // When T is int8_t or uint8_t the quantizer must be trained on a
+    // representative sample before any vectors can be quantized.
+    // Raw float chunks are accumulated here until kQuantizerTrainThreshold
+    // vectors are available, then the quantizer is trained on all of them at
+    // once and the buffer is flushed into flattened_host_dataset as T.
+    // If build() is called before the threshold is reached the buffer is
+    // force-flushed (trained on whatever is available).
+    // Only ever accessed from submit_main() tasks (serialised), so no extra
+    // locking is needed beyond what those tasks already take.
+    struct pending_float_chunk_t {
+        std::vector<float> data;   ///< count * dimension floats
+        uint64_t           count;
+        int64_t            offset; ///< -1 = append; >= 0 = explicit position
+        std::vector<IdT>   ids;    ///< empty if caller supplied no IDs
+    };
+    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
+    std::vector<pending_float_chunk_t> pending_float_chunks_;
+    uint64_t pending_total_count_ = 0;
+
     // ---- External ID mapping ----
     // If non-empty: host_ids[internal_pos] = external_id.
     // If empty: internal positions are used directly as IDs.
@@ -528,6 +548,80 @@ public:
         }
     }
 
+    // Flush all pending float chunks: train the quantizer on the combined data,
+    // then quantize each chunk and store into flattened_host_dataset.
+    // Must be called only from inside a submit_main() task (GPU work is legal there).
+    // GPU operations are performed without holding mutex_; shared state is updated
+    // under unique_lock after each chunk's GPU work completes.
+    void flush_pending_float_chunks_internal(raft_handle_wrapper_t& handle) {
+        if (pending_float_chunks_.empty()) return;
+
+        auto res = handle.get_raft_resources();
+
+        // --- GPU work: train quantizer on ALL pending float data — NO LOCK ---
+        uint64_t total = pending_total_count_;
+        std::vector<float> all_floats;
+        all_floats.reserve(total * dimension);
+        for (auto& c : pending_float_chunks_) {
+            all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
+        }
+        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(
+            all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
+        auto train_device = raft::make_device_matrix<float, int64_t>(*res, total, dimension);
+        raft::copy(*res, train_device.view(), train_host_view);
+        quantizer_.train(*res, train_device.view());
+        handle.sync();
+
+        // --- GPU work + locked store: process each buffered chunk ---
+        for (auto& c : pending_float_chunks_) {
+            // Upload and quantize — NO LOCK
+            auto chunk_host_view = raft::make_host_matrix_view<const float, int64_t>(
+                c.data.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension));
+            auto chunk_device = raft::make_device_matrix<float, int64_t>(*res, c.count, dimension);
+            raft::copy(*res, chunk_device.view(), chunk_host_view);
+
+            auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
+            quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
+
+            std::vector<T> chunk_host_target(c.count * dimension);
+            raft::copy(*res,
+                raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension)),
+                chunk_device_target.view());
+            handle.sync();
+
+            // Store into shared state — unique_lock
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            uint64_t target_offset;
+            if (c.offset == -1) {
+                target_offset = current_offset_;
+                current_offset_ += c.count;
+            } else {
+                target_offset = static_cast<uint64_t>(c.offset);
+                if (target_offset + c.count > current_offset_) {
+                    current_offset_ = target_offset + c.count;
+                }
+            }
+            if (current_offset_ > count) count = static_cast<uint32_t>(current_offset_);
+
+            size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
+            if (flattened_host_dataset.size() < required_elements) {
+                flattened_host_dataset.resize(required_elements);
+            }
+            std::copy(chunk_host_target.begin(), chunk_host_target.end(),
+                      flattened_host_dataset.begin() + target_offset * dimension);
+
+            if (!c.ids.empty()) {
+                if (host_ids.size() < current_offset_) {
+                    host_ids.resize(current_offset_);
+                }
+                std::copy(c.ids.begin(), c.ids.end(), host_ids.begin() + target_offset);
+            }
+        }
+
+        pending_float_chunks_.clear();
+        pending_total_count_ = 0;
+    }
+
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         uint64_t job_id = worker->submit_main(
             [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
@@ -535,19 +629,34 @@ public:
                 
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
+                    if (!quantizer_.is_trained()) {
+                        // Buffer this chunk for deferred training.
+                        // We accumulate raw floats until kQuantizerTrainThreshold
+                        // vectors are available, then train the quantizer on all of
+                        // them at once for a representative min/max range.
+                        pending_float_chunk_t c;
+                        c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
+                        c.count  = chunk_count;
+                        c.offset = offset;
+                        if (ids) c.ids.assign(ids, ids + chunk_count);
+                        pending_total_count_ += chunk_count;
+                        pending_float_chunks_.push_back(std::move(c));
+
+                        if (pending_total_count_ >= kQuantizerTrainThreshold) {
+                            // Enough data: train + flush the whole pending buffer now.
+                            flush_pending_float_chunks_internal(handle);
+                        }
+                        return std::any();
+                    }
+
+                    // Quantizer already trained: quantize this chunk immediately.
                     auto queries_host_view = raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension);
                     auto queries_device = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
                     raft::copy(*res, queries_device.view(), queries_host_view);
 
                     auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, chunk_count, dimension);
-                    
-                    if (!quantizer_.is_trained()) {
-                        int64_t n_train = std::min((int64_t)chunk_count, (int64_t)1000);
-                        auto train_view = raft::make_device_matrix_view<const float, int64_t>(queries_device.data_handle(), n_train, dimension);
-                        quantizer_.train(*res, train_view);
-                    }
                     quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
-                    
+
                     std::vector<T> chunk_host_target(chunk_count * dimension);
                     raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
                     handle.sync();
@@ -624,6 +733,19 @@ public:
 
     void train_quantizer_if_needed() {
         if constexpr (sizeof(T) == 1) {
+            // Flush any buffered raw-float chunks first (force-train on whatever
+            // is available even if below kQuantizerTrainThreshold).
+            if (pending_total_count_ > 0) {
+                uint64_t job_id = worker->submit_main(
+                    [this](raft_handle_wrapper_t& handle) -> std::any {
+                        flush_pending_float_chunks_internal(handle);
+                        return std::any();
+                    });
+                worker->wait(job_id).get();
+            }
+
+            // Fallback: if the quantizer is still not trained (caller used
+            // add_chunk<T> with pre-quantized data), train from the host buffer.
             if (!quantizer_.is_trained() && !flattened_host_dataset.empty()) {
                 uint64_t n_train = std::min(static_cast<uint64_t>(500), static_cast<uint64_t>(count));
                 if (n_train == 0) return;
