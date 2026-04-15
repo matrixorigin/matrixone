@@ -612,6 +612,41 @@ func TestBaseHandleResolveVisibleObjectsByDeleteChain(t *testing.T) {
 	require.Equal(t, []*objectio.ObjectEntry{successor, orphan}, resolved)
 }
 
+func TestBaseHandleResolveVisibleObjectsByDeleteChain_AppendableDeletedBeforeEnd(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	deleted := makeNamedObjectEntry(t, 1, true, false, types.BuildTS(5, 0), types.BuildTS(10, 0))
+	successor := makeNamedObjectEntry(t, 2, false, false, types.BuildTS(10, 0), types.TS{})
+
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: successor.ObjectName().String(),
+		Entries: []fileservice.IOEntry{
+			{Data: []byte("ok"), Size: 2},
+		},
+	}))
+
+	base := &baseHandle{
+		changesHandle: &ChangeHandler{fs: fs},
+	}
+
+	resolved, err := base.resolveVisibleObjectsByDeleteChain(
+		ctx,
+		types.BuildTS(1, 0),
+		types.BuildTS(30, 0),
+		[]*objectio.ObjectEntry{deleted},
+		map[types.TS][]*objectio.ObjectEntry{
+			successor.CreateTime: {successor},
+		},
+		[]types.TS{successor.CreateTime},
+		false,
+		"data",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []*objectio.ObjectEntry{successor}, resolved)
+}
+
 func TestNewChangesHandlerWithPartitionStateRange_EmptyState(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
