@@ -1786,6 +1786,23 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
+					// Multiply-specific: when coercion promotes intN×D64 to
+					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
+					// D128 output so overflow is impossible, and it's ~4× faster
+					// than d128Mul (1 vs 4 hardware MUL instructions).
+					// Exclude uint64 (values > max_int64 can't fit in D64=int64).
+					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
+						i0, i1 := inputs[0].Oid, inputs[1].Oid
+						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
+						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
+						noU64 := i0 != types.T_uint64 && i1 != types.T_uint64
+						if hasD64 && noD128 && noU64 {
+							t1 = types.T_decimal64.ToType()
+							t2 = types.T_decimal64.ToType()
+							SetTargetScaleFromSource(&inputs[0], &t1)
+							SetTargetScaleFromSource(&inputs[1], &t2)
+						}
+					}
 					if multiOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
 					} else if multiOperatorSupports(t1, t2) {
