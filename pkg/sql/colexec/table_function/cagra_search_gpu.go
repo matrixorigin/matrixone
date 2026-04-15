@@ -44,7 +44,7 @@ type cagraSearchState struct {
 	idxcfg    vectorindex.IndexConfig
 	offset    int
 	limit     uint64
-	keys      []uint32
+	keys      []int64
 	distances []float64
 	// holding one call batch, cagraSearchState owns it.
 	batch *batch.Batch
@@ -83,7 +83,7 @@ func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 	nkeys := len(u.keys)
 	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendFixed[uint32](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
+		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
 		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
@@ -240,9 +240,9 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 	}
 
 	var ok bool
-	u.keys, ok = keys.([]uint32)
+	u.keys, ok = keys.([]int64)
 	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "keys is not []uint32")
+		return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
 	}
 	return nil
 }

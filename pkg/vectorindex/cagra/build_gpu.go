@@ -38,8 +38,8 @@ type CagraBuild[T cuvs.VectorType] struct {
 	current *CagraModel[T]   // sub-index currently being filled
 	nthread uint32
 	devices []int
-	count   int64    // vectors in current sub-index
-	idBuf   [1]uint32 // reusable buffer for AddFloat to avoid per-call heap allocation
+	count   int64   // vectors in current sub-index
+	idBuf   [1]int64 // reusable buffer for AddFloat to avoid per-call heap allocation
 }
 
 // NewCagraBuild creates a new CagraBuild ready for AddFloat calls.
@@ -96,10 +96,10 @@ func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
 	return b.current, nil
 }
 
-// AddFloat appends one float32 vector with the given uint32 id.
+// AddFloat appends one float32 vector with the given int64 id.
 // The internal quantization (T) is handled by AddChunkFloat.
 // idBuf is reused across calls to avoid a per-call heap allocation.
-func (b *CagraBuild[T]) AddFloat(id uint32, vec []float32) error {
+func (b *CagraBuild[T]) AddFloat(id int64, vec []float32) error {
 	idx, err := b.getOrCreateCurrent()
 	if err != nil {
 		return err

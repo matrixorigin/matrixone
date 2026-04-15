@@ -73,9 +73,9 @@ func TestCagraSearchEmpty(t *testing.T) {
 	require.Empty(t, keys)
 	require.Empty(t, dists)
 
-	outKeys := make([]uint32, 4)
+	outKeys := make([]int64, 4)
 	outDists := make([]float32, 4)
-	err = s.SearchFloat32WithKeyUint32(sqlproc, query, rt, outKeys, outDists)
+	err = s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
 	require.NoError(t, err)
 }
 
@@ -98,7 +98,7 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCagraSearchAndSearchFloat32WithKeyUint32 tests Search and SearchFloat32WithKeyUint32 with a single loaded index.
+// TestCagraSearchAndSearchFloat32 tests Search and SearchFloat32 with a single loaded index.
 func TestCagraSearchAndSearchFloat32WithKeyUint32(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -109,6 +109,7 @@ func TestCagraSearchAndSearchFloat32WithKeyUint32(t *testing.T) {
 
 	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*CagraModel[float32]{idx}
+	s.MultiIndex = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim] // first vector; internal ID 0 should be closest
@@ -118,17 +119,17 @@ func TestCagraSearchAndSearchFloat32WithKeyUint32(t *testing.T) {
 	// ---- Search ----
 	keysAny, dists, err := s.Search(sqlproc, query, rt)
 	require.NoError(t, err)
-	keys := keysAny.([]uint32)
+	keys := keysAny.([]int64)
 	require.Equal(t, 4, len(keys))
 	require.Equal(t, 4, len(dists))
 	fmt.Printf("CagraSearch.Search: keys=%v dists=%v\n", keys, dists)
-	require.Equal(t, uint32(0), keys[0])
+	require.Equal(t, int64(0), keys[0])
 	require.InDelta(t, float64(0), dists[0], 1e-3)
 
-	// ---- SearchFloat32WithKeyUint32 results must match Search ----
-	outKeys := make([]uint32, 4)
+	// ---- SearchFloat32 results must match Search ----
+	outKeys := make([]int64, 4)
 	outDists := make([]float32, 4)
-	err = s.SearchFloat32WithKeyUint32(sqlproc, query, rt, outKeys, outDists)
+	err = s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
 	require.NoError(t, err)
 	require.Equal(t, keys, outKeys[:len(keys)])
 	for i := range dists {
@@ -149,6 +150,7 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 
 	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*CagraModel[float32]{idx0, idx1}
+	s.MultiIndex = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -156,12 +158,12 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 
 	keysAny, dists, err := s.Search(sqlproc, query, rt)
 	require.NoError(t, err)
-	keys := keysAny.([]uint32)
+	keys := keysAny.([]int64)
 	require.Equal(t, 4, len(keys))
 	require.Equal(t, 4, len(dists))
 	fmt.Printf("CagraSearch multi: keys=%v dists=%v\n", keys, dists)
 	// Both sub-indexes have the same data so key 0 must still top the list.
-	require.Equal(t, uint32(0), keys[0])
+	require.Equal(t, int64(0), keys[0])
 	require.InDelta(t, float64(0), dists[0], 1e-3)
 }
 
@@ -209,8 +211,8 @@ func TestCagraSearchLoad(t *testing.T) {
 
 	keysAny, dists, err := s.Search(sqlproc, query, rt)
 	require.NoError(t, err)
-	keys := keysAny.([]uint32)
-	require.Equal(t, uint32(0), keys[0])
+	keys := keysAny.([]int64)
+	require.Equal(t, int64(0), keys[0])
 	require.InDelta(t, float64(0), dists[0], 1e-3)
 
 	s.Destroy()

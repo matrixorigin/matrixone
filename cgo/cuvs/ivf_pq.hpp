@@ -306,6 +306,7 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            std::cout << "[DEBUG] IVF-PQ build: current_offset_=" << this->current_offset_ << " pending_total_count_=" << this->pending_total_count_ << std::endl;
             if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
                 uint64_t rows, cols;
                 load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
@@ -320,9 +321,10 @@ public:
         }
 
         if (this->count == 0) {
-            this->is_loaded_ = true;
-            // std::cout << "[DEBUG] IVF-PQ build: Empty dataset, build skipped" << std::endl;
-            return;
+            if (this->pending_total_count_ == 0) {
+                this->is_loaded_ = true;
+                return;
+            }
         }
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");

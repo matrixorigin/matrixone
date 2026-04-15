@@ -3071,7 +3071,7 @@ func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
 	}
 
-	if colMap[pkeyName].Typ.Id != int32(types.T_uint32) {
+	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be uint32")
 	}
 

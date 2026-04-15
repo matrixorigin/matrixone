@@ -65,11 +65,11 @@ struct gpu_cagra_any_t {
 
 extern "C" {
 
-gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, 
+gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension,
                             distance_type_t metric_c, cagra_build_params_t build_params,
-                            const int* devices, int device_count, uint32_t nthread, 
-                            distribution_mode_t dist_mode, quantization_t qtype, 
-                            const uint32_t* ids, void* errmsg) {
+                            const int* devices, int device_count, uint32_t nthread,
+                            distribution_mode_t dist_mode, quantization_t qtype,
+                            const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
@@ -98,11 +98,11 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
     return nullptr;
 }
 
-gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, 
+gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c,
                                      cagra_build_params_t build_params,
-                                     const int* devices, int device_count, uint32_t nthread, 
-                                     distribution_mode_t dist_mode, quantization_t qtype, 
-                                     const uint32_t* ids, void* errmsg) {
+                                     const int* devices, int device_count, uint32_t nthread,
+                                     distribution_mode_t dist_mode, quantization_t qtype,
+                                     const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
@@ -207,7 +207,7 @@ void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg) {
     }
 }
 
-void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, const uint32_t* ids, void* errmsg) {
+void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
@@ -224,7 +224,7 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
     }
 }
 
-void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, const uint32_t* ids, void* errmsg) {
+void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
@@ -358,7 +358,7 @@ void gpu_cagra_save_dir(gpu_cagra_c index_c, const char* dir, void* errmsg) {
     }
 }
 
-void gpu_cagra_delete_id(gpu_cagra_c index_c, uint32_t id, void* errmsg) {
+void gpu_cagra_delete_id(gpu_cagra_c index_c, int64_t id, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
@@ -492,7 +492,7 @@ gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_i
     }
     return result;
 }
-void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, uint32_t* neighbors) {
+void gpu_cagra_get_neighbors(gpu_cagra_result_c result_c, uint64_t total_elements, int64_t* neighbors) {
     if (!result_c) return;
     auto* neighbors_vec = &static_cast<cagra_search_result_t*>(result_c)->neighbors;
     if (neighbors_vec->size() >= total_elements) {
@@ -559,7 +559,7 @@ char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg) {
 }
 
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors,
-                      const uint32_t* new_ids, void* errmsg) {
+                      const int64_t* new_ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
@@ -586,25 +586,25 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         
         switch (qtype) {
             case Quantization_F32: {
-                std::vector<gpu_index_base_t<float, cagra_build_params_t, uint32_t>*> base_indices;
+                std::vector<gpu_index_base_t<float, cagra_build_params_t, int64_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<float>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<float>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_F16: {
-                std::vector<gpu_index_base_t<half, cagra_build_params_t, uint32_t>*> base_indices;
+                std::vector<gpu_index_base_t<half, cagra_build_params_t, int64_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<half>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<half>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_INT8: {
-                std::vector<gpu_index_base_t<int8_t, cagra_build_params_t, uint32_t>*> base_indices;
+                std::vector<gpu_index_base_t<int8_t, cagra_build_params_t, int64_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<int8_t>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<int8_t>::merge(base_indices, nthread, devs).release();
                 break;
             }
             case Quantization_UINT8: {
-                std::vector<gpu_index_base_t<uint8_t, cagra_build_params_t, uint32_t>*> base_indices;
+                std::vector<gpu_index_base_t<uint8_t, cagra_build_params_t, int64_t>*> base_indices;
                 for (int i = 0; i < num_indices; ++i) base_indices.push_back(static_cast<gpu_cagra_t<uint8_t>*>(static_cast<gpu_cagra_any_t*>(indices_c[i])->ptr));
                 merged_ptr = gpu_cagra_t<uint8_t>::merge(base_indices, nthread, devs).release();
                 break;

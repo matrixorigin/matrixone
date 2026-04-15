@@ -57,7 +57,7 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	limit := rt.Limit
 
 	if s.MultiIndex == nil {
-		return []uint32{}, []float64{}, nil
+		return []int64{}, []float64{}, nil
 	}
 
 	dim := uint32(s.Idxcfg.CuvsCagra.Dimensions)
@@ -68,13 +68,13 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	}
 
 	// multiGpuSearch returns results in ascending order (nearest first); -1 marks empty slots.
-	reskeys := make([]uint32, 0, limit)
+	reskeys := make([]int64, 0, limit)
 	resdistances := make([]float64, 0, limit)
 	for i, k := range neighbors64 {
 		if k == -1 {
 			continue
 		}
-		reskeys = append(reskeys, uint32(k))
+		reskeys = append(reskeys, k)
 		resdistances = append(resdistances, metric.DistanceTransformIvfflat(
 			float64(dists32[i]),
 			metric.DistFuncNameToMetricType[rt.OrigFuncName],
@@ -85,14 +85,9 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	return reskeys, resdistances, nil
 }
 
-// SearchFloat32 implements cache.VectorIndexSearchIf (int64 key variant — not used by CAGRA).
-func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("CagraSearch: use SearchFloat32WithKeyUint32 for uint32 keys")
-}
-
-// SearchFloat32WithKeyUint32 implements cache.VectorIndexSearchIf.
+// SearchFloat32 implements cache.VectorIndexSearchIf.
 // Writes results directly into caller-provided slices to avoid heap allocation.
-func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
+func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)
 	if err != nil {
 		return err
@@ -100,7 +95,7 @@ func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, qu
 	if keys == nil {
 		return nil
 	}
-	ks, ok := keys.([]uint32)
+	ks, ok := keys.([]int64)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("CagraSearch: unknown keys type")
 	}
@@ -109,6 +104,11 @@ func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, qu
 		outDists[i] = float32(d)
 	}
 	return nil
+}
+
+// SearchFloat32WithKeyUint32 is not supported by CAGRA (which uses int64 keys).
+func (s *CagraSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
+	return moerr.NewInternalErrorNoCtx("CagraSearch: does not support uint32 keys; use SearchFloat32 for int64 keys")
 }
 
 // Load implements cache.VectorIndexSearchIf: loads metadata then index data from the database.

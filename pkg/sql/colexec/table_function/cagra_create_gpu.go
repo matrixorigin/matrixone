@@ -210,8 +210,8 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_uint32 {
-			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be a uint32")
+		if idVec.GetType().Oid != types.T_int64 {
+			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")
 		}
 
 		faVec := tf.ctr.argVecs[2]
@@ -257,7 +257,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
-	id := vector.GetFixedAtNoTypeCheck[uint32](tf.ctr.argVecs[1], nthRow)
+	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 	fa := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 
 	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {

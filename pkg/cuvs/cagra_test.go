@@ -474,9 +474,9 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 
 	// Index 1: values around 0, IDs [1000..1199]
 	ds1 := make([]float32, count*uint64(dimension))
-	ids1 := make([]uint32, count)
+	ids1 := make([]int64, count)
 	for i := uint64(0); i < count; i++ {
-		ids1[i] = uint32(1000 + i)
+		ids1[i] = int64(1000 + i)
 		for j := uint32(0); j < dimension; j++ {
 			ds1[i*uint64(dimension)+uint64(j)] = float32(i % 10)
 		}
@@ -484,9 +484,9 @@ func TestGpuCagraMergeWithIds(t *testing.T) {
 
 	// Index 2: values around 5000, IDs [5000..5199]
 	ds2 := make([]float32, count*uint64(dimension))
-	ids2 := make([]uint32, count)
+	ids2 := make([]int64, count)
 	for i := uint64(0); i < count; i++ {
-		ids2[i] = uint32(5000 + i)
+		ids2[i] = int64(5000 + i)
 		for j := uint32(0); j < dimension; j++ {
 			ds2[i*uint64(dimension)+uint64(j)] = float32(5000 + (i % 10))
 		}
@@ -698,7 +698,7 @@ func BenchmarkGpuShardedCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -757,7 +757,7 @@ func BenchmarkGpuSingleCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -819,7 +819,7 @@ func BenchmarkGpuReplicatedCagra(b *testing.B) {
 				}
 			})
 			b.StopTimer()
-			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+			ReportRecall(b, dataset, uint64(n_vectors), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 				res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 				if err != nil {
 					return nil, err
@@ -885,7 +885,7 @@ func BenchmarkGpuAddChunkAndSearchCagraF16(b *testing.B) {
 		}
 	})
 	b.StopTimer()
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err
@@ -949,7 +949,7 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 		}
 	})
 	b.StopTimer()
-	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]uint32, error) {
+	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
 		res, err := index.SearchFloat(queries, numQueries, dimension, limit, sp)
 		if err != nil {
 			return nil, err

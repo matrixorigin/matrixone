@@ -83,7 +83,7 @@ namespace matrixone {
 // NEIGHBOR ID TYPE
 // ----------------
 // IdT = uint32_t (unlike IVF types which use int64_t).
-// All host_ids / id_to_index_ structures use uint32_t.
+// All host_ids / id_to_index_ structures use int64_t.
 // The C wrapper and Go layer also use uint32_t for CAGRA neighbor IDs.
 //
 // LIFECYCLE
@@ -193,7 +193,7 @@ namespace matrixone {
  * Common for all CAGRA instantiations.
  */
 struct cagra_search_result_t {
-    std::vector<uint32_t> neighbors; // Indices of nearest neighbors
+    std::vector<int64_t> neighbors; // External neighbor IDs (int64 user PKs after host_ids translation)
     std::vector<float> distances;  // Distances to nearest neighbors
 };
 
@@ -201,7 +201,7 @@ struct cagra_search_result_t {
  * @brief gpu_cagra_t implements a CAGRA index that can run on a single GPU or sharded across multiple GPUs.
  */
 template <typename T>
-class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t, uint32_t> {
+class gpu_cagra_t : public gpu_index_base_t<T, cagra_build_params_t, int64_t> {
 public:
     using cagra_index = cuvs::neighbors::cagra::index<T, uint32_t>;
     using search_result_t = cagra_search_result_t;
@@ -218,7 +218,7 @@ public:
     gpu_cagra_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                     distance_type_t m, const cagra_build_params_t& bp,
                     const std::vector<int>& devices, uint32_t nthread, distribution_mode_t mode,
-                    const uint32_t* ids = nullptr) {
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(count_vectors);
@@ -249,7 +249,7 @@ public:
     gpu_cagra_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                     const cagra_build_params_t& bp, const std::vector<int>& devices,
                     uint32_t nthread, distribution_mode_t mode,
-                    const uint32_t* ids = nullptr) {
+                    const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
         this->count = static_cast<uint32_t>(total_count);
@@ -327,7 +327,7 @@ public:
      * @brief Merges multiple CAGRA indices into a single index.
      * Only works for SINGLE_GPU indices.
      */
-    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t, uint32_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
+    static std::unique_ptr<gpu_cagra_t<T>> merge(const std::vector<gpu_index_base_t<T, cagra_build_params_t, int64_t>*>& base_indices, uint32_t nthread, const std::vector<int>& devs) {
         if (base_indices.empty()) throw std::invalid_argument("base_indices empty");
         
         uint32_t dim = base_indices[0]->dimension;
@@ -379,9 +379,9 @@ public:
             if (!bi->host_ids.empty()) { any_has_ids = true; break; }
         }
         if (any_has_ids) {
-            std::vector<uint32_t> merged_ids;
+            std::vector<int64_t> merged_ids;
             merged_ids.reserve(new_idx->count);
-            uint32_t offset = 0;
+            int64_t offset = 0;
             for (auto* bi : base_indices) {
                 uint32_t n = bi->count;
                 if (!bi->host_ids.empty()) {
@@ -406,13 +406,16 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            std::cout << "[DEBUG] CAGRA build: current_offset_=" << this->current_offset_ << " pending_total_count_=" << this->pending_total_count_ << std::endl;
             this->count = static_cast<uint32_t>(this->current_offset_);
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         }
         if (this->count == 0) {
-            this->is_loaded_ = true;
-            return;
+            if (this->pending_total_count_ == 0) {
+                this->is_loaded_ = true;
+                return;
+            }
         }
 
         // std::cout << "[DEBUG] CAGRA build: Starting build count=" << this->count << " dim=" << this->dimension << " metric=" << (int)this->metric << std::endl;
@@ -601,7 +604,7 @@ public:
         }
     }
 
-    void extend(const T* additional_data, uint64_t num_vectors, const uint32_t* new_ids = nullptr) {
+    void extend(const T* additional_data, uint64_t num_vectors, const int64_t* new_ids = nullptr) {
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->is_loaded_) {
@@ -811,6 +814,9 @@ public:
             if (local_index) handle.set_index_ptr(static_cast<const cagra_index*>(local_index));
         }
 
+        // Temporary buffer for uint32_t raw GPU neighbor positions.
+        std::vector<uint32_t> raw_neighbors(num_queries * limit, (uint32_t)-1);
+
         if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
             raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
@@ -843,7 +849,7 @@ public:
                                                     neighbors_device.view(), distances_device.view());
             }
 
-            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors.data(), num_queries, limit), neighbors_device.view());
             raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
         } else {
             std::string msg = "CAGRA search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
@@ -852,29 +858,29 @@ public:
         }
         handle.sync(); // Local sync
 
-        // GPU search is done; take shared_lock only for the CPU-side ID translation
-        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        // GPU search is done; translate raw uint32 positions → int64 external IDs.
+        // Take shared_lock only for the CPU-side host_ids read so that concurrent
+        // extend() calls (which write host_ids under unique_lock) are safe.
+        search_res.neighbors.resize(num_queries * limit, -1LL);
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             if (this->dist_mode == DistributionMode_SHARDED) {
                 uint32_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (uint32_t)this->shard_sizes_[r];
-                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                    if (search_res.neighbors[i] != (uint32_t)-1) {
-                        uint32_t global_pos = search_res.neighbors[i] + offset;
-                        if (!this->host_ids.empty()) {
-                            search_res.neighbors[i] = this->host_ids[global_pos];
-                        } else {
-                            search_res.neighbors[i] = global_pos;
-                        }
+                for (size_t i = 0; i < raw_neighbors.size(); ++i) {
+                    if (raw_neighbors[i] != (uint32_t)-1) {
+                        uint32_t global_pos = raw_neighbors[i] + offset;
+                        search_res.neighbors[i] = this->host_ids.empty()
+                            ? (int64_t)global_pos
+                            : (int64_t)this->host_ids[global_pos];
                     }
                 }
             } else {
-                if (!this->host_ids.empty()) {
-                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                        if (search_res.neighbors[i] != (uint32_t)-1) {
-                            search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
-                        }
+                for (size_t i = 0; i < raw_neighbors.size(); ++i) {
+                    if (raw_neighbors[i] != (uint32_t)-1) {
+                        search_res.neighbors[i] = this->host_ids.empty()
+                            ? (int64_t)raw_neighbors[i]
+                            : (int64_t)this->host_ids[raw_neighbors[i]];
                     }
                 }
             }
@@ -1020,8 +1026,10 @@ public:
         }
         raft::resource::sync_stream(*res);
 
+        // Temporary buffer for uint32_t raw GPU neighbor positions.
+        std::vector<uint32_t> raw_neighbors_f(num_queries * limit, (uint32_t)-1);
+
         search_result_t search_res;
-        search_res.neighbors.resize(num_queries * limit);
         search_res.distances.resize(num_queries * limit);
 
         cuvs::neighbors::cagra::search_params search_params{};
@@ -1039,7 +1047,7 @@ public:
                 handle.set_index_ptr(std::any()); // Clear invalid cache
             }
         }
-        
+
         if (!local_index) {
             // Tiered fallback: Replicated -> Single (lock covers both the map read and index_ read)
             {
@@ -1084,7 +1092,7 @@ public:
                                                     neighbors_device.view(), distances_device.view());
             }
 
-            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<uint32_t, int64_t>(raw_neighbors_f.data(), num_queries, limit), neighbors_device.view());
             raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
         } else {
             std::string msg = "CAGRA search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
@@ -1093,29 +1101,27 @@ public:
         }
         handle.sync();
 
-        // GPU search is done; take shared_lock only for the CPU-side ID translation
-        // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
+        // Translate raw uint32 positions → int64 external IDs.
+        search_res.neighbors.resize(num_queries * limit, -1LL);
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
             if (this->dist_mode == DistributionMode_SHARDED) {
                 uint32_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (uint32_t)this->shard_sizes_[r];
-                for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                    if (search_res.neighbors[i] != (uint32_t)-1) {
-                        uint32_t global_pos = search_res.neighbors[i] + offset;
-                        if (!this->host_ids.empty()) {
-                            search_res.neighbors[i] = this->host_ids[global_pos];
-                        } else {
-                            search_res.neighbors[i] = global_pos;
-                        }
+                for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
+                    if (raw_neighbors_f[i] != (uint32_t)-1) {
+                        uint32_t global_pos = raw_neighbors_f[i] + offset;
+                        search_res.neighbors[i] = this->host_ids.empty()
+                            ? (int64_t)global_pos
+                            : (int64_t)this->host_ids[global_pos];
                     }
                 }
             } else {
-                if (!this->host_ids.empty()) {
-                    for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
-                        if (search_res.neighbors[i] != (uint32_t)-1) {
-                            search_res.neighbors[i] = this->host_ids[search_res.neighbors[i]];
-                        }
+                for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
+                    if (raw_neighbors_f[i] != (uint32_t)-1) {
+                        search_res.neighbors[i] = this->host_ids.empty()
+                            ? (int64_t)raw_neighbors_f[i]
+                            : (int64_t)this->host_ids[raw_neighbors_f[i]];
                     }
                 }
             }
@@ -1126,7 +1132,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, cagra_build_params_t, uint32_t>::info();
+        std::string json = gpu_index_base_t<T, cagra_build_params_t, int64_t>::info();
         json += ", \"type\": \"CAGRA\", \"cagra\": {";
         std::shared_lock<std::shared_mutex> lock(this->mutex_);
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
@@ -1354,11 +1360,11 @@ public:
         global_res.distances.resize(num_queries * limit);
 
         for (uint64_t q = 0; q < num_queries; ++q) {
-            std::vector<std::pair<float, uint32_t>> candidates;
+            std::vector<std::pair<float, int64_t>> candidates;
             for (const auto& sr : shard_results) {
                 for (uint32_t k = 0; k < limit; ++k) {
-                    uint32_t id = sr.neighbors[q * limit + k];
-                    if (id != (uint32_t)-1) {
+                    int64_t id = sr.neighbors[q * limit + k];
+                    if (id != -1LL) {
                         candidates.push_back({sr.distances[q * limit + k], id});
                     }
                 }
@@ -1372,7 +1378,7 @@ public:
                     global_res.neighbors[q * limit + k] = candidates[k].second;
                     global_res.distances[q * limit + k] = candidates[k].first;
                 } else {
-                    global_res.neighbors[q * limit + k] = (uint32_t)-1;
+                    global_res.neighbors[q * limit + k] = -1LL;
                     global_res.distances[q * limit + k] = std::numeric_limits<float>::max();
                 }
             }

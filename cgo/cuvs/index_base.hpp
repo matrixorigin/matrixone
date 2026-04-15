@@ -42,6 +42,7 @@
 #include <unordered_map>
 #include <sys/stat.h>
 #include <cerrno>
+#include <iostream>
 
 namespace matrixone {
 
@@ -572,6 +573,8 @@ public:
         quantizer_.train(*res, train_device.view());
         handle.sync();
 
+        // std::cout << "[DEBUG] flush_pending_float_chunks_internal: trained quantizer on " << total << " vectors" << std::endl;
+
         // --- GPU work + locked store: process each buffered chunk ---
         for (auto& c : pending_float_chunks_) {
             // Upload and quantize — NO LOCK
@@ -615,7 +618,11 @@ public:
                     host_ids.resize(current_offset_);
                 }
                 std::copy(c.ids.begin(), c.ids.end(), host_ids.begin() + target_offset);
+                for (uint64_t i = 0; i < c.count; ++i) {
+                    id_to_index_[c.ids[i]] = target_offset + i;
+                }
             }
+            // std::cout << "[DEBUG] flush_pending_float_chunks_internal: flushed chunk of " << c.count << " vectors at offset " << target_offset << std::endl;
         }
 
         pending_float_chunks_.clear();
@@ -623,13 +630,16 @@ public:
     }
 
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
+        std::cout << "[DEBUG] add_chunk_float: count=" << chunk_count << " offset=" << offset << std::endl;
         uint64_t job_id = worker->submit_main(
             [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
+                std::cout << "[DEBUG] add_chunk_float_task execution: count=" << chunk_count << " offset=" << offset << std::endl;
                 auto res = handle.get_raft_resources();
                 
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
                     if (!quantizer_.is_trained()) {
+                        std::cout << "[DEBUG] add_chunk_float: quantizer not trained, buffering " << chunk_count << " vectors. Pending total: " << (pending_total_count_ + chunk_count) << std::endl;
                         // Buffer this chunk for deferred training.
                         // We accumulate raw floats until kQuantizerTrainThreshold
                         // vectors are available, then train the quantizer on all of
@@ -685,7 +695,11 @@ public:
                             host_ids.resize(current_offset_);
                         }
                         std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
+                        for (uint64_t i = 0; i < chunk_count; ++i) {
+                            id_to_index_[ids[i]] = target_offset + i;
+                        }
                     }
+                    std::cout << "[DEBUG] add_chunk_float (trained): added chunk of " << chunk_count << " vectors at offset " << target_offset << std::endl;
                 } else {
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
@@ -709,6 +723,7 @@ public:
                     if (ids) {
                         this->set_ids(ids, chunk_count, target_offset);
                     }
+                    std::cout << "[DEBUG] add_chunk_float (no quant): added chunk of " << chunk_count << " vectors at offset " << target_offset << std::endl;
                 }
                 return std::any();
             }
@@ -733,11 +748,13 @@ public:
 
     void train_quantizer_if_needed() {
         if constexpr (sizeof(T) == 1) {
+            std::cout << "[DEBUG] train_quantizer_if_needed: pending_total_count_=" << pending_total_count_ << " is_trained=" << quantizer_.is_trained() << std::endl;
             // Flush any buffered raw-float chunks first (force-train on whatever
             // is available even if below kQuantizerTrainThreshold).
             if (pending_total_count_ > 0) {
                 uint64_t job_id = worker->submit_main(
                     [this](raft_handle_wrapper_t& handle) -> std::any {
+                        std::cout << "[DEBUG] train_quantizer_if_needed task: flushing pending chunks" << std::endl;
                         flush_pending_float_chunks_internal(handle);
                         return std::any();
                     });
@@ -747,6 +764,7 @@ public:
             // Fallback: if the quantizer is still not trained (caller used
             // add_chunk<T> with pre-quantized data), train from the host buffer.
             if (!quantizer_.is_trained() && !flattened_host_dataset.empty()) {
+                std::cout << "[DEBUG] train_quantizer_if_needed: training from host buffer, count=" << count << std::endl;
                 uint64_t n_train = std::min(static_cast<uint64_t>(500), static_cast<uint64_t>(count));
                 if (n_train == 0) return;
                 std::vector<float> train_data(n_train * dimension);

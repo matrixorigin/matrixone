@@ -129,7 +129,7 @@ func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
 
 // buildTestModel builds, trains and saves a CagraModel, returning it with Index==nil and
 // Path/Checksum/FileSize set. The caller is responsible for removing the tar file.
-func buildTestModel(t *testing.T, id string, ids []uint32) *CagraModel[float32] {
+func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32] {
 	t.Helper()
 
 	idxcfg := testIdxcfg()
@@ -196,9 +196,9 @@ func TestModelBuildAndLoad(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 	data := generateTestData(testNVectors, testDim)
-	ids := make([]uint32, testNVectors)
+	ids := make([]int64, testNVectors)
 	for i := range ids {
-		ids[i] = uint32(i + 1000)
+		ids[i] = int64(i + 1000)
 	}
 
 	// ---- Build ----
@@ -283,9 +283,9 @@ func TestModelLoadFromDB(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 
-	ids := make([]uint32, testNVectors)
+	ids := make([]int64, testNVectors)
 	for i := range ids {
-		ids[i] = uint32(i + 2000)
+		ids[i] = int64(i + 2000)
 	}
 
 	// Build a real index and save to tar.
@@ -358,11 +358,11 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// AddChunk fails because Index is nil.
-	err = idx.AddChunk([]float32{1, 2}, 1, []uint32{1})
+	err = idx.AddChunk([]float32{1, 2}, 1, []int64{1})
 	require.NotNil(t, err)
 
 	// AddChunkFloat fails because Index is nil.
-	err = idx.AddChunkFloat([]float32{1, 2}, 1, []uint32{1})
+	err = idx.AddChunkFloat([]float32{1, 2}, 1, []int64{1})
 	require.NotNil(t, err)
 
 	// Search fails because Index is nil.

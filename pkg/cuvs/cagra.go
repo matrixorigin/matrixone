@@ -59,7 +59,7 @@ func (gi *GpuCagra[T]) SetBatchWindow(windowUs int64) error {
 // NewGpuCagra creates a new GpuCagra instance from a dataset.
 // ids may be nil to use internal sequential IDs (0..count-1).
 func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
-	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []uint32) (*GpuCagra[T], error) {
+	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuCagra[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
 	}
@@ -71,9 +71,9 @@ func NewGpuCagra[T VectorType](dataset []T, count uint64, dimension uint32, metr
 		cDevices[i] = C.int(d)
 	}
 
-	var cIds *C.uint32_t
+	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.uint32_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
 
 	cBP := C.cagra_build_params_t{
@@ -361,7 +361,7 @@ func NewGpuCagraEmpty[T VectorType](totalCount uint64, dimension uint32, metric 
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) error {
+func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -370,9 +370,9 @@ func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) erro
 	}
 
 	var errmsg *C.char
-	var cIds *C.uint32_t
+	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.uint32_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
 	C.gpu_cagra_add_chunk(
 		gi.cCagra,
@@ -393,7 +393,7 @@ func (gi *GpuCagra[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) erro
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly quantization if needed.
-func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []uint32) error {
+func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -402,9 +402,9 @@ func (gi *GpuCagra[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []u
 	}
 
 	var errmsg *C.char
-	var cIds *C.uint32_t
+	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.uint32_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
 	}
 	C.gpu_cagra_add_chunk_float(
 		gi.cCagra,
@@ -570,12 +570,12 @@ func (gi *GpuCagra[T]) Unpack(filename string) error {
 }
 
 // DeleteId removes an ID from the index (soft delete).
-func (gi *GpuCagra[T]) DeleteId(id uint32) error {
+func (gi *GpuCagra[T]) DeleteId(id int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_cagra_delete_id(gi.cCagra, C.uint32_t(id), unsafe.Pointer(&errmsg))
+	C.gpu_cagra_delete_id(gi.cCagra, C.int64_t(id), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -621,10 +621,10 @@ func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
-	neighbors := make([]uint32, totalElements)
+	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
 	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
@@ -674,10 +674,10 @@ func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
-	neighbors := make([]uint32, totalElements)
+	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
 	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
@@ -790,23 +790,17 @@ func (gi *GpuCagra[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32)
 	}
 
 	totalElements := uint64(numQueries) * uint64(limit)
-	neighbors := make([]uint32, totalElements)
+	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.uint32_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
 	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
 	C.gpu_cagra_free_result(res.result_ptr)
 
-	// Convert uint32 neighbors to int64 for the GpuIndex interface
-	neighbors64 := make([]int64, totalElements)
-	for i, n := range neighbors {
-		neighbors64[i] = int64(n)
-	}
-
-	return neighbors64, distances, nil
+	return neighbors, distances, nil
 }
 
 // Cap returns the capacity of the index buffer
@@ -851,7 +845,7 @@ func (gi *GpuCagra[T]) Info() (string, error) {
 
 // Extend adds more vectors to the index (single-GPU only).
 // newIDs may be nil to auto-assign sequential IDs starting from the current index size.
-func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []uint32) error {
+func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []int64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -859,9 +853,9 @@ func (gi *GpuCagra[T]) Extend(additionalData []T, numVectors uint64, newIDs []ui
 		return nil
 	}
 
-	var idsPtr *C.uint32_t
+	var idsPtr *C.int64_t
 	if len(newIDs) > 0 {
-		idsPtr = (*C.uint32_t)(unsafe.Pointer(&newIDs[0]))
+		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
 	}
 
 	var errmsg *C.char
@@ -934,7 +928,7 @@ func MergeGpuCagra[T VectorType](indices []*GpuCagra[T], nthread uint32, devices
 
 // SearchResult contains the neighbors and distances from a CAGRA search.
 type SearchResult struct {
-	Neighbors []uint32
+	Neighbors []int64
 	Distances []float32
 }
 

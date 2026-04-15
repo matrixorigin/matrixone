@@ -41,7 +41,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0LL);
 
     index.destroy();
 }
@@ -50,10 +50,10 @@ TEST(GpuCagraTest, BasicLoadAndSearchWithIds) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
-    std::vector<uint32_t> ids(count);
+    std::vector<int64_t> ids(count);
     for (size_t i = 0; i < count; ++i) {
         for (size_t j = 0; j < dimension; ++j) dataset[i * dimension + j] = (float)rand() / RAND_MAX;
-        ids[i] = (uint32_t)(i + 1000); // Offset IDs
+        ids[i] = (int64_t)(i + 1000); // Offset IDs
     }
     
     std::vector<int> devices = {0};
@@ -67,7 +67,7 @@ TEST(GpuCagraTest, BasicLoadAndSearchWithIds) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 1000u); // Should return the provided ID
+    ASSERT_EQ(result.neighbors[0], 1000LL); // Should return the provided ID
 
     index.destroy();
 }
@@ -78,16 +78,16 @@ TEST(GpuCagraTest, ParallelAddChunkWithOffset) {
     const uint64_t total_count = count_per_chunk * 2;
     std::vector<float> chunk1(count_per_chunk * dimension);
     std::vector<float> chunk2(count_per_chunk * dimension);
-    std::vector<uint32_t> ids1(count_per_chunk);
-    std::vector<uint32_t> ids2(count_per_chunk);
+    std::vector<int64_t> ids1(count_per_chunk);
+    std::vector<int64_t> ids2(count_per_chunk);
 
     for (size_t i = 0; i < count_per_chunk; ++i) {
         for (size_t j = 0; j < dimension; ++j) {
             chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
             chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
         }
-        ids1[i] = (uint32_t)i;
-        ids2[i] = (uint32_t)(i + count_per_chunk);
+        ids1[i] = (int64_t)i;
+        ids2[i] = (int64_t)(i + count_per_chunk);
     }
 
     std::vector<int> devices = {0};
@@ -109,7 +109,7 @@ TEST(GpuCagraTest, ParallelAddChunkWithOffset) {
     cagra_search_params_t sp = cagra_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
-    ASSERT_EQ(result.neighbors[0], (uint32_t)count_per_chunk);
+    ASSERT_EQ(result.neighbors[0], (int64_t)count_per_chunk);
 
     index.destroy();
 }
@@ -118,9 +118,9 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
-    std::vector<uint32_t> ids(count);
+    std::vector<int64_t> ids(count);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-    for (size_t i = 0; i < count; ++i) ids[i] = (uint32_t)(i + 5000);
+    for (size_t i = 0; i < count; ++i) ids[i] = (int64_t)(i + 5000);
 
     std::string filename = "test_cagra.bin";
     std::vector<int> devices = {0};
@@ -147,7 +147,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
         auto result = index.search(queries.data(), 1, dimension, 5, sp);
         
         ASSERT_EQ(result.neighbors.size(), (size_t)5);
-        ASSERT_EQ(result.neighbors[0], 5000u);
+        ASSERT_EQ(result.neighbors[0], 5000LL);
 
         index.destroy();
     }
@@ -177,7 +177,7 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0LL);
 
     index.destroy();
 }
@@ -207,7 +207,7 @@ TEST(GpuCagraTest, ManualShardedSearch) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 0u);
+    ASSERT_EQ(result.neighbors[0], 0LL);
 
     index.destroy();
 }
@@ -216,9 +216,9 @@ TEST(GpuCagraTest, ManualShardedSearchWithIds) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;
     std::vector<float> dataset(count * dimension);
-    std::vector<uint32_t> ids(count);
+    std::vector<int64_t> ids(count);
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
-    for (size_t i = 0; i < count; ++i) ids[i] = (uint32_t)(i + 20000);
+    for (size_t i = 0; i < count; ++i) ids[i] = (int64_t)(i + 20000);
     
     int dev_count = gpu_get_device_count();
     if (dev_count < 2) {
@@ -239,7 +239,7 @@ TEST(GpuCagraTest, ManualShardedSearchWithIds) {
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
     ASSERT_EQ(result.neighbors.size(), (size_t)5);
-    ASSERT_EQ(result.neighbors[0], 20000u);
+    ASSERT_EQ(result.neighbors[0], 20000LL);
 
     index.destroy();
 }
@@ -268,19 +268,19 @@ TEST(GpuCagraTest, SoftDeleteSearch) {
     std::vector<float> queries = {1.0, 2.0, 3.0};
     cagra_search_params_t sp = cagra_search_params_default();
     auto result1 = index.search(queries.data(), 1, dimension, 2, sp);
-    ASSERT_EQ(result1.neighbors[0], 0u);
-    ASSERT_EQ(result1.neighbors[1], 1u);
+    ASSERT_EQ(result1.neighbors[0], 0LL);
+    ASSERT_EQ(result1.neighbors[1], 1LL);
 
     // 2. Delete point 1 and search again: point 1 should be gone, point 2 should be the second neighbor
     index.delete_id(1);
     auto result2 = index.search(queries.data(), 1, dimension, 2, sp);
-    ASSERT_EQ(result2.neighbors[0], 0u);
-    ASSERT_EQ(result2.neighbors[1], 2u);
+    ASSERT_EQ(result2.neighbors[0], 0LL);
+    ASSERT_EQ(result2.neighbors[1], 2LL);
 
     // 3. Delete point 0 and search: point 0 should be gone, point 2 should be first
     index.delete_id(0);
     auto result3 = index.search(queries.data(), 1, dimension, 1, sp);
-    ASSERT_EQ(result3.neighbors[0], 2u);
+    ASSERT_EQ(result3.neighbors[0], 2LL);
 
     index.destroy();
 }
@@ -297,9 +297,9 @@ TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
     for (uint64_t i = 3; i < count; ++i)
         for (uint32_t j = 0; j < dimension; ++j)
             dataset[i * dimension + j] = 1e6f + (float)i; // far away
-    std::vector<uint32_t> ids(count);
+    std::vector<int64_t> ids(count);
     ids[0] = 100; ids[1] = 200; ids[2] = 300;
-    for (uint64_t i = 3; i < count; ++i) ids[i] = (uint32_t)(1000 + i);
+    for (uint64_t i = 3; i < count; ++i) ids[i] = (int64_t)(1000 + i);
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
@@ -310,14 +310,14 @@ TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
     std::vector<float> query = {20, 20};
     cagra_search_params_t sp = cagra_search_params_default();
     auto res1 = index.search(query.data(), 1, dimension, 1, sp);
-    ASSERT_EQ(res1.neighbors[0], 200u);
+    ASSERT_EQ(res1.neighbors[0], 200LL);
 
     // Delete by custom ID
     index.delete_id(200);
     auto res2 = index.search(query.data(), 1, dimension, 1, sp);
     // Should now return the next closest point (100 or 300)
-    ASSERT_TRUE(res2.neighbors[0] == 100u || res2.neighbors[0] == 300u);
-    ASSERT_NE(res2.neighbors[0], 200u);
+    ASSERT_TRUE(res2.neighbors[0] == 100LL || res2.neighbors[0] == 300LL);
+    ASSERT_NE(res2.neighbors[0], 200LL);
 
     index.destroy();
 }
@@ -333,11 +333,11 @@ TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     gpu_get_device_list(devices.data(), dev_count);
 
     std::vector<float> dataset(n_base * dimension);
-    std::vector<uint32_t> base_ids(n_base);
+    std::vector<int64_t> base_ids(n_base);
     for (uint64_t i = 0; i < n_base; ++i) {
         for (uint32_t j = 0; j < dimension; ++j)
             dataset[i * dimension + j] = (float)rand() / RAND_MAX;
-        base_ids[i] = (uint32_t)(1000 + i);
+        base_ids[i] = (int64_t)(1000 + i);
     }
 
     cagra_build_params_t bp = cagra_build_params_default();
@@ -348,9 +348,9 @@ TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     index.build();
 
     std::vector<float> ext(n_ext * dimension, 1000.0f);
-    std::vector<uint32_t> ext_ids(n_ext);
+    std::vector<int64_t> ext_ids(n_ext);
     for (uint64_t i = 0; i < n_ext; ++i)
-        ext_ids[i] = (uint32_t)(2000 + i);
+        ext_ids[i] = (int64_t)(2000 + i);
 
     index.extend(ext.data(), n_ext, ext_ids.data());
 
@@ -361,13 +361,13 @@ TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     // Query at base vector 0: expect host ID 1000
     std::vector<float> q0(dataset.begin(), dataset.begin() + dimension);
     auto r0 = index.search(q0.data(), 1, dimension, 1, sp);
-    ASSERT_EQ(r0.neighbors[0], 1000u);
+    ASSERT_EQ(r0.neighbors[0], 1000LL);
 
     // Query at extended cluster: expect host ID in [2000, 2010)
     std::vector<float> q_ext(dimension, 1000.0f);
     auto r_ext = index.search(q_ext.data(), 1, dimension, 1, sp);
-    ASSERT_GE(r_ext.neighbors[0], 2000u);
-    ASSERT_TRUE(r_ext.neighbors[0] < 2010u);
+    ASSERT_GE(r_ext.neighbors[0], 2000LL);
+    ASSERT_TRUE(r_ext.neighbors[0] < 2010LL);
 
     index.destroy();
 }
@@ -458,13 +458,13 @@ TEST(GpuCagraTest, ExtendWithoutHostIds) {
     // Query at base vector 0: expect sequential ID 0
     std::vector<float> q0(dataset.begin(), dataset.begin() + dimension);
     auto r0 = index.search(q0.data(), 1, dimension, 1, sp);
-    ASSERT_EQ(r0.neighbors[0], 0u);
+    ASSERT_EQ(r0.neighbors[0], 0LL);
 
     // Query at extended cluster: expect sequential ID in [n_base, n_base+n_ext)
     std::vector<float> q_ext(dimension, 1000.0f);
     auto r_ext = index.search(q_ext.data(), 1, dimension, 1, sp);
-    ASSERT_GE(r_ext.neighbors[0], (uint32_t)n_base);
-    ASSERT_TRUE(r_ext.neighbors[0] < (uint32_t)(n_base + n_ext));
+    ASSERT_GE(r_ext.neighbors[0], (int64_t)n_base);
+    ASSERT_TRUE(r_ext.neighbors[0] < (int64_t)(n_base + n_ext));
 
     index.destroy();
 }
@@ -475,11 +475,11 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
     const uint64_t n_ext  = 10;
 
     std::vector<float> dataset(n_base * dimension);
-    std::vector<uint32_t> base_ids(n_base);
+    std::vector<int64_t> base_ids(n_base);
     for (uint64_t i = 0; i < n_base; ++i) {
         for (uint32_t j = 0; j < dimension; ++j)
             dataset[i * dimension + j] = (float)rand() / RAND_MAX;
-        base_ids[i] = (uint32_t)(1000 + i);  // external IDs 1000..1199
+        base_ids[i] = (int64_t)(1000 + i);  // external IDs 1000..1199
     }
 
     std::vector<int> devices = {0};
@@ -491,9 +491,9 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
     index.build();
 
     std::vector<float> ext(n_ext * dimension, 1000.0f);
-    std::vector<uint32_t> ext_ids(n_ext);
+    std::vector<int64_t> ext_ids(n_ext);
     for (uint64_t i = 0; i < n_ext; ++i)
-        ext_ids[i] = (uint32_t)(2000 + i);  // external IDs 2000..2009
+        ext_ids[i] = (int64_t)(2000 + i);  // external IDs 2000..2009
 
     index.extend(ext.data(), n_ext, ext_ids.data());
 
@@ -504,13 +504,13 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
     // Query at base vector 0: expect host ID 1000
     std::vector<float> q0(dataset.begin(), dataset.begin() + dimension);
     auto r0 = index.search(q0.data(), 1, dimension, 1, sp);
-    ASSERT_EQ(r0.neighbors[0], 1000u);
+    ASSERT_EQ(r0.neighbors[0], 1000LL);
 
     // Query at extended cluster: expect host ID in [2000, 2010)
     std::vector<float> q_ext(dimension, 1000.0f);
     auto r_ext = index.search(q_ext.data(), 1, dimension, 1, sp);
-    ASSERT_GE(r_ext.neighbors[0], 2000u);
-    ASSERT_TRUE(r_ext.neighbors[0] < 2010u);
+    ASSERT_GE(r_ext.neighbors[0], 2000LL);
+    ASSERT_TRUE(r_ext.neighbors[0] < 2010LL);
 
     index.destroy();
 }

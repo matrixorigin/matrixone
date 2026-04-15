@@ -41,7 +41,7 @@ var (
 		{
 			Name: "pkid",
 			Typ: plan.Type{
-				Id:          int32(types.T_uint32),
+				Id:          int32(types.T_int64),
 				NotNullable: false,
 				Width:       8,
 			},

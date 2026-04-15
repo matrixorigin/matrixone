@@ -128,7 +128,7 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 }
 
 // AddChunk appends a chunk of typed vectors to the pre-allocated GPU buffer.
-func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) error {
+func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
@@ -140,7 +140,7 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []uint32) e
 }
 
 // AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
-func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []uint32) error {
+func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
@@ -308,7 +308,7 @@ func (idx *CagraModel[T]) Full() bool {
 	return idx.MaxCapacity > 0 && uint64(idx.Len) >= idx.MaxCapacity
 }
 
-// Search performs a KNN search and returns external PKs (uint32 cast to int64) with distances.
+// Search performs a KNN search and returns external PKs with distances.
 func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("CagraModel: index not loaded")
@@ -321,11 +321,7 @@ func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distanc
 	if err != nil {
 		return nil, nil, err
 	}
-	keys = make([]int64, len(res.Neighbors))
-	for i, n := range res.Neighbors {
-		keys[i] = int64(n)
-	}
-	return keys, res.Distances, nil
+	return res.Neighbors, res.Distances, nil
 }
 
 // loadChunk reads one streaming result batch and writes each chunk at the correct file offset.

@@ -34,7 +34,7 @@ func NewCagraBuild[T cuvs.VectorType](
 	return nil, errGPURequired
 }
 
-func (b *CagraBuild[T]) AddFloat(id uint32, vec []float32) error {
+func (b *CagraBuild[T]) AddFloat(id int64, vec []float32) error {
 	return errGPURequired
 }
 
