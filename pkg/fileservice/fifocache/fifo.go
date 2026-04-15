@@ -32,8 +32,10 @@ type Cache[K comparable, V any] struct {
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
 
-	postSet   func(ctx context.Context, key K, value V, size int64)
-	postGet   func(ctx context.Context, key K, value V, size int64)
+	postSet func(ctx context.Context, key K, value V, size int64)
+	postGet func(ctx context.Context, key K, value V, size int64)
+	// postEvict is called after an item is evicted from the cache.
+	// It must be safe for concurrent invocation from multiple goroutines.
 	postEvict func(ctx context.Context, key K, value V, size int64)
 
 	shards [numShards]struct {
@@ -275,16 +277,19 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 	defer func() {
 		// Unlock first so other Set() callers can proceed while callbacks run.
 		c.queueLock.Unlock()
+		// Nested defer guarantees done is always signaled, even if a
+		// postEvict callback panics. The panic itself propagates to the
+		// caller's recover (e.g., query handler).
+		if done != nil {
+			defer func() { done <- target }()
+		}
 		// Execute postEvict callbacks outside the queueLock.
 		if c.postEvict != nil {
 			for i := range pendingPostEvicts {
 				c.postEvict(ctx, pendingPostEvicts[i].key, pendingPostEvicts[i].value, pendingPostEvicts[i].size)
+				// Release reference so GC can reclaim memory incrementally.
+				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
 			}
-		}
-		// Signal done after callbacks complete so callers can rely on
-		// "eviction finished" semantics (see IOVectorCache.Evict doc).
-		if done != nil {
-			done <- target
 		}
 	}()
 	for {
@@ -385,6 +390,13 @@ func (c *Cache[K, V]) enqueueGhost(item *_CacheItem[K, V]) (pe _PendingPostEvict
 		pe.size = item.size
 		evicted = true
 		item.valueOK = false
+		// Clear item.value to:
+		// 1. Break the reference from item to backing buffer, allowing GC to
+		//    reclaim it as soon as postEvict calls Release (not waiting for
+		//    the ghost item itself to be GC'd).
+		// 2. Ensure the ghost state (valueOK=false + zero value) is atomically
+		//    visible under the shard lock, so concurrent Get() never reads a
+		//    dangling value reference.
 		var zero V
 		item.value = zero
 	}
