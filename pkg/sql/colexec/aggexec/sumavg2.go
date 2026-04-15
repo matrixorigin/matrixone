@@ -686,9 +686,9 @@ func makeSumAvgExec(
 	case types.T_float64:
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
-		return newSumAvgDecExec[types.Decimal64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
-		return newSumAvgDecExec[types.Decimal128, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+		return newSumDecimal128FastExec(mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal256:
 		return newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, isSum, aggID, isDistinct, param)
 	default:
