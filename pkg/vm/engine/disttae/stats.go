@@ -260,6 +260,9 @@ type GlobalStats struct {
 
 	// beforeCacheRemoteInfo is for test only.
 	beforeCacheRemoteInfo func(pb.StatsInfoKey)
+
+	// beforeSubscribeTable is for test only.
+	beforeSubscribeTable func(pb.StatsInfoKey)
 }
 
 func NewGlobalStats(
@@ -386,6 +389,9 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 	}
 
 	gs.mu.statsInfoMap[key] = remoteInfo
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
 	return remoteInfo
 }
 
@@ -405,6 +411,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 
 	// after checking first potential patched cache
 	// we check the approx to avoid taking a place in statInfo map
+	if gs.beforeSubscribeTable != nil {
+		gs.beforeSubscribeTable(key)
+	}
 	ps, err := gs.engine.pClient.toSubscribeTable(
 		ctx,
 		uint64(key.AccId),

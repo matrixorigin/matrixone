@@ -1841,6 +1841,16 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 			DbName:     "d",
 		}
 
+		reachSubscribe := make(chan struct{})
+		oldSubscribeHook := gs.beforeSubscribeTable
+		var subscribeOnce sync.Once
+		gs.beforeSubscribeTable = func(statsinfo.StatsInfoKey) {
+			subscribeOnce.Do(func() { close(reachSubscribe) })
+		}
+		defer func() {
+			gs.beforeSubscribeTable = oldSubscribeHook
+		}()
+
 		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
@@ -1850,8 +1860,14 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 			_ = gs.Get(getCtx, key, false)
 		}()
 
-		// Give Get enough time to reach toSubscribeTable and block on subscribed.rw.
-		time.Sleep(20 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			select {
+			case <-reachSubscribe:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get did not reach subscribe path")
 
 		muAcquired := make(chan struct{})
 		go func() {
@@ -1860,12 +1876,19 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 			close(muAcquired)
 		}()
 
-		select {
-		case <-muAcquired:
-			// expected: Get should not hold gs.mu while waiting subscribe lock.
-		case <-time.After(200 * time.Millisecond):
-			t.Fatal("GlobalStats.Get holds gs.mu while waiting on subscribe lock")
-		}
+		require.Eventually(t, func() bool {
+			select {
+			case <-getDone:
+				return false
+			default:
+			}
+			select {
+			case <-muAcquired:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get holds gs.mu while waiting on subscribe lock")
 
 		locked = false
 		e.pClient.subscribed.rw.Unlock()
@@ -1875,6 +1898,75 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
 		}
+	})
+}
+
+func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		waitEntered := make(chan struct{})
+		waitDone := make(chan struct{})
+		var waitOnce sync.Once
+
+		go func() {
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			for {
+				if _, ok := gs.mu.statsInfoMap[key]; ok {
+					break
+				}
+				waitOnce.Do(func() { close(waitEntered) })
+				gs.mu.cond.Wait()
+			}
+			close(waitDone)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitEntered:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
+
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo)
+		require.NotNil(t, info)
+		require.Equal(t, remoteInfo, info)
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitDone:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter was not awakened by remote cache broadcast")
 	})
 }
 
