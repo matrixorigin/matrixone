@@ -549,42 +549,45 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 	bat *batch.Batch,
 	rowCount int,
 ) (err error) {
+	_ = rowCount
 
 	// init buf
 	if writer.deleteBlockInfo[idx] == nil {
 		writer.deleteBlockInfo[idx] = make(map[string]*deleteBlockInfo, 1)
 	}
 
-	stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
-	fileName := stats.ObjectLocation().String()
-	if writer.deleteBlockInfo[idx][fileName] == nil {
-		blockInfoBat := batch.NewWithSize(bat.VectorCount())
-		blockInfoBat.Attrs = bat.Attrs
-		for i := 0; i < bat.VectorCount(); i++ {
-			blockInfoBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-		}
-		writer.deleteBlockInfo[idx][fileName] = &deleteBlockInfo{
-			name: "",
-			bat:  blockInfoBat,
-		}
-	}
-
-	objId := stats.ObjectName().ObjectId()[:]
-	targetBloInfo := writer.deleteBlockInfo[idx][fileName]
-	targetBloInfo.name = fmt.Sprintf("%s|%d", objId, deletion.FlushDeltaLoc)
-	targetBloInfo.rawRowCount += uint64(rowCount)
-
-	for i := range bat.Vecs {
-		row, col := vector.MustVarlenaRawData(bat.Vecs[i])
-		for j := range bat.Vecs[i].Length() {
-			if err = vector.AppendBytes(
-				targetBloInfo.bat.Vecs[i], row[j].GetByteSlice(col), false, proc.GetMPool()); err != nil {
-				return err
+	row, area := vector.MustVarlenaRawData(bat.Vecs[0])
+	for j := range row {
+		stats := objectio.ObjectStats(row[j].GetByteSlice(area))
+		fileName := stats.ObjectLocation().String()
+		targetBloInfo := writer.deleteBlockInfo[idx][fileName]
+		if targetBloInfo == nil {
+			blockInfoBat := batch.NewWithSize(bat.VectorCount())
+			blockInfoBat.Attrs = bat.Attrs
+			for i := 0; i < bat.VectorCount(); i++ {
+				blockInfoBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
 			}
+			targetBloInfo = &deleteBlockInfo{
+				name: "",
+				bat:  blockInfoBat,
+			}
+			writer.deleteBlockInfo[idx][fileName] = targetBloInfo
 		}
-	}
 
-	targetBloInfo.bat.SetRowCount(targetBloInfo.bat.Vecs[0].Length())
+		objId := stats.ObjectName().ObjectId()[:]
+		targetBloInfo.name = fmt.Sprintf("%s|%d", objId, deletion.FlushDeltaLoc)
+		targetBloInfo.rawRowCount += uint64(stats.Rows())
+
+		if err = vector.AppendBytes(
+			targetBloInfo.bat.Vecs[0],
+			stats.Marshal(),
+			false,
+			proc.GetMPool(),
+		); err != nil {
+			return err
+		}
+		targetBloInfo.bat.SetRowCount(targetBloInfo.bat.Vecs[0].Length())
+	}
 
 	return
 }

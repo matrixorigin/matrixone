@@ -35,30 +35,33 @@ func TestFillDeleteBlockInfoKeepsObjectsSeparated(t *testing.T) {
 		deleteBlockInfo: make([]map[string]*deleteBlockInfo, 1),
 	}
 
-	bat1 := newDeleteBlockInfoTestBatch(t, proc, objectio.NewObjectStatsWithObjectID(new(objectio.ObjectId), true, true, true))
-	defer bat1.Clean(proc.Mp())
-
+	stats1 := objectio.NewObjectStatsWithObjectID(new(objectio.ObjectId), true, true, true)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 10))
 	obj2 := types.Objectid{1}
-	bat2 := newDeleteBlockInfoTestBatch(t, proc, objectio.NewObjectStatsWithObjectID(&obj2, true, true, true))
-	defer bat2.Clean(proc.Mp())
+	stats2 := objectio.NewObjectStatsWithObjectID(&obj2, true, true, true)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats2, 20))
 
-	require.NoError(t, writer.fillDeleteBlockInfo(proc, 0, bat1, 10))
-	require.NoError(t, writer.fillDeleteBlockInfo(proc, 0, bat2, 20))
+	bat := newDeleteBlockInfoTestBatch(t, proc, stats1, stats2)
+	defer bat.Clean(proc.Mp())
 
-	stats1 := objectio.ObjectStats(bat1.Vecs[0].GetBytesAt(0))
-	stats2 := objectio.ObjectStats(bat2.Vecs[0].GetBytesAt(0))
+	require.NoError(t, writer.fillDeleteBlockInfo(proc, 0, bat, 30))
+
+	stats1Val := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+	stats2Val := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(1))
 
 	require.Len(t, writer.deleteBlockInfo[0], 2)
-	require.Equal(t, uint64(10), writer.deleteBlockInfo[0][(&stats1).ObjectLocation().String()].rawRowCount)
-	require.Equal(t, uint64(20), writer.deleteBlockInfo[0][(&stats2).ObjectLocation().String()].rawRowCount)
+	require.Equal(t, uint64(10), writer.deleteBlockInfo[0][(&stats1Val).ObjectLocation().String()].rawRowCount)
+	require.Equal(t, uint64(20), writer.deleteBlockInfo[0][(&stats2Val).ObjectLocation().String()].rawRowCount)
 }
 
-func newDeleteBlockInfoTestBatch(t *testing.T, proc *process.Process, stats *objectio.ObjectStats) *batch.Batch {
+func newDeleteBlockInfoTestBatch(t *testing.T, proc *process.Process, stats ...*objectio.ObjectStats) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
 	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
 	bat.SetVector(0, vector.NewVec(types.T_binary.ToType()))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, proc.Mp()))
-	bat.SetRowCount(1)
+	for _, stat := range stats {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], stat.Marshal(), false, proc.Mp()))
+	}
+	bat.SetRowCount(len(stats))
 	return bat
 }
