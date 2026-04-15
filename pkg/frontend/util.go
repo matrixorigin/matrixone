@@ -1031,11 +1031,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 // errCodeRollbackWholeTxn denotes that the error code
 // that should rollback the whole txn
 var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrDeadLockDetected:     false,
-	moerr.ErrLockTableBindChanged: false,
-	moerr.ErrLockTableNotFound:    false,
-	moerr.ErrDeadlockCheckBusy:    false,
-	moerr.ErrLockConflict:         false,
+	moerr.ErrRetryForCNRollingRestart: false,
+	moerr.ErrDeadLockDetected:         false,
+	moerr.ErrLockTableBindChanged:     false,
+	moerr.ErrLockTableNotFound:        false,
+	moerr.ErrDeadlockCheckBusy:        false,
+	moerr.ErrLockConflict:             false,
+	moerr.ErrTxnUnknown:               false,
+	moerr.ErrBackendClosed:            false,
+	moerr.ErrNoAvailableBackend:       false,
+	moerr.ErrBackendCannotConnect:     false,
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
@@ -1061,6 +1066,8 @@ func getRandomErrorRollbackWholeTxn() error {
 		arr = append(arr, k)
 	}
 	switch arr[x] {
+	case moerr.ErrRetryForCNRollingRestart:
+		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
 		return moerr.NewDeadLockDetectedNoCtx()
 	case moerr.ErrLockTableBindChanged:
@@ -1071,6 +1078,14 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrTxnUnknown:
+		return moerr.NewTxnUnknown(context.Background(), "test")
+	case moerr.ErrBackendClosed:
+		return moerr.NewBackendClosedNoCtx()
+	case moerr.ErrNoAvailableBackend:
+		return moerr.NewNoAvailableBackendNoCtx()
+	case moerr.ErrBackendCannotConnect:
+		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}

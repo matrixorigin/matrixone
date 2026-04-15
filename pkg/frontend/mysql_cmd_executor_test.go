@@ -1811,7 +1811,7 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
-func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
+func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1829,14 +1829,14 @@ func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 42 AS x FROM testdb.t1"),
+		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
 	}
 
 	resp, err := ExecRequest(ses, ec, req)
@@ -1845,7 +1845,7 @@ func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
 	assert.Equal(t, ResultResponse, resp.category)
 }
 
-func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
+func Test_ExecRequest_SidecarError(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1863,14 +1863,14 @@ func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 1 FROM testdb.t1"),
+		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
 	}
 
 	resp, err := ExecRequest(ses, ec, req)
@@ -1880,8 +1880,8 @@ func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
 	assert.Equal(t, ErrorResponse, resp.category)
 }
 
-func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
-	// GPU hint present but sidecar not configured → strips hint, falls through.
+func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
+	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
 	// doComQuery will fail (no engine), but we verify the fallthrough happened.
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
@@ -1889,7 +1889,7 @@ func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
 
 	saved := debugHTTPAddr
 	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = "" // no manifest URL → errGPUNotConfigured
+	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
@@ -1897,7 +1897,7 @@ func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 1"),
+		data: []byte("/*+ SIDECAR */ SELECT 1"),
 	}
 
 	// ExecRequest won't return an error even though doComQuery panics/fails;
