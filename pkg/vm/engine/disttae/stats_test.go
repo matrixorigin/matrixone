@@ -1772,3 +1772,73 @@ func TestRemoveTid(t *testing.T) {
 		})
 	})
 }
+
+func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		locked := true
+		e.pClient.subscribed.rw.Lock()
+		defer func() {
+			if locked {
+				e.pClient.subscribed.rw.Unlock()
+			}
+		}()
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		getDone := make(chan struct{})
+		go func() {
+			defer close(getDone)
+			_ = gs.Get(getCtx, key, false)
+		}()
+
+		// Give Get enough time to reach toSubscribeTable and block on subscribed.rw.
+		time.Sleep(20 * time.Millisecond)
+
+		muAcquired := make(chan struct{})
+		go func() {
+			gs.mu.Lock()
+			gs.mu.Unlock()
+			close(muAcquired)
+		}()
+
+		select {
+		case <-muAcquired:
+			// expected: Get should not hold gs.mu while waiting subscribe lock.
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("GlobalStats.Get holds gs.mu while waiting on subscribe lock")
+		}
+
+		locked = false
+		e.pClient.subscribed.rw.Unlock()
+
+		select {
+		case <-getDone:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
+		}
+	})
+}
