@@ -18,32 +18,19 @@ import (
 	"fmt"
 	"strings"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 const fullTextMainTableDebugRows = 4096
-const fullTextMainTableFallbackDebugRows = 100000
 
 func shouldLogFullTextMainTableBatch(
 	updateCtx *MultiUpdateCtx,
 	tableType UpdateTableType,
 	rowCount int,
 ) bool {
-	if rowCount < fullTextMainTableDebugRows || tableType != UpdateMainTable {
-		return false
-	}
-	if updateCtx == nil || updateCtx.TableDef == nil {
-		return rowCount >= fullTextMainTableFallbackDebugRows
-	}
-	for _, idx := range updateCtx.TableDef.Indexes {
-		if idx != nil && pkgcatalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
-			return true
-		}
-	}
-	return rowCount >= fullTextMainTableFallbackDebugRows
+	return rowCount >= fullTextMainTableDebugRows && tableType == UpdateMainTable
 }
 
 func debugBatchPKRange(
@@ -121,4 +108,17 @@ func debugTotalBatchRows(bats []*batch.Batch) int {
 		}
 	}
 	return total
+}
+
+func debugUpdateAction(action UpdateAction) string {
+	switch action {
+	case UpdateWriteTable:
+		return "write-table"
+	case UpdateWriteS3:
+		return "write-s3"
+	case UpdateFlushS3Info:
+		return "flush-s3-info"
+	default:
+		return fmt.Sprintf("unknown-%d", action)
+	}
 }

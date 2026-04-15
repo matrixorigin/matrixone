@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (update *MultiUpdate) String(buf *bytes.Buffer) {
@@ -148,6 +150,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	} else {
 		update.ctr.action = actionDelete
 	}
+	logutil.Info(
+		"[MULTIUPDATE-ACTION]",
+		zap.String("table", debugObjectRefName(mainCtx.ObjRef)),
+		zap.String("action", debugUpdateAction(update.Action)),
+		zap.Int("table-count", len(update.MultiUpdateCtx)),
+		zap.Bool("delegated", update.delegated),
+		zap.Bool("is-remote", update.IsRemote),
+	)
 
 	return nil
 }
