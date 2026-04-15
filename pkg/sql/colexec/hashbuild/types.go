@@ -159,9 +159,12 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
-		// 0 means auto config
+		// 0 means auto config.
+		// Use 1/4 of per-core available memory as spill threshold.
+		// Previous divisor of 8 was too aggressive and caused premature
+		// spilling that increased peak memory due to concurrent IO buffers.
 		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 4
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128

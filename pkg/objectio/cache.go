@@ -25,9 +25,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/shirou/gopsutil/v3/mem"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -77,12 +77,10 @@ var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
 
 func metaCacheSize() int64 {
-	v, err := mem.VirtualMemory()
-	if err != nil {
-		panic(err)
-	}
+	// Use system.MemoryTotal() which is cgroup-aware in containers,
+	// instead of gopsutil VirtualMemory() which may report host memory.
+	total := system.MemoryTotal()
 
-	total := v.Total
 	if total < 2*mpool.GB {
 		return int64(total / 4)
 	}

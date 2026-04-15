@@ -158,9 +158,14 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	}
 
 	if m == 0 {
-		// 0 means auto config.   Here the formula is made up on the fly.
+		// 0 means auto config.
+		// Use 1/4 of per-core available memory as spill threshold.
+		// Previous divisor of 8 was too aggressive — on memory-constrained
+		// containers (e.g. 25GB with 15GB file cache) it forced premature
+		// spilling, and the simultaneous spill IO from all partitions
+		// actually increased peak memory due to temporary buffers.
 		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
+		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 4
 		// min 128MB
 		if mem < common.MiB*128 {
 			mem = common.MiB * 128
