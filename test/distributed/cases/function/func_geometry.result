@@ -2126,7 +2126,7 @@ where table_schema = database()
 and table_name = 'geo_srid_show'
 and column_name = 'location';
 ➤ data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  srs_id[-5,64,0]  𝄀
-POINT SRID 4326  ¦  POINT SRID 4326  ¦  null
+POINT  ¦  POINT SRID 4326  ¦  4326
 drop table geo_srid_show;
 drop table if exists geo_srid_show_any;
 create table geo_srid_show_any (
@@ -2138,7 +2138,7 @@ where table_schema = database()
 and table_name = 'geo_srid_show_any'
 and column_name = 'g';
 ➤ data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  srs_id[-5,64,0]  𝄀
-GEOMETRY SRID 0  ¦  GEOMETRY SRID 0  ¦  null
+GEOMETRY  ¦  GEOMETRY SRID 0  ¦  0
 drop table geo_srid_show_any;
 drop table if exists geo_srid_value_ok;
 create table geo_srid_value_ok(g point not null srid 4326);
