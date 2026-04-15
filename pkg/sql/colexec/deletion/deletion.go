@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+	"strings"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -41,6 +42,19 @@ const (
 )
 
 const opName = "deletion"
+
+func shouldLogDeletePath(deletion *Deletion, rows int) bool {
+	if deletion == nil || deletion.DeleteCtx == nil || deletion.DeleteCtx.Ref == nil {
+		return false
+	}
+	if deletion.RemoteDelete {
+		return true
+	}
+	if rows >= 100000 {
+		return true
+	}
+	return strings.HasPrefix(deletion.DeleteCtx.Ref.SchemaName, "fts_")
+}
 
 func (deletion *Deletion) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -84,10 +98,13 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 
 	}
 	deletion.ctr.affectedRows = 0
-	if deletion.RemoteDelete && deletion.DeleteCtx != nil && deletion.DeleteCtx.Ref != nil {
+	if shouldLogDeletePath(deletion, 0) {
 		logutil.Info(
-			"[REMOTEDELETE-ACTION]",
+			"[DELETE-ACTION]",
 			zap.String("table", deletion.DeleteCtx.Ref.SchemaName+"."+deletion.DeleteCtx.Ref.ObjName),
+			zap.Bool("remote-delete", deletion.RemoteDelete),
+			zap.Bool("delegated", deletion.delegated),
+			zap.Bool("can-truncate", deletion.DeleteCtx.CanTruncate),
 			zap.Uint32("bucket", deletion.IBucket),
 			zap.Uint32("nbucket", deletion.Nbucket),
 		)
@@ -274,6 +291,16 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	}
 	affectedRows = uint64(deletion.ctr.resBat.RowCount())
 	if affectedRows > 0 {
+		if shouldLogDeletePath(deletion, int(affectedRows)) {
+			logutil.Info(
+				"[DELETE-BATCH]",
+				zap.String("table", deletion.DeleteCtx.Ref.SchemaName+"."+deletion.DeleteCtx.Ref.ObjName),
+				zap.Bool("remote-delete", deletion.RemoteDelete),
+				zap.Bool("delegated", deletion.delegated),
+				zap.Int("input-rows", bat.RowCount()),
+				zap.Uint64("filtered-rows", affectedRows),
+			)
+		}
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		err = deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
