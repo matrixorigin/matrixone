@@ -31,6 +31,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_alter_mo_snapshots,
 	enableRoleRule,
 	upg_information_schema_columns,
+	upg_information_schema_columns_geometry_srid,
 	upg_information_schema_statistics,
 }
 
@@ -87,6 +88,27 @@ var upg_alter_mo_snapshots = versions.UpgradeEntry{
 }
 
 var upg_information_schema_columns = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "COLUMNS",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql:    sysview.InformationSchemaColumnsDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "COLUMNS"),
+}
+
+// Keep a follow-up MODIFY_VIEW entry so existing 4.0.0 tenants rerun the
+// refreshed COLUMNS definition when only the view text changes.
+var upg_information_schema_columns_geometry_srid = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "COLUMNS",
 	UpgType:   versions.MODIFY_VIEW,

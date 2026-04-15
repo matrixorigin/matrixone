@@ -338,7 +338,7 @@ func NewVectorWithNulls(n int, typ types.Type, m *mpool.MPool, random bool, null
 		}
 		return NewDecimal128Vector(n, typ, m, random, nulls, nil)
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
 		if vs, ok := Values.([]string); ok {
 			return NewStringVector(n, typ, m, random, nulls, vs)
 		}

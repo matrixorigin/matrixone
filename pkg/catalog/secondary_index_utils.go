@@ -31,6 +31,7 @@ import (
 const (
 	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
 	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
+	MoIndexRTreeAlgo    = tree.INDEX_TYPE_RTREE    // used for Spatial Index on GEOMETRY columns
 	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
 	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
 	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
@@ -57,7 +58,12 @@ func IsNullIndexAlgo(algo string) bool {
 // we have one hidden table.
 func IsRegularIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
-	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString()
+	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString() || _algo == MoIndexRTreeAlgo.ToString()
+}
+
+func IsRTreeIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexRTreeAlgo.ToString()
 }
 
 func IsIvfIndexAlgo(algo string) bool {
@@ -254,7 +260,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 	if idx, ok := def.(*tree.Index); ok {
 
 		switch idx.KeyType {
-		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
 			// do nothing

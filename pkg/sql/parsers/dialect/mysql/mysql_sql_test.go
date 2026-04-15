@@ -3893,3 +3893,97 @@ func TestWithInsertCTEPropagation(t *testing.T) {
 	require.NotNil(t, ins.Rows)
 	require.NotNil(t, ins.Rows.Select)
 }
+
+func TestSpatialColumnTypes(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (g geometry)",
+			output: "create table t (g geometry)",
+		},
+		{
+			input:  "create table t (g point)",
+			output: "create table t (g point)",
+		},
+		{
+			input:  "create table t (g linestring)",
+			output: "create table t (g linestring)",
+		},
+		{
+			input:  "create table t (g polygon)",
+			output: "create table t (g polygon)",
+		},
+		{
+			input:  "create table t (g geometrycollection)",
+			output: "create table t (g geometrycollection)",
+		},
+		{
+			input:  "create table t (g multipoint)",
+			output: "create table t (g multipoint)",
+		},
+		{
+			input:  "create table t (g multilinestring)",
+			output: "create table t (g multilinestring)",
+		},
+		{
+			input:  "create table t (g multipolygon)",
+			output: "create table t (g multipolygon)",
+		},
+		{
+			input:  "create table t (g point srid 4326)",
+			output: "create table t (g point srid 4326)",
+		},
+		{
+			input:  "create table t (g point not null srid 4326)",
+			output: "create table t (g point not null srid 4326)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (a int srid 4326)",
+			output: "create table t (a int srid 4326)",
+		},
+		{
+			input:  "create table t (a varchar(20) srid 4326)",
+			output: "create table t (a varchar(20) srid 4326)",
+		},
+		{
+			input:  "create table t (a decimal(10,2) srid 4326)",
+			output: "create table t (a decimal(10, 2) srid 4326)",
+		},
+		{
+			input:  "alter table t add column a int srid 4326",
+			output: "alter table t add column a int srid 4326",
+		},
+		{
+			input:  "alter table t modify column a int srid 4326",
+			output: "alter table t modify column a int srid 4326",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
