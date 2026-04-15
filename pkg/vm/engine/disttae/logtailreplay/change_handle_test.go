@@ -620,12 +620,14 @@ func TestBaseHandleResolveVisibleObjectsByDeleteChain_AppendableDeletedBeforeEnd
 	deleted := makeNamedObjectEntry(t, 1, true, false, types.BuildTS(5, 0), types.BuildTS(10, 0))
 	successor := makeNamedObjectEntry(t, 2, false, false, types.BuildTS(10, 0), types.TS{})
 
-	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
-		FilePath: successor.ObjectName().String(),
-		Entries: []fileservice.IOEntry{
-			{Data: []byte("ok"), Size: 2},
-		},
-	}))
+	for _, obj := range []*objectio.ObjectEntry{deleted, successor} {
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: obj.ObjectName().String(),
+			Entries: []fileservice.IOEntry{
+				{Data: []byte("ok"), Size: 2},
+			},
+		}))
+	}
 
 	base := &baseHandle{
 		changesHandle: &ChangeHandler{fs: fs},
