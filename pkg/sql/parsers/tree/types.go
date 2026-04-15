@@ -51,6 +51,8 @@ type IntervalDurationField struct {
 }
 
 type GeoMetadata struct {
+	SRID        uint32
+	SRIDDefined bool
 }
 
 type PersistentUserDefinedTypeMetadata struct {
@@ -208,6 +210,10 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	}
 	if node.Zerofill {
 		ctx.WriteString(" zerofill")
+	}
+	if node.GeoMetadata != nil && node.GeoMetadata.SRIDDefined {
+		ctx.WriteString(" srid ")
+		ctx.WriteString(strconv.FormatUint(uint64(node.GeoMetadata.SRID), 10))
 	}
 }
 
