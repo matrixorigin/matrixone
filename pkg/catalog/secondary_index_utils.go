@@ -166,11 +166,11 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	}
 
 	if val, ok := result[Quantization]; ok {
-		res += fmt.Sprintf(" %s = %s ", Quantization, val)
+		res += fmt.Sprintf(" %s '%s' ", Quantization, val)
 	}
 
 	if val, ok := result[DistributionMode]; ok {
-		res += fmt.Sprintf(" %s = %s ", DistributionMode, val)
+		res += fmt.Sprintf(" %s '%s' ", DistributionMode, val)
 	}
 
 	if val, ok := result[BitsPerCode]; ok {
