@@ -132,6 +132,13 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 				return result, err
 			}
 			if result.Batch == nil {
+				if deletion.ctr.batch_size > 0 {
+					size, err := deletion.ctr.flush(proc, analyzer)
+					if err != nil {
+						return result, err
+					}
+					deletion.ctr.batch_size -= size
+				}
 				deletion.ctr.state = vm.Eval
 				break
 			}
