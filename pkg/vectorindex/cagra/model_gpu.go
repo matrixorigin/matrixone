@@ -492,7 +492,7 @@ func (idx *CagraModel[T]) LoadIndex(
 	}
 
 	gi, err := cuvs.NewGpuCagraEmpty[T](
-		0,
+		uint64(tblcfg.IndexCapacity),
 		uint32(idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
 		bp,
@@ -514,7 +514,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	gi.SetBatchWindow(100)
+	gi.SetBatchWindow(tblcfg.BatchWindow)
 
 	idx.Index = gi
 	idx.View = view

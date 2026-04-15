@@ -36,6 +36,7 @@ type cagraIndexContext struct {
 	pkType       plan.Type
 	params       string
 	nThread      int64
+	batchWindow int64
 }
 
 func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*cagraIndexContext, error) {
@@ -93,6 +94,11 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	batchWindow, err := builder.compCtx.ResolveVariable("cagra_batch_window", true, false)
+	if err != nil {
+		return nil, err
+	}
+
 	return &cagraIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -104,6 +110,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
 		nThread:      nThread.(int64),
+		batchWindow:  batchWindow.(int64),
 	}, nil
 }
 
@@ -126,13 +133,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		cagraCtx.metaDef.IndexTableName,
 		cagraCtx.idxDef.IndexTableName,
 		cagraCtx.nThread,
-		cagraCtx.origFuncName)
+		cagraCtx.origFuncName,
+	        cagraCtx.batchWindow)
 
 	// JOIN between source table and cagra_search table function
 	tableFuncTag := builder.genNewBindTag()

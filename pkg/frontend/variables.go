@@ -3741,7 +3741,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("cagra_max_index_capacity", 1, 5000000000, false),
-		Default:           int64(100000000),
+		Default:           int64(1000000),
+	},
+	"cagra_batch_window": {
+		Name:              "cagra_batch_window",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_batch_window", 1, 5000000000, false),
+		Default:           int64(0),
 	},
 	"validate_password": {
 		Name:              "validate_password",

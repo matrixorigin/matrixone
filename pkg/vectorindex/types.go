@@ -101,6 +101,9 @@ type IndexTableConfig struct {
 	LowerBound         float64 `json:"lower_bound"`
 	UpperBoundType     int8    `json:"upper_bound_type"`
 	UpperBound         float64 `json:"upper_bound"`
+
+	// GPU related
+	BatchWindow int64 `json:"batch_window"`
 }
 
 // HNSW specified parameters
