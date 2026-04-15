@@ -38,6 +38,19 @@ const (
 	INDEX_TYPE_SPATIAL  = "SPATIAL"
 )
 
+func indexMetadataType(unique bool, algo string) string {
+	switch {
+	case unique:
+		return INDEX_TYPE_UNIQUE
+	case catalog.IsRTreeIndexAlgo(algo):
+		return INDEX_TYPE_SPATIAL
+	case catalog.IsFullTextIndexAlgo(algo):
+		return INDEX_TYPE_FULLTEXT
+	default:
+		return INDEX_TYPE_MULTIPLE
+	}
+}
+
 const (
 	INDEX_VISIBLE_YES = 1
 	INDEX_VISIBLE_NO  = 0
@@ -109,8 +122,12 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
+	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
+	if spatialIndex && len(indexDef.Parts) > 0 {
+		temp = partsToColsStr(indexDef.Parts[:1])
+	}
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
-		if len(indexDef.Parts) == 1 {
+		if len(indexDef.Parts) == 1 || spatialIndex {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
 		} else {
 			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
@@ -131,7 +148,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		} else {
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
-		if len(indexDef.Parts) == 1 {
+		if len(indexDef.Parts) == 1 || spatialIndex {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
 		} else {
 			if isUnique {
@@ -231,12 +248,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", indexDef.IndexName)
 
 					// 5. index_type
-					var index_type string
-					if indexDef.Unique {
-						index_type = INDEX_TYPE_UNIQUE
-					} else {
-						index_type = INDEX_TYPE_MULTIPLE
-					}
+					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
 					fmt.Fprintf(buffer, "'%s', ", index_type)
 
 					//6. algorithm

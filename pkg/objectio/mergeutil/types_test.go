@@ -123,4 +123,29 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
 		require.Equal(t, ptr0, &idxBuf[0]) // same backing array
 	})
+
+	t.Run("geometry payload column", func(t *testing.T) {
+		vecs := []*vector.Vector{
+			vector.NewVec(types.T_int32.ToType()),
+			vector.NewVec(types.T_geometry.ToType()),
+		}
+		for _, key := range []int32{3, 1, 2} {
+			require.NoError(t, vector.AppendFixed[int32](vecs[0], key, false, mp))
+		}
+		require.NoError(t, vector.AppendBytesList(vecs[1], [][]byte{
+			[]byte("POINT(3 3)"),
+			[]byte("POINT(1 1)"),
+			[]byte("POINT(2 2)"),
+		}, nil, mp))
+
+		var idxBuf []int64
+		var shuffleBuf []byte
+		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
+		require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](vecs[0]))
+		require.Equal(t, [][]byte{
+			[]byte("POINT(1 1)"),
+			[]byte("POINT(2 2)"),
+			[]byte("POINT(3 3)"),
+		}, vector.InefficientMustBytesCol(vecs[1]))
+	})
 }

@@ -19,8 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_buildTestShowCreateTable(t *testing.T) {
@@ -146,6 +148,27 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 	}
 }
 
+func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE spatial_src (
+		id INT NOT NULL,
+		g POINT NOT NULL,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName: "idx_g",
+		Parts:     []string{"g"},
+		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+	})
+
+	var snapshot *plan.Snapshot
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
@@ -264,4 +287,25 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 	return showSQL, nil
+}
+
+func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	require.Equal(t, "POINT", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "POINT",
+	}))
+
+	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
+		Id: int32(types.T_geometry),
+	}))
+
+	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "POINT;SRID=4326",
+	}))
+
+	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
+		Id:         int32(types.T_geometry),
+		Enumvalues: "SRID=0",
+	}))
 }

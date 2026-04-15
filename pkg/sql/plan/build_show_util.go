@@ -42,6 +42,10 @@ func ConstructCreateTableSQL(
 
 	var err error
 	var createStr string
+	rewritePairs := make([]struct {
+		display string
+		rewrite string
+	}, 0)
 	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
@@ -249,16 +253,27 @@ func ConstructCreateTableSQL(
 				}
 
 			} else {
-				if indexdef.Unique {
+				rewriteIndexStr := ""
+				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
+					indexStr = "  SPATIAL KEY "
+					rewriteIndexStr = "  KEY "
+				} else if indexdef.Unique {
 					indexStr = "  UNIQUE KEY "
+					rewriteIndexStr = "  UNIQUE KEY "
 				} else {
 					indexStr = "  KEY "
+					rewriteIndexStr = "  KEY "
 				}
 				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					rewriteIndexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
 				indexStr += "("
+				rewriteIndexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
@@ -266,14 +281,17 @@ func ConstructCreateTableSQL(
 					}
 					if i > 0 {
 						indexStr += ","
+						rewriteIndexStr += ","
 					}
 
 					part = colNameToOriginName[part]
 					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(part))
 					i++
 				}
 
 				indexStr += ")"
+				rewriteIndexStr += ")"
 				if indexdef.IndexAlgoParams != "" {
 					var paramList string
 					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
@@ -281,11 +299,28 @@ func ConstructCreateTableSQL(
 						return "", nil, err
 					}
 					indexStr += paramList
+					rewriteIndexStr += paramList
+				}
+				if indexStr != rewriteIndexStr {
+					rewritePairs = append(rewritePairs, struct {
+						display string
+						rewrite string
+					}{display: indexStr, rewrite: rewriteIndexStr})
 				}
 			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
+					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
+					rewritePairs[len(rewritePairs)-1] = struct {
+						display string
+						rewrite string
+					}{
+						display: indexStr,
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+					}
+				}
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -583,7 +618,11 @@ func ConstructCreateTableSQL(
 	}
 	var stmt tree.Statement
 	if ctx != nil {
-		stmt, err = getRewriteSQLStmt(ctx, createStr)
+		rewriteStr := createStr
+		for _, pair := range rewritePairs {
+			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
+		}
+		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
 }
@@ -815,6 +854,12 @@ func FormatColType(colType plan.Type) string {
 	}
 	if isSetPlanType(&colType) {
 		ts = "SET"
+	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+	}
+	if srid, ok := geometrySRIDValue(&colType); ok {
+		ts = fmt.Sprintf("%s SRID %d", ts, srid)
 	}
 
 	suffix := ""
