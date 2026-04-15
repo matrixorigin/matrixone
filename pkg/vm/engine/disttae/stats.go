@@ -257,6 +257,9 @@ type GlobalStats struct {
 
 	// approxObjectNumUpdater is for test only currently.
 	approxObjectNumUpdater func() int64
+
+	// beforeCacheRemoteInfo is for test only.
+	beforeCacheRemoteInfo func(pb.StatsInfoKey)
 }
 
 func NewGlobalStats(
@@ -343,6 +346,49 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 	return gs.enqueueStatsUpdate(wrapkey, false)
 }
 
+func (gs *GlobalStats) subscribedEntry(key pb.StatsInfoKey) *subEntry {
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	ent, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || ent == nil {
+		return nil
+	}
+	if ent.dbID != key.DatabaseID || ent.state != Subscribed {
+		return nil
+	}
+	return ent
+}
+
+func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
+	key pb.StatsInfoKey,
+	subscribedEnt *subEntry,
+	remoteInfo *pb.StatsInfo,
+) *pb.StatsInfo {
+	if subscribedEnt == nil || remoteInfo == nil {
+		return nil
+	}
+
+	gs.engine.pClient.subscribed.rw.RLock()
+	defer gs.engine.pClient.subscribed.rw.RUnlock()
+
+	currentEnt, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || currentEnt != subscribedEnt || currentEnt.dbID != key.DatabaseID || currentEnt.state != Subscribed {
+		return nil
+	}
+
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok && info != nil {
+		return info
+	}
+
+	gs.mu.statsInfoMap[key] = remoteInfo
+	return remoteInfo
+}
+
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
@@ -371,6 +417,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		return nil
 	}
 
+	subscribedEnt := gs.subscribedEntry(key)
 	var remoteInfo *pb.StatsInfo
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
@@ -395,6 +442,15 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 
+	if remoteInfo != nil {
+		if gs.beforeCacheRemoteInfo != nil {
+			gs.beforeCacheRemoteInfo(key)
+		}
+		if info = gs.cacheRemoteInfoIfSubscribed(key, subscribedEnt, remoteInfo); info != nil {
+			return info
+		}
+	}
+
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
@@ -402,12 +458,6 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	info, ok = gs.mu.statsInfoMap[key]
 	if ok && info != nil {
 		return info
-	}
-
-	if remoteInfo != nil {
-		// If we get stats info from remote node, update local stats info.
-		gs.mu.statsInfoMap[key] = remoteInfo
-		return remoteInfo
 	}
 
 	ok = false
