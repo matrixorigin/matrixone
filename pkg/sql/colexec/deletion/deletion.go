@@ -23,12 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -82,6 +84,14 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 
 	}
 	deletion.ctr.affectedRows = 0
+	if deletion.RemoteDelete && deletion.DeleteCtx != nil && deletion.DeleteCtx.Ref != nil {
+		logutil.Info(
+			"[REMOTEDELETE-ACTION]",
+			zap.String("table", deletion.DeleteCtx.Ref.SchemaName+"."+deletion.DeleteCtx.Ref.ObjName),
+			zap.Uint32("bucket", deletion.IBucket),
+			zap.Uint32("nbucket", deletion.Nbucket),
+		)
+	}
 
 	return nil
 }
@@ -115,6 +125,25 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 			if err = deletion.SplitBatch(proc, result.Batch, analyzer); err != nil {
 				return result, err
 			}
+		}
+		if deletion.DeleteCtx != nil && deletion.DeleteCtx.Ref != nil {
+			blockCount := 0
+			tombstoneBats := 0
+			for _, blockIdRowIdBatch := range deletion.ctr.partitionId_blockId_rowIdBatch {
+				blockCount += len(blockIdRowIdBatch)
+			}
+			for _, bats := range deletion.ctr.partitionId_tombstoneObjectStatsBats {
+				tombstoneBats += len(bats)
+			}
+			logutil.Info(
+				"[REMOTEDELETE-BUILD]",
+				zap.String("table", deletion.DeleteCtx.Ref.SchemaName+"."+deletion.DeleteCtx.Ref.ObjName),
+				zap.Uint32("bucket", deletion.IBucket),
+				zap.Uint32("nbucket", deletion.Nbucket),
+				zap.Uint32("deleted-length", deletion.ctr.deleted_length),
+				zap.Int("block-batches", blockCount),
+				zap.Int("tombstone-batches", tombstoneBats),
+			)
 		}
 	}
 

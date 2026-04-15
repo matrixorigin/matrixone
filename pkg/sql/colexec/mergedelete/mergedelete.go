@@ -20,9 +20,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const opName = "merge_delete"
@@ -81,6 +83,31 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	blkIds, _ := vector.MustVarlenaRawData(resBat.GetVector(0))
 	deltaLocs, area1 := vector.MustVarlenaRawData(resBat.GetVector(1))
 	typs := vector.MustFixedColWithTypeCheck[int8](resBat.GetVector(2))
+	flushDeltaCount := 0
+	committedCount := 0
+	uncommittedCount := 0
+	for _, typ := range typs {
+		switch typ {
+		case 0:
+			flushDeltaCount++
+		case 2:
+			committedCount++
+		case 1:
+			uncommittedCount++
+		}
+	}
+	tableName := ""
+	if mergeDelete.Ref != nil {
+		tableName = mergeDelete.Ref.SchemaName + "." + mergeDelete.Ref.ObjName
+	}
+	logutil.Info(
+		"[MERGEDELETE-REPLAY]",
+		zap.String("table", tableName),
+		zap.Int("rows", resBat.RowCount()),
+		zap.Int("flush-delta-rows", flushDeltaCount),
+		zap.Int("committed-rows", committedCount),
+		zap.Int("uncommitted-rows", uncommittedCount),
+	)
 
 	bat := mergeDelete.ctr.bat
 	bat.CleanOnlyData()
