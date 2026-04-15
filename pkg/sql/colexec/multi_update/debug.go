@@ -25,21 +25,25 @@ import (
 )
 
 const fullTextMainTableDebugRows = 4096
+const fullTextMainTableFallbackDebugRows = 100000
 
 func shouldLogFullTextMainTableBatch(
 	updateCtx *MultiUpdateCtx,
 	tableType UpdateTableType,
 	rowCount int,
 ) bool {
-	if rowCount < fullTextMainTableDebugRows || tableType != UpdateMainTable || updateCtx == nil || updateCtx.TableDef == nil {
+	if rowCount < fullTextMainTableDebugRows || tableType != UpdateMainTable {
 		return false
+	}
+	if updateCtx == nil || updateCtx.TableDef == nil {
+		return rowCount >= fullTextMainTableFallbackDebugRows
 	}
 	for _, idx := range updateCtx.TableDef.Indexes {
 		if idx != nil && pkgcatalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			return true
 		}
 	}
-	return false
+	return rowCount >= fullTextMainTableFallbackDebugRows
 }
 
 func debugBatchPKRange(
