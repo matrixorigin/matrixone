@@ -650,18 +650,16 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 
 func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.mu.store != nil {
-		_ = s.mu.store.Close()
-	}
-
 	if s.mu.closed {
+		s.mu.Unlock()
 		return
 	}
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
+		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
+
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
 		s.rt.Logger().Error(
@@ -671,7 +669,6 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 		return
 	}
 
-	s.mu.lastAddress = connectAddress
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.trying",
 		zap.String("address", connectAddress),
@@ -684,7 +681,24 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 			zap.Error(err))
 		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.closed {
+		_ = store.Close()
+		return
+	}
+	if lastAddress != "" && lastAddress != s.mu.lastAddress {
+		_ = store.Close()
+		return
+	}
+
+	prevStore := s.mu.store
 	s.mu.store = store
+	s.mu.lastAddress = connectAddress
+	if prevStore != nil && prevStore != store {
+		_ = prevStore.Close()
+	}
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.completed",
 		zap.String("sql-address", connectAddress),
