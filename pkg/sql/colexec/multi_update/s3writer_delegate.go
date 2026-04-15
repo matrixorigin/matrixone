@@ -261,6 +261,35 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 		writer.deleteBlockMap[idx] = make(map[types.Blockid]*deleteBlockData)
 	}
 	blockMap := writer.deleteBlockMap[idx]
+	var updateCtx *MultiUpdateCtx
+	if idx < len(writer.updateCtxs) {
+		updateCtx = writer.updateCtxs[idx]
+	}
+	tableType := UpdateMainTable
+	if updateCtx != nil && updateCtx.TableDef != nil {
+		if info := writer.updateCtxInfos[updateCtx.TableDef.Name]; info != nil {
+			tableType = info.tableType
+		}
+	}
+	totalRows := debugTotalBatchRows(src)
+	logDeleteBatches := shouldLogFullTextMainTableBatch(updateCtx, tableType, totalRows)
+	if logDeleteBatches {
+		for batchIdx, bat := range src {
+			firstRowID, lastRowID, nullCount := debugBatchRowIDRange(bat, RowIDIdx)
+			firstPK, lastPK := debugBatchPKRange(bat, "pk")
+			logutil.Info(
+				"[FULLTEXT-S3DELETE-SRC]",
+				zap.String("table", debugObjectRefName(updateCtx.ObjRef)),
+				zap.Int("batch", batchIdx),
+				zap.Int("rows", bat.RowCount()),
+				zap.Int("rowid-nulls", nullCount),
+				zap.String("first-rowid", firstRowID),
+				zap.String("last-rowid", lastRowID),
+				zap.String("first-pk", firstPK),
+				zap.String("last-pk", lastPK),
+			)
+		}
+	}
 
 	for _, bat := range src {
 		rowIDVec := bat.GetVector(RowIDIdx)
@@ -339,6 +368,24 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 		}
 	}
 	retBatchs := deleteBats.TakeBatchs()
+	if logDeleteBatches {
+		firstBlock := ""
+		lastBlock := ""
+		if len(blkids) > 0 {
+			firstBlock = blkids[0].String()
+			lastBlock = blkids[len(blkids)-1].String()
+		}
+		logutil.Info(
+			"[FULLTEXT-S3DELETE-BLOCKS]",
+			zap.String("table", debugObjectRefName(updateCtx.ObjRef)),
+			zap.Int("src-total-rows", totalRows),
+			zap.Int("block-count", len(blkids)),
+			zap.Int("output-batches", len(retBatchs)),
+			zap.Int("output-total-rows", debugTotalBatchRows(retBatchs)),
+			zap.String("first-block", firstBlock),
+			zap.String("last-block", lastBlock),
+		)
+	}
 	return retBatchs, nil
 }
 
@@ -549,17 +596,34 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 	bat *batch.Batch,
 	rowCount int,
 ) (err error) {
-	_ = rowCount
-
 	// init buf
 	if writer.deleteBlockInfo[idx] == nil {
 		writer.deleteBlockInfo[idx] = make(map[string]*deleteBlockInfo, 1)
 	}
 
+	var updateCtx *MultiUpdateCtx
+	if idx < len(writer.updateCtxs) {
+		updateCtx = writer.updateCtxs[idx]
+	}
+	tableType := UpdateMainTable
+	if updateCtx != nil && updateCtx.TableDef != nil {
+		if info := writer.updateCtxInfos[updateCtx.TableDef.Name]; info != nil {
+			tableType = info.tableType
+		}
+	}
+	logDeleteStats := shouldLogFullTextMainTableBatch(updateCtx, tableType, rowCount)
 	row, area := vector.MustVarlenaRawData(bat.Vecs[0])
+	statsTotalRows := 0
+	firstFile := ""
+	lastFile := ""
 	for j := range row {
 		stats := objectio.ObjectStats(row[j].GetByteSlice(area))
 		fileName := stats.ObjectLocation().String()
+		if firstFile == "" {
+			firstFile = fileName
+		}
+		lastFile = fileName
+		statsTotalRows += int(stats.Rows())
 		targetBloInfo := writer.deleteBlockInfo[idx][fileName]
 		if targetBloInfo == nil {
 			blockInfoBat := batch.NewWithSize(bat.VectorCount())
@@ -587,6 +651,17 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 			return err
 		}
 		targetBloInfo.bat.SetRowCount(targetBloInfo.bat.Vecs[0].Length())
+	}
+	if logDeleteStats {
+		logutil.Info(
+			"[FULLTEXT-S3DELETE-STATS]",
+			zap.String("table", debugObjectRefName(updateCtx.ObjRef)),
+			zap.Int("deleted-rows", rowCount),
+			zap.Int("stats-rows", bat.RowCount()),
+			zap.Int("stats-total-rows", statsTotalRows),
+			zap.String("first-file", firstFile),
+			zap.String("last-file", lastFile),
+		)
 	}
 
 	return

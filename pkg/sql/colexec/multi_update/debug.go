@@ -78,3 +78,43 @@ func debugObjectRefName(ref *plan.ObjectRef) string {
 	}
 	return ref.SchemaName + "." + ref.ObjName
 }
+
+func debugBatchRowIDRange(
+	bat *batch.Batch,
+	rowIDIdx int,
+) (string, string, int) {
+	if bat == nil || rowIDIdx < 0 || rowIDIdx >= len(bat.Vecs) || bat.RowCount() == 0 {
+		return "", "", 0
+	}
+	vec := bat.Vecs[rowIDIdx]
+	if vec == nil {
+		return "", "", 0
+	}
+	nulls := vec.GetNulls()
+	nullCount := int(nulls.Count())
+	first := ""
+	for i := 0; i < bat.RowCount(); i++ {
+		if !nulls.Contains(uint64(i)) {
+			first = debugVectorValue(vec, i)
+			break
+		}
+	}
+	last := ""
+	for i := bat.RowCount() - 1; i >= 0; i-- {
+		if !nulls.Contains(uint64(i)) {
+			last = debugVectorValue(vec, i)
+			break
+		}
+	}
+	return first, last, nullCount
+}
+
+func debugTotalBatchRows(bats []*batch.Batch) int {
+	total := 0
+	for _, bat := range bats {
+		if bat != nil {
+			total += bat.RowCount()
+		}
+	}
+	return total
+}
