@@ -36,7 +36,7 @@ TEST(DynamicBatchingTest, CagraConcurrentSearch) {
     cagra_build_params_t bp = cagra_build_params_default();
     gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
-    index.set_use_batching(true);
+    index.set_batch_window(100);
     index.start();
     index.build();
 
@@ -71,7 +71,7 @@ TEST(DynamicBatchingTest, IvfFlatConcurrentSearch) {
     bp.n_lists = 10;
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
-    index.set_use_batching(true);
+    index.set_batch_window(100);
     index.start();
     index.build();
 
@@ -107,7 +107,7 @@ TEST(DynamicBatchingTest, IvfPqConcurrentSearch) {
     bp.m = 8;
     gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 8, DistributionMode_SINGLE_GPU);
     
-    index.set_use_batching(true);
+    index.set_batch_window(100);
     index.start();
     index.build();
 

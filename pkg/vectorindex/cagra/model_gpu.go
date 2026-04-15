@@ -514,7 +514,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	gi.SetUseBatching(true)
+	gi.SetBatchWindow(100)
 
 	idx.Index = gi
 	idx.View = view

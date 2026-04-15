@@ -435,7 +435,7 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
 TEST(CuvsWorkerTest, FlushBatchNoLeak) {
     cuvs_worker_t worker(1, std::vector<int>{0});
     worker.start();
-    worker.set_use_batching(true);
+    worker.set_batch_window(100);
 
     std::atomic<int> exec_count{0};
     auto exec_fn = [&exec_count](raft_handle_wrapper_t&,
@@ -449,7 +449,7 @@ TEST(CuvsWorkerTest, FlushBatchNoLeak) {
 
     auto fut = worker.submit_batched<int, int>("leak_test", 1, exec_fn);
     // Force an immediate flush
-    worker.set_use_batching(false);  // triggers sync + flush
+    worker.set_batch_window(0);  // triggers sync + flush
 
     ASSERT_EQ(fut.get(), 42);
     ASSERT_GE(exec_count.load(), 1);
@@ -497,7 +497,7 @@ TEST(CuvsWorkerTest, SyncNoSpin) {
 TEST(CuvsWorkerTest, StopFlushesNotCancels) {
     cuvs_worker_t worker(1, std::vector<int>{0});
     worker.start();
-    worker.set_use_batching(true);
+    worker.set_batch_window(100);
 
     std::atomic<int> exec_count{0};
     auto exec_fn = [&exec_count](raft_handle_wrapper_t&,

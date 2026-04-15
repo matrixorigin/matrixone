@@ -635,9 +635,9 @@ func BenchmarkGpuShardedIvfPq(b *testing.B) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
 
-	for _, useBatching := range []bool{false, true} {
-		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
-			index.SetUseBatching(useBatching)
+	for _, windowUs := range []int64{0, 100} {
+		b.Run(fmt.Sprintf("BatchWindow%d", windowUs), func(b *testing.B) {
+			index.SetBatchWindow(windowUs)
 
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -696,9 +696,9 @@ func BenchmarkGpuSingleIvfPq(b *testing.B) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
 
-	for _, useBatching := range []bool{false, true} {
-		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
-			index.SetUseBatching(useBatching)
+	for _, windowUs := range []int64{0, 100} {
+		b.Run(fmt.Sprintf("BatchWindow%d", windowUs), func(b *testing.B) {
+			index.SetBatchWindow(windowUs)
 
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -760,9 +760,9 @@ func BenchmarkGpuReplicatedIvfPq(b *testing.B) {
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 3
 
-	for _, useBatching := range []bool{false, true} {
-		b.Run(fmt.Sprintf("Batching%v", useBatching), func(b *testing.B) {
-			index.SetUseBatching(useBatching)
+	for _, windowUs := range []int64{0, 100} {
+		b.Run(fmt.Sprintf("BatchWindow%d", windowUs), func(b *testing.B) {
+			index.SetBatchWindow(windowUs)
 
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {

@@ -680,7 +680,7 @@ public:
 
         // std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
 
-        if (!this->worker->use_batching()) {
+        if (this->worker->batch_window() == 0) {
             auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
                 return this->search_internal(handle, queries_data, num_queries, limit, sp);
             };
@@ -912,7 +912,7 @@ public:
 
         // std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
-        if (!this->worker->use_batching()) {
+        if (this->worker->batch_window() == 0) {
             auto task = [this, num_queries, limit, sp, queries_data, query_dimension](raft_handle_wrapper_t& handle) -> std::any {
                 return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
             };

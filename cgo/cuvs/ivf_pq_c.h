@@ -76,7 +76,7 @@ void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, u
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_ivf_pq_set_per_thread_device(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
-void gpu_ivf_pq_set_use_batching(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
+void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg);
 
 void gpu_ivf_pq_set_quantizer(gpu_ivf_pq_c index_c, float min, float max, void* errmsg);
 void gpu_ivf_pq_get_quantizer(gpu_ivf_pq_c index_c, float* min, float* max, void* errmsg);

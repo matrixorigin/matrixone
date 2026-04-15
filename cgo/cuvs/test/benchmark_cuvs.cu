@@ -99,10 +99,10 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
                   IndexT& index, const std::vector<float>& recall_queries, const std::vector<int64_t>& recall_expected_ids, 
                   const benchmark_config_t& cfg, const SearchParamsT& sp) {
     
-    for (bool batching : {false, true}) {
-        index.set_use_batching(batching);
-        
-        std::string full_name = index_name + "_" + matrixone::mode_name(mode) + "_" + type_name<T>() + (batching ? "_BatchingON" : "_BatchingOFF");
+    for (int64_t window_us : {(int64_t)0, (int64_t)100}) {
+        index.set_batch_window(window_us);
+
+        std::string full_name = index_name + "_" + matrixone::mode_name(mode) + "_" + type_name<T>() + (window_us > 0 ? "_BatchingON" : "_BatchingOFF");
 
         auto queries = generate_random_data(cfg.n_queries, cfg.dimension);
         

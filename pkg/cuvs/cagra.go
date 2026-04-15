@@ -37,15 +37,16 @@ type GpuCagra[T VectorType] struct {
 	dimension   uint32
 	nthread     uint32
 	distMode    DistributionMode
-	useBatching bool
+	batchWindowUs int64
 }
 
-// SetUseBatching enables or disables dynamic batching for search operations.
-func (gi *GpuCagra[T]) SetUseBatching(enable bool) error {
-	gi.useBatching = enable
+// SetBatchWindow sets the batching window in microseconds for search operations.
+// A window of 0 disables batching; any positive value enables batching with that delay.
+func (gi *GpuCagra[T]) SetBatchWindow(windowUs int64) error {
+	gi.batchWindowUs = windowUs
 	if gi.cCagra != nil {
 		var errmsg *C.char
-		C.gpu_cagra_set_use_batching(gi.cCagra, C.bool(enable), unsafe.Pointer(&errmsg))
+		C.gpu_cagra_set_batch_window(gi.cCagra, C.int64_t(windowUs), unsafe.Pointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
 			C.free(unsafe.Pointer(errmsg))
@@ -275,8 +276,8 @@ func (gi *GpuCagra[T]) Start() error {
 		}
 	}
 
-	if gi.useBatching {
-		if err := gi.SetUseBatching(true); err != nil {
+	if gi.batchWindowUs > 0 {
+		if err := gi.SetBatchWindow(gi.batchWindowUs); err != nil {
 			return err
 		}
 	}

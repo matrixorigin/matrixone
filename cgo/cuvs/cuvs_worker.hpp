@@ -130,13 +130,13 @@ namespace matrixone {
 // -------------------------
 // Optional path for aggregating multiple concurrent float-query search requests
 // into a single cuVS call to improve GPU utilization.
-//   - Enabled by set_use_batching(true) on the index.
+//   - Enabled by set_batch_window(window_us > 0) on the index; 0 = disabled.
 //   - submit_batched(key, req, exec_fn): groups requests under a key (per-index
-//     string), flushes when >= 16 requests accumulate or after 100 µs delay.
+//     string), flushes when >= 16 requests accumulate or after window_us delay.
 //   - exec_fn receives the batched requests and a vector of per-request setters
 //     (callbacks to resolve individual futures).
 //   - The batch is flushed either eagerly (>= 16 reqs) or via a scheduled task
-//     that sleeps 100 µs to allow more requests to arrive.
+//     that sleeps window_us µs to allow more requests to arrive.
 //   - For SHARDED mode, the batch flush task is sent to the main thread.
 //
 // DISTRIBUTION MODE USAGE BY INDEX TYPES
@@ -443,7 +443,7 @@ public:
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
-        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), stopping_(false), use_batching_(false), per_thread_device_(false), next_device_idx_(0), in_flight_tasks_(0) {
+        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), stopping_(false), batch_window_us_(0), per_thread_device_(false), next_device_idx_(0), in_flight_tasks_(0) {
         
         // One queue per physical GPU device
         for (size_t i = 0; i < devices_.size(); ++i) {
@@ -646,7 +646,7 @@ public:
 
     uint32_t nthread() const { return nthread_; }
 
-    void set_use_batching(bool enable) {
+    void set_batch_window(int64_t window_us) {
         // Sync and flush before changing mode
         this->sync();
         std::vector<std::string> keys;
@@ -658,9 +658,9 @@ public:
             this->flush_batch(key);
         }
         this->sync();
-        use_batching_ = enable;
+        batch_window_us_ = window_us;
     }
-    bool use_batching() const { return use_batching_; }
+    int64_t batch_window() const { return batch_window_us_; }
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
 
     template <typename ResT, typename ReqT>
@@ -723,7 +723,7 @@ public:
             } else if (should_schedule) {
                 try {
                     this->submit_fire_and_forget([this, key](raft_handle&) -> std::any {
-                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                        std::this_thread::sleep_for(std::chrono::microseconds(batch_window_us_));
                         this->flush_batch(key);
                         return std::any();
                     });
@@ -917,7 +917,7 @@ private:
     std::vector<std::thread> device_threads_;
     std::atomic<bool> running_;
     std::atomic<bool> stopping_;  // set true at start of stop(); blocks new external submits
-    bool use_batching_;
+    int64_t batch_window_us_;  // batching window in microseconds; 0 = disabled
     bool per_thread_device_;
 
     std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;

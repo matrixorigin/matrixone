@@ -436,8 +436,8 @@ public:
         }
     }
 
-    void set_use_batching(bool enable) {
-        if (worker) worker->set_use_batching(enable);
+    void set_batch_window(int64_t window_us) {
+        if (worker) worker->set_batch_window(window_us);
     }
 
     uint32_t cap() const { return count; }
