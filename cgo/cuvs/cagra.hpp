@@ -406,7 +406,6 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            std::cout << "[DEBUG] CAGRA build: current_offset_=" << this->current_offset_ << " pending_total_count_=" << this->pending_total_count_ << std::endl;
             this->count = static_cast<uint32_t>(this->current_offset_);
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);

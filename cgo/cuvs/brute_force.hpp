@@ -284,7 +284,6 @@ public:
 
     void build() override {
         this->count = static_cast<uint32_t>(this->current_offset_);
-        std::cout << "[DEBUG] Brute-Force build: current_offset_=" << this->current_offset_ << " pending_total_count_=" << this->pending_total_count_ << std::endl;
         if (this->count == 0) {
             if (this->pending_total_count_ == 0) {
                 this->is_loaded_ = true;

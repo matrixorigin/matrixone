@@ -306,7 +306,6 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            std::cout << "[DEBUG] IVF-PQ build: current_offset_=" << this->current_offset_ << " pending_total_count_=" << this->pending_total_count_ << std::endl;
             if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
                 uint64_t rows, cols;
                 load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
