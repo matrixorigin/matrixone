@@ -79,6 +79,9 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 // Uses count tracking instead of null bitmap checks on accumulator.
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
+	if vec.IsConstNull() {
+		return nil
+	}
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	// constMask: 0 for const vectors (always index 0), -1 for flat (use full idx).
 	constMask := -min(1, len(vals)-1)
@@ -296,6 +299,9 @@ func (exec *sumDecimal128FastExec) BatchFill(offset int, groups []uint64, vector
 
 func (exec *sumDecimal128FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
+	if vec.IsConstNull() {
+		return nil
+	}
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 	// constMask: 0 for const vectors (always index 0), -1 for flat (use full idx).
 	constMask := -min(1, len(vals)-1)

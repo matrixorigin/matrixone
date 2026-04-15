@@ -4343,6 +4343,11 @@ func decimal64ToDecimal128Array(
 			// Fast path: direct slice write with branchless sign extension.
 			// Copy null bitmap from source, then convert non-null values.
 			srcVec := from.GetSourceVector()
+			if srcVec.IsConstNull() {
+				rsVec := to.GetResultVector()
+				rsVec.GetNulls().AddRange(0, uint64(length))
+				return nil
+			}
 			rsVec := to.GetResultVector()
 			rsVec.GetNulls().Or(srcVec.GetNulls())
 			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)

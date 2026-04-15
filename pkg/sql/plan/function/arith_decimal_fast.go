@@ -451,12 +451,13 @@ func d128ScaleUp(x *types.Decimal128, n int32) bool {
 // Hoists pow10 factor outside the loop so d128Abs/d128Mul1Limb/d128Negate all inline.
 func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
-	pow10a := types.Pow10[scaleDiff]
-	var pow10b uint64
 	twoStep := scaleDiff > 19
+	var pow10a, pow10b uint64
 	if twoStep {
 		pow10a = types.Pow10[19]
 		pow10b = types.Pow10[scaleDiff-19]
+	} else {
+		pow10a = types.Pow10[scaleDiff]
 	}
 	// Prescan: when all values fit in int64 and scaleDiff ≤ 19, replace
 	// d128Abs+d128Mul1Limb+d128Negate with branchless abs → bits.Mul64 → d128Negate.
@@ -610,67 +611,6 @@ func d128Mul(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 				neg := (v1[i].B64_127 >> 63) ^ signy
 				xi := int64(v1[i].B0_63)
 				ax := uint64((xi ^ (xi >> 63)) - (xi >> 63))
-				hi, lo := bits.Mul64(ax, ay)
-				rs[i].B0_63 = lo
-				rs[i].B64_127 = hi
-				if needScale {
-					d128DivPow10(&rs[i], negScaleAdj)
-				}
-				d128Negate(&rs[i], neg)
-			}
-		}
-		return nil
-	}
-
-	// Tier 2: if all |values| fit in uint64 (but not int64), inline multiply
-	// using branchless abs on B0_63. Avoids d128MulInline call (cost 941).
-	if d128AllAbsFit64(v1, len1) && d128AllAbsFit64(v2, len2) {
-		if len1 == len2 {
-			for i := 0; i < len1; i++ {
-				if hasNull && bmp.Contains(uint64(i)) {
-					continue
-				}
-				signx := v1[i].B64_127 >> 63
-				signy := v2[i].B64_127 >> 63
-				neg := signx ^ signy
-				ax := (v1[i].B0_63 ^ (-signx)) + signx
-				ay := (v2[i].B0_63 ^ (-signy)) + signy
-				hi, lo := bits.Mul64(ax, ay)
-				rs[i].B0_63 = lo
-				rs[i].B64_127 = hi
-				if needScale {
-					d128DivPow10(&rs[i], negScaleAdj)
-				}
-				d128Negate(&rs[i], neg)
-			}
-		} else if len1 == 1 {
-			signx := v1[0].B64_127 >> 63
-			ax := (v1[0].B0_63 ^ (-signx)) + signx
-			for i := 0; i < len2; i++ {
-				if hasNull && bmp.Contains(uint64(i)) {
-					continue
-				}
-				signy := v2[i].B64_127 >> 63
-				neg := signx ^ signy
-				ay := (v2[i].B0_63 ^ (-signy)) + signy
-				hi, lo := bits.Mul64(ax, ay)
-				rs[i].B0_63 = lo
-				rs[i].B64_127 = hi
-				if needScale {
-					d128DivPow10(&rs[i], negScaleAdj)
-				}
-				d128Negate(&rs[i], neg)
-			}
-		} else {
-			signy := v2[0].B64_127 >> 63
-			ay := (v2[0].B0_63 ^ (-signy)) + signy
-			for i := 0; i < len1; i++ {
-				if hasNull && bmp.Contains(uint64(i)) {
-					continue
-				}
-				signx := v1[i].B64_127 >> 63
-				neg := signx ^ signy
-				ax := (v1[i].B0_63 ^ (-signx)) + signx
 				hi, lo := bits.Mul64(ax, ay)
 				rs[i].B0_63 = lo
 				rs[i].B64_127 = hi
