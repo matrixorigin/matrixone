@@ -1143,7 +1143,11 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			continue
 		}
 		visited[name] = struct{}{}
-		if !current.GetAppendable() && !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
+		// For snapshot-state range replay, we only need terminal objects that are
+		// still visible at range end. If an object has already been deleted at or
+		// before end, keep following its delete-time chain instead of reading this
+		// transient intermediate object.
+		if !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
 			next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
 			if len(next) == 0 {
 				logutil.Warn(
