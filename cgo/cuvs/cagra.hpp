@@ -500,6 +500,7 @@ public:
                 this->build_params.intermediate_graph_degree,
                 static_cast<cuvs::distance::DistanceType>(this->metric));
             nd_params.dist_comp_dtype = cuvs::neighbors::nn_descent::DIST_COMP_DTYPE::FP32;
+            nd_params.max_iterations = 30; // Increase from default (usually 20)
             index_params.graph_build_params = nd_params;
         }
 

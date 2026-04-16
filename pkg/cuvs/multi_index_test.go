@@ -42,6 +42,8 @@ func TestMultiGpuIndex(t *testing.T) {
 	bpCagra := DefaultCagraBuildParams()
 	idx1, err := NewGpuCagra[float32](dataset1, count1, dimension, metric, bpCagra, devices, nthread, SingleGpu, nil)
 	assert.NoError(t, err)
+	err = idx1.Start()
+	assert.NoError(t, err)
 	err = idx1.Build()
 	assert.NoError(t, err)
 
@@ -49,11 +51,15 @@ func TestMultiGpuIndex(t *testing.T) {
 	bpIvf := DefaultIvfFlatBuildParams()
 	idx2, err := NewGpuIvfFlat[float32](dataset2, count2, dimension, metric, bpIvf, devices, nthread, SingleGpu, nil)
 	assert.NoError(t, err)
+	err = idx2.Start()
+	assert.NoError(t, err)
 	err = idx2.Build()
 	assert.NoError(t, err)
 
 	// Brute Force
 	bf, err := NewGpuBruteForce[float32](dataset1, count1, dimension, metric, nthread, 0)
+	assert.NoError(t, err)
+	err = bf.Start()
 	assert.NoError(t, err)
 	err = bf.Build()
 	assert.NoError(t, err)
