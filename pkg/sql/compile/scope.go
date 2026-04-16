@@ -864,7 +864,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2, s.Proc)
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
@@ -885,11 +885,19 @@ func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
 	return err
 }
 
-func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
+func receiveMsgAndForward(
+	sender *messageSenderOnClient,
+	forwardCh chan process.PipelineSignal,
+	proc *process.Process,
+) error {
 	for {
 		bat, end, err := sender.receiveBatch()
-		if err != nil || end || bat == nil {
+		if err != nil {
 			return err
+		}
+		if end || bat == nil {
+			sender.mergeRemoteWarnings(proc)
+			return nil
 		}
 
 		if err = forwardRemoteBatchWithContext(sender, forwardCh, bat, sender.mp); err != nil {

@@ -137,6 +137,9 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 				if err == io.EOF {
 					finish = true
 				} else if ignoreError {
+					if recoverErr := csvReader.RecoverAfterReadError(); recoverErr != nil {
+						return false, recoverErr
+					}
 					logutil.Warnf("load data ignore error: read csv row failed: %v", err)
 					proc.Base.Warnings.Add(1)
 					i--

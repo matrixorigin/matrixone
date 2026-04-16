@@ -240,6 +240,20 @@ func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
 	return row, err
 }
 
+// RecoverAfterReadError discards bytes until the next record terminator so the
+// next Read starts from a new physical line after a parse error.
+func (parser *CSVParser) RecoverAfterReadError() error {
+	parser.recordBuffer = parser.recordBuffer[:0]
+	parser.fieldIndexes = parser.fieldIndexes[:0]
+	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
+
+	_, _, err := parser.readUntilTerminator()
+	if err == io.EOF {
+		return nil
+	}
+	return err
+}
+
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }

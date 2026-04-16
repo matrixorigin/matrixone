@@ -530,3 +530,27 @@ func TestCustomEscapeChar(t *testing.T) {
 		newStringField(`{"itemRangeType":0,"itemContainType":0,"shopRangeType":1,"shopJson":"[{\"id\":\"A1234\",\"shopName\":\"AAAAAA\"}]"}`, false, true),
 	}, row)
 }
+
+func TestRecoverAfterReadErrorSkipsBrokenRowTail(t *testing.T) {
+	cfg := CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		LinesTerminatedBy:  "\n",
+	}
+
+	parser, err := NewCSVParser(&cfg, NewStringReader("\"bad\"oops,1\n2,ok\n"), int64(ReadBlockSize), false)
+	require.NoError(t, err)
+
+	_, err = parser.Read(nil)
+	require.Error(t, err)
+
+	err = parser.RecoverAfterReadError()
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, []Field{
+		newStringField("2", false, false),
+		newStringField("ok", false, false),
+	}, row)
+}

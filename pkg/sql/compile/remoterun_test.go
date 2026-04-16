@@ -866,7 +866,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- receiveMsgAndForward(sender, forwardCh)
+		done <- receiveMsgAndForward(sender, forwardCh, nil)
 	}()
 
 	cancel()
@@ -879,6 +879,25 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 		<-forwardCh
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
 	}
+}
+
+func TestReceiveMsgAndForward_MergesRemoteWarningsOnEnd(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	forwardCh := make(chan process.PipelineSignal, 1)
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	endMsg := &pipeline.Message{}
+	endMsg.SetSid(pipeline.Status_MessageEnd)
+	endMsg.SetWarningCount(6)
+	sender.receiveCh <- endMsg
+
+	err := receiveMsgAndForward(sender, forwardCh, proc)
+	require.NoError(t, err)
+	require.Equal(t, uint32(6), proc.Base.Warnings.Load())
 }
 
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
