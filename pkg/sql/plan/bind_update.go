@@ -214,6 +214,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					if err != nil {
 						return 0, err
 					}
+				} else if col != nil && isGeometryPlanType(&col.Typ) {
+					selectNode.ProjectList[colPos], err = funcCastForGeometryType(builder.GetContext(), updateExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
 				} else {
 					selectNode.ProjectList[colPos], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
@@ -239,6 +244,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 				} else if isSetPlanType(&col.Typ) {
 					selectNode.ProjectList[originPos], err = funcCastForSetType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				} else if isGeometryPlanType(&col.Typ) {
+					selectNode.ProjectList[originPos], err = funcCastForGeometryType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -602,7 +612,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
 
-			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(idxDef)
+			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
 			pkTyp := idxTableDef.Cols[rightPkPos].Typ
 
 			rightExpr := &plan.Expr{
@@ -615,16 +626,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}
 
-			args := make([]*plan.Expr, len(idxDef.Parts))
-
-			var colPos int32
-			var ok bool
-			for k, colName := range idxDef.Parts {
-				if colPos, ok = oldColName2Idx[alias+"."+catalog.ResolveAlias(colName)]; !ok {
-					errMsg := fmt.Sprintf("bind update err, can not find colName = %s", colName)
-					return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
-				}
-				args[k] = &plan.Expr{
+			var leftExpr *plan.Expr
+			if isSpatialIndexDef(idxDef) {
+				colPos := oldColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
+				leftExpr = &plan.Expr{
 					Typ: selectNode.ProjectList[colPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
@@ -633,15 +638,35 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						},
 					},
 				}
-			}
+			} else {
+				args := make([]*plan.Expr, len(idxDef.Parts))
 
-			leftExpr := args[0]
-			if len(idxDef.Parts) > 1 {
-				funcName := "serial"
-				if !idxDef.Unique {
-					funcName = "serial_full"
+				var colPos int32
+				var ok bool
+				for k, colName := range idxDef.Parts {
+					if colPos, ok = oldColName2Idx[alias+"."+catalog.ResolveAlias(colName)]; !ok {
+						errMsg := fmt.Sprintf("bind update err, can not find colName = %s", colName)
+						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
+					}
+					args[k] = &plan.Expr{
+						Typ: selectNode.ProjectList[colPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: colPos,
+							},
+						},
+					}
 				}
-				leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+
+				leftExpr = args[0]
+				if indexTableStoresSerializedKey(idxDef) {
+					funcName := "serial"
+					if !idxDef.Unique {
+						funcName = "serial_full"
+					}
+					leftExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+				}
 			}
 
 			joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
@@ -650,7 +675,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 
 			joinType := plan.Node_LEFT
-			if !idxDef.Unique {
+			if !idxDef.Unique && !isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_INNER
 			}
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -782,7 +807,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			deleteCols[0].ColPos = int32(oldIdx)
 
 			oldIdx = len(finalProjList)
-			idxColIdx := idxNode.TableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(tableDef.Indexes[j])
+			idxColIdx := idxNode.TableDef.Name2ColIndex[lookupColName]
 			finalProjList = append(finalProjList, &plan.Expr{
 				Typ: idxNode.TableDef.Cols[idxColIdx].Typ,
 				Expr: &plan.Expr_Col{
@@ -815,15 +841,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					finalProjList = append(finalProjList, newIdxExpr)
 				}
 			} else {
-				args := make([]*plan.Expr, len(idxDef.Parts))
-
-				for k, colName := range idxDef.Parts {
-					realColName := catalog.ResolveAlias(colName)
+				var newIdxExpr *plan.Expr
+				if !indexTableStoresSerializedKey(idxDef) {
+					realColName := indexPrimaryPartName(idxDef)
 					colPos := int32(oldColName2Idx[alias+"."+realColName])
 					if updateIdx, ok := newColName2Idx[alias+"."+realColName]; ok {
 						colPos = int32(updateIdx)
 					}
-					args[k] = &plan.Expr{
+					newIdxExpr = &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
@@ -832,12 +857,26 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 							},
 						},
 					}
-				}
-
-				var newIdxExpr *plan.Expr
-				if len(idxDef.Parts) == 0 {
-					newIdxExpr = args[0]
 				} else {
+					args := make([]*plan.Expr, len(idxDef.Parts))
+
+					for k, colName := range idxDef.Parts {
+						realColName := catalog.ResolveAlias(colName)
+						colPos := int32(oldColName2Idx[alias+"."+realColName])
+						if updateIdx, ok := newColName2Idx[alias+"."+realColName]; ok {
+							colPos = int32(updateIdx)
+						}
+						args[k] = &plan.Expr{
+							Typ: selectNode.ProjectList[colPos].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: selectNodeTag,
+									ColPos: colPos,
+								},
+							},
+						}
+					}
+
 					funcName := "serial"
 					if !idxDef.Unique {
 						funcName = "serial_full"

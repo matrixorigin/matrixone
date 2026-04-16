@@ -366,14 +366,27 @@ type templateDec interface {
 	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
-func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
+type templateDecOut interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | int64
+}
+
+// decimalBatchArith is the batch arithmetic framework for all Decimal types.
+// It passes entire slices to the kernel function for batch processing with
+// minimal per-element overhead.
+//
+// TIn is the input element type, TOut is the output element type.
+// For same-type ops (add/sub): TIn == TOut. For D64×D64→D128 multiply: TIn=D64, TOut=D128.
+// For integer division (DIV): TIn=Decimal, TOut=int64.
+// The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
+// Scale values and null bitmap are provided for kernels that need them.
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-	p1 := vector.OptGetParamFromWrapper[types.Decimal128](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[types.Decimal128](rs, 1, parameters[1])
+	rs := vector.MustFunctionResult[TOut](result)
+	p1 := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[TIn](rs, 1, parameters[1])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[TOut](rsVec)
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
 
@@ -412,18 +425,16 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 		}
 	}
 
-	// Get values from wrappers, which handle type conversion (e.g., decimal64/float64 -> decimal128)
-	// For constant vectors, pass single-element slice - arithFn handles len1==1 or len2==1 cases
-	var v1, v2 []types.Decimal128
+	var v1, v2 []TIn
 	if c1 {
 		val, _ := p1.GetValue(0)
-		v1 = []types.Decimal128{val}
+		v1 = []TIn{val}
 	} else {
 		v1 = p1.UnSafeGetAllValue()
 	}
 	if c2 {
 		val, _ := p2.GetValue(0)
-		v2 = []types.Decimal128{val}
+		v2 = []TIn{val}
 	} else {
 		v2 = p2.UnSafeGetAllValue()
 	}
@@ -431,501 +442,11 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	if err != nil {
 		return err
 	}
-	// Safety: if both inputs have no nulls, ensure result nulls are cleared.
-	if (parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
+	// Only reset rsNull if the kernel didn't add any nulls (e.g., div-by-zero).
+	if rsNull.IsEmpty() &&
+		(parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
 		(parameters[1].GetNulls() == nil || parameters[1].GetNulls().IsEmpty()) {
 		rsNull.Reset()
-	}
-	return nil
-}
-
-func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error), selectList *FunctionSelectList, isDivision bool) error {
-	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[T](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		ifNull := null1 || null2
-		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			// Check for division by zero only if this is a division operation
-			if isDivision {
-				var isZero bool
-				switch any(v2).(type) {
-				case types.Decimal128:
-					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-				case types.Decimal64:
-					isZero = (any(v2).(types.Decimal64) == 0)
-				case types.Decimal256:
-					d := any(v2).(types.Decimal256)
-					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
-				}
-				if isZero {
-					if checkDivisionByZeroBehavior(proc, selectList) {
-						return moerr.NewDivByZeroNoCtx()
-					}
-					// Return NULL (MySQL 8.0 behavior)
-					nulls.AddRange(rsNull, 0, uint64(length))
-					return nil
-				}
-			}
-			r, err := arithFn(v1, v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			shouldError := isDivision && checkDivisionByZeroBehavior(proc, selectList)
-			if p2.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v2, _ := p2.GetValue(i)
-					// Check for division by zero only if this is a division operation
-					if isDivision {
-						var isZero bool
-						switch any(v2).(type) {
-						case types.Decimal128:
-							isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-						case types.Decimal64:
-							isZero = (any(v2).(types.Decimal64) == 0)
-						}
-						if isZero {
-							if shouldError {
-								return moerr.NewDivByZeroNoCtx()
-							}
-							// Return NULL (MySQL 8.0 behavior)
-							rsNull.Add(i)
-							continue
-						}
-					}
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v2, _ := p2.GetValue(i)
-					// Check for division by zero only if this is a division operation
-					if isDivision {
-						var isZero bool
-						switch any(v2).(type) {
-						case types.Decimal128:
-							isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-						case types.Decimal64:
-							isZero = (any(v2).(types.Decimal64) == 0)
-						}
-						if isZero {
-							if shouldError {
-								return moerr.NewDivByZeroNoCtx()
-							}
-							// Return NULL (MySQL 8.0 behavior)
-							rsNull.Add(i)
-							continue
-						}
-					}
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			// Check for division by zero only if this is a division operation
-			if isDivision {
-				var isZero bool
-				switch any(v2).(type) {
-				case types.Decimal128:
-					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-				case types.Decimal64:
-					isZero = (any(v2).(types.Decimal64) == 0)
-				case types.Decimal256:
-					d := any(v2).(types.Decimal256)
-					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
-				}
-				if isZero {
-					if checkDivisionByZeroBehavior(proc, selectList) {
-						return moerr.NewDivByZeroNoCtx()
-					}
-					// Return NULL (MySQL 8.0 behavior)
-					nulls.AddRange(rsNull, 0, uint64(length))
-					return nil
-				}
-			}
-			if p1.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v1, _ := p1.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v1, _ := p1.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			// Check for division by zero only if this is a division operation
-			if isDivision {
-				var isZero bool
-				switch any(v2).(type) {
-				case types.Decimal128:
-					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-				case types.Decimal64:
-					isZero = (any(v2).(types.Decimal64) == 0)
-				case types.Decimal256:
-					d := any(v2).(types.Decimal256)
-					isZero = (d.B0_63 == 0 && d.B64_127 == 0 && d.B128_191 == 0 && d.B192_255 == 0)
-				}
-				if isZero {
-					if shouldError {
-						return moerr.NewDivByZeroNoCtx()
-					}
-					// Return NULL (MySQL 8.0 behavior)
-					rsNull.Add(i)
-					continue
-				}
-			}
-			r, err := arithFn(v1, v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rss[i] = r
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetValue(i)
-		v2, _ := p2.GetValue(i)
-		// Check for division by zero only if this is a division operation
-		if isDivision {
-			var isZero bool
-			switch any(v2).(type) {
-			case types.Decimal128:
-				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-			case types.Decimal64:
-				isZero = (any(v2).(types.Decimal64) == 0)
-			}
-			if isZero {
-				if shouldError {
-					return moerr.NewDivByZeroNoCtx()
-				}
-				// Return NULL (MySQL 8.0 behavior)
-				rsNull.Add(i)
-				continue
-			}
-		}
-		r, err := arithFn(v1, v2, scale1, scale2)
-		if err != nil {
-			return err
-		}
-		rss[i] = r
-	}
-
-	// Safety: if both inputs have no nulls, ensure result nulls are cleared.
-	if (parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
-		(parameters[1].GetNulls() == nil || parameters[1].GetNulls().IsEmpty()) {
-		rsNull.Reset()
-	}
-	return nil
-}
-
-// XXX For decimal64 / decimal64, decimal64 * decimal64
-// isDivision: true for division (check for divide by zero), false for multiplication
-func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error), selectList *FunctionSelectList, isDivision bool) error {
-	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-	p1 := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[types.Decimal64](rs, 1, parameters[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			// Check for division by zero (only for division, not multiplication)
-			if isDivision && v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
-					return moerr.NewDivByZeroNoCtx()
-				}
-				// Return NULL (MySQL 8.0 behavior)
-				nulls.AddRange(rsNull, 0, uint64(length))
-				return nil
-			}
-			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-			r, err := arithFn(x, y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			shouldError := checkDivisionByZeroBehavior(proc, selectList)
-			if p2.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-				x := functionUtil.ConvertD64ToD128(v1)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v2, _ := p2.GetValue(i)
-					if isDivision && v2 == 0 {
-						if shouldError {
-							return moerr.NewDivByZeroNoCtx()
-						}
-						// Return NULL (MySQL 8.0 behavior)
-						rsNull.Add(i)
-						continue
-					}
-					y := functionUtil.ConvertD64ToD128(v2)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				x := functionUtil.ConvertD64ToD128(v1)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v2, _ := p2.GetValue(i)
-					if isDivision && v2 == 0 {
-						if shouldError {
-							return moerr.NewDivByZeroNoCtx()
-						}
-						// Return NULL (MySQL 8.0 behavior)
-						rsNull.Add(i)
-						continue
-					}
-					y := functionUtil.ConvertD64ToD128(v2)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			// Check for division by zero (only for division, not multiplication)
-			if isDivision && v2 == 0 {
-				if checkDivisionByZeroBehavior(proc, selectList) {
-					return moerr.NewDivByZeroNoCtx()
-				}
-				// Return NULL (MySQL 8.0 behavior)
-				nulls.AddRange(rsNull, 0, uint64(length))
-				return nil
-			}
-			if p1.WithAnyNullValue() {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-				y := functionUtil.ConvertD64ToD128(v2)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v1, _ := p1.GetValue(i)
-					x := functionUtil.ConvertD64ToD128(v1)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				y := functionUtil.ConvertD64ToD128(v2)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v1, _ := p1.GetValue(i)
-					x := functionUtil.ConvertD64ToD128(v1)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	shouldError := checkDivisionByZeroBehavior(proc, selectList)
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			if isDivision && v2 == 0 {
-				if shouldError {
-					return moerr.NewDivByZeroNoCtx()
-				}
-				// Return NULL (MySQL 8.0 behavior)
-				rsNull.Add(i)
-				continue
-			}
-			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-			r, err := arithFn(x, y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rss[i] = r
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetValue(i)
-		v2, _ := p2.GetValue(i)
-		if isDivision && v2 == 0 {
-			if shouldError {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			// Return NULL (MySQL 8.0 behavior)
-			rsNull.Add(i)
-			continue
-		}
-		x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-		r, err := arithFn(x, y, scale1, scale2)
-		if err != nil {
-			return err
-		}
-		rss[i] = r
 	}
 	return nil
 }

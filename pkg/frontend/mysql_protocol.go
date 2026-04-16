@@ -2449,7 +2449,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 		// Binary/varbinary will be sent out as varchar type.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
@@ -2710,7 +2710,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			}
 		// Binary/varbinary will be sent out as varchar type.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
@@ -3023,7 +3023,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, rowIdx, i)
 			if err != nil {
 				return err
@@ -3341,7 +3341,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, r, i)
 			if err != nil {
 				return err

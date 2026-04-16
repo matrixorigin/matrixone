@@ -413,6 +413,189 @@ func TestSendWithRequestRetry(t *testing.T) {
 	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
 }
 
+func TestSendStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
+
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 10 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.TNShard{
+				Address: testTN5Addr,
+			},
+			Payload: make([]byte, 10),
+		},
+	}
+
+	start := time.Now()
+	result, err := sd.Send(context.Background(), []txn.TxnRequest{req})
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t,
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	assert.Less(t, time.Since(start), oldWait)
+}
+
+func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
+
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 0
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.TNShard{
+				Address: testTN5Addr,
+			},
+			Payload: make([]byte, 10),
+		},
+	}
+
+	start := time.Now()
+	result, err := sd.Send(context.Background(), []txn.TxnRequest{req})
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t,
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	assert.Less(t, time.Since(start), 2*defaultWaitTimeOnRetryBackendSend)
+}
+
+func TestSendWithMultiRequestStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
+
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 10 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	requests := []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+					Address:       testTN5Addr,
+				},
+			},
+		},
+		{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+					Address:       testTN5Addr,
+				},
+			},
+		},
+	}
+
+	start := time.Now()
+	result, err := sd.Send(context.Background(), requests)
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t,
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	assert.Less(t, time.Since(start), 2*defaultWaitTimeOnRetryBackendSend)
+}
+
+func TestSendReturnsBackendErrorWhenContextCanceledDuringBackendRetryWait(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
+
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 500 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+	)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(3*defaultWaitTimeOnRetryBackendSend+20*time.Millisecond, cancel)
+
+	req := txn.TxnRequest{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.TNShard{
+				Address: testTN5Addr,
+			},
+			Payload: make([]byte, 10),
+		},
+	}
+
+	start := time.Now()
+	result, err := sd.Send(ctx, []txn.TxnRequest{req})
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	assert.True(t,
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	assert.Less(t, time.Since(start), defaultMaxWaitTimeOnRetryBackendSend)
+}
+
 func TestSendWithTxnUnknown(t *testing.T) {
 	s := newTestTxnServer(t, testTN1Addr, nil)
 	defer func() {
