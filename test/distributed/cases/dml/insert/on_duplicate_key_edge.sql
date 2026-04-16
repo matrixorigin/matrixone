@@ -1,4 +1,3 @@
--- @bvt:issue#23947
 -- Test: INSERT ON DUPLICATE KEY UPDATE edge cases
 -- Covers: NULL values, multi-unique-key, VALUES() function, rewrite-to-REPLACE paths
 
@@ -150,4 +149,3 @@ insert into t_odku_auto (uk_val, data) values (3, 'third');
 select * from t_odku_auto order by id;
 
 drop table if exists t_odku_auto;
--- @bvt:issue
