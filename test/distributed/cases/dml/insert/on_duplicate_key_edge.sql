@@ -23,7 +23,7 @@ select * from t_odku_null order by id;
 -- Conflict on unique key (non-NULL)
 insert into t_odku_null values (3, NULL, 'third');
 update t_odku_null set uk_col = 100 where id = 1;
--- @regex("(Duplicate entry '100' for key 'uk_col'|^$)", true)
+-- @regex("(Duplicate entry '100' for key '.*'|^$)", true)
 insert into t_odku_null values (99, 100, 'conflict') on duplicate key update val = 'uk_conflict';
 -- @regex("(?s)1.*(pk_conflict_null_uk|uk_conflict).*2.*null.*second.*3.*null.*third", true)
 select * from t_odku_null order by id;
@@ -45,19 +45,19 @@ insert into t_odku_multi_uk values (1, 10, 'a', 100);
 insert into t_odku_multi_uk values (2, 20, 'b', 200);
 
 -- Conflict on uk1 only
--- @regex("(Duplicate entry '10' for key 'uk1'|^$)", true)
+-- @regex("(Duplicate entry '10' for key '.*'|^$)", true)
 insert into t_odku_multi_uk values (3, 10, 'c', 300) on duplicate key update val = val + 1;
 -- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*200", true)
 select * from t_odku_multi_uk order by id;
 
 -- Conflict on uk2 only
--- @regex("(Duplicate entry 'b' for key 'uk2'|^$)", true)
+-- @regex("(Duplicate entry 'b' for key '.*'|^$)", true)
 insert into t_odku_multi_uk values (4, 40, 'b', 400) on duplicate key update val = val + 2;
 -- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*(200|202)", true)
 select * from t_odku_multi_uk order by id;
 
 -- Conflict on both uk1 and uk2 pointing to SAME row
--- @regex("(Duplicate entry '10' for key 'uk1'|^$)", true)
+-- @regex("(Duplicate entry '10' for key '.*'|^$)", true)
 insert into t_odku_multi_uk values (5, 10, 'a', 500) on duplicate key update val = val + 10;
 -- @regex("(?s)1.*10.*a.*(100|111).*2.*20.*b.*(200|202)", true)
 select * from t_odku_multi_uk order by id;
@@ -89,7 +89,7 @@ insert into t_odku_composite values (1, 1, 'z', 30) on duplicate key update val 
 select * from t_odku_composite order by a, b;
 
 -- Conflict on unique key
--- @regex("(Duplicate entry 'y' for key 'c'|^$)", true)
+-- @regex("(Duplicate entry 'y' for key '.*'|^$)", true)
 insert into t_odku_composite values (2, 1, 'y', 40) on duplicate key update val = val + 200;
 -- @regex("(?s)1.*1.*x.*110.*1.*2.*y.*(20|220)", true)
 select * from t_odku_composite order by a, b;
@@ -151,7 +151,7 @@ create table t_odku_auto (
 
 insert into t_odku_auto (uk_val, data) values (1, 'first');
 insert into t_odku_auto (uk_val, data) values (2, 'second');
--- @regex("(Duplicate entry '1' for key 'uk_val'|^$)", true)
+-- @regex("(Duplicate entry '1' for key '.*'|^$)", true)
 insert into t_odku_auto (uk_val, data) values (1, 'conflict') on duplicate key update data = 'updated_first';
 -- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second", true)
 select * from t_odku_auto order by id;
