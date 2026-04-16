@@ -23,10 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 const opName = "postdml"
@@ -35,13 +33,6 @@ var (
 	fulltextInsertSqlFmt    = "INSERT INTO %s SELECT f.* FROM %s as %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) as f WHERE %s IN (%s)"
 	fulltextDeleteSqlFmt    = "DELETE FROM %s WHERE doc_id IN (%s)"
 	fulltextDeleteAllSqlFmt = "DELETE FROM %s"
-)
-
-const (
-	fullTextPostDmlDebugRows      = 4096
-	fullTextPostDmlDebugValuesLen = 1 << 16
-	largeFullTextPostDmlRows      = 100000
-	largeFullTextPostDmlValuesLen = 1 << 20
 )
 
 func qualifyFullTextTableName(dbname, tblname string) string {
@@ -96,8 +87,6 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 	pkTyp := pkvec.GetType()
 
 	var values string
-	firstPK := ""
-	lastPK := ""
 	if !postdml.PostDmlCtx.IsDeleteWithoutFilters {
 		in_list = make([]string, 0, bat.RowCount())
 		for i := 0; i < bat.RowCount(); i++ {
@@ -118,10 +107,6 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			in_list = append(in_list, pkey)
 		}
 		values = strings.Join(in_list, ",")
-		if len(in_list) > 0 {
-			firstPK = in_list[0]
-			lastPK = in_list[len(in_list)-1]
-		}
 	}
 
 	// you may add new context to generate post dml SQL
@@ -151,32 +136,6 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		var parts []string
 		for _, p := range ftctx.Parts {
 			parts = append(parts, fmt.Sprintf("%s.%s", alias, p))
-		}
-		if bat.RowCount() >= fullTextPostDmlDebugRows || len(values) >= fullTextPostDmlDebugValuesLen {
-			logutil.Info(
-				"[FULLTEXT-POSTDML-BATCH]",
-				zap.String("source-table", sourcetbl),
-				zap.String("index-table", indextbl),
-				zap.Int("rows", bat.RowCount()),
-				zap.Int("pk-list-bytes", len(values)),
-				zap.String("first-pk", firstPK),
-				zap.String("last-pk", lastPK),
-				zap.Bool("is-insert", postdml.PostDmlCtx.IsInsert),
-				zap.Bool("is-delete", postdml.PostDmlCtx.IsDelete),
-			)
-		}
-		if bat.RowCount() >= largeFullTextPostDmlRows || len(values) >= largeFullTextPostDmlValuesLen {
-			logutil.Info(
-				"[FULLTEXT-POSTDML-LARGE-BATCH]",
-				zap.String("source-table", sourcetbl),
-				zap.String("index-table", indextbl),
-				zap.Int("rows", bat.RowCount()),
-				zap.Int("pk-list-bytes", len(values)),
-				zap.String("first-pk", firstPK),
-				zap.String("last-pk", lastPK),
-				zap.Bool("is-insert", postdml.PostDmlCtx.IsInsert),
-				zap.Bool("is-delete", postdml.PostDmlCtx.IsDelete),
-			)
 		}
 
 		if postdml.PostDmlCtx.IsDelete {
