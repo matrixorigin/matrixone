@@ -222,9 +222,6 @@ public:
 
         this->dimension = dimension;
         this->count = static_cast<uint64_t>(count_vectors);
-        if (count_vectors > (uint64_t)0xFFFFFFFF) {
-            std::cout << "[ERROR] CAGRA constructor: count_vectors (" << count_vectors << ") exceeds uint32_t! count=" << this->count << std::endl;
-        }
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
@@ -256,9 +253,6 @@ public:
 
         this->dimension = dimension;
         this->count = static_cast<uint64_t>(total_count);
-        if (total_count > (uint64_t)0xFFFFFFFF) {
-            std::cout << "[ERROR] CAGRA constructor (chunked): total_count (" << total_count << ") exceeds uint32_t! count=" << this->count << std::endl;
-        }
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
@@ -413,9 +407,6 @@ public:
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             this->count = static_cast<uint64_t>(this->current_offset_);
-            if (this->current_offset_ > (uint64_t)0xFFFFFFFF) {
-                std::cout << "[ERROR] CAGRA build: current_offset_ (" << this->current_offset_ << ") exceeds uint32_t! count=" << this->count << std::endl;
-            }
             if (this->flattened_host_dataset.size() > (size_t)this->current_offset_ * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->current_offset_ * this->dimension);
         }
@@ -496,6 +487,22 @@ public:
         index_params.graph_degree = this->build_params.graph_degree;
         index_params.attach_dataset_on_build = this->build_params.attach_dataset_on_build;
 
+        if constexpr (std::is_same_v<T, half>) {
+            // When T=half, NN-Descent with DIST_COMP_DTYPE::AUTO picks fp16 arithmetic
+            // for distance computations during graph construction.  fp16's limited
+            // precision creates many distance ties, making NN-Descent's stochastic
+            // neighbor selection highly variable across builds and causing the
+            // occasional sudden recall drop that is observed on repeat builds of the
+            // same dataset.  Forcing FP32 distance computation during build eliminates
+            // the ties and gives stable, consistent graph quality.  The stored dataset
+            // remains fp16; only the build-time kNN distances are promoted to fp32.
+            cuvs::neighbors::graph_build_params::nn_descent_params nd_params(
+                this->build_params.intermediate_graph_degree,
+                static_cast<cuvs::distance::DistanceType>(this->metric));
+            nd_params.dist_comp_dtype = cuvs::neighbors::nn_descent::DIST_COMP_DTYPE::FP32;
+            index_params.graph_build_params = nd_params;
+        }
+
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
@@ -528,13 +535,13 @@ public:
                 this->shard_sizes_[rank] = num_rows;
             }
 
-            std::cout << "[DEBUG] CAGRA build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << " rows_per_shard=" << rows_per_shard << std::endl;
-            if (!this->host_ids.empty()) {
-                std::cout << "[DEBUG] Shard " << rank << " first 3 host_ids: " 
-                          << this->host_ids[start_row] << ", " 
-                          << this->host_ids[start_row+1] << ", " 
-                          << this->host_ids[start_row+2] << std::endl;
-            }
+            // std::cout << "[DEBUG] CAGRA build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << " rows_per_shard=" << rows_per_shard << std::endl;
+            // if (!this->host_ids.empty()) {
+            //     std::cout << "[DEBUG] Shard " << rank << " first 3 host_ids: " 
+            //               << this->host_ids[start_row] << ", " 
+            //               << this->host_ids[start_row+1] << ", " 
+            //               << this->host_ids[start_row+2] << std::endl;
+            // }
 
             auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
             raft::copy(*res, dataset_device.view(), 
@@ -628,8 +635,8 @@ public:
                 std::copy(additional_data, additional_data + num_vectors * this->dimension,
                           this->flattened_host_dataset.begin() + old_size);
                 if (new_ids) this->set_ids_internal(new_ids, num_vectors, this->count);
-                this->count += static_cast<uint32_t>(num_vectors);
-                this->current_offset_ += static_cast<uint32_t>(num_vectors);
+                this->count += num_vectors;
+                this->current_offset_ += num_vectors;
                 return;
             }
         }
@@ -663,7 +670,7 @@ public:
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 if (new_ids) this->set_ids_internal(new_ids, num_vectors, static_cast<uint64_t>(this->count));
-                this->count += static_cast<uint32_t>(num_vectors);
+                this->count += num_vectors;
                 this->current_offset_ += num_vectors;
             }
         }
@@ -678,7 +685,7 @@ public:
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
-            std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
+            // std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
             std::vector<search_result_t> shard_results(num_shards);
 
             auto shard_search_task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& gpu_handle) -> std::any {
@@ -884,9 +891,9 @@ public:
                 uint64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += this->shard_sizes_[r];
                 
-                std::cout << "[DEBUG] CAGRA search_internal SHARDED: rank=" << handle.get_rank() 
-                          << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
-                          << " count=" << this->count << " num_queries=" << num_queries << std::endl;
+                // std::cout << "[DEBUG] CAGRA search_internal SHARDED: rank=" << handle.get_rank() 
+                //           << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
+                //           << " count=" << this->count << " num_queries=" << num_queries << std::endl;
 
                 for (size_t i = 0; i < raw_neighbors.size(); ++i) {
                     if (raw_neighbors[i] != (uint32_t)-1) {
@@ -904,13 +911,13 @@ public:
                     }
                 }
                 
-                if (num_queries > 0) {
-                    std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
-                    for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
-                        std::cout << "raw=" << raw_neighbors[k] << "->id=" << search_res.neighbors[k] << " ";
-                    }
-                    std::cout << std::endl;
-                }
+                // if (num_queries > 0) {
+                //     std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
+                //     for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
+                //         std::cout << "raw=" << raw_neighbors[k] << "->id=" << search_res.neighbors[k] << " ";
+                //     }
+                //     std::cout << std::endl;
+                // }
             } else {
                 for (size_t i = 0; i < raw_neighbors.size(); ++i) {
                     if (raw_neighbors[i] != (uint32_t)-1) {
@@ -935,7 +942,7 @@ public:
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = this->devices_.size();
-            std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
+            // std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
             std::vector<search_result_t> shard_results(num_shards);
 
             auto shard_search_task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& gpu_handle) -> std::any {
@@ -1146,9 +1153,9 @@ public:
                 uint64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += this->shard_sizes_[r];
                 
-                std::cout << "[DEBUG] CAGRA search_float_internal SHARDED: rank=" << handle.get_rank() 
-                          << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
-                          << " count=" << this->count << " num_queries=" << num_queries << std::endl;
+                // std::cout << "[DEBUG] CAGRA search_float_internal SHARDED: rank=" << handle.get_rank() 
+                //           << " offset=" << offset << " host_ids.size=" << this->host_ids.size() 
+                //           << " count=" << this->count << " num_queries=" << num_queries << std::endl;
 
                 for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
                     if (raw_neighbors_f[i] != (uint32_t)-1) {
@@ -1166,13 +1173,13 @@ public:
                     }
                 }
                 
-                if (num_queries > 0) {
-                    std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
-                    for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
-                        std::cout << "raw=" << raw_neighbors_f[k] << "->id=" << search_res.neighbors[k] << " ";
-                    }
-                    std::cout << std::endl;
-                }
+                // if (num_queries > 0) {
+                //     std::cout << "[DEBUG] Shard " << handle.get_rank() << " query 0 first 5 results: ";
+                //     for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
+                //         std::cout << "raw=" << raw_neighbors_f[k] << "->id=" << search_res.neighbors[k] << " ";
+                //     }
+                //     std::cout << std::endl;
+                // }
             } else {
                 for (size_t i = 0; i < raw_neighbors_f.size(); ++i) {
                     if (raw_neighbors_f[i] != (uint32_t)-1) {
@@ -1412,7 +1419,7 @@ public:
     }
 
     search_result_t merge_sharded_results(const std::vector<search_result_t>& shard_results, uint64_t num_queries, uint32_t limit) {
-        std::cout << "[DEBUG] merge_sharded_results: num_shards=" << shard_results.size() << " num_queries=" << num_queries << " limit=" << limit << std::endl;
+        // std::cout << "[DEBUG] merge_sharded_results: num_shards=" << shard_results.size() << " num_queries=" << num_queries << " limit=" << limit << std::endl;
         search_result_t global_res;
         global_res.neighbors.resize(num_queries * limit);
         global_res.distances.resize(num_queries * limit);
@@ -1421,6 +1428,7 @@ public:
             std::vector<std::pair<float, int64_t>> candidates;
             for (size_t s = 0; s < shard_results.size(); ++s) {
                 const auto& sr = shard_results[s];
+                /*
                 if (q == 0) {
                     std::cout << "  Shard " << s << " query 0 results: ";
                     for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
@@ -1428,6 +1436,7 @@ public:
                     }
                     std::cout << std::endl;
                 }
+                */
                 for (uint32_t k = 0; k < limit; ++k) {
                     int64_t id = sr.neighbors[q * limit + k];
                     if (id != -1LL) {
@@ -1439,9 +1448,11 @@ public:
             uint32_t to_sort = std::min((uint32_t)limit, (uint32_t)candidates.size());
             std::partial_sort(candidates.begin(), candidates.begin() + to_sort, candidates.end());
 
+            /*
             if (q == 0) {
                 std::cout << "  Query 0 total candidates: " << candidates.size() << " best candidate id=" << (candidates.empty() ? -1 : candidates[0].second) << " dist=" << (candidates.empty() ? -1 : candidates[0].first) << std::endl;
             }
+            */
 
             for (uint32_t k = 0; k < limit; ++k) {
                 if (k < to_sort) {

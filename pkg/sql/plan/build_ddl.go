@@ -3072,7 +3072,7 @@ func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 	}
 
 	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be uint32")
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
 	}
 
 	indexParts := make([]string, 1)

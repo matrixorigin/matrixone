@@ -89,7 +89,6 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -121,8 +120,7 @@ gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, 
                 ptr = new gpu_ivf_flat_t<uint8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             default: return nullptr;
-        }        static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
-        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
+        }        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
  "Error in gpu_ivf_flat_new_empty", e.what());
@@ -153,7 +151,6 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, ivf_flat_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 

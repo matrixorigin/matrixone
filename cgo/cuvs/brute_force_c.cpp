@@ -60,7 +60,6 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
-        if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -83,7 +82,6 @@ gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimen
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
         }
-        if (index_ptr) static_cast<matrixone::gpu_index_base_t<float, brute_force_build_params_t>*>(index_ptr)->start();
         return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(qtype, index_ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 

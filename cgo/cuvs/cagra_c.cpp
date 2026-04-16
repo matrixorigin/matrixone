@@ -89,7 +89,6 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -122,7 +121,6 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -154,7 +152,6 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, cagra_build_params_t>*>(ptr)->start();
         return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 

@@ -432,9 +432,9 @@ public:
 
     void set_ids_internal(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
-        std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
-                  << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
-                  << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
+        // std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
+        //           << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
+        //           << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
@@ -606,13 +606,14 @@ public:
             all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
         auto train_device = raft::make_device_matrix<float, int64_t>(*res, total, dimension);
         raft::copy(*res, train_device.view(), train_host_view);
-        
-        {
-            // Lock only for the actual training update (sets the unique_ptr)
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            quantizer_.train(*res, train_device.view());
-        }
+        // Train without holding the lock: GPU kernels run while lock is not held,
+        // so concurrent readers are not blocked for the duration of training.
+        quantizer_.train(*res, train_device.view());
         handle.sync();
+        // Brief unique_lock after sync to publish the completed quantizer state.
+        // The lock/unlock acts as a memory barrier: any subsequent shared_lock
+        // acquisition by a reader is guaranteed to see is_trained() == true.
+        { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
 
         // --- GPU work + locked store: process each buffered chunk ---
         for (auto& c : chunks) {
@@ -888,14 +889,13 @@ public:
     void save_ids(const std::string& filename) const {
         std::ofstream os(filename, std::ios::binary);
         if (!os) throw std::runtime_error("Failed to open file for saving IDs: " + filename);
-        uint64_t size;
-        {
-            std::shared_lock<std::shared_mutex> lock(mutex_);
-            size = host_ids.size();
-        }
+        // Hold a single lock for the entire snapshot to avoid TOCTOU: another
+        // thread modifying host_ids between the size read and the data write
+        // would produce a file whose header and body disagree.
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        uint64_t size = host_ids.size();
         os.write(reinterpret_cast<const char*>(&size), sizeof(size));
         if (size > 0) {
-            std::shared_lock<std::shared_mutex> lock(mutex_);
             os.write(reinterpret_cast<const char*>(host_ids.data()), size * sizeof(IdT));
         }
     }

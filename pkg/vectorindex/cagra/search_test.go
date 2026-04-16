@@ -99,7 +99,7 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 }
 
 // TestCagraSearchAndSearchFloat32 tests Search and SearchFloat32 with a single loaded index.
-func TestCagraSearchAndSearchFloat32WithKeyUint32(t *testing.T) {
+func TestCagraSearchAndSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)

@@ -88,7 +88,7 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
                 ptr = new gpu_ivf_pq_t<uint8_t>(static_cast<const uint8_t*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             default: return nullptr;
-        }        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
+        }
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -120,7 +120,6 @@ gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_t
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -152,7 +151,7 @@ gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, dist
                 ptr = new gpu_ivf_pq_t<uint8_t>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
                 break;
             default: return nullptr;
-        }        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
+        }
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
@@ -184,7 +183,6 @@ gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, dist
                 break;
             default: return nullptr;
         }
-        static_cast<gpu_index_base_t<float, ivf_pq_build_params_t>*>(ptr)->start();
         return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 

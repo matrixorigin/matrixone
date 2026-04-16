@@ -86,7 +86,6 @@ gpu_kmeans_c gpu_kmeans_new(uint32_t n_clusters, uint32_t dimension, distance_ty
                 break;
             default: return nullptr;
         }
-        if (ptr) static_cast<gpu_index_base_t<float, kmeans_build_params_t>*>(ptr)->start();
         return static_cast<gpu_kmeans_c>(new gpu_kmeans_any_t(qtype, ptr));
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, 
