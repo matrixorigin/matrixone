@@ -71,9 +71,9 @@ type TestDisttaeEngine struct {
 	mp                       *mpool.MPool
 	commitWorkspaceThreshold uint64
 	writeWorkspaceThreshold  uint64
-	quota                       uint64
-	extraWorkspaceThreshold     uint64
-	insertEntryMaxCount         int
+	quota                    uint64
+	extraWorkspaceThreshold  uint64
+	insertEntryMaxCount      int
 	newTxnMu                 sync.Mutex
 
 	rootDir string

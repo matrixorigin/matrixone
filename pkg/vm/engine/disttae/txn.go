@@ -647,16 +647,24 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			// Safety valve: even though the current statement's writes are small,
 			// the global workspace may have accumulated too much data (e.g., when
 			// IncrStatementID is disabled during HNSW index creation via RunSql).
-			// In that case, rescan from the beginning and force a full dump.
+			// In that case, rescan from the current statement's start to dump all
+			// accumulated data within this statement. We use the statement boundary
+			// (not 0) to avoid compacting prior statements' entries, which would
+			// break offsets[] used by RollbackLastStatement.
 			if txn.approximateInMemInsertSize >= txn.engine.config.extraWorkspaceThreshold {
+				stmtStart := 0
+				if txn.statementID > 0 {
+					stmtStart = txn.offsets[txn.statementID-1]
+				}
 				logutil.Info(
 					"WORKSPACE-FORCE-DUMP",
 					zap.Uint64("approximateInMemInsertSize", txn.approximateInMemInsertSize),
 					zap.Uint64("extraWorkspaceThreshold", txn.engine.config.extraWorkspaceThreshold),
+					zap.Int("stmtStart", stmtStart),
 					zap.String("txn", txn.op.Txn().DebugString()),
 				)
-				offset = 0
-				size = txn.scanInMemInsertSize(0)
+				offset = stmtStart
+				size = txn.scanInMemInsertSize(stmtStart)
 			} else {
 				return nil
 			}
