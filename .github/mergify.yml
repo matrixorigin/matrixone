@@ -153,9 +153,13 @@ priority_rules:
     conditions:
       - queue-name=main
     priority: 2500
+    allow_checks_interruption: true
   - name: priority for queue `release-2.0`
     conditions:
       - queue-name=release-2.0
     priority: 2250
+    allow_checks_interruption: true
 merge_queue:
   max_parallel_checks: 1
+merge_protections_settings:
+  reporting_method: check-runs
