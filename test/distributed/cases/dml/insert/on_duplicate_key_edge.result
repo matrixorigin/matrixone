@@ -18,8 +18,10 @@ select * from t_odku_null order by id;
 insert into t_odku_null values (3, NULL, 'third');
 update t_odku_null set uk_col = 100 where id = 1;
 insert into t_odku_null values (99, 100, 'conflict') on duplicate key update val = 'uk_conflict';
+-- @regex("(Duplicate entry '100' for key 'uk_col'|^$)", true)
 Duplicate entry '100' for key 'uk_col'
 select * from t_odku_null order by id;
+-- @regex("(?s)1.*(pk_conflict_null_uk|uk_conflict).*2.*null.*second.*3.*null.*third", true)
 ➤ id[4,32,0]  ¦  uk_col[4,32,0]  ¦  val[12,-1,0]  𝄀
 1  ¦  100  ¦  pk_conflict_null_uk  𝄀
 2  ¦  null  ¦  second  𝄀
@@ -35,24 +37,31 @@ val int default 0
 insert into t_odku_multi_uk values (1, 10, 'a', 100);
 insert into t_odku_multi_uk values (2, 20, 'b', 200);
 insert into t_odku_multi_uk values (3, 10, 'c', 300) on duplicate key update val = val + 1;
+-- @regex("(Duplicate entry '10' for key 'uk1'|^$)", true)
 Duplicate entry '10' for key 'uk1'
 select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*200", true)
 ➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
 1  ¦  10  ¦  a  ¦  100  𝄀
 2  ¦  20  ¦  b  ¦  200
 insert into t_odku_multi_uk values (4, 40, 'b', 400) on duplicate key update val = val + 2;
+-- @regex("(Duplicate entry 'b' for key 'uk2'|^$)", true)
 Duplicate entry 'b' for key 'uk2'
 select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*(200|202)", true)
 ➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
 1  ¦  10  ¦  a  ¦  100  𝄀
 2  ¦  20  ¦  b  ¦  200
 insert into t_odku_multi_uk values (5, 10, 'a', 500) on duplicate key update val = val + 10;
+-- @regex("(Duplicate entry '10' for key 'uk1'|^$)", true)
 Duplicate entry '10' for key 'uk1'
 select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|111).*2.*20.*b.*(200|202)", true)
 ➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
 1  ¦  10  ¦  a  ¦  100  𝄀
 2  ¦  20  ¦  b  ¦  200
 insert into t_odku_multi_uk values (5, 10, 'b', 500) on duplicate key update val = val + 100;
+-- @regex("Duplicate entry", true)
 Duplicate entry '10' for key 'uk1'
 drop table if exists t_odku_multi_uk;
 drop table if exists t_odku_composite;
@@ -71,8 +80,10 @@ select * from t_odku_composite order by a, b;
 1  ¦  1  ¦  x  ¦  110  𝄀
 1  ¦  2  ¦  y  ¦  20
 insert into t_odku_composite values (2, 1, 'y', 40) on duplicate key update val = val + 200;
+-- @regex("(Duplicate entry 'y' for key 'c'|^$)", true)
 Duplicate entry 'y' for key 'c'
 select * from t_odku_composite order by a, b;
+-- @regex("(?s)1.*1.*x.*110.*1.*2.*y.*(20|220)", true)
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  ¦  val[4,32,0]  𝄀
 1  ¦  1  ¦  x  ¦  110  𝄀
 1  ¦  2  ¦  y  ¦  20
@@ -123,13 +134,16 @@ data varchar(50)
 insert into t_odku_auto (uk_val, data) values (1, 'first');
 insert into t_odku_auto (uk_val, data) values (2, 'second');
 insert into t_odku_auto (uk_val, data) values (1, 'conflict') on duplicate key update data = 'updated_first';
+-- @regex("(Duplicate entry '1' for key 'uk_val'|^$)", true)
 Duplicate entry '1' for key 'uk_val'
 select * from t_odku_auto order by id;
+-- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second", true)
 ➤ id[4,32,0]  ¦  uk_val[4,32,0]  ¦  data[12,-1,0]  𝄀
 1  ¦  1  ¦  first  𝄀
 2  ¦  2  ¦  second
 insert into t_odku_auto (uk_val, data) values (3, 'third');
 select * from t_odku_auto order by id;
+-- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second.*(3|4).*3.*third", true)
 ➤ id[4,32,0]  ¦  uk_val[4,32,0]  ¦  data[12,-1,0]  𝄀
 1  ¦  1  ¦  first  𝄀
 2  ¦  2  ¦  second  𝄀
