@@ -73,7 +73,7 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	if index.Cap() != uint32(totalCount) {
+	if index.Cap() != uint64(totalCount) {
 		t.Errorf("Expected capacity %d, got %d", totalCount, index.Cap())
 	}
 	if index.Len() != 0 {
@@ -94,8 +94,8 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		}
 
 		expectedLen := uint32(i + chunkSize)
-		if index.Len() != expectedLen {
-			t.Errorf("Expected length %d, got %d", expectedLen, index.Len())
+		if index.Len() != uint64(expectedLen) {
+			t.Fatalf("Expected length %d, got %d", expectedLen, index.Len())
 		}
 	}
 

@@ -627,7 +627,7 @@ public:
                 this->flattened_host_dataset.resize(old_size + num_vectors * this->dimension);
                 std::copy(additional_data, additional_data + num_vectors * this->dimension,
                           this->flattened_host_dataset.begin() + old_size);
-                if (new_ids) this->set_ids(new_ids, num_vectors, this->count);
+                if (new_ids) this->set_ids_internal(new_ids, num_vectors, this->count);
                 this->count += static_cast<uint32_t>(num_vectors);
                 this->current_offset_ += static_cast<uint32_t>(num_vectors);
                 return;
@@ -662,7 +662,7 @@ public:
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                if (new_ids) this->set_ids(new_ids, num_vectors, static_cast<uint64_t>(this->count));
+                if (new_ids) this->set_ids_internal(new_ids, num_vectors, static_cast<uint64_t>(this->count));
                 this->count += static_cast<uint32_t>(num_vectors);
                 this->current_offset_ += num_vectors;
             }

@@ -426,6 +426,12 @@ public:
 
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        set_ids_internal(ids, count_vectors, offset);
+    }
+
+    void set_ids_internal(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
+        if (!ids) return;
         std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
                   << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
                   << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
@@ -496,6 +502,19 @@ public:
 
         std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
 
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            // Pre-calculate shard distribution if we're in sharded mode.
+            // Note: This will be re-calculated/finalized in build().
+            int num_shards = static_cast<int>(this->devices_.size());
+            if (this->shard_sizes_.size() != (size_t)num_shards) {
+                this->shard_sizes_.assign(num_shards, 0);
+            }
+            uint64_t total = this->current_offset_;
+            uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+            for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+            this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+        }
+
         if (ids) {
             if (host_ids.size() < current_offset_) {
                 host_ids.resize(current_offset_);
@@ -564,28 +583,39 @@ public:
     // GPU operations are performed without holding mutex_; shared state is updated
     // under unique_lock after each chunk's GPU work completes.
     void flush_pending_float_chunks_internal(raft_handle_wrapper_t& handle) {
-        if (pending_float_chunks_.empty()) return;
+        std::vector<pending_float_chunk_t> chunks;
+        uint64_t total;
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (pending_float_chunks_.empty()) return;
+            chunks = std::move(pending_float_chunks_);
+            total = pending_total_count_;
+            pending_total_count_ = 0;
+            pending_float_chunks_.clear();
+        }
 
         auto res = handle.get_raft_resources();
 
         // --- GPU work: train quantizer on ALL pending float data — NO LOCK ---
-        uint64_t total = pending_total_count_;
         std::vector<float> all_floats;
         all_floats.reserve(total * dimension);
-        for (auto& c : pending_float_chunks_) {
+        for (auto& c : chunks) {
             all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
         }
         auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(
             all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
         auto train_device = raft::make_device_matrix<float, int64_t>(*res, total, dimension);
         raft::copy(*res, train_device.view(), train_host_view);
-        quantizer_.train(*res, train_device.view());
+        
+        {
+            // Lock only for the actual training update (sets the unique_ptr)
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            quantizer_.train(*res, train_device.view());
+        }
         handle.sync();
 
-        // std::cout << "[DEBUG] flush_pending_float_chunks_internal: trained quantizer on " << total << " vectors" << std::endl;
-
         // --- GPU work + locked store: process each buffered chunk ---
-        for (auto& c : pending_float_chunks_) {
+        for (auto& c : chunks) {
             // Upload and quantize — NO LOCK
             auto chunk_host_view = raft::make_host_matrix_view<const float, int64_t>(
                 c.data.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension));
@@ -593,7 +623,11 @@ public:
             raft::copy(*res, chunk_device.view(), chunk_host_view);
 
             auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
-            quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
+            
+            {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
+            }
 
             std::vector<T> chunk_host_target(c.count * dimension);
             raft::copy(*res,
@@ -631,38 +665,58 @@ public:
                     id_to_index_[c.ids[i]] = target_offset + i;
                 }
             }
-            // std::cout << "[DEBUG] flush_pending_float_chunks_internal: flushed chunk of " << c.count << " vectors at offset " << target_offset << std::endl;
         }
-
-        pending_float_chunks_.clear();
-        pending_total_count_ = 0;
     }
 
     void add_chunk_float(const float* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         uint64_t job_id = worker->submit_main(
             [this, chunk_data, chunk_count, offset, ids](raft_handle_wrapper_t& handle) -> std::any {
+                {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+                }
+
                 auto res = handle.get_raft_resources();
                 
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
-                    if (!quantizer_.is_trained()) {
+                    bool trained;
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        trained = quantizer_.is_trained();
+                    }
+
+                    if (!trained) {
                         // Buffer this chunk for deferred training.
-                        // We accumulate raw floats until kQuantizerTrainThreshold
-                        // vectors are available, then train the quantizer on all of
-                        // them at once for a representative min/max range.
                         pending_float_chunk_t c;
                         c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
                         c.count  = chunk_count;
                         c.offset = offset;
                         if (ids) c.ids.assign(ids, ids + chunk_count);
-                        pending_total_count_ += chunk_count;
-                        pending_float_chunks_.push_back(std::move(c));
-
-                        if (pending_total_count_ >= kQuantizerTrainThreshold) {
-                            // Enough data: train + flush the whole pending buffer now.
+                        
+                        bool should_flush = false;
+                        {
+                            std::unique_lock<std::shared_mutex> lock(mutex_);
+                            // Re-check trained under unique_lock to be absolutely safe
+                            if (!quantizer_.is_trained()) {
+                                pending_total_count_ += chunk_count;
+                                pending_float_chunks_.push_back(std::move(c));
+                                if (pending_total_count_ >= kQuantizerTrainThreshold) {
+                                    should_flush = true;
+                                }
+                            } else {
+                                trained = true; // Someone trained it while we were copying
+                            }
+                        }
+                        
+                        if (should_flush) {
                             flush_pending_float_chunks_internal(handle);
                         }
-                        return std::any();
+                        
+                        if (!trained) return std::any();
+                        // If we found it was trained after all, fall through to trained path.
+                        // We need to use the data from 'c' though, or the original chunk_data.
+                        // Since we are serialised in submit_main, this fall-through is rare.
                     }
 
                     // Quantizer already trained: quantize this chunk immediately.
@@ -671,7 +725,11 @@ public:
                     raft::copy(*res, queries_device.view(), queries_host_view);
 
                     auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, chunk_count, dimension);
-                    quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
+                    
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
+                    }
 
                     std::vector<T> chunk_host_target(chunk_count * dimension);
                     raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
@@ -695,18 +753,21 @@ public:
                         flattened_host_dataset.resize(required_elements);
                     }
                     std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (target_offset * dimension));
-                    
-                    if (ids) {
-                        if (host_ids.size() < current_offset_) {
-                            host_ids.resize(current_offset_);
+
+                    if (this->dist_mode == DistributionMode_SHARDED) {
+                        int num_shards = static_cast<int>(this->devices_.size());
+                        if (this->shard_sizes_.size() != (size_t)num_shards) {
+                            this->shard_sizes_.assign(num_shards, 0);
                         }
-                        std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
-                        for (uint64_t i = 0; i < chunk_count; ++i) {
-                            id_to_index_[ids[i]] = target_offset + i;
-                        }
+                        uint64_t total = this->current_offset_;
+                        uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                        for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                        this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
                     }
-                    // std::cout << "[DEBUG] add_chunk_float (trained): added chunk of " << chunk_count << " vectors at offset " << target_offset << std::endl;
-                } else {
+
+                    if (ids) {
+                        this->set_ids_internal(ids, chunk_count, target_offset);
+                    }                } else {
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -726,10 +787,20 @@ public:
                     }
                     std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
                     
-                    if (ids) {
-                        this->set_ids(ids, chunk_count, target_offset);
+                    if (this->dist_mode == DistributionMode_SHARDED) {
+                        int num_shards = static_cast<int>(this->devices_.size());
+                        if (this->shard_sizes_.size() != (size_t)num_shards) {
+                            this->shard_sizes_.assign(num_shards, 0);
+                        }
+                        uint64_t total = this->current_offset_;
+                        uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                        for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                        this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
                     }
-                    // std::cout << "[DEBUG] add_chunk_float (no quant): added chunk of " << chunk_count << " vectors at offset " << target_offset << std::endl;
+
+                    if (ids) {
+                        this->set_ids_internal(ids, chunk_count, target_offset);
+                    }
                 }
                 return std::any();
             }
@@ -754,50 +825,77 @@ public:
 
     void train_quantizer_if_needed() {
         if constexpr (sizeof(T) == 1) {
-            // Flush any buffered raw-float chunks first (force-train on whatever
-            // is available even if below kQuantizerTrainThreshold).
-            if (pending_total_count_ > 0) {
-                uint64_t job_id = worker->submit_main(
-                    [this](raft_handle_wrapper_t& handle) -> std::any {
-                        flush_pending_float_chunks_internal(handle);
-                        return std::any();
-                    });
-                worker->wait(job_id).get();
-            }
+            uint64_t job_id = worker->submit_main(
+                [this](raft_handle_wrapper_t& handle) -> std::any {
+                    // 1. Flush any buffered chunks first
+                    flush_pending_float_chunks_internal(handle);
 
-            // Fallback: if the quantizer is still not trained (caller used
-            // add_chunk<T> with pre-quantized data), train from the host buffer.
-            if (!quantizer_.is_trained() && !flattened_host_dataset.empty()) {
-                uint64_t n_train = std::min(static_cast<uint64_t>(500), count);
-                if (n_train == 0) return;
-                std::vector<float> train_data(n_train * dimension);
-                for (size_t i = 0; i < n_train * dimension; ++i) {
-                    train_data[i] = static_cast<float>(flattened_host_dataset[i]);
+                    // 2. Check if still not trained (might have used add_chunk<T> instead of float)
+                    bool needs_training;
+                    uint64_t n_train = 0;
+                    {
+                        std::shared_lock<std::shared_mutex> lock(mutex_);
+                        needs_training = !quantizer_.is_trained() && !flattened_host_dataset.empty();
+                        if (needs_training) {
+                            n_train = std::min(static_cast<uint64_t>(500), count);
+                            if (n_train == 0) needs_training = false;
+                        }
+                    }
+
+                    if (needs_training) {
+                        std::vector<float> train_data(n_train * dimension);
+                        {
+                            std::shared_lock<std::shared_mutex> lock(mutex_);
+                            for (size_t i = 0; i < n_train * dimension; ++i) {
+                                train_data[i] = static_cast<float>(flattened_host_dataset[i]);
+                            }
+                        }
+                        
+                        auto res = handle.get_raft_resources();
+                        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(train_data.data(), n_train, dimension);
+                        auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_train, dimension);
+                        raft::copy(*res, train_device.view(), train_host_view);
+                        
+                        {
+                            std::unique_lock<std::shared_mutex> lock(mutex_);
+                            quantizer_.train(*res, train_device.view());
+                        }
+                        handle.sync();
+                    }
+                    return std::any();
                 }
-                train_quantizer(train_data.data(), n_train);
-            }
+            );
+            worker->wait(job_id).get();
         }
     }
 
     void set_quantizer(float min, float max) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         quantizer_.set_quantizer(min, max);
     }
 
     void get_quantizer(float* min, float* max) {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
         *min = quantizer_.min();
         *max = quantizer_.max();
     }
 
     const IdT* get_host_ids() const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
         return host_ids.empty() ? nullptr : host_ids.data();
     }
 
     void save_ids(const std::string& filename) const {
         std::ofstream os(filename, std::ios::binary);
         if (!os) throw std::runtime_error("Failed to open file for saving IDs: " + filename);
-        uint64_t size = host_ids.size();
+        uint64_t size;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            size = host_ids.size();
+        }
         os.write(reinterpret_cast<const char*>(&size), sizeof(size));
         if (size > 0) {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
             os.write(reinterpret_cast<const char*>(host_ids.data()), size * sizeof(IdT));
         }
     }
@@ -807,8 +905,11 @@ public:
         if (!is) throw std::runtime_error("Failed to open file for loading IDs: " + filename);
         uint64_t size;
         is.read(reinterpret_cast<char*>(&size), sizeof(size));
-        this->host_ids.clear();
-        this->id_to_index_.clear();
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            this->host_ids.clear();
+            this->id_to_index_.clear();
+        }
         if (size > 0) {
             std::vector<IdT> temp_ids(size);
             is.read(reinterpret_cast<char*>(temp_ids.data()), size * sizeof(IdT));
@@ -844,13 +945,20 @@ public:
         std::string filename = dir + "/bitset.bin";
         std::ofstream os(filename, std::ios::binary);
         if (!os) throw std::runtime_error("Failed to open bitset file for writing: " + filename);
-        uint64_t n_bits  = current_offset_;
-        uint64_t n_words = deleted_bitset_.size();
+        uint64_t n_bits, n_words, d_count;
+        std::vector<uint32_t> bs_copy;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            n_bits  = current_offset_;
+            n_words = deleted_bitset_.size();
+            d_count = deleted_count_;
+            bs_copy = deleted_bitset_;
+        }
         os.write(reinterpret_cast<const char*>(&n_bits),       sizeof(n_bits));
         os.write(reinterpret_cast<const char*>(&n_words),      sizeof(n_words));
-        os.write(reinterpret_cast<const char*>(&deleted_count_), sizeof(deleted_count_));
+        os.write(reinterpret_cast<const char*>(&d_count), sizeof(d_count));
         if (n_words > 0) {
-            os.write(reinterpret_cast<const char*>(deleted_bitset_.data()),
+            os.write(reinterpret_cast<const char*>(bs_copy.data()),
                      n_words * sizeof(uint32_t));
         }
     }
@@ -859,16 +967,23 @@ public:
     void load_bitset_from_file(const std::string& filename) {
         std::ifstream is(filename, std::ios::binary);
         if (!is) throw std::runtime_error("Failed to open bitset file for reading: " + filename);
-        uint64_t n_bits = 0, n_words = 0;
+        uint64_t n_bits = 0, n_words = 0, d_count = 0;
         is.read(reinterpret_cast<char*>(&n_bits),       sizeof(n_bits));
         is.read(reinterpret_cast<char*>(&n_words),      sizeof(n_words));
-        is.read(reinterpret_cast<char*>(&deleted_count_), sizeof(deleted_count_));
-        deleted_bitset_.resize(n_words);
+        is.read(reinterpret_cast<char*>(&d_count), sizeof(d_count));
+        std::vector<uint32_t> temp_bs(n_words);
         if (n_words > 0) {
-            is.read(reinterpret_cast<char*>(deleted_bitset_.data()),
+            is.read(reinterpret_cast<char*>(temp_bs.data()),
                     n_words * sizeof(uint32_t));
         }
-        bitset_version_.fetch_add(1);
+        
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            deleted_bitset_ = std::move(temp_bs);
+            deleted_count_ = d_count;
+            bitset_version_.fetch_add(1);
+        }
+        
         std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
         device_deleted_bitsets_.clear();
         std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
@@ -890,9 +1005,13 @@ public:
     // Saves ids, quantizer, and bitset (when present) to dir.
     // Returns comp_entry strings for each saved file.
     std::vector<std::string> save_common_components(const std::string& dir) const {
-        bool has_ids       = !this->host_ids.empty();
-        bool has_quantizer = this->quantizer_.is_trained();
-        bool has_bitset    = !this->deleted_bitset_.empty();
+        bool has_ids, has_quantizer, has_bitset;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            has_ids       = !this->host_ids.empty();
+            has_quantizer = this->quantizer_.is_trained();
+            has_bitset    = !this->deleted_bitset_.empty();
+        }
 
         if (has_ids)       this->save_ids(dir + "/ids.bin");
         if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
@@ -922,9 +1041,18 @@ public:
     void write_manifest(const std::string& dir, const std::string& index_type,
                         const std::string& build_params_json,
                         const std::vector<std::string>& comp_entries) const {
-        bool has_ids       = !this->host_ids.empty();
-        bool has_quantizer = this->quantizer_.is_trained();
-        bool has_bitset    = !this->deleted_bitset_.empty();
+        bool has_ids, has_quantizer, has_bitset;
+        uint64_t cap_val, len_val, del_count, bs_ver;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            has_ids       = !this->host_ids.empty();
+            has_quantizer = this->quantizer_.is_trained();
+            has_bitset    = !this->deleted_bitset_.empty();
+            cap_val       = this->count;
+            len_val       = this->current_offset_;
+            del_count     = this->deleted_count_;
+            bs_ver        = this->bitset_version_.load();
+        }
 
         std::ofstream mf(dir + "/manifest.json");
         if (!mf) throw std::runtime_error("Failed to create manifest.json in: " + dir);
@@ -936,13 +1064,13 @@ public:
         mf << "  \"dimension\": "       << this->dimension               << ",\n";
         mf << "  \"metric\": "          << static_cast<int>(this->metric) << ",\n";
         mf << "  \"dist_mode\": "       << static_cast<int>(this->dist_mode) << ",\n";
-        mf << "  \"capacity\": "        << this->count                   << ",\n";
-        mf << "  \"length\": "          << this->current_offset_         << ",\n";
+        mf << "  \"capacity\": "        << cap_val                       << ",\n";
+        mf << "  \"length\": "          << len_val                       << ",\n";
         mf << "  \"has_ids\": "         << (has_ids       ? "true" : "false") << ",\n";
         mf << "  \"has_quantizer\": "   << (has_quantizer ? "true" : "false") << ",\n";
         mf << "  \"has_bitset\": "      << (has_bitset    ? "true" : "false") << ",\n";
-        mf << "  \"deleted_count\": "   << this->deleted_count_          << ",\n";
-        mf << "  \"bitset_version\": "  << this->bitset_version_.load()  << ",\n";
+        mf << "  \"deleted_count\": "   << del_count                     << ",\n";
+        mf << "  \"bitset_version\": "  << bs_ver                        << ",\n";
         mf << "  \"devices\": [";
         for (size_t i = 0; i < this->devices_.size(); ++i) {
             mf << this->devices_[i];
@@ -1006,6 +1134,7 @@ public:
     }
 
     virtual std::string info() const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
         std::string json = "{";
         json += "\"element_size\": " + std::to_string(sizeof(T)) + ", ";
         json += "\"dimension\": " + std::to_string(dimension) + ", ";

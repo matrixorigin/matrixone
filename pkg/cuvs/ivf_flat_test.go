@@ -338,7 +338,7 @@ func TestGpuIvfFlatExtend(t *testing.T) {
 		t.Fatalf("Extend failed: %v", err)
 	}
 
-	if got := index.Len(); got != uint32(nBase+nExt) {
+	if got := index.Len(); got != uint64(nBase+nExt) {
 		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
 	}
 
@@ -402,7 +402,7 @@ func TestGpuIvfFlatExtendFloat(t *testing.T) {
 		t.Fatalf("ExtendFloat failed: %v", err)
 	}
 
-	if got := index.Len(); got != uint32(nBase+nExt) {
+	if got := index.Len(); got != uint64(nBase+nExt) {
 		t.Errorf("Len() = %d, want %d", got, nBase+nExt)
 	}
 

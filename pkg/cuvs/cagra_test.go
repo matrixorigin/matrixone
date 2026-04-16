@@ -111,7 +111,7 @@ func TestGpuCagraSaveLoad(t *testing.T) {
 		t.Fatalf("Load from file failed: %v", err)
 	}
 
-	if got := index2.Len(); got != uint32(n_vectors) {
+	if got := index2.Len(); got != uint64(n_vectors) {
 		t.Errorf("Expected length %d, got %d", n_vectors, got)
 	}
 }
@@ -159,7 +159,7 @@ func TestGpuCagraPackUnpack(t *testing.T) {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 
-			if got := index2.Len(); got != uint32(n_vectors) {
+			if got := index2.Len(); got != uint64(n_vectors) {
 				t.Errorf("Expected length %d, got %d", n_vectors, got)
 			}
 		})

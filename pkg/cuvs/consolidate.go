@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Pack archives all files in dirPath into a single .tar or .tar.gz file.
@@ -155,6 +156,8 @@ func Unpack(inputPath string, dirPath string) (string, error) {
 	if err != nil {
 		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to read manifest from tar: %v", err))
 	}
+
+	logutil.Infof("Unpack manifest: %s", string(manifestBytes))
 
 	return string(manifestBytes), nil
 }

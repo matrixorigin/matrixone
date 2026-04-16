@@ -565,7 +565,10 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
+            if (new_ids) this->set_ids_internal(new_ids, n_rows, (uint64_t)old_count);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                this->shard_sizes_.back() += n_rows;
+            }
             this->count += n_rows;
             this->current_offset_ += n_rows;
         }
@@ -619,7 +622,10 @@ public:
         }
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
+            if (new_ids) this->set_ids_internal(new_ids, n_rows, (uint64_t)old_count);
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                this->shard_sizes_.back() += n_rows;
+            }
             this->count += n_rows;
             this->current_offset_ += n_rows;
         }

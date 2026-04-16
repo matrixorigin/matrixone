@@ -53,20 +53,19 @@ int get_next_device_id() {
 }
 
 const raft::resources& get_raft_resources(int device_id) {
-    thread_local std::unordered_map<int, raft::resources> res_map;
-    thread_local int current_device = -1;
-    if (current_device != device_id) {
-        // Set the device before accessing (or lazily creating) resources for it,
-        // so the CUDA stream inside raft::resources is bound to the right device.
-        RAFT_CUDA_TRY(cudaSetDevice(device_id));
-        current_device = device_id;
+    thread_local std::unordered_map<int, std::unique_ptr<raft::resources>> res_map;
+    
+    // Always set the device before accessing (or lazily creating) resources for it.
+    // This is necessary because Go's runtime may reuse the same OS thread for 
+    // different goroutines targeting different devices, and other CGO calls 
+    // might have changed the current device on this thread.
+    RAFT_CUDA_TRY(cudaSetDevice(device_id));
+
+    auto& res_ptr = res_map[device_id];
+    if (!res_ptr) {
+        res_ptr = std::make_unique<raft::resources>();
     }
-    // WARNING: cudaSetDevice() above leaves this thread's current CUDA device
-    // set to device_id as a side effect.  Any bare CUDA allocation or kernel
-    // launch made on this thread *after* this call (without an explicit stream
-    // or another cudaSetDevice) will silently target device_id.  Always use
-    // explicit streams for device operations after calling this function.
-    return res_map[device_id];
+    return *res_ptr;
 }
 
 cuvs::distance::DistanceType convert_distance_type(distance_type_t metric_c) {
