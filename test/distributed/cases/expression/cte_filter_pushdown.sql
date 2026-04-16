@@ -1,4 +1,3 @@
--- @bvt:issue#24020
 -- Test: CTE with WHERE filter pushdown
 -- Verifies that filtering conditions within/after CTE are correctly pushed down
 -- and produce correct results with ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)
@@ -104,4 +103,3 @@ SELECT
     (SELECT COUNT(*) FROM latest WHERE industry_name = 'Healthcare') AS hc_count;
 
 drop table if exists ds_t_int_hsicl_dtl;
--- @bvt:issue
