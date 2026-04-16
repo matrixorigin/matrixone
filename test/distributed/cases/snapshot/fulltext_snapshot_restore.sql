@@ -1,4 +1,3 @@
--- @bvt:issue#23861
 -- Test: FULLTEXT INDEX with snapshot restore
 -- Verifies that secondary fulltext index tables survive snapshot restore operations
 
@@ -118,4 +117,3 @@ drop snapshot if exists ft_snap3;
 drop table if exists ft_restore;
 
 drop database if exists db_ft_snap;
--- @bvt:issue
