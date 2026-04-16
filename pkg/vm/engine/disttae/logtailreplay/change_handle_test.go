@@ -872,6 +872,44 @@ func TestResolveVisibleObjectsByDeleteChain_NonAppendableDeletedBeforeEnd(t *tes
 	require.Len(t, resolved, 1)
 }
 
+func TestResolveVisibleObjectsByDeleteChain_AppendableDeletedBeforeEnd(t *testing.T) {
+	// An appendable object that is deleted before end should also follow chain
+	// so replay keeps only the terminal successor visible at range end.
+	deleted := makeTestObjectEntry(t, 1, true, false, types.BuildTS(3, 0))
+	deleted.DeleteTime = types.BuildTS(7, 0)
+	successor := makeTestObjectEntry(t, 1, false, false, types.BuildTS(7, 0))
+
+	stubFS := &stubStatFileFS{existing: map[string]struct{}{
+		deleted.ObjectName().String():   {},
+		successor.ObjectName().String(): {},
+	}}
+	base := &baseHandle{
+		changesHandle: &ChangeHandler{
+			enableDeleteChainResolve: true,
+			fs:                       stubFS,
+		},
+	}
+
+	tnByCreateTS := map[types.TS][]*objectio.ObjectEntry{
+		successor.CreateTime: {successor},
+	}
+	tnKeys := []types.TS{successor.CreateTime}
+
+	resolved, err := base.resolveVisibleObjectsByDeleteChain(
+		context.Background(),
+		types.BuildTS(1, 0),
+		types.BuildTS(10, 0),
+		[]*objectio.ObjectEntry{deleted},
+		tnByCreateTS,
+		tnKeys,
+		false,
+		"data",
+	)
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	require.Equal(t, successor.ObjectShortName().ShortString(), resolved[0].ObjectShortName().ShortString())
+}
+
 func TestResolveVisibleObjectsByDeleteChain_OrphanSweep(t *testing.T) {
 	// Orphan TN object whose appendable predecessor was GC'd
 	orphan := makeTestObjectEntry(t, 1, false, false, types.BuildTS(5, 0))
