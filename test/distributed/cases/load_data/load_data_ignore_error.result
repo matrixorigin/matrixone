@@ -4,12 +4,14 @@ col1 int,
 col2 varchar(50),
 col3 int
 );
-load data infile '$resources/load_data/ignore_error.csv' into table t_ignore_error fields terminated by ',';
+load data infile '$resources/load_data/ignore_parse_error.csv' into table t_ignore_error fields terminated by ',';
 [unknown result because it is related to issue#23937]
-load data infile '$resources/load_data/ignore_error.csv' ignore into table t_ignore_error fields terminated by ',';
+truncate table t_ignore_error;
+load data infile '$resources/load_data/ignore_parse_error.csv' ignore into table t_ignore_error fields terminated by ',';
 select * from t_ignore_error order by col1;
 col1    col2    col3
 1    hello    100
-3    foo    300
-5    bar    500
+truncate table t_ignore_error;
+load data infile '$resources/load_data/ignore_error.csv' ignore into table t_ignore_error fields terminated by ',';
+[unknown result because it is related to issue#23937]
 drop table t_ignore_error;

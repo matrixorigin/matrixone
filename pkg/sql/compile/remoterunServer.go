@@ -220,6 +220,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if err == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
+			receiver.warningCount = runCompile.proc.Base.Warnings.Load()
 		}
 		return err
 
@@ -299,6 +300,9 @@ type messageReceiverOnServer struct {
 
 	// result.
 	phyPlan *models.PhyPlan
+
+	// warningCount records warnings generated during remote execution.
+	warningCount uint32
 }
 
 func newMessageReceiverOnServer(
@@ -488,6 +492,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
+	message.SetWarningCount(receiver.warningCount)
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {

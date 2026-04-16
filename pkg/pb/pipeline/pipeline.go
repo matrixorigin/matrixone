@@ -69,6 +69,10 @@ func (m *Message) SetProcData(data []byte) {
 	m.ProcInfoData = data
 }
 
+func (m *Message) SetWarningCount(n uint32) {
+	m.WarningCount = n
+}
+
 func (m *Message) DebugString() string {
 	errInfo := "none"
 	if len(m.Err) > 0 {

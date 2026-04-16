@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -91,6 +92,39 @@ func Test_newMessageSenderOnClient(t *testing.T) {
 	client.alreadyClose = false
 
 	client.waitingTheStopResponse()
+}
+
+func TestMessageSenderMergeRemoteWarnings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sender := &messageSenderOnClient{remoteWarningCount: 7}
+
+	sender.mergeRemoteWarnings(proc)
+	assert.Equal(t, uint32(7), proc.Base.Warnings.Load())
+	assert.Equal(t, uint32(0), sender.remoteWarningCount)
+
+	// idempotent when no remote warnings left.
+	sender.mergeRemoteWarnings(proc)
+	assert.Equal(t, uint32(7), proc.Base.Warnings.Load())
+}
+
+func TestMessageSenderReceiveBatchCapturesWarningCount(t *testing.T) {
+	ctx := context.Background()
+	sender := &messageSenderOnClient{
+		ctx:       ctx,
+		receiveCh: make(chan morpc.Message, 1),
+		mp:        mpool.MustNewZero(),
+	}
+
+	endMsg := &pipeline.Message{}
+	endMsg.SetSid(pipeline.Status_MessageEnd)
+	endMsg.SetWarningCount(5)
+	sender.receiveCh <- endMsg
+
+	bat, over, err := sender.receiveBatch()
+	assert.NoError(t, err)
+	assert.Nil(t, bat)
+	assert.True(t, over)
+	assert.Equal(t, uint32(5), sender.remoteWarningCount)
 }
 
 func TestRemoteRun(t *testing.T) {

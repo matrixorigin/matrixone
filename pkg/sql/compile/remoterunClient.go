@@ -224,8 +224,12 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 	// However, I have used a loop here to ensure that the query can still be executed normally even if this situation occurs.
 	for {
 		bat, end, err = sender.receiveBatch()
-		if err != nil || end || bat == nil {
+		if err != nil {
 			return err
+		}
+		if end || bat == nil {
+			sender.mergeRemoteWarnings(s.Proc)
+			return nil
 		}
 		bat.Clean(mp)
 	}
@@ -244,8 +248,12 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
 	for {
 		bat, end, err = sender.receiveBatch()
-		if err != nil || end || bat == nil {
+		if err != nil {
 			return err
+		}
+		if end || bat == nil {
+			sender.mergeRemoteWarnings(s.Proc)
+			return nil
 		}
 		connectorAnalyze.Network(bat)
 
@@ -282,8 +290,12 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	mp := s.Proc.Mp()
 	for {
 		bat, end, err = sender.receiveBatch()
-		if err != nil || end || bat == nil {
+		if err != nil {
 			return err
+		}
+		if end || bat == nil {
+			sender.mergeRemoteWarnings(s.Proc)
+			return nil
 		}
 
 		dispatchAnalyze.Network(bat)
@@ -363,6 +375,9 @@ type messageSenderOnClient struct {
 	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs
 	// (including when close() returns early because alreadyClose is true, so the gauge still decrements).
 	gaugeDecOnce sync.Once
+
+	// remoteWarningCount accumulates warnings returned by remote MessageEnd packets.
+	remoteWarningCount uint32
 }
 
 func newMessageSenderOnClient(
@@ -484,6 +499,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 		if m.IsEndMessage() {
 			sender.safeToClose = true
+			sender.remoteWarningCount += m.GetWarningCount()
 
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
@@ -516,6 +532,14 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   		} */
 		return bat, false, err
 	}
+}
+
+func (sender *messageSenderOnClient) mergeRemoteWarnings(proc *process.Process) {
+	if sender.remoteWarningCount == 0 || proc == nil {
+		return
+	}
+	proc.Base.Warnings.Add(sender.remoteWarningCount)
+	sender.remoteWarningCount = 0
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {

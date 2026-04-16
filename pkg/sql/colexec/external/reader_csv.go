@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -177,32 +176,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 					unexpectEOF = true
 					continue
 				}
-				if ignoreError {
-					logutil.Warnf("load data ignore error: parse json line failed: %v", err)
-					proc.Base.Warnings.Add(1)
-					i--
-					continue
-				}
 				return false, err
 			}
 		}
 
 		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
-			if ignoreError {
-				logutil.Warnf("load data ignore error: convert row data failed: %v", err)
-				proc.Base.Warnings.Add(1)
-				// rollback partially appended columns
-				for j := 0; j < bat.VectorCount(); j++ {
-					vec := bat.GetVector(int32(j))
-					vecLen := vec.Length()
-					if vecLen > rowIdx {
-						nulls.RemoveRange(vec.GetNulls(), uint64(rowIdx), uint64(vecLen))
-						vec.SetLength(rowIdx)
-					}
-				}
-				i--
-				continue
-			}
 			return false, err
 		}
 		for j := 0; j < len(row); j++ {
