@@ -188,6 +188,175 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		err := buildOutputSchema(ctx, ses, stmt, tblStuff)
 		require.Error(t, err)
 	})
+
+	t.Run("columns projection", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+			Columns:     tree.IdentifierList{tree.Identifier("name")},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		// 2 meta columns (diff header + flag) + 1 projected column
+		require.Equal(t, uint64(3), mrs.GetColumnCount())
+		col2, err := mrs.GetColumn(ctx, 2)
+		require.NoError(t, err)
+		require.Equal(t, "name", col2.Name())
+	})
+
+	t.Run("columns projection with limit", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		limit := int64(5)
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   &tree.DiffOutputOpt{Limit: &limit},
+			Columns:     tree.IdentifierList{tree.Identifier("id")},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		require.Equal(t, uint64(3), mrs.GetColumnCount())
+		col2, err := mrs.GetColumn(ctx, 2)
+		require.NoError(t, err)
+		require.Equal(t, "id", col2.Name())
+	})
+
+	t.Run("columns projection unknown column", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+			Columns:     tree.IdentifierList{tree.Identifier("nonexistent")},
+		}
+		err := buildOutputSchema(ctx, ses, stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "nonexistent")
+		require.Contains(t, err.Error(), "t2")
+	})
+}
+
+func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
+	tblStuff := tableStuff{}
+	tblStuff.def.colNames = []string{"id", "name", "age"}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+
+	t.Run("nil columns returns nil", func(t *testing.T) {
+		got, err := resolveProjectedIdxes(nil, tblStuff)
+		require.NoError(t, err)
+		require.Nil(t, got)
+	})
+
+	t.Run("single column", func(t *testing.T) {
+		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("name")}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{1}, got)
+	})
+
+	t.Run("multiple columns preserve order", func(t *testing.T) {
+		got, err := resolveProjectedIdxes(tree.IdentifierList{
+			tree.Identifier("age"), tree.Identifier("id"),
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{2, 0}, got)
+	})
+
+	t.Run("duplicate columns deduplicated", func(t *testing.T) {
+		got, err := resolveProjectedIdxes(tree.IdentifierList{
+			tree.Identifier("id"), tree.Identifier("id"),
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{0}, got)
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		got, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("NAME")}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{1}, got)
+	})
+
+	t.Run("unknown column returns error", func(t *testing.T) {
+		_, err := resolveProjectedIdxes(tree.IdentifierList{tree.Identifier("xxx")}, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "xxx")
+	})
+}
+
+func TestDataBranchOutputValidateProjectedColumns(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("t1").AnyTimes()
+	tarRel.EXPECT().GetTableName().Return("t2").AnyTimes()
+
+	tblStuff := tableStuff{
+		baseRel: baseRel,
+		tarRel:  tarRel,
+	}
+	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+
+	limit := int64(5)
+
+	t.Run("nil columns", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("count validates columns but remains supported", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("name")},
+			OutputOpt: &tree.DiffOutputOpt{Count: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("summary validates columns but remains supported", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Summary: true},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("row output validates columns", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("id")},
+			OutputOpt: &tree.DiffOutputOpt{Limit: &limit},
+		}
+		require.NoError(t, validateProjectedColumns(stmt, tblStuff))
+	})
+
+	t.Run("unknown column returns invalid input", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("missing")},
+			OutputOpt: &tree.DiffOutputOpt{Count: true},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "missing")
+		require.Contains(t, err.Error(), "t2")
+	})
+
+	t.Run("output file is rejected", func(t *testing.T) {
+		stmt := &tree.DataBranchDiff{
+			Columns:   tree.IdentifierList{tree.Identifier("name")},
+			OutputOpt: &tree.DiffOutputOpt{DirPath: "/tmp"},
+		}
+		err := validateProjectedColumns(stmt, tblStuff)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Contains(t, err.Error(), "OUTPUT FILE")
+	})
 }
 
 func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {

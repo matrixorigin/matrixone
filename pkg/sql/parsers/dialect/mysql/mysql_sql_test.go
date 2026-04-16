@@ -92,6 +92,7 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.True(t, diffStmt.OutputOpt.Summary)
 	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
 
 	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
 	require.NoError(t, err)
@@ -101,6 +102,44 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
 }
 
 func TestDataBranchPick(t *testing.T) {
@@ -3845,4 +3884,98 @@ func TestWithInsertCTEPropagation(t *testing.T) {
 	// Verify Rows is a SELECT statement
 	require.NotNil(t, ins.Rows)
 	require.NotNil(t, ins.Rows.Select)
+}
+
+func TestSpatialColumnTypes(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (g geometry)",
+			output: "create table t (g geometry)",
+		},
+		{
+			input:  "create table t (g point)",
+			output: "create table t (g point)",
+		},
+		{
+			input:  "create table t (g linestring)",
+			output: "create table t (g linestring)",
+		},
+		{
+			input:  "create table t (g polygon)",
+			output: "create table t (g polygon)",
+		},
+		{
+			input:  "create table t (g geometrycollection)",
+			output: "create table t (g geometrycollection)",
+		},
+		{
+			input:  "create table t (g multipoint)",
+			output: "create table t (g multipoint)",
+		},
+		{
+			input:  "create table t (g multilinestring)",
+			output: "create table t (g multilinestring)",
+		},
+		{
+			input:  "create table t (g multipolygon)",
+			output: "create table t (g multipolygon)",
+		},
+		{
+			input:  "create table t (g point srid 4326)",
+			output: "create table t (g point srid 4326)",
+		},
+		{
+			input:  "create table t (g point not null srid 4326)",
+			output: "create table t (g point not null srid 4326)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (a int srid 4326)",
+			output: "create table t (a int srid 4326)",
+		},
+		{
+			input:  "create table t (a varchar(20) srid 4326)",
+			output: "create table t (a varchar(20) srid 4326)",
+		},
+		{
+			input:  "create table t (a decimal(10,2) srid 4326)",
+			output: "create table t (a decimal(10, 2) srid 4326)",
+		},
+		{
+			input:  "alter table t add column a int srid 4326",
+			output: "alter table t add column a int srid 4326",
+		},
+		{
+			input:  "alter table t modify column a int srid 4326",
+			output: "alter table t modify column a int srid 4326",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
 }

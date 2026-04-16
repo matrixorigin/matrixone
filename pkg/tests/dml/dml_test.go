@@ -600,6 +600,28 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 		_, ok := fullSet[strings.Join(row, "||")]
 		require.Truef(t, ok, "limited diff row not contained in full diff: %v", row)
 	}
+
+	projectedFullStmt := fmt.Sprintf("data branch diff %s against %s columns (val, note)", branch, base)
+	projectedFullRows := fetchDiffRowsAsStrings(t, ctx, db, projectedFullStmt)
+	require.GreaterOrEqual(t, len(projectedFullRows), 6)
+	for _, row := range projectedFullRows {
+		require.Len(t, row, 4, "projected diff should only include table, flag, and requested columns")
+	}
+
+	projectedLimitStmt := fmt.Sprintf("data branch diff %s against %s columns (val, note) output limit %d", branch, base, limit)
+	projectedLimitedRows := fetchDiffRowsAsStrings(t, ctx, db, projectedLimitStmt)
+	require.NotEmpty(t, projectedLimitedRows, "projected limited diff returned no rows")
+	require.LessOrEqual(t, len(projectedLimitedRows), limit, "projected limited diff returned too many rows")
+
+	projectedFullSet := make(map[string]struct{}, len(projectedFullRows))
+	for _, row := range projectedFullRows {
+		projectedFullSet[strings.Join(row, "||")] = struct{}{}
+	}
+	for _, row := range projectedLimitedRows {
+		require.Len(t, row, 4, "projected limited diff should only include table, flag, and requested columns")
+		_, ok := projectedFullSet[strings.Join(row, "||")]
+		require.Truef(t, ok, "projected limited diff row not contained in projected full diff: %v", row)
+	}
 }
 
 func runDiffOutputLimitNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {

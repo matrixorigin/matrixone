@@ -3895,12 +3895,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
 		Default:           int64(0),
 	},
-	"gpu_sidecar_url": {
-		Name:              "gpu_sidecar_url",
+	"sidecar_url": {
+		Name:              "sidecar_url",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("gpu_sidecar_url"),
+		Type:              InitSystemVariableStringType("sidecar_url"),
 		Default:           "",
 	},
 }
