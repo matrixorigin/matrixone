@@ -181,12 +181,12 @@ public:
                     const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
         this->devices_ = devices;
-        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+        this->current_offset_ = count_vectors;
 
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
@@ -208,11 +208,11 @@ public:
     gpu_brute_force_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                        distance_type_t m, int nthread, int device_id, const int64_t* ids = nullptr) {
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->metric = m;
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
-        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+        this->current_offset_ = count_vectors;
 
         this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
@@ -230,7 +230,7 @@ public:
     gpu_brute_force_t(uint64_t total_count, uint32_t dimension, distance_type_t m,
                        uint32_t nthread, int device_id, const int64_t* ids = nullptr) {
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(total_count);
+        this->count = total_count;
         this->metric = m;
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
@@ -251,7 +251,7 @@ public:
                     const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(total_count);
+        this->count = total_count;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
@@ -283,7 +283,7 @@ public:
     }
 
     void build() override {
-        this->count = static_cast<uint32_t>(this->current_offset_);
+        this->count = this->current_offset_;
         if (this->count == 0) {
             if (this->pending_total_count_ == 0) {
                 this->is_loaded_ = true;

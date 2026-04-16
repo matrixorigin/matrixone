@@ -549,7 +549,7 @@ void gpu_ivf_flat_free_result(gpu_ivf_flat_result_c result_c) {
     delete static_cast<ivf_flat_search_result_t*>(result_c);
 }
 
-uint32_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c) {
+uint64_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
     switch (any->qtype) {
@@ -561,7 +561,7 @@ uint32_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c) {
     }
 }
 
-uint32_t gpu_ivf_flat_len(gpu_ivf_flat_c index_c) {
+uint64_t gpu_ivf_flat_len(gpu_ivf_flat_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
     switch (any->qtype) {

@@ -196,12 +196,12 @@ public:
                     const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
         this->devices_ = devices;
-        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+        this->current_offset_ = count_vectors;
 
         std::vector<int> worker_devices = this->devices_;
         if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
@@ -227,7 +227,7 @@ public:
                     const int64_t* ids = nullptr) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(total_count);
+        this->count = total_count;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = mode;
@@ -309,11 +309,11 @@ public:
             if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
                 uint64_t rows, cols;
                 load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
-                this->count = static_cast<uint32_t>(rows);
+                this->count = rows;
                 this->dimension = static_cast<uint32_t>(cols);
                 this->current_offset_ = this->count;
             } else {
-                this->count = static_cast<uint32_t>(this->current_offset_);
+                this->count = this->current_offset_;
             }
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
@@ -633,7 +633,7 @@ public:
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
-            this->count += static_cast<uint32_t>(n_rows);
+            this->count += n_rows;
             this->current_offset_ += n_rows;
         }
     }
@@ -687,7 +687,7 @@ public:
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (new_ids) this->set_ids(new_ids, n_rows, (uint64_t)old_count);
-            this->count += static_cast<uint32_t>(n_rows);
+            this->count += n_rows;
             this->current_offset_ += n_rows;
         }
     }
@@ -1228,7 +1228,7 @@ public:
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->count = static_cast<uint32_t>(local_idx->size());
+                this->count = static_cast<uint64_t>(local_idx->size());
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
                 this->current_offset_ = this->count;
 

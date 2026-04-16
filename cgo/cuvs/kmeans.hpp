@@ -89,12 +89,12 @@ public:
                     uint32_t nthread, int device_id) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
-        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+        this->current_offset_ = count_vectors;
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
@@ -108,12 +108,12 @@ public:
     gpu_kmeans_t(const T* dataset_data, uint64_t count_vectors, uint32_t dimension,
                     distance_type_t m, int nthread, int device_id) {
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->metric = m;
         this->build_params = kmeans_build_params_default();
         this->dist_mode = DistributionMode_SINGLE_GPU;
         this->devices_ = {device_id};
-        this->current_offset_ = static_cast<uint32_t>(count_vectors);
+        this->current_offset_ = count_vectors;
 
         this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
@@ -128,7 +128,7 @@ public:
                     const kmeans_build_params_t& bp, uint32_t nthread, int device_id) {
 
         this->dimension = dimension;
-        this->count = static_cast<uint32_t>(total_count);
+        this->count = total_count;
         this->metric = m;
         this->build_params = bp;
         this->dist_mode = DistributionMode_SINGLE_GPU;
@@ -209,7 +209,7 @@ public:
     }
 
     kmeans_result_t fit(const T* dataset_data, uint64_t count_vectors) {
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->flattened_host_dataset.resize(this->count * this->dimension);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
@@ -334,7 +334,7 @@ public:
     }
 
     kmeans_result_t fit_predict(const T* dataset_data, uint64_t count_vectors) {
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->flattened_host_dataset.resize(this->count * this->dimension);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
@@ -387,7 +387,7 @@ public:
     }
 
     kmeans_result_t fit_predict_float(const float* dataset_data, uint64_t count_vectors) {
-        this->count = static_cast<uint32_t>(count_vectors);
+        this->count = count_vectors;
         this->train_quantizer_if_needed();
         
         uint64_t job_id = this->worker->submit_main(

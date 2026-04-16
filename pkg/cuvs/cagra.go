@@ -804,20 +804,19 @@ func (gi *GpuCagra[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32)
 }
 
 // Cap returns the capacity of the index buffer
-
-func (gi *GpuCagra[T]) Cap() uint32 {
+func (gi *GpuCagra[T]) Cap() uint64 {
 	if gi.cCagra == nil {
 		return 0
 	}
-	return uint32(C.gpu_cagra_cap(gi.cCagra))
+	return uint64(C.gpu_cagra_cap(gi.cCagra))
 }
 
 // Len returns current number of vectors in index
-func (gi *GpuCagra[T]) Len() uint32 {
+func (gi *GpuCagra[T]) Len() uint64 {
 	if gi.cCagra == nil {
 		return 0
 	}
-	return uint32(C.gpu_cagra_len(gi.cCagra))
+	return uint64(C.gpu_cagra_len(gi.cCagra))
 }
 
 // Info returns detailed information about the index as a JSON string.

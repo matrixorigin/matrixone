@@ -866,19 +866,19 @@ func (gi *GpuIvfPq[T]) SearchWait(jobID uint64, numQueries uint64, limit uint32)
 }
 
 // Cap returns the capacity of the index buffer
-func (gi *GpuIvfPq[T]) Cap() uint32 {
+func (gi *GpuIvfPq[T]) Cap() uint64 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
-	return uint32(C.gpu_ivf_pq_cap(gi.cIvfPq))
+	return uint64(C.gpu_ivf_pq_cap(gi.cIvfPq))
 }
 
 // Len returns current number of vectors in index
-func (gi *GpuIvfPq[T]) Len() uint32 {
+func (gi *GpuIvfPq[T]) Len() uint64 {
 	if gi.cIvfPq == nil {
 		return 0
 	}
-	return uint32(C.gpu_ivf_pq_len(gi.cIvfPq))
+	return uint64(C.gpu_ivf_pq_len(gi.cIvfPq))
 }
 
 // Info returns detailed information about the index as a JSON string.

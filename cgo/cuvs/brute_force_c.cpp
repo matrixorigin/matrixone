@@ -292,7 +292,7 @@ void gpu_brute_force_free_search_result(gpu_brute_force_search_result_c result_c
     delete static_cast<matrixone::gpu_brute_force_t<float>::search_result_t*>(result_c);
 }
 
-uint32_t gpu_brute_force_cap(gpu_brute_force_c index_c) {
+uint64_t gpu_brute_force_cap(gpu_brute_force_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
     switch (any->qtype) {
@@ -302,7 +302,7 @@ uint32_t gpu_brute_force_cap(gpu_brute_force_c index_c) {
     }
 }
 
-uint32_t gpu_brute_force_len(gpu_brute_force_c index_c) {
+uint64_t gpu_brute_force_len(gpu_brute_force_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
     switch (any->qtype) {

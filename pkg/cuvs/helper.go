@@ -179,6 +179,8 @@ type GpuIndexBase interface {
 	Build() error
 	Destroy() error
 	Info() (string, error)
+	Cap() uint64
+	Len() uint64
 }
 
 // GpuIndex is a generic interface for all GPU-accelerated indexes that support async search.
@@ -187,6 +189,8 @@ type GpuIndex[T VectorType] interface {
 	SearchFloat32Async(queries []float32, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
 	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
 	Destroy() error
+	Cap() uint64
+	Len() uint64
 }
 
 // GetQuantization returns the Quantization enum for a given VectorType.

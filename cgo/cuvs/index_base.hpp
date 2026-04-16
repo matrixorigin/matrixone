@@ -241,7 +241,7 @@ public:
     distribution_mode_t dist_mode;   ///< SINGLE_GPU / REPLICATED / SHARDED
 
     // ---- Mutable counters (protected by mutex_) ----
-    uint32_t count = 0;              ///< cap(): total allocated slots (after build = total vectors)
+    uint64_t count = 0;              ///< cap(): total allocated slots (after build = total vectors)
     // current_offset_: number of vectors actually inserted; len() reads this.
     // Before build: incremented by add_chunk(). After build: incremented by extend().
     // Invariant: current_offset_ <= count always holds after build.
@@ -426,6 +426,9 @@ public:
 
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
+        std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
+                  << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
+                  << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
@@ -461,8 +464,14 @@ public:
         if (worker) worker->set_batch_window(window_us);
     }
 
-    uint32_t cap() const { return count; }
-    uint32_t len() const { return static_cast<uint32_t>(current_offset_); }
+    uint64_t cap() const { 
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return count; 
+    }
+    uint64_t len() const { 
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return current_offset_; 
+    }
 
     void add_chunk(const T* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
@@ -471,7 +480,7 @@ public:
         uint64_t target_offset;
         if (offset == -1) {
             target_offset = current_offset_;
-            current_offset_ += static_cast<uint32_t>(chunk_count);
+            current_offset_ += chunk_count;
         } else {
             target_offset = static_cast<uint64_t>(offset);
             if (target_offset + chunk_count > current_offset_) {
@@ -480,7 +489,7 @@ public:
         }
         if (current_offset_ > count) count = current_offset_;
 
-        size_t required_elements = (size_t)current_offset_ * dimension;
+        size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
         if (flattened_host_dataset.size() < required_elements) {
             flattened_host_dataset.resize(required_elements);
         }
@@ -604,7 +613,7 @@ public:
                     current_offset_ = target_offset + c.count;
                 }
             }
-            if (current_offset_ > count) count = static_cast<uint32_t>(current_offset_);
+            if (current_offset_ > count) count = current_offset_;
 
             size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
             if (flattened_host_dataset.size() < required_elements) {
@@ -672,7 +681,7 @@ public:
                     uint64_t target_offset;
                     if (offset == -1) {
                         target_offset = current_offset_;
-                        current_offset_ += static_cast<uint32_t>(chunk_count);
+                        current_offset_ += chunk_count;
                     } else {
                         target_offset = static_cast<uint64_t>(offset);
                         if (target_offset + chunk_count > current_offset_) {
@@ -681,7 +690,7 @@ public:
                     }
                     if (current_offset_ > count) count = current_offset_;
 
-                    size_t required_elements = (size_t)current_offset_ * dimension;
+                    size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
                     if (flattened_host_dataset.size() < required_elements) {
                         flattened_host_dataset.resize(required_elements);
                     }
@@ -702,7 +711,7 @@ public:
                     uint64_t target_offset;
                     if (offset == -1) {
                         target_offset = current_offset_;
-                        current_offset_ += static_cast<uint32_t>(chunk_count);
+                        current_offset_ += chunk_count;
                     } else {
                         target_offset = static_cast<uint64_t>(offset);
                         if (target_offset + chunk_count > current_offset_) {
@@ -711,7 +720,7 @@ public:
                     }
                     if (current_offset_ > count) count = current_offset_;
 
-                    size_t required_elements = (size_t)current_offset_ * dimension;
+                    size_t required_elements = static_cast<size_t>(current_offset_) * dimension;
                     if (flattened_host_dataset.size() < required_elements) {
                         flattened_host_dataset.resize(required_elements);
                     }
@@ -759,7 +768,7 @@ public:
             // Fallback: if the quantizer is still not trained (caller used
             // add_chunk<T> with pre-quantized data), train from the host buffer.
             if (!quantizer_.is_trained() && !flattened_host_dataset.empty()) {
-                uint64_t n_train = std::min(static_cast<uint64_t>(500), static_cast<uint64_t>(count));
+                uint64_t n_train = std::min(static_cast<uint64_t>(500), count);
                 if (n_train == 0) return;
                 std::vector<float> train_data(n_train * dimension);
                 for (size_t i = 0; i < n_train * dimension; ++i) {
@@ -968,7 +977,7 @@ public:
                                      "', expected '" + expected_type + "'");
 
         this->dimension       = static_cast<uint32_t>(json_int(raw, "dimension"));
-        this->count           = static_cast<uint32_t>(json_int(raw, "capacity"));
+        this->count           = static_cast<uint64_t>(json_int(raw, "capacity"));
         this->current_offset_ = static_cast<uint64_t>(json_int(raw, "length"));
         this->metric          = static_cast<distance_type_t>(json_int(raw, "metric"));
         this->dist_mode       = static_cast<distribution_mode_t>(json_int(raw, "dist_mode"));

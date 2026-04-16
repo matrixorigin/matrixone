@@ -362,19 +362,19 @@ func (gb *GpuBruteForce[T]) SearchWait(jobID uint64, numQueries uint64, limit ui
 }
 
 // Cap returns the capacity of the index buffer
-func (gb *GpuBruteForce[T]) Cap() uint32 {
+func (gb *GpuBruteForce[T]) Cap() uint64 {
 	if gb.cIndex == nil {
 		return 0
 	}
-	return uint32(C.gpu_brute_force_cap(gb.cIndex))
+	return uint64(C.gpu_brute_force_cap(gb.cIndex))
 }
 
 // Len returns current number of vectors in index
-func (gb *GpuBruteForce[T]) Len() uint32 {
+func (gb *GpuBruteForce[T]) Len() uint64 {
 	if gb.cIndex == nil {
 		return 0
 	}
-	return uint32(C.gpu_brute_force_len(gb.cIndex))
+	return uint64(C.gpu_brute_force_len(gb.cIndex))
 }
 
 // Info returns detailed information about the index as a JSON string.

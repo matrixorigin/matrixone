@@ -123,10 +123,10 @@ void gpu_cagra_get_distances(gpu_cagra_result_c result_c, uint64_t total_element
 void gpu_cagra_free_result(gpu_cagra_result_c result_c);
 
 // Returns the capacity of the index buffer
-uint32_t gpu_cagra_cap(gpu_cagra_c index_c);
+uint64_t gpu_cagra_cap(gpu_cagra_c index_c);
 
 // Returns the current number of vectors in the index
-uint32_t gpu_cagra_len(gpu_cagra_c index_c);
+uint64_t gpu_cagra_len(gpu_cagra_c index_c);
 
 // Returns info about the index as a JSON string
 char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg);

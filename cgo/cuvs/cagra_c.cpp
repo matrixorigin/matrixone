@@ -513,7 +513,7 @@ void gpu_cagra_free_result(gpu_cagra_result_c result_c) {
     delete static_cast<cagra_search_result_t*>(result_c);
 }
 
-uint32_t gpu_cagra_cap(gpu_cagra_c index_c) {
+uint64_t gpu_cagra_cap(gpu_cagra_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_cagra_any_t*>(index_c);
     switch (any->qtype) {
@@ -525,7 +525,7 @@ uint32_t gpu_cagra_cap(gpu_cagra_c index_c) {
     }
 }
 
-uint32_t gpu_cagra_len(gpu_cagra_c index_c) {
+uint64_t gpu_cagra_len(gpu_cagra_c index_c) {
     if (!index_c) return 0;
     auto* any = static_cast<gpu_cagra_any_t*>(index_c);
     switch (any->qtype) {

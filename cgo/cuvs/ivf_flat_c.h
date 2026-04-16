@@ -130,10 +130,10 @@ void gpu_ivf_flat_get_distances(gpu_ivf_flat_result_c result_c, uint64_t total_e
 void gpu_ivf_flat_free_result(gpu_ivf_flat_result_c result_c);
 
 // Returns the capacity of the index buffer
-uint32_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c);
+uint64_t gpu_ivf_flat_cap(gpu_ivf_flat_c index_c);
 
 // Returns the current number of vectors in the index
-uint32_t gpu_ivf_flat_len(gpu_ivf_flat_c index_c);
+uint64_t gpu_ivf_flat_len(gpu_ivf_flat_c index_c);
 
 // Returns info about the index as a JSON string
 char* gpu_ivf_flat_info(gpu_ivf_flat_c index_c, void* errmsg);
