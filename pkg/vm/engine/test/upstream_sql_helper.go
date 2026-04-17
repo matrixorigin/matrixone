@@ -1160,7 +1160,7 @@ func (h *UpstreamSQLHelper) handleObjectListCmd(
 		Table:    tree.Identifier(tablename),
 		Snapshot: tree.Identifier(snapshotName),
 	}
-	if againstSnapshotName != "" && againstSnapshotName != "_" {
+	if againstSnapshotName != "" && againstSnapshotName != "-" {
 		againstName := tree.Identifier(againstSnapshotName)
 		stmt.AgainstSnapshot = &againstName
 	}
