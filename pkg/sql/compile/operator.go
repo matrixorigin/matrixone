@@ -1327,7 +1327,12 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
@@ -1355,7 +1360,12 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
