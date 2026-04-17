@@ -590,12 +590,52 @@ const (
 	CAST_SET_VALUE_TO_INDEX       = 408
 	CAST_SET_INDEX_VALUE_TO_INDEX = 409
 
-	VECF32_FROM_BASE64 = 410
-	VECF64_FROM_BASE64 = 411
+	VECF32_FROM_BASE64       = 410
+	VECF64_FROM_BASE64       = 411
+	CAST_GEOMETRY_TO_SUBTYPE = 412
+	ST_ASTEXT                = 413
+	ST_GEOMFROMTEXT          = 414
+	ST_GEOMETRYTYPE          = 415
+	ST_X                     = 416
+	ST_Y                     = 417
+	ST_NUMGEOMETRIES         = 418
+	ST_GEOMETRYN             = 419
+	ST_ISEMPTY               = 420
+	ST_DISTANCE              = 421
+	ST_SRID                  = 422
+	ST_LENGTH                = 423
+	ST_AREA                  = 424
+	ST_CONTAINS              = 425
+	ST_WITHIN                = 426
+	ST_STARTPOINT            = 427
+	ST_ENDPOINT              = 428
+	ST_POINTN                = 429
+	ST_EXTERIORRING          = 430
+	ST_NUMINTERIORRINGS      = 431
+	ST_INTERIORRINGN         = 432
+	ST_NUMPOINTS             = 433
+	ST_ISCLOSED              = 434
+	ST_ISCOLLECTION          = 435
+	ST_DIMENSION             = 436
+	ST_ISSIMPLE              = 437
+	ST_ISRING                = 438
+	ST_ENVELOPE              = 439
+	ST_CENTROID              = 440
+	ST_BOUNDARY              = 441
+	ST_ISVALID               = 442
+	ST_POINTONSURFACE        = 443
+	ST_INTERSECTS            = 444
+	ST_DISJOINT              = 445
+	ST_TOUCHES               = 446
+	ST_CROSSES               = 447
+	ST_OVERLAPS              = 448
+	ST_EQUALS                = 449
+	ST_COVERS                = 450
+	ST_COVEREDBY             = 451
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 412
+	FUNCTION_END_NUMBER = 452
 )
 
 // functionIdRegister is what function we have registered already.
@@ -975,6 +1015,46 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_set_value":        CAST_INDEX_TO_SET_VALUE,
 	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
+	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"st_astext":                      ST_ASTEXT,
+	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geometrytype":                ST_GEOMETRYTYPE,
+	"st_x":                           ST_X,
+	"st_y":                           ST_Y,
+	"st_numgeometries":               ST_NUMGEOMETRIES,
+	"st_geometryn":                   ST_GEOMETRYN,
+	"st_isempty":                     ST_ISEMPTY,
+	"st_distance":                    ST_DISTANCE,
+	"st_srid":                        ST_SRID,
+	"st_length":                      ST_LENGTH,
+	"st_area":                        ST_AREA,
+	"st_contains":                    ST_CONTAINS,
+	"st_within":                      ST_WITHIN,
+	"st_intersects":                  ST_INTERSECTS,
+	"st_disjoint":                    ST_DISJOINT,
+	"st_touches":                     ST_TOUCHES,
+	"st_crosses":                     ST_CROSSES,
+	"st_overlaps":                    ST_OVERLAPS,
+	"st_equals":                      ST_EQUALS,
+	"st_covers":                      ST_COVERS,
+	"st_coveredby":                   ST_COVEREDBY,
+	"st_startpoint":                  ST_STARTPOINT,
+	"st_endpoint":                    ST_ENDPOINT,
+	"st_pointn":                      ST_POINTN,
+	"st_exteriorring":                ST_EXTERIORRING,
+	"st_numinteriorrings":            ST_NUMINTERIORRINGS,
+	"st_interiorringn":               ST_INTERIORRINGN,
+	"st_numpoints":                   ST_NUMPOINTS,
+	"st_isclosed":                    ST_ISCLOSED,
+	"st_iscollection":                ST_ISCOLLECTION,
+	"st_dimension":                   ST_DIMENSION,
+	"st_issimple":                    ST_ISSIMPLE,
+	"st_isring":                      ST_ISRING,
+	"st_envelope":                    ST_ENVELOPE,
+	"st_centroid":                    ST_CENTROID,
+	"st_boundary":                    ST_BOUNDARY,
+	"st_isvalid":                     ST_ISVALID,
+	"st_pointonsurface":              ST_POINTONSURFACE,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,

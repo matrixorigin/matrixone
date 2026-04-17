@@ -722,6 +722,11 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 
+	// Set sync protection validator for TN commit validation (CCPR transactions)
+	db.Runtime.SyncProtectionValidator = func(jobID string, prepareTS int64) error {
+		return db.DiskCleaner.GetCleaner().GetSyncProtectionManager().ValidateSyncProtection(jobID, prepareTS)
+	}
+
 	var (
 		checkpointed        types.TS
 		ckpLSN              uint64

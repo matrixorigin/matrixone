@@ -31,6 +31,7 @@ var MergeAllocator *mpool.MPool
 var WorkspaceAllocator *mpool.MPool
 var DebugAllocator *mpool.MPool
 var ISCPAllocator *mpool.MPool
+var PublicationAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
@@ -85,6 +86,11 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(ISCPAllocator)
 		if ISCPAllocator, err = mpool.NewMPool("iscp", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(PublicationAllocator)
+		if PublicationAllocator, err = mpool.NewMPool("publication", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 	}

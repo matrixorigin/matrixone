@@ -168,6 +168,7 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 }
 
 var qcloudEndpointPattern = regexp.MustCompile(`cos\.([^.]+)\.myqcloud\.com`)
+var objectStorageHTTPHead = http.Head
 
 func (o *ObjectStorageArguments) validate() error {
 
@@ -198,7 +199,7 @@ func (o *ObjectStorageArguments) validate() error {
 		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
 			// AWS
 			// try to get region from bucket
-			resp, err := http.Head("https://" + o.Bucket + ".s3.amazonaws.com")
+			resp, err := objectStorageHTTPHead("https://" + o.Bucket + ".s3.amazonaws.com")
 			if err == nil {
 				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
 					o.Region = value

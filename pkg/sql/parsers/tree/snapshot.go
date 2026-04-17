@@ -56,8 +56,10 @@ func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
 }
 
 type ObjectInfo struct {
-	SLevel  SnapshotLevelType // snapshot level
-	ObjName Identifier        // object name
+	SLevel      SnapshotLevelType // snapshot level
+	ObjName     Identifier        // object name
+	AccountName Identifier        // account name for publication-based snapshots
+	PubName     Identifier        // publication name for publication-based snapshots
 }
 
 func (node *ObjectInfo) Format(ctx *FmtCtx) {
@@ -67,6 +69,14 @@ func (node *ObjectInfo) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 	}
 	node.ObjName.Format(ctx)
+
+	// Handle publication info for table/database/account level snapshots
+	if node.AccountName != "" && node.PubName != "" {
+		ctx.WriteString(" from ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" publication ")
+		node.PubName.Format(ctx)
+	}
 }
 
 type CreateSnapShot struct {
@@ -94,8 +104,10 @@ func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
 type DropSnapShot struct {
 	statementImpl
 
-	IfExists bool
-	Name     Identifier // snapshot name
+	IfExists    bool
+	Name        Identifier // snapshot name
+	AccountName Identifier // account name for publication-based drop
+	PubName     Identifier // publication name for publication-based drop
 }
 
 func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
@@ -104,10 +116,12 @@ func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
 
 func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
 
-func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
+func NewDropSnapShot(ifExists bool, Name Identifier, accountName Identifier, pubName Identifier) *DropSnapShot {
 	drop := reuse.Alloc[DropSnapShot](nil)
 	drop.IfExists = ifExists
 	drop.Name = Name
+	drop.AccountName = accountName
+	drop.PubName = pubName
 	return drop
 }
 
@@ -119,6 +133,14 @@ func (node *DropSnapShot) Format(ctx *FmtCtx) {
 	}
 
 	node.Name.Format(ctx)
+
+	// Handle publication info for cross-cluster drop
+	if node.AccountName != "" && node.PubName != "" {
+		ctx.WriteString(" from ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString(" publication ")
+		node.PubName.Format(ctx)
+	}
 }
 
 func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
@@ -218,3 +240,31 @@ func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
 func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
 
 func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
+
+type CheckSnapshotFlushed struct {
+	statementImpl
+	Name            Identifier // snapshot name
+	AccountName     Identifier // account name for authorization
+	PublicationName Identifier // publication name
+}
+
+func (node *CheckSnapshotFlushed) Format(ctx *FmtCtx) {
+	ctx.WriteString("checkSnapshotFlushed ")
+	node.Name.Format(ctx)
+	if node.AccountName != "" {
+		ctx.WriteString(" account ")
+		node.AccountName.Format(ctx)
+	}
+	if node.PublicationName != "" {
+		ctx.WriteString(" publication ")
+		node.PublicationName.Format(ctx)
+	}
+}
+
+func (node *CheckSnapshotFlushed) GetStatementType() string { return "Check Snapshot Flushed" }
+
+func (node *CheckSnapshotFlushed) GetQueryType() string { return QueryTypeDQL }
+
+func (node *CheckSnapshotFlushed) StmtKind() StmtKind {
+	return compositeResRowType
+}

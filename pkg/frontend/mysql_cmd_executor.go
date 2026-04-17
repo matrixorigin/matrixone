@@ -1378,12 +1378,28 @@ func handleCreatePublication(ses FeSession, execCtx *ExecCtx, cp *tree.CreatePub
 	return doCreatePublication(execCtx.reqCtx, ses.(*Session), cp)
 }
 
+func handleCreateSubscription(ses FeSession, execCtx *ExecCtx, cs *tree.CreateSubscription) error {
+	return doCreateSubscription(execCtx.reqCtx, ses.(*Session), cs)
+}
+
 func handleAlterPublication(ses FeSession, execCtx *ExecCtx, ap *tree.AlterPublication) error {
 	return doAlterPublication(execCtx.reqCtx, ses.(*Session), ap)
 }
 
 func handleDropPublication(ses FeSession, execCtx *ExecCtx, dp *tree.DropPublication) error {
 	return doDropPublication(execCtx.reqCtx, ses.(*Session), dp)
+}
+
+func handleDropCcprSubscription(ses FeSession, execCtx *ExecCtx, dcs *tree.DropCcprSubscription) error {
+	return doDropCcprSubscription(execCtx.reqCtx, ses.(*Session), dcs)
+}
+
+func handleResumeCcprSubscription(ses FeSession, execCtx *ExecCtx, rcs *tree.ResumeCcprSubscription) error {
+	return doResumeCcprSubscription(execCtx.reqCtx, ses.(*Session), rcs)
+}
+
+func handlePauseCcprSubscription(ses FeSession, execCtx *ExecCtx, pcs *tree.PauseCcprSubscription) error {
+	return doPauseCcprSubscription(execCtx.reqCtx, ses.(*Session), pcs)
 }
 
 func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) error {
@@ -1928,6 +1944,14 @@ func handleShowSubscriptions(ses FeSession, execCtx *ExecCtx, ss *tree.ShowSubsc
 	return doShowSubscriptions(execCtx.reqCtx, ses.(*Session), ss)
 }
 
+func handleShowPublicationCoverage(ses FeSession, execCtx *ExecCtx, spc *tree.ShowPublicationCoverage) error {
+	return doShowPublicationCoverage(execCtx.reqCtx, ses.(*Session), spc)
+}
+
+func handleShowCcprSubscriptions(ses FeSession, execCtx *ExecCtx, scs *tree.ShowCcprSubscriptions) error {
+	return doShowCcprSubscriptions(execCtx.reqCtx, ses.(*Session), scs)
+}
+
 func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	// Construct the columns.
 	col1 := new(MysqlColumn)
@@ -2351,6 +2375,12 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
+	var cmdGetSnapshotTsStmt *InternalCmdGetSnapshotTs
+	var cmdGetDatabasesStmt *InternalCmdGetDatabases
+	var cmdGetMoIndexesStmt *InternalCmdGetMoIndexes
+	var cmdGetDdlStmt *InternalCmdGetDdl
+	var cmdGetObjectStmt *InternalCmdGetObject
+	var cmdObjectListStmt *InternalCmdObjectList
 	var err error
 	// if the input is an option ast, we should use it directly
 	if execCtx.input.getStmt() != nil {
@@ -2361,6 +2391,48 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		stmts = append(stmts, cmdFieldStmt)
+	} else if isCmdGetSnapshotTsSql(execCtx.input.getSql()) {
+		cmdGetSnapshotTsStmt, err = parseCmdGetSnapshotTs(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetSnapshotTsStmt)
+	} else if isCmdGetDatabasesSql(execCtx.input.getSql()) {
+		cmdGetDatabasesStmt, err = parseCmdGetDatabases(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetDatabasesStmt)
+	} else if isCmdGetMoIndexesSql(execCtx.input.getSql()) {
+		cmdGetMoIndexesStmt, err = parseCmdGetMoIndexes(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetMoIndexesStmt)
+	} else if isCmdGetDdlSql(execCtx.input.getSql()) {
+		cmdGetDdlStmt, err = parseCmdGetDdl(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetDdlStmt)
+	} else if isCmdGetObjectSql(execCtx.input.getSql()) {
+		cmdGetObjectStmt, err = parseCmdGetObject(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdGetObjectStmt)
+	} else if isCmdObjectListSql(execCtx.input.getSql()) {
+		cmdObjectListStmt, err = parseCmdObjectList(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdObjectListStmt)
+	} else if isCmdCheckSnapshotFlushedSql(execCtx.input.getSql()) {
+		cmdCheckSnapshotFlushedStmt, err := parseCmdCheckSnapshotFlushed(execCtx.reqCtx, execCtx.input.getSql())
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
 		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
 		if err != nil {
@@ -2524,6 +2596,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
+		if _, ok := stmt.(*tree.DataBranchPick); ok {
+			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
 			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())
@@ -3459,22 +3534,23 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// GPU offload: intercept /*+ GPU */ hint before normal processing.
-		// If sidecar is not configured, silently fall through to normal MO execution.
-		if isGPUOffloadQuery(query) {
+		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
+		// before normal processing. If sidecar is not configured, silently
+		// fall through to normal MO execution.
+		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			err = handleGPUOffload(ses, execCtx, query)
+			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
-			if err != errGPUNotConfigured {
+			if err != errSidecarNotConfigured {
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
 			}
-			// errGPUNotConfigured: strip hint and fall through to normal execution
-			query = stripGPUHint(query)
+			// errSidecarNotConfigured: strip hint and fall through to normal execution
+			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}
@@ -3765,6 +3841,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	case types.T_geometry:
+		col.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
 	case types.T_uuid:
 		// Downgrade to string for client compatibility (e.g. Go MySQL driver).
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)

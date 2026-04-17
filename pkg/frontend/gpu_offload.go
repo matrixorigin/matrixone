@@ -35,11 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const gpuHintPrefix = "/*+ GPU */"
+const (
+	sidecarHintPrefix    = "/*+ SIDECAR */"
+	sidecarGPUHintPrefix = "/*+ SIDECAR GPU */"
+)
 
-// errGPUNotConfigured is a sentinel indicating GPU offload should fall back
-// to normal MO execution (sidecar URL not set).
-var errGPUNotConfigured = moerr.NewInternalErrorNoCtx("gpu offload not configured")
+// errSidecarNotConfigured is a sentinel indicating sidecar offload should
+// fall back to normal MO execution (sidecar URL not set).
+var errSidecarNotConfigured = moerr.NewInternalErrorNoCtx("sidecar offload not configured")
 
 // Precompiled regexes for fixMOSyntaxForDuckDB (avoid recompiling per query).
 var (
@@ -77,18 +80,30 @@ func getManifestBaseURL() string {
 	return "http://" + host
 }
 
-// isGPUOffloadQuery checks whether the SQL string starts with the /*+ GPU */ hint.
-func isGPUOffloadQuery(sql string) bool {
-	trimmed := strings.TrimSpace(sql)
-	return strings.HasPrefix(strings.ToUpper(trimmed), gpuHintPrefix)
-}
-
-// stripGPUHint removes the /*+ GPU */ hint prefix from the SQL string.
-func stripGPUHint(sql string) string {
+// isSidecarQuery checks whether the SQL string starts with a /*+ SIDECAR */
+// or /*+ SIDECAR GPU */ hint. Returns (isSidecar, useGPU).
+func isSidecarQuery(sql string) (bool, bool) {
 	trimmed := strings.TrimSpace(sql)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, gpuHintPrefix) {
-		return strings.TrimSpace(trimmed[len(gpuHintPrefix):])
+	if strings.HasPrefix(upper, sidecarGPUHintPrefix) {
+		return true, true
+	}
+	if strings.HasPrefix(upper, sidecarHintPrefix) {
+		return true, false
+	}
+	return false, false
+}
+
+// stripSidecarHint removes the /*+ SIDECAR GPU */ or /*+ SIDECAR */ hint
+// prefix from the SQL string. The longer GPU variant is checked first.
+func stripSidecarHint(sql string) string {
+	trimmed := strings.TrimSpace(sql)
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, sidecarGPUHintPrefix) {
+		return strings.TrimSpace(trimmed[len(sidecarGPUHintPrefix):])
+	}
+	if strings.HasPrefix(upper, sidecarHintPrefix) {
+		return strings.TrimSpace(trimmed[len(sidecarHintPrefix):])
 	}
 	return sql
 }
@@ -114,32 +129,33 @@ type gpuStatistics struct {
 	ByteRead int     `json:"bytes_read"`
 }
 
-// handleGPUOffload intercepts a /*+ GPU */ query:
+// handleSidecarOffload intercepts a /*+ SIDECAR */ or /*+ SIDECAR GPU */ query:
 //  1. Strips the hint.
 //  2. Generates manifests for referenced tables via the debug HTTP endpoint.
 //  3. Rewrites FROM clauses to use tae_scan(manifest_url).
-//  4. Sends the rewritten SQL to the DuckDB sidecar.
-//  5. Translates the response into a MySQL result set.
-func handleGPUOffload(ses *Session, execCtx *ExecCtx, sql string) error {
+//  4. Optionally wraps in gpu_execution('...') for Sirius GPU mode.
+//  5. Sends the rewritten SQL to the DuckDB sidecar.
+//  6. Translates the response into a MySQL result set.
+func handleSidecarOffload(ses *Session, execCtx *ExecCtx, sql string, useGPU bool) error {
 	ctx := execCtx.reqCtx
-	stripped := stripGPUHint(sql)
+	stripped := stripSidecarHint(sql)
 
-	sidecarURLVal, err := ses.GetSessionSysVar("gpu_sidecar_url")
+	sidecarURLVal, err := ses.GetSessionSysVar("sidecar_url")
 	var sidecarURL string
 	if err == nil && sidecarURLVal != nil {
 		sidecarURL = sidecarURLVal.(string)
 	}
 	if sidecarURL == "" {
-		// Fall back to TOML config value (frontend.gpuSidecarUrl).
-		sidecarURL = getPu(ses.GetService()).SV.GPUSidecarURL
+		// Fall back to TOML config value (frontend.sidecarUrl).
+		sidecarURL = getPu(ses.GetService()).SV.SidecarURL
 	}
 	if sidecarURL == "" {
-		return errGPUNotConfigured
+		return errSidecarNotConfigured
 	}
 
 	manifestURL := getManifestBaseURL()
 	if manifestURL == "" {
-		return errGPUNotConfigured
+		return errSidecarNotConfigured
 	}
 
 	t0 := time.Now()
@@ -149,7 +165,11 @@ func handleGPUOffload(ses *Session, execCtx *ExecCtx, sql string) error {
 	}
 	t1 := time.Now()
 
-	logutil.Debugf("GPU offload: rewritten SQL: %s", rewritten)
+	if useGPU {
+		rewritten = wrapForGPUExecution(rewritten)
+	}
+
+	logutil.Debugf("Sidecar offload: rewritten SQL (gpu=%v): %s", useGPU, rewritten)
 
 	result, err := sendToSidecar(ctx, sidecarURL, rewritten)
 	if err != nil {
@@ -167,8 +187,8 @@ func handleGPUOffload(ses *Session, execCtx *ExecCtx, sql string) error {
 	err = trySaveQueryResult(ctx, ses, mrs)
 	t4 := time.Now()
 
-	logutil.Infof("GPU offload timing: rewrite=%v sidecar=%v buildResult=%v saveResult=%v total=%v rows=%d",
-		t1.Sub(t0), t2.Sub(t1), t3.Sub(t2), t4.Sub(t3), t4.Sub(t0), result.Rows)
+	logutil.Infof("Sidecar offload timing: gpu=%v rewrite=%v sidecar=%v buildResult=%v saveResult=%v total=%v rows=%d",
+		useGPU, t1.Sub(t0), t2.Sub(t1), t3.Sub(t2), t4.Sub(t3), t4.Sub(t0), result.Rows)
 
 	return err
 }
@@ -183,6 +203,15 @@ type taeScanRef struct {
 func (t *taeScanRef) Format(ctx *tree.FmtCtx) {
 	escaped := strings.ReplaceAll(t.url, "'", "''")
 	ctx.WriteString(fmt.Sprintf("tae_scan('%s')", escaped))
+}
+
+// wrapForGPUExecution wraps a SQL string in a gpu_execution('...') table
+// function call so the DuckDB sidecar routes execution through the Sirius
+// GPU engine. Single quotes in the inner SQL are doubled per SQL standard
+// string literal escaping — DuckDB unescapes them when parsing the argument.
+func wrapForGPUExecution(sql string) string {
+	escaped := strings.ReplaceAll(sql, "'", "''")
+	return fmt.Sprintf("SELECT * FROM gpu_execution('%s')", escaped)
 }
 
 // rewriteTablesForGPU parses the SQL into an AST, walks the tree to find

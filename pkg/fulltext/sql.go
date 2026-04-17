@@ -110,7 +110,130 @@ type SqlNode struct {
 }
 
 func escape(src string) string {
-	return strings.ReplaceAll(src, "'", `\'`)
+	s := strings.ReplaceAll(src, `\`, `\\`)
+	return strings.ReplaceAll(s, "'", `\'`)
+}
+
+func singleKeywordPattern(ps []*Pattern, mode int64) (*Pattern, bool) {
+	if mode != int64(tree.FULLTEXT_NL) && mode != int64(tree.FULLTEXT_DEFAULT) {
+		return nil, false
+	}
+	if len(ps) != 1 {
+		return nil, false
+	}
+	p := ps[0]
+	switch p.Operator {
+	case TEXT, STAR:
+		return p, true
+	case PLUS:
+		if len(p.Children) == 1 {
+			switch p.Children[0].Operator {
+			case TEXT, STAR:
+				return p.Children[0], true
+			}
+		}
+	}
+	return nil, false
+}
+
+func cappedTfExpr() string {
+	return "CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END"
+}
+
+func singleKeywordWhereClause(p *Pattern) (string, error) {
+	switch p.Operator {
+	case TEXT:
+		return fmt.Sprintf("word = '%s'", escape(p.Text)), nil
+	case STAR:
+		if p.Text[len(p.Text)-1] != '*' {
+			return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
+		}
+		return fmt.Sprintf("prefix_eq(word,'%s')", escape(p.Text[:len(p.Text)-1])), nil
+	default:
+		return "", moerr.NewInternalErrorNoCtx("single keyword optimization only supports text/star patterns")
+	}
+}
+
+func SingleKeywordTopKSQL(ps []*Pattern, mode int64, idxTable string, limit uint64) (string, bool, error) {
+	p, ok := singleKeywordPattern(ps, mode)
+	if !ok {
+		return "", false, nil
+	}
+	whereClause, err := singleKeywordWhereClause(p)
+	if err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf(
+		"SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT %d",
+		cappedTfExpr(), idxTable, whereClause, limit,
+	), true, nil
+}
+
+func SingleKeywordTopKBM25SQL(ps []*Pattern, mode int64, idxTable string, avgDocLen float64, limit uint64) (string, bool, error) {
+	p, ok := singleKeywordPattern(ps, mode)
+	if !ok {
+		return "", false, nil
+	}
+	whereClause, err := singleKeywordWhereClause(p)
+	if err != nil {
+		return "", false, err
+	}
+
+	scoreExpr := fmt.Sprintf(
+		"(a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (CAST(COALESCE(dl.pos, 0) AS INT) / %.17g))))",
+		BM25_K1, BM25_K1, BM25_B, BM25_B, avgDocLen,
+	)
+	return fmt.Sprintf(
+		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, %s AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s') ranked ORDER BY score DESC LIMIT %d",
+		scoreExpr, cappedTfExpr(), idxTable, whereClause, idxTable, DOC_LEN_WORD, limit,
+	), true, nil
+}
+
+func PhraseCountSQL(ps []*Pattern, mode int64, idxTable string) (string, bool, error) {
+	if mode != int64(tree.FULLTEXT_NL) && mode != int64(tree.FULLTEXT_DEFAULT) {
+		return "", false, nil
+	}
+	if len(ps) <= 1 {
+		return "", false, nil
+	}
+	baseSQL, err := SqlPhrase(ps, mode, idxTable, false)
+	if err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("SELECT COUNT(DISTINCT doc_id) FROM (%s) ft", baseSQL), true, nil
+}
+
+func PhraseTopKSQL(ps []*Pattern, mode int64, idxTable string, limit uint64) (string, bool, error) {
+	if mode != int64(tree.FULLTEXT_NL) && mode != int64(tree.FULLTEXT_DEFAULT) {
+		return "", false, nil
+	}
+	if len(ps) <= 1 {
+		return "", false, nil
+	}
+	baseSQL, err := SqlPhrase(ps, mode, idxTable, false)
+	if err != nil {
+		return "", false, err
+	}
+	return fmt.Sprintf("SELECT doc_id, %s AS tf FROM (%s) ft GROUP BY doc_id ORDER BY tf DESC LIMIT %d", cappedTfExpr(), baseSQL, limit), true, nil
+}
+
+func PhraseTopKBM25SQL(ps []*Pattern, mode int64, idxTable string, idfSq float64, avgDocLen float64, nkeywords int, limit uint64) (string, bool, error) {
+	if mode != int64(tree.FULLTEXT_NL) && mode != int64(tree.FULLTEXT_DEFAULT) {
+		return "", false, nil
+	}
+	if len(ps) <= 1 {
+		return "", false, nil
+	}
+	baseSQL, err := SqlPhrase(ps, mode, idxTable, false)
+	if err != nil {
+		return "", false, err
+	}
+	scoreExpr := fmt.Sprintf("%.17g * %.17g * (a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (CAST(COALESCE(dl.pos, 0) AS INT) / %.17g))))",
+		float64(nkeywords), idfSq, BM25_K1, BM25_K1, BM25_B, BM25_B, avgDocLen)
+	return fmt.Sprintf(
+		"SELECT a.doc_id, %s AS score FROM (SELECT doc_id, %s AS tf FROM (%s) ft GROUP BY doc_id) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s' ORDER BY score DESC LIMIT %d",
+		scoreExpr, cappedTfExpr(), baseSQL, idxTable, DOC_LEN_WORD, limit,
+	), true, nil
 }
 
 // GenTextSql that support ngram in boolean mode
@@ -512,7 +635,7 @@ func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, alg
 }
 
 func genBM25SQL(sql string, idxTable string) string {
-	return fmt.Sprintf("select a.*, b.pos as doc_len from (%s) a left join %s b on a.doc_id = b.doc_id and b.word = '%s'", sql, idxTable, DOC_LEN_WORD)
+	return fmt.Sprintf("select a.*, CAST(COALESCE(dl.pos, 0) AS INT) as doc_len from (%s) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s'", sql, idxTable, DOC_LEN_WORD)
 }
 
 func patternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {

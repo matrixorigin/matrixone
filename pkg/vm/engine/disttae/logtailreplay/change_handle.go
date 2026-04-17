@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -527,12 +528,12 @@ func (h *AObjectHandle) buildBlockPlan(
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
 	overlapBlockCnt := 0
+	pkf := h.p.changesHandle.pkFilter
+	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
 		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
 		if !evaluable {
-			// Keep non-evaluable blocks as "read=true" (default). We can still
-			// preserve correctness by row-wise commit-ts filtering after read.
 			plan.nonEvaluableReasons[reason]++
 			if len(plan.nonEvaluableSamples) < 5 {
 				plan.nonEvaluableSamples = append(
@@ -540,10 +541,26 @@ func (h *AObjectHandle) buildBlockPlan(
 					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
 				)
 			}
+			// Even for non-evaluable blocks, PK pruning can still skip them.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+				if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
+					plan.shouldReadByBlks[i] = false
+					plan.prunedBlocks++
+				}
+			}
 			continue
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
+		// Apply PK pruning as a secondary filter on blocks that survived commit-TS check.
+		if overlap && pkf != nil && len(pkf.Segments) > 0 {
+			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+			if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
+				plan.shouldReadByBlks[i] = false
+				overlap = false
+			}
+		}
 		if overlap {
 			overlapBlockCnt++
 		} else {
@@ -1033,6 +1050,10 @@ func (p *baseHandle) getObjectEntries(
 	cnObj = make([]*objectio.ObjectEntry, 0)
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
 	tnKeySet := make(map[types.TS]struct{})
+	var pkf *engine.PKFilter
+	if p.changesHandle != nil {
+		pkf = p.changesHandle.pkFilter
+	}
 	for objIter.Next() {
 		entry := objIter.Item()
 		entryCopy := entry
@@ -1043,17 +1064,38 @@ func (p *baseHandle) getObjectEntries(
 			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
+			// PK zonemap pruning: skip appendable objects whose sort-key range
+			// does not overlap with the requested PK values.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					continue
+				}
+			}
 			aobj = append(aobj, &entryCopy)
 		} else {
 			if entry.ObjectStats.GetCNCreated() {
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
+				if pkf != nil && len(pkf.Segments) > 0 {
+					zm := entry.SortKeyZoneMap()
+					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+						continue
+					}
+				}
 				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
 			if entry.CreateTime.GT(&end) {
 				continue
+			}
+			// PK zonemap pruning for TN non-appendable objects.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					continue
+				}
 			}
 			// Keep every TN-produced non-appendable object in the create-time index so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
@@ -1111,10 +1153,10 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 		}
 		visited[name] = struct{}{}
 		// For snapshot-state range replay, we only need terminal objects that are
-		// still visible at range end. If a non-appendable object has already been
-		// deleted at or before end, keep following its delete-time chain instead
-		// of reading this transient intermediate object.
-		if !current.GetAppendable() && !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
+		// still visible at range end. If an object has already been deleted at or
+		// before end, keep following its delete-time chain instead of reading this
+		// transient intermediate object.
+		if !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
 			next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
 			if len(next) == 0 {
 				logutil.Warn(
@@ -1344,6 +1386,10 @@ type ChangeHandler struct {
 	// When enabled, visible objects that were already GC-ed can be rewritten
 	// through delete-time linked TN non-appendable objects before replay starts.
 	enableDeleteChainResolve bool
+
+	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
+	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
+	pkFilter *engine.PKFilter
 
 	LogThreshold time.Duration
 }
@@ -1768,6 +1814,7 @@ func NewChangesHandler(
 		primarySeqnum: primarySeqnum,
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
+		pkFilter:      engine.PKFilterFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {

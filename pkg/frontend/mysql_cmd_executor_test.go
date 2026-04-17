@@ -648,6 +648,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_geometry,
 			types.T_array_float32,
 			types.T_array_float64,
 			types.T_bit,
@@ -675,6 +676,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_GEOMETRY, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_BIT},
@@ -843,7 +845,6 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 				gSysVars: &SystemVariables{mp: sysVars},
 			},
 		}
-
 		ctrl := gomock.NewController(t)
 		ec := newTestExecCtx(context.Background(), ctrl)
 		ec.ses = ses
@@ -856,6 +857,134 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 		sv, ok := stmt.(*tree.ShowVariables)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(sv.Global, convey.ShouldBeTrue)
+	})
+}
+
+// Test_GetComputationWrapper_InternalCmds tests the internal command parsing in GetComputationWrapper
+func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("GetComputationWrapper internal commands", t, func() {
+		db, user := "T", "root"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Test internal_get_snapshot_ts command
+		convey.Convey("internal_get_snapshot_ts command", func() {
+			sql := makeGetSnapshotTsSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetSnapshotTs)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_databases command
+		convey.Convey("internal_get_databases command", func() {
+			sql := makeGetDatabasesSql("snap1", "account1", "pub1", "account", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDatabases)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_mo_indexes command
+		convey.Convey("internal_get_mo_indexes command", func() {
+			sql := makeGetMoIndexesSql(123, "account1", "pub1", "snap1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetMoIndexes)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_ddl command
+		convey.Convey("internal_get_ddl command", func() {
+			sql := makeGetDdlSql("snap1", "account1", "pub1", "table", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDdl)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_object command
+		convey.Convey("internal_get_object command", func() {
+			sql := makeGetObjectSql("account1", "pub1", "object1", 0)
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetObject)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_object_list command
+		convey.Convey("internal_object_list command", func() {
+			sql := makeObjectListSql("snap1", "snap0", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdObjectList)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_check_snapshot_flushed command
+		convey.Convey("internal_check_snapshot_flushed command", func() {
+			sql := makeCheckSnapshotFlushedSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdCheckSnapshotFlushed)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
 	})
 }
 
@@ -1809,7 +1938,7 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
-func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
+func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1827,14 +1956,14 @@ func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 42 AS x FROM testdb.t1"),
+		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
 	}
 
 	resp, err := ExecRequest(ses, ec, req)
@@ -1843,7 +1972,7 @@ func Test_ExecRequest_GPUOffloadSuccess(t *testing.T) {
 	assert.Equal(t, ResultResponse, resp.category)
 }
 
-func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
+func Test_ExecRequest_SidecarError(t *testing.T) {
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1861,14 +1990,14 @@ func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "gpu_sidecar_url", srv.URL)
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 1 FROM testdb.t1"),
+		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
 	}
 
 	resp, err := ExecRequest(ses, ec, req)
@@ -1878,8 +2007,8 @@ func Test_ExecRequest_GPUOffloadSidecarError(t *testing.T) {
 	assert.Equal(t, ErrorResponse, resp.category)
 }
 
-func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
-	// GPU hint present but sidecar not configured → strips hint, falls through.
+func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
+	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
 	// doComQuery will fail (no engine), but we verify the fallthrough happened.
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
@@ -1887,7 +2016,7 @@ func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
 
 	saved := debugHTTPAddr
 	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = "" // no manifest URL → errGPUNotConfigured
+	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
@@ -1895,7 +2024,7 @@ func Test_ExecRequest_GPUOffloadFallthrough(t *testing.T) {
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
 		cmd:  COM_QUERY,
-		data: []byte("/*+ GPU */ SELECT 1"),
+		data: []byte("/*+ SIDECAR */ SELECT 1"),
 	}
 
 	// ExecRequest won't return an error even though doComQuery panics/fails;
