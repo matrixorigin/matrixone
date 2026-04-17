@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -54,8 +55,13 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		}
 
 		// If the target is not partition table, you only need to operate the main table
+		var sinkerOpts []ioutil.SinkerOption
+		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
+			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
+		}
 		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, insert.isMemoryTable())
+			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, insert.isMemoryTable(),
+			sinkerOpts...)
 
 		insert.ctr.s3Writer = s3Writer
 
