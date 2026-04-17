@@ -121,10 +121,10 @@ func stripSidecarHint(sql string) string {
 
 // httpserver JSONCompact response from DuckDB sidecar.
 type sidecarResponse struct {
-	Meta       []sidecarColumn       `json:"meta"`
-	Data       []json.RawMessage `json:"data"`
-	Rows       int               `json:"rows"`
-	Statistics *sidecarStatistics    `json:"statistics,omitempty"`
+	Meta       []sidecarColumn    `json:"meta"`
+	Data       []json.RawMessage  `json:"data"`
+	Rows       int                `json:"rows"`
+	Statistics *sidecarStatistics `json:"statistics,omitempty"`
 }
 
 type sidecarColumn struct {
