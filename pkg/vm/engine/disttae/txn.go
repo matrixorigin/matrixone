@@ -114,6 +114,31 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
+
+	pkCheckPos := -1
+	pkCheckReady := false
+	if typ == INSERT || typ == DELETE {
+		// resolvePKCheckPosForWrite may reach Engine.Database, which can craft an
+		// internal SQL on the current txn and reenter txn.Lock via
+		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
+		pkCheckPos, err = txn.resolvePKCheckPosForWrite(
+			typ,
+			accountId,
+			databaseName,
+			tableName,
+			tableId,
+			bat,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if typ == INSERT && pkCheckPos >= 0 {
+			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
+			pkCheckPos++
+		}
+		pkCheckReady = true
+	}
+
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert
@@ -208,23 +233,6 @@ func (txn *Transaction) WriteBatch(
 
 		bat.Vecs[0].SetSorted(true)
 		bat.Vecs[1].SetSorted(true)
-	}
-
-	pkCheckPos := -1
-	pkCheckReady := false
-	if typ == INSERT || typ == DELETE {
-		pkCheckPos, err = txn.resolvePKCheckPosForWrite(
-			typ,
-			accountId,
-			databaseName,
-			tableName,
-			tableId,
-			bat,
-		)
-		if err != nil {
-			return nil, err
-		}
-		pkCheckReady = true
 	}
 
 	e := Entry{
