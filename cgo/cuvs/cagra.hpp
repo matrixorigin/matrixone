@@ -487,7 +487,7 @@ public:
         index_params.graph_degree = this->build_params.graph_degree;
         index_params.attach_dataset_on_build = this->build_params.attach_dataset_on_build;
 
-        if constexpr (std::is_same_v<T, half>) {
+        if constexpr (std::is_same_v<T, half> || sizeof(T) == 1) {
             // When T=half, NN-Descent with DIST_COMP_DTYPE::AUTO picks fp16 arithmetic
             // for distance computations during graph construction.  fp16's limited
             // precision creates many distance ties, making NN-Descent's stochastic

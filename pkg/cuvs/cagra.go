@@ -593,6 +593,10 @@ func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 		return SearchResult{}, nil
 	}
 
+	if sp.ItopkSize < uint64(limit) {
+		sp.ItopkSize = uint64(limit)
+	}
+
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{
 		itopk_size:   C.size_t(sp.ItopkSize),
@@ -644,6 +648,10 @@ func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 	}
 	if len(queries) == 0 || numQueries == 0 {
 		return SearchResult{}, nil
+	}
+
+	if sp.ItopkSize < uint64(limit) {
+		sp.ItopkSize = uint64(limit)
 	}
 
 	var errmsg *C.char
@@ -704,6 +712,10 @@ func (gi *GpuCagra[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dim
 		return 0, nil
 	}
 
+	if sp.ItopkSize < uint64(limit) {
+		sp.ItopkSize = uint64(limit)
+	}
+
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{
 		itopk_size:   C.size_t(sp.ItopkSize),
@@ -742,6 +754,10 @@ func (gi *GpuCagra[T]) SearchFloat32AsyncWithParams(queries []float32, numQuerie
 	}
 	if len(queries) == 0 || numQueries == 0 {
 		return 0, nil
+	}
+
+	if sp.ItopkSize < uint64(limit) {
+		sp.ItopkSize = uint64(limit)
 	}
 
 	var errmsg *C.char

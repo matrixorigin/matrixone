@@ -957,3 +957,42 @@ func BenchmarkGpuAddChunkAndSearchCagraInt8(b *testing.B) {
 		return res.Neighbors, nil
 	})
 }
+
+func TestGpuCagraLargeTopK(t *testing.T) {
+	dimension := uint32(2)
+	n_vectors := uint64(1000)
+	dataset := make([]float32, n_vectors*uint64(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+	}
+
+	devices := []int{0}
+	bp := DefaultCagraBuildParams()
+	index, err := NewGpuCagra[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	if err != nil {
+		t.Fatalf("Failed to create GpuCagra: %v", err)
+	}
+	defer index.Destroy()
+
+	if err := index.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := index.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	queries := []float32{1.0, 1.0}
+	// Default itopk_size is 64. Requested limit is 100.
+	// This should not crash now as we adjust itopk_size to 100 internally.
+	limit := uint32(100)
+	sp := DefaultCagraSearchParams()
+	result, err := index.Search(queries, 1, dimension, limit, sp)
+	if err != nil {
+		t.Fatalf("Search with large limit failed: %v", err)
+	}
+
+	if uint32(len(result.Neighbors)) != limit {
+		t.Errorf("Expected %d neighbors, got %d", limit, len(result.Neighbors))
+	}
+}
