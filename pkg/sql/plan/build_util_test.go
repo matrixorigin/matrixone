@@ -18,10 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -93,4 +97,123 @@ func TestRewriteCountNotNullColToStarcount(t *testing.T) {
 	require.NotNil(t, agg.Func)
 	assert.Equal(t, "starcount", agg.Func.ObjName, "ObjName must be starcount so compile treats as single starcount")
 	assert.Equal(t, wantObj, agg.Func.Obj, "Obj must be CountStar overload so runtime uses countStarExec")
+}
+
+func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Len(t, createTable.Defs, 1)
+
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), typ.Id)
+	require.Equal(t, "POINT", typ.Enumvalues)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
+	require.Equal(t, "POINT", typ.Enumvalues)
+
+	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry)", 1)
+	require.NoError(t, err)
+	createTable, ok = stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok = createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err = getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), typ.Id)
+	require.Empty(t, typ.Enumvalues)
+
+	stmt, err = mysql.ParseOne(context.Background(), "create table t (g point srid 4326)", 1)
+	require.NoError(t, err)
+	createTable, ok = stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok = createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err = getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
+	require.Equal(t, "POINT;SRID=4326", typ.Enumvalues)
+
+	stmt, err = mysql.ParseOne(context.Background(), "create table t (g geometry srid 0)", 1)
+	require.NoError(t, err)
+	createTable, ok = stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok = createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err = getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	require.NoError(t, applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes))
+	require.Equal(t, "SRID=0", typ.Enumvalues)
+}
+
+func TestApplyColumnAttributesToTypeRejectsNonGeometrySRID(t *testing.T) {
+	tests := []string{
+		"create table t (a int srid 4326)",
+		"create table t (a varchar(20) srid 4326)",
+		"create table t (a decimal(10,2) srid 4326)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			err = applyColumnAttributesToType(context.Background(), &typ, colDef.Attributes)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "SRID is only supported for GEOMETRY columns")
+		})
+	}
+}
+
+func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (g geometry default 'POINT(1 1)')", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+
+	_, err = buildDefaultExpr(colDef, typ, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot have default value")
+}
+
+func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	stmt, err := mysql.ParseOne(context.Background(), "create table t (g geometry default null)", 1)
+	require.NoError(t, err)
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+
+	def, err := buildDefaultExpr(colDef, typ, proc)
+	require.NoError(t, err)
+	require.NotNil(t, def)
 }

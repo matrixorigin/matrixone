@@ -117,11 +117,6 @@ func (d *branchHashmapDeallocator) As(target malloc.Trait) bool {
 	return false
 }
 
-//type retBatchDebug struct {
-//	acquire string
-//	release string
-//}
-
 func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	if vec == nil {
 		return false
@@ -142,9 +137,6 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if retBatchPool.pinned == nil {
 		retBatchPool.pinned = make(map[*batch.Batch]struct{})
 	}
-	//if retBatchPool.debug == nil {
-	//	retBatchPool.debug = make(map[*batch.Batch]retBatchDebug)
-	//}
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
@@ -201,7 +193,6 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 done:
 	retBatchPool.pinned[bat] = struct{}{}
-	//retBatchPool.debug[bat] = retBatchDebug{acquire: string(debug.Stack())}
 	return bat
 }
 
@@ -213,13 +204,8 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
-	//trace := retBatchPool.debug[bat]
-
 	if _, ok := retBatchPool.pinned[bat]; !ok {
 		msg := "retBatchPool: release unknown or already released batch"
-		//if trace.acquire != "" || trace.release != "" {
-		//	msg = fmt.Sprintf("%s (acquired at: %s) (last release at: %s)", msg, trace.acquire, trace.release)
-		//}
 		panic(moerr.NewInternalErrorNoCtx(msg))
 	}
 
@@ -238,11 +224,6 @@ func (retBatchPool *retBatchList) releaseRetBatch(bat *batch.Batch, forTombstone
 	} else {
 		retBatchPool.dList = append(retBatchPool.dList, bat)
 	}
-
-	//retBatchPool.debug[bat] = retBatchDebug{
-	//	acquire: trace.acquire,
-	//	release: string(debug.Stack()),
-	//}
 
 	delete(retBatchPool.pinned, bat)
 }
@@ -270,7 +251,6 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	retBatchPool.dList = nil
 	retBatchPool.tList = nil
 	retBatchPool.pinned = nil
-	//retBatchPool.debug = nil
 
 }
 
@@ -293,6 +273,8 @@ func handleDataBranch(
 		return handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
 		return handleBranchMerge(execCtx, ses, st)
+	case *tree.DataBranchPick:
+		return handleBranchPick(execCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
@@ -629,7 +611,6 @@ func diffMergeAgency(
 		cancel context.CancelFunc
 	)
 
-	//ctx = fileservice.WithParallelMode(execCtx.reqCtx, fileservice.ParallelForce)
 	ctx, cancel = context.WithCancel(execCtx.reqCtx)
 
 	var (
@@ -639,6 +620,7 @@ func diffMergeAgency(
 		ok        bool
 		diffStmt  *tree.DataBranchDiff
 		mergeStmt *tree.DataBranchMerge
+		pickStmt  *tree.DataBranchPick
 	)
 
 	defer func() {
@@ -647,7 +629,9 @@ func diffMergeAgency(
 
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
-			return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
+				return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", stmt)
+			}
 		}
 	}
 
@@ -664,12 +648,34 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-	} else {
+		if err = validateProjectedColumns(diffStmt, tblStuff); err != nil {
+			return
+		}
+	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, mergeStmt.SrcTable, mergeStmt.DstTable,
 		); err != nil {
+			return
+		}
+	} else {
+		// Always use ACCEPT at hashDiff level for PICK so that conflicts on
+		// non-picked keys do not abort the operation. The user's actual
+		// conflict choice (FAIL/SKIP/ACCEPT) is enforced in the PICK pipeline
+		// via synthetic base-delete conflict markers plus the consumer logic.
+		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
+		copt.expandUpdate = true
+		copt.preservePickConflicts = true
+		if tblStuff, err = getTableStuff(
+			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
+		); err != nil {
+			return
+		}
+		if tblStuff.def.pkKind == fakeKind {
+			err = moerr.NewNotSupportedNoCtxf(
+				"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
+				pickStmt.SrcTable.ObjectName)
 			return
 		}
 	}
@@ -724,6 +730,39 @@ func diffMergeAgency(
 		}
 	}
 
+	// Materialize PICK keys and build PK filter in one unified pass.
+	// Both pickKeyHashmap (for producer-side precise batch filtering in
+	// buildHashmapForTable) and pkFilter (for object/block ZoneMap pruning
+	// inside CollectChanges) are produced here, BEFORE the goroutines are
+	// launched.
+	var pkFilter *engine.PKFilter
+	var pickKeyHashmap databranchutils.BranchHashmap
+	if pickStmt != nil && pickStmt.Keys != nil {
+		var err2 error
+		pickKeyHashmap, pkFilter, err2 = materializePickKeysAndFilter(ctx, ses, bh, pickStmt, tblStuff)
+		if err2 != nil {
+			err = err2
+			return
+		}
+	}
+	defer freePKFilter(pkFilter, ses.proc.Mp())
+	defer func() {
+		if pickKeyHashmap != nil {
+			pickKeyHashmap.Close()
+		}
+	}()
+
+	// Resolve BETWEEN SNAPSHOT timestamps for PICK.
+	// These are passed to constructChangeHandle which intersects them with the
+	// target collect range computed by decideCollectRange.
+	var betweenFrom, betweenTo *types.TS
+	if pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != "" {
+		betweenFrom, betweenTo, err = resolveBetweenSnapshots(ses, pickStmt.BetweenFrom, pickStmt.BetweenTo)
+		if err != nil {
+			return
+		}
+	}
+
 	wg.Add(2)
 
 	go func() {
@@ -740,6 +779,12 @@ func diffMergeAgency(
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
+		} else if pickStmt != nil {
+			if err2 := pickMergeDiffs(
+				ctx, cancel, ses, bh, pickStmt, dagInfo, tblStuff, retBatCh,
+			); err2 != nil {
+				outputErr.Store(err2)
+			}
 		} else {
 			if err2 := mergeDiffs(
 				ctx, cancel, ses, bh, mergeStmt, dagInfo, tblStuff, retBatCh,
@@ -750,8 +795,20 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
+		betweenFrom, betweenTo,
 	); err != nil {
+		// If the consumer cancelled the context (e.g., PICK conflict FAIL),
+		// wait for it to finish and prefer its real error over context.Canceled.
+		if retBatCh != nil {
+			close(retBatCh)
+			retBatCh = nil
+		}
+		waited = true
+		wg.Wait()
+		if outputErr.Load() != nil {
+			err = outputErr.Load().(error)
+		}
 		return
 	}
 
@@ -875,6 +932,7 @@ func getTableStuff(
 	}
 
 	tblStuff.def.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
+	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[tblStuff.def.pkColIdx].Seqnum)
 
 	for i, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -916,6 +974,9 @@ func diffOnBase(
 	tblStuff tableStuff,
 	copt compositeOption,
 	emit emitFunc,
+	pkFilter *engine.PKFilter,
+	pickKeyHashmap databranchutils.BranchHashmap,
+	betweenFrom, betweenTo *types.TS,
 ) (err error) {
 
 	defer func() {
@@ -970,14 +1031,14 @@ func diffOnBase(
 	}
 	// has no lca
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo,
+		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
 		return
 	}
 
 	if err = hashDiff(
 		ctx, ses, bh, tblStuff, dagInfo,
-		copt, emit, tarHandle, baseHandle,
+		copt, emit, tarHandle, baseHandle, pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -1206,6 +1267,8 @@ func constructChangeHandle(
 	bh BackgroundExec,
 	tables tableStuff,
 	branchInfo *branchMetaInfo,
+	pkFilter *engine.PKFilter,
+	betweenFrom, betweenTo *types.TS,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -1237,9 +1300,54 @@ func constructChangeHandle(
 	); err != nil {
 		return
 	}
+
+	// BETWEEN SNAPSHOT: intersect the target collect range with [betweenFrom.Next(), betweenTo].
+	// This narrows the time window on the source side so only changes within the
+	// snapshot range are collected.  The base (destination) side is not narrowed.
+	if betweenFrom != nil && betweenTo != nil {
+		bFrom := betweenFrom.Next()
+		bTo := *betweenTo
+		j := 0
+		for i := range tarRange.rel {
+			// Intersect: from = max(original, bFrom), end = min(original, bTo)
+			f := tarRange.from[i]
+			e := tarRange.end[i]
+			if bFrom.GT(&f) {
+				f = bFrom
+			}
+			if bTo.LT(&e) {
+				e = bTo
+			}
+			if f.LE(&e) {
+				tarRange.from[j] = f
+				tarRange.end[j] = e
+				tarRange.rel[j] = tarRange.rel[i]
+				j++
+			}
+		}
+		tarRange.from = tarRange.from[:j]
+		tarRange.end = tarRange.end[:j]
+		tarRange.rel = tarRange.rel[:j]
+	}
+
+	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
+	collectFn := func(
+		ctx context.Context,
+		rel engine.Relation,
+		from, end types.TS,
+		mp *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		if pkFilter != nil && len(pkFilter.Segments) > 0 {
+			return databranchutils.CollectChangesWithPKFilter(
+				ctx, rel, from, end, mp, pkFilter,
+			)
+		}
+		return databranchutils.CollectChanges(ctx, rel, from, end, mp)
+	}
+
 	for i := range tarRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			tarRange.rel[i],
 			tarRange.from[i],
@@ -1264,7 +1372,7 @@ func constructChangeHandle(
 
 	for i := range baseRange.rel {
 		collectStart := time.Now()
-		if handle, err = databranchutils.CollectChanges(
+		if handle, err = collectFn(
 			ctx,
 			baseRange.rel[i],
 			baseRange.from[i],

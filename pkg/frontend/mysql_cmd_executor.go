@@ -2524,6 +2524,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
+		if _, ok := stmt.(*tree.DataBranchPick); ok {
+			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
 			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())
@@ -3459,11 +3462,30 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
+		// before normal processing. If sidecar is not configured, silently
+		// fall through to normal MO execution.
+		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
+			ses.addSqlCount(1)
+			err = handleSidecarOffload(ses, execCtx, query, useGPU)
+			if err == nil {
+				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
+				return resp, nil
+			}
+			if err != errSidecarNotConfigured {
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+				return resp, nil
+			}
+			// errSidecarNotConfigured: strip hint and fall through to normal execution
+			query = stripSidecarHint(query)
+		} else {
+			ses.addSqlCount(1)
+		}
 		// Inject rewrite rules hint before building UserInput (only if enabled)
 		if ses.rewriteEnabled.Load() {
 			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
 		}
-		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
@@ -3747,6 +3769,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	case types.T_text:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	case types.T_geometry:
+		col.SetColumnType(defines.MYSQL_TYPE_GEOMETRY)
 	case types.T_uuid:
 		// Downgrade to string for client compatibility (e.g. Go MySQL driver).
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)

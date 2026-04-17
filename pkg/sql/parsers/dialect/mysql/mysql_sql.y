@@ -234,6 +234,7 @@ import (
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
+    pickKeys *tree.PickKeys
     diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
@@ -364,7 +365,7 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE BRANCH LOG REVERT REBASE DIFF
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF PICK
 %token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
@@ -458,6 +459,7 @@ import (
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> GET_FORMAT
+%token <str> SRID
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -579,6 +581,7 @@ import (
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
+%type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
@@ -599,7 +602,7 @@ import (
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
@@ -626,7 +629,7 @@ import (
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
-%type <str> integer_opt
+%type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
@@ -8263,12 +8266,13 @@ branch_stmt:
 	t.DatabaseName = tree.Identifier($5)
 	$$ = t
     }
-|   DATA BRANCH DIFF table_name AGAINST table_name diff_output_opt
+|   DATA BRANCH DIFF table_name AGAINST table_name diff_columns_opt diff_output_opt
     {
     	t := tree.NewDataBranchDiff()
     	t.TargetTable = *$4
     	t.BaseTable = *$6
-    	t.OutputOpt = $7
+    	t.Columns = $7
+    	t.OutputOpt = $8
     	$$ = t
     }
 |   DATA BRANCH MERGE table_name INTO table_name conflict_opt
@@ -8278,6 +8282,66 @@ branch_stmt:
     	t.DstTable = *$6
     	t.ConflictOpt = $7
     	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.Keys = $7
+    	t.ConflictOpt = $8
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
+
+diff_columns_opt:
+    {
+        $$ = nil
+    }
+|   COLUMNS '(' column_list ')'
+    {
+        $$ = $3
     }
 
 diff_output_opt:
@@ -8337,6 +8401,22 @@ conflict_opt:
     {
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
+    	}
+    }
+
+pick_keys_clause:
+    KEYS '(' expression_list ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:     tree.PickKeysValues,
+    	    KeyExprs: $3,
+    	}
+    }
+|   KEYS '(' select_no_parens ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:   tree.PickKeysSubquery,
+    	    Select: $3,
     	}
     }
 
@@ -9915,6 +9995,19 @@ column_attribute_elem:
             Exprs: es,
         }
         $$ = tree.NewAttributeOnUpdate(expr)
+    }
+|   SRID INTEGRAL
+    {
+        v, errStr := util.GetInt64($2)
+        if errStr != "" {
+            yylex.Error(errStr)
+            goto ret1
+        }
+        if v < 0 || v > 4294967295 {
+            yylex.Error("SRID should be between 0 and 4294967295")
+            goto ret1
+        }
+        $$ = tree.NewAttributeSRID(uint32(v))
     }
 |   LOW_CARDINALITY
     {
@@ -12869,7 +12962,7 @@ declare_stmt:
     }
 
 spatial_type:
-    GEOMETRY
+    spatial_type_name
     {
         locale := ""
         $$ = &tree.T{
@@ -12881,13 +12974,16 @@ spatial_type:
             },
         }
     }
-// |   POINT
-// |   LINESTRING
-// |   POLYGON
-// |   GEOMETRYCOLLECTION
-// |   MULTIPOINT
-// |   MULTILINESTRING
-// |   MULTIPOLYGON
+
+spatial_type_name:
+    GEOMETRY
+|   POINT
+|   LINESTRING
+|   POLYGON
+|   GEOMETRYCOLLECTION
+|   MULTIPOINT
+|   MULTILINESTRING
+|   MULTIPOLYGON
 
 // TODO:
 // need to encode SQL string
@@ -13341,6 +13437,7 @@ non_reserved_keyword:
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
+|   PICK
 |   POINT
 |   POLYGON
 |   PROCEDURE
@@ -13377,6 +13474,7 @@ non_reserved_keyword:
 |   PITR
 |   RECOVERY_WINDOW
 |   SPATIAL
+|   SRID
 |   START
 |   STATUS
 |   STORAGE

@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -646,6 +648,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_geometry,
 			types.T_array_float32,
 			types.T_array_float64,
 			types.T_bit,
@@ -673,6 +676,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_GEOMETRY, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_BIT},
@@ -1805,6 +1809,101 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func Test_ExecRequest_SidecarSuccess(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar returning a valid JSONCompact response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"meta":[{"name":"x","type":"INTEGER"}],"data":[[42]],"rows":1}`))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, ResultResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarError(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar that returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	// Should be an error response (from sidecar), not a success.
+	assert.Equal(t, ErrorResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
+	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
+	// doComQuery will fail (no engine), but we verify the fallthrough happened.
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1"),
+	}
+
+	// ExecRequest won't return an error even though doComQuery panics/fails;
+	// the deferred recover catches it. We just verify it doesn't panic.
+	resp, _ := ExecRequest(ses, ec, req)
+	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {

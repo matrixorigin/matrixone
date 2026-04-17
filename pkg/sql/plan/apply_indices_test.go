@@ -299,6 +299,52 @@ func TestCalculatePostFilterOverFetchFactor_ActualValues(t *testing.T) {
 	}
 }
 
+func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
+	testCases := []struct {
+		limit    uint64
+		expected float64
+	}{
+		{
+			limit:    3,
+			expected: 5.0,
+		},
+		{
+			limit:    10,
+			expected: 5.0,
+		},
+		{
+			limit:    49,
+			expected: 5.0,
+		},
+		{
+			limit:    50,
+			expected: 2.0,
+		},
+		{
+			limit:    99,
+			expected: 2.0,
+		},
+		{
+			limit:    100,
+			expected: 1.5,
+		},
+		{
+			limit:    199,
+			expected: 1.5,
+		},
+		{
+			limit:    200,
+			expected: 1.3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run("", func(t *testing.T) {
+			assert.Equal(t, tc.expected, calculateFilteredPostModeOverFetchFactor(tc.limit))
+		})
+	}
+}
+
 func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
 	t.Helper()
 	args := make([]*planpb.Expr, 0, numArgs)
@@ -717,4 +763,118 @@ func makeEqFilterExpr(colPos int32) *planpb.Expr {
 			},
 		},
 	}
+}
+
+func makeSpatialConstGeometryExpr() *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_geomfromtext"},
+				Args: []*planpb.Expr{
+					{
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: "POINT(1 1)"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeSpatialColExpr(colPos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{
+				RelPos: 0,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
+func makeSpatialDistanceExpr(left, right *planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_distance"},
+				Args: []*planpb.Expr{left, right},
+			},
+		},
+	}
+}
+
+func makeComparisonExpr(op string, left, right *planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{left, right},
+			},
+		},
+	}
+}
+
+func makeInt64LiteralExpr(v int64) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: v},
+			},
+		},
+	}
+}
+
+func TestCheckSpatialIndexFilterPredicate(t *testing.T) {
+	filter := &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_intersects"},
+				Args: []*planpb.Expr{
+					makeSpatialColExpr(1),
+					makeSpatialConstGeometryExpr(),
+				},
+			},
+		},
+	}
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(1), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceComparison(t *testing.T) {
+	filter := makeComparisonExpr(
+		"<=",
+		makeSpatialDistanceExpr(makeSpatialColExpr(2), makeSpatialConstGeometryExpr()),
+		makeInt64LiteralExpr(0),
+	)
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(2), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceComparisonConstOnLeft(t *testing.T) {
+	filter := makeComparisonExpr(
+		">=",
+		makeInt64LiteralExpr(0),
+		makeSpatialDistanceExpr(makeSpatialColExpr(3), makeSpatialConstGeometryExpr()),
+	)
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(3), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceRejectsNonConstGeometryArg(t *testing.T) {
+	filter := makeComparisonExpr(
+		"<=",
+		makeSpatialDistanceExpr(makeSpatialColExpr(1), makeSpatialColExpr(2)),
+		makeInt64LiteralExpr(0),
+	)
+
+	require.Nil(t, checkSpatialIndexFilter(filter))
 }

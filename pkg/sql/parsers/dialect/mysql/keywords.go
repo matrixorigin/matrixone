@@ -456,6 +456,7 @@ func init() {
 		"sql_small_result":           SQL_SMALL_RESULT,
 		"sql_buffer_result":          SQL_BUFFER_RESULT,
 		"ssl":                        SSL,
+		"srid":                       SRID,
 		"slave":                      SLAVE,
 		"sliding":                    SLIDING,
 		"start":                      START,
@@ -681,6 +682,7 @@ func init() {
 		"skip":                       CONFLICT_SKIP,
 		"accept":                     CONFLICT_ACCEPT,
 		"diff":                       DIFF,
+		"pick":                       PICK,
 		"conflict":                   CONFLICT,
 		"output":                     OUTPUT,
 	}
