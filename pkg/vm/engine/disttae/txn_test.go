@@ -181,6 +181,20 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		bat.Clean(proc.Mp())
 	})
 
+	t.Run("insert with active pk table adjusts pk position after rowid prepend", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1, 2})
+
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{})
+		require.NoError(t, err)
+		require.Len(t, txn.writes, 1)
+		require.True(t, txn.writes[0].pkCheckReady)
+		require.Equal(t, 1, txn.writes[0].pkCheckPos)
+		require.Equal(t, []string{objectio.PhysicalAddr_Attr, "pk"}, bat.Attrs)
+
+		bat.Clean(txn.proc.Mp())
+	})
+
 	t.Run("delete", func(t *testing.T) {
 		txn := &Transaction{proc: proc, op: op}
 		bat := newDeleteBatchForTest(t, proc, []int64{1})

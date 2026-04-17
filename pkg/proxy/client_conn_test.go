@@ -106,6 +106,7 @@ type mockClientConn struct {
 	router     Router
 	tun        *tunnel
 	redoStmts  []internalStmt
+	killFn     func(ServerConn) error
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -178,7 +179,76 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		return moerr.NewInternalErrorNoCtx("type not supported")
 	}
 }
+func (c *mockClientConn) KillCurrentBackendConn(sc ServerConn) error {
+	if c.killFn != nil {
+		return c.killFn(sc)
+	}
+	return nil
+}
 func (c *mockClientConn) Close() error { return nil }
+
+type killTestRouter struct {
+	connectFn func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error)
+}
+
+func (r *killTestRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	return r.connectFn(c, handshakeResp, t)
+}
+
+type killCurrentServerConn struct {
+	cn *CNServer
+}
+
+func (s *killCurrentServerConn) ConnID() uint32 { return s.cn.connID }
+func (s *killCurrentServerConn) RawConn() net.Conn {
+	return nil
+}
+func (s *killCurrentServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
+	return nil, nil
+}
+func (s *killCurrentServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	return true, nil
+}
+func (s *killCurrentServerConn) GetCNServer() *CNServer   { return s.cn }
+func (s *killCurrentServerConn) SetConnResponse(_ []byte) {}
+func (s *killCurrentServerConn) GetConnResponse() []byte  { return nil }
+func (s *killCurrentServerConn) CreateTime() time.Time    { return time.Now() }
+func (s *killCurrentServerConn) Quit() error              { return nil }
+func (s *killCurrentServerConn) Close() error             { return nil }
+
+type killExecServerConn struct {
+	stmt internalStmt
+}
+
+func (s *killExecServerConn) ConnID() uint32 { return 0 }
+func (s *killExecServerConn) RawConn() net.Conn {
+	return nil
+}
+func (s *killExecServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
+	return nil, nil
+}
+func (s *killExecServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	s.stmt = stmt
+	return true, nil
+}
+func (s *killExecServerConn) GetCNServer() *CNServer   { return nil }
+func (s *killExecServerConn) SetConnResponse(_ []byte) {}
+func (s *killExecServerConn) GetConnResponse() []byte  { return nil }
+func (s *killExecServerConn) CreateTime() time.Time    { return time.Now() }
+func (s *killExecServerConn) Quit() error              { return nil }
+func (s *killExecServerConn) Close() error             { return nil }
 
 func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer) func() {
 	if cn.salt == nil || len(cn.salt) != 20 {
@@ -211,6 +281,34 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 		_ = tu.Close()
 		_ = sc.Close()
 	}
+}
+
+func TestClientConn_KillCurrentBackendConn(t *testing.T) {
+	currentCN := &CNServer{
+		connID: 10,
+		uuid:   "cn1",
+		addr:   "127.0.0.1:6001",
+		salt:   testSlat,
+	}
+	execSC := &killExecServerConn{}
+	router := &killTestRouter{
+		connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
+			require.Equal(t, currentCN.uuid, c.uuid)
+			require.Equal(t, currentCN.addr, c.addr)
+			require.Equal(t, currentCN.salt, c.salt)
+			require.NotZero(t, c.connID)
+			return execSC, makeOKPacket(8), nil
+		},
+	}
+
+	c := &clientConn{
+		connID: 42,
+		router: router,
+	}
+	err := c.KillCurrentBackendConn(&killCurrentServerConn{cn: currentCN})
+	require.NoError(t, err)
+	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
+	require.Equal(t, "kill connection 42", execSC.stmt.s)
 }
 
 func copyCNServer(dst, src *CNServer) {
