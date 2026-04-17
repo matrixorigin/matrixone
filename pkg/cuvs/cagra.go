@@ -33,10 +33,10 @@ import (
 
 // GpuCagra represents the C++ gpu_cagra_t object.
 type GpuCagra[T VectorType] struct {
-	cCagra      C.gpu_cagra_c
-	dimension   uint32
-	nthread     uint32
-	distMode    DistributionMode
+	cCagra        C.gpu_cagra_c
+	dimension     uint32
+	nthread       uint32
+	distMode      DistributionMode
 	batchWindowUs int64
 }
 
@@ -584,6 +584,23 @@ func (gi *GpuCagra[T]) DeleteId(id int64) error {
 	return nil
 }
 
+func (gi *GpuCagra[T]) adjustSearchParams(sp CagraSearchParams, limit uint32) CagraSearchParams {
+	qtype := GetQuantization[T]()
+	isByteType := (qtype == INT8 || qtype == UINT8)
+
+	if isByteType {
+		// Ensure ItopkSize is at least 128 for INT8/UINT8 to prevent local optima issues
+		if sp.ItopkSize < 128 {
+			sp.ItopkSize = 128
+		}
+	}
+
+	if sp.ItopkSize < uint64(limit) {
+		sp.ItopkSize = uint64(limit)
+	}
+	return sp
+}
+
 // Search performs a K-Nearest Neighbor search
 func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) (SearchResult, error) {
 	if gi.cCagra == nil {
@@ -593,9 +610,7 @@ func (gi *GpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, 
 		return SearchResult{}, nil
 	}
 
-	if sp.ItopkSize < uint64(limit) {
-		sp.ItopkSize = uint64(limit)
-	}
+	sp = gi.adjustSearchParams(sp, limit)
 
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{
@@ -650,9 +665,7 @@ func (gi *GpuCagra[T]) SearchFloat(queries []float32, numQueries uint64, dimensi
 		return SearchResult{}, nil
 	}
 
-	if sp.ItopkSize < uint64(limit) {
-		sp.ItopkSize = uint64(limit)
-	}
+	sp = gi.adjustSearchParams(sp, limit)
 
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{
@@ -712,9 +725,7 @@ func (gi *GpuCagra[T]) SearchAsyncWithParams(queries []T, numQueries uint64, dim
 		return 0, nil
 	}
 
-	if sp.ItopkSize < uint64(limit) {
-		sp.ItopkSize = uint64(limit)
-	}
+	sp = gi.adjustSearchParams(sp, limit)
 
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{
@@ -756,9 +767,7 @@ func (gi *GpuCagra[T]) SearchFloat32AsyncWithParams(queries []float32, numQuerie
 		return 0, nil
 	}
 
-	if sp.ItopkSize < uint64(limit) {
-		sp.ItopkSize = uint64(limit)
-	}
+	sp = gi.adjustSearchParams(sp, limit)
 
 	var errmsg *C.char
 	cSP := C.cagra_search_params_t{

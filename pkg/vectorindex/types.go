@@ -135,6 +135,7 @@ type CagraParam struct {
 	Distribution           string `json:"distribution_mode"`
 	IntermediateGraphDegee string `json:"intermediate_graph_degree"`
 	GraphDegee             string `json:"graph_degree"`
+	ITopkSize              string `json:"itopk_size"`
 }
 
 type IvfflatIndexConfig struct {
@@ -162,6 +163,7 @@ type CuvsIvfIndexConfig struct {
 type CuvsCagraIndexConfig struct {
 	IntermediateGraphDegree uint64
 	GraphDegree             uint64
+	ITopkSize               uint64
 	Metric                  uint16
 	Dimensions              uint
 	Version                 int64

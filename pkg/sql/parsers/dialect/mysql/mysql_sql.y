@@ -378,7 +378,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -7852,6 +7852,8 @@ index_option_list:
               opt1.DistributionMode = opt2.DistributionMode
             } else if opt2.BitsPerCode > 0 {
               opt1.BitsPerCode = opt2.BitsPerCode
+            } else if opt2.ITopkSize > 0 {
+              opt1.ITopkSize = opt2.ITopkSize
             }
             $$ = opt1
         }
@@ -7960,6 +7962,17 @@ index_option:
 	io := tree.NewIndexOption()
 	io.GraphDegree = val
 	$$ = io
+     }
+|   ITOPK_SIZE equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+        if val <= 0 {
+                yylex.Error("GRAPH_DEGREE should be greater than 0")
+                return 1
+        }
+        io := tree.NewIndexOption()
+        io.ITopkSize = val
+        $$ = io
      }
 |   QUANTIZATION STRING
     {

@@ -807,7 +807,7 @@ public:
         // the resize(n, -1LL) below initializes all slots to -1LL correctly.
 
         cuvs::neighbors::cagra::search_params search_params{};
-        search_params.itopk_size = sp.itopk_size;
+        search_params.itopk_size = std::max((size_t)limit, (size_t)sp.itopk_size);
         search_params.search_width = sp.search_width;
 
         const cagra_index* local_index = nullptr;
@@ -1078,7 +1078,7 @@ public:
         search_res.distances.resize(num_queries * limit);
 
         cuvs::neighbors::cagra::search_params search_params{};
-        search_params.itopk_size = sp.itopk_size;
+        search_params.itopk_size = std::max((size_t)limit, (size_t)sp.itopk_size);
         search_params.search_width = sp.search_width;
 
         const cagra_index* local_index = nullptr;

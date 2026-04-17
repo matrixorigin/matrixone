@@ -94,6 +94,7 @@ func init() {
 		"secondary_engine_attribute": SECONDARY_ENGINE_ATTRIBUTE,
 		"insert_method":              INSERT_METHOD,
 		"intermediate_graph_degree":  INTERMEDIATE_GRAPH_DEGREE,
+		"itopk_size":                 ITOPK_SIZE,
 		"comment":                    COMMENT_KEYWORD,
 		"committed":                  COMMITTED,
 		"commit":                     COMMIT,

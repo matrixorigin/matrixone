@@ -158,6 +158,15 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsCagra.GraphDegree = val
 		}
 
+		// graph_degree
+		if len(u.param.ITopkSize) > 0 {
+			val, err := strconv.ParseUint(u.param.ITopkSize, 10, 64)
+			if err != nil {
+				return err
+			}
+			u.idxcfg.CuvsCagra.ITopkSize = val
+		}
+
 		// distribution mode
 		switch u.param.Distribution {
 		case vectorindex.DistributionMode_REPLICATED_Str:

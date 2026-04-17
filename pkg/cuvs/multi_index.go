@@ -1,6 +1,6 @@
 //go:build gpu
 
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -86,7 +86,9 @@ func NewMultiGpuIvfFlat[T VectorType](indices []*GpuIvfFlat[T], bruteForce *GpuB
 
 func (mi *MultiGpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuIvfFlat[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
 	}, nil)
@@ -94,7 +96,9 @@ func (mi *MultiGpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension u
 
 func (mi *MultiGpuIvfFlat[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuIvfFlat[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
 	})
@@ -115,7 +119,9 @@ func NewMultiGpuIvfPq[T VectorType](indices []*GpuIvfPq[T], bruteForce *GpuBrute
 
 func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuIvfPq[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
 	}, nil)
@@ -123,7 +129,9 @@ func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uin
 
 func (mi *MultiGpuIvfPq[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuIvfPq[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
 	})
@@ -144,7 +152,9 @@ func NewMultiGpuCagra[T VectorType](indices []*GpuCagra[T], bruteForce *GpuBrute
 
 func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, queries, nil, numQueries, dimension, limit, func(idx GpuIndex[T], q []T, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuCagra[T]).SearchAsyncWithParams(q, nQ, d, l, sp)
 	}, nil)
@@ -152,7 +162,9 @@ func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uin
 
 func (mi *MultiGpuCagra[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
-	for i, idx := range mi.indices { genericIndices[i] = idx }
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
 	return multiGpuSearch(genericIndices, mi.bruteForce, mi.dimension, nil, queries, numQueries, dimension, limit, nil, func(idx GpuIndex[T], q []float32, nQ uint64, d uint32, l uint32) (uint64, error) {
 		return idx.(*GpuCagra[T]).SearchFloat32AsyncWithParams(q, nQ, d, l, sp)
 	})

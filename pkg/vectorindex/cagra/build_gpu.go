@@ -38,7 +38,7 @@ type CagraBuild[T cuvs.VectorType] struct {
 	current *CagraModel[T]   // sub-index currently being filled
 	nthread uint32
 	devices []int
-	count   int64   // vectors in current sub-index
+	count   int64    // vectors in current sub-index
 	idBuf   [1]int64 // reusable buffer for AddFloat to avoid per-call heap allocation
 }
 

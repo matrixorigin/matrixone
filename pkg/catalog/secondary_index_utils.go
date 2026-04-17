@@ -112,6 +112,7 @@ const (
 	BitsPerCode             = "bits_per_code"
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
+	ITopkSize               = "itopk_size"
 )
 
 /* 1. ToString Functions */
@@ -189,6 +190,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[GraphDegree]; ok {
 		res += fmt.Sprintf(" %s = %s ", GraphDegree, val)
+	}
+
+	if val, ok := result[ITopkSize]; ok {
+		res += fmt.Sprintf(" %s = %s ", ITopkSize, val)
 	}
 	return res, nil
 }
@@ -343,12 +348,18 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if idx.IndexOption.GraphDegree < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid graph_degree. cagra.graph_degree must be > 0")
 			}
+			if idx.IndexOption.ITopkSize < 0 {
+				return nil, moerr.NewInternalErrorNoCtx("invalid itopk_size. cagra.itopk_size must be > 0")
+			}
 
 			if idx.IndexOption.IntermediateGraphDegree > 0 {
 				res[IntermediateGraphDegree] = strconv.FormatInt(idx.IndexOption.IntermediateGraphDegree, 10)
 			}
 			if idx.IndexOption.GraphDegree > 0 {
 				res[GraphDegree] = strconv.FormatInt(idx.IndexOption.GraphDegree, 10)
+			}
+			if idx.IndexOption.ITopkSize > 0 {
+				res[ITopkSize] = strconv.FormatInt(idx.IndexOption.ITopkSize, 10)
 			}
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {

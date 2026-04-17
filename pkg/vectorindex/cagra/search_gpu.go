@@ -62,6 +62,9 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 
 	dim := uint32(s.Idxcfg.CuvsCagra.Dimensions)
 	sp := cuvs.DefaultCagraSearchParams()
+	if s.Idxcfg.CuvsCagra.ITopkSize > 0 {
+		sp.ItopkSize = s.Idxcfg.CuvsCagra.ITopkSize
+	}
 	neighbors64, dists32, err := s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
 	if err != nil {
 		return nil, nil, err

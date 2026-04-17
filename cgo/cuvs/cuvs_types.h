@@ -125,7 +125,7 @@ typedef struct {
  * @brief IVF-PQ search parameters.
  */
 typedef struct {
-    uint32_t n_probes; // Number of lists to probe during search (default 20)
+    uint32_t n_probes;   // Number of lists to probe during search (default 20)
 } ivf_pq_search_params_t;
 
 /**

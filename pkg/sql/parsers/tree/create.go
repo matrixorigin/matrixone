@@ -2126,6 +2126,7 @@ type IndexOption struct {
 	GraphDegree              int64
 	Quantization             string
 	DistributionMode         string
+	ITopkSize                int64
 }
 
 // Must follow the following sequence when test
@@ -2138,7 +2139,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Hour != 0 ||
 		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
 		node.Quantization != "" || node.DistributionMode != "" ||
-		node.BitsPerCode != 0 {
+		node.BitsPerCode != 0 || node.ITopkSize != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2226,6 +2227,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.BitsPerCode != 0 {
 		ctx.WriteString("BITS_PER_CODE ")
 		ctx.WriteString(strconv.FormatInt(node.BitsPerCode, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.ITopkSize != 0 {
+		ctx.WriteString("ITOPK_SIZE ")
+		ctx.WriteString(strconv.FormatInt(node.ITopkSize, 10))
 		ctx.WriteByte(' ')
 	}
 

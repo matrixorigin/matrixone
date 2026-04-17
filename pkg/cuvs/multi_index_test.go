@@ -1,6 +1,6 @@
 //go:build gpu
 
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,8 +19,8 @@
 package cuvs
 
 import (
-	"testing"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestMultiGpuIndex(t *testing.T) {
@@ -32,8 +32,12 @@ func TestMultiGpuIndex(t *testing.T) {
 	dataset1 := make([]float32, count1*uint64(dimension))
 	dataset2 := make([]float32, count2*uint64(dimension))
 
-	for i := range dataset1 { dataset1[i] = float32(i) / float32(len(dataset1)) }
-	for i := range dataset2 { dataset2[i] = float32(i) / float32(len(dataset2)) + 0.5 }
+	for i := range dataset1 {
+		dataset1[i] = float32(i) / float32(len(dataset1))
+	}
+	for i := range dataset2 {
+		dataset2[i] = float32(i)/float32(len(dataset2)) + 0.5
+	}
 
 	devices := []int{0}
 	nthread := uint32(4)
@@ -67,11 +71,13 @@ func TestMultiGpuIndex(t *testing.T) {
 	// --- Test Generic MultiGpuIndex ---
 	t.Run("Generic", func(t *testing.T) {
 		mi := NewMultiGpuIndex[float32]([]GpuIndex[float32]{idx1, idx2}, bf, dimension, metric)
-		
+
 		numQueries := uint64(5)
 		limit := uint32(10)
 		queries := make([]float32, numQueries*uint64(dimension))
-		for i := range queries { queries[i] = 0.2 }
+		for i := range queries {
+			queries[i] = 0.2
+		}
 
 		neighbors, distances, err := mi.Search(queries, numQueries, dimension, limit)
 		assert.NoError(t, err)
@@ -88,11 +94,13 @@ func TestMultiGpuIndex(t *testing.T) {
 	// --- Test Specialized MultiGpuIvfFlat ---
 	t.Run("SpecializedIvfFlat", func(t *testing.T) {
 		mivf := NewMultiGpuIvfFlat[float32]([]*GpuIvfFlat[float32]{idx2}, bf, dimension, metric)
-		
+
 		numQueries := uint64(5)
 		limit := uint32(10)
 		queries := make([]float32, numQueries*uint64(dimension))
-		for i := range queries { queries[i] = 0.2 }
+		for i := range queries {
+			queries[i] = 0.2
+		}
 
 		sp := DefaultIvfFlatSearchParams()
 		sp.NProbes = 32
@@ -100,7 +108,7 @@ func TestMultiGpuIndex(t *testing.T) {
 		neighbors, distances, err := mivf.Search(queries, numQueries, dimension, limit, sp)
 		assert.NoError(t, err)
 		assert.Equal(t, int(numQueries*uint64(limit)), len(neighbors))
-		
+
 		for q := uint64(0); q < numQueries; q++ {
 			for k := uint32(1); k < limit; k++ {
 				assert.True(t, distances[q*uint64(limit)+uint64(k)] >= distances[q*uint64(limit)+uint64(k-1)])

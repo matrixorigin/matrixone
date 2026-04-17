@@ -133,9 +133,9 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) er
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
 	/*
-	if len(ids) > 0 {
-		logutil.Infof("[DEBUG] CagraModel.AddChunk: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
-	}
+		if len(ids) > 0 {
+			logutil.Infof("[DEBUG] CagraModel.AddChunk: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
+		}
 	*/
 	if err := idx.Index.AddChunk(chunk, chunkCount, ids); err != nil {
 		return err
@@ -150,9 +150,9 @@ func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids 
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
 	/*
-	if len(ids) > 0 {
-		logutil.Infof("[DEBUG] CagraModel.AddChunkFloat: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
-	}
+		if len(ids) > 0 {
+			logutil.Infof("[DEBUG] CagraModel.AddChunkFloat: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
+		}
 	*/
 	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
 		return err
