@@ -2015,3 +2015,138 @@ func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	}
 }
+
+// Test_WorkspaceForceDumpNoIncrStatement simulates the real HNSW scenario where
+// IncrStatementID is completely disabled (statementID==0). This verifies the safety
+// valve works when stmtStart falls back to 0, which is the actual code path hit
+// during HNSW index creation via sqlexec.RunSql with WithDisableIncrStatement.
+func Test_WorkspaceForceDumpNoIncrStatement(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(100),
+		testutil.WithDisttaeEngineExtraWorkspaceThreshold(3000),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(100*1024*1024),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 10
+	totalWrites := 10
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	ws := txn.GetWorkspace().(*disttae.Transaction)
+
+	// Only call StartStatement — NO IncrStatementID. This is the real HNSW path:
+	// sqlexec.RunSql uses WithDisableIncrStatement, so IncrStatementID is never called,
+	// leaving statementID==0 and offsets[] empty.
+	ws.StartStatement()
+
+	var maxInMemSize uint64
+	forceDumpTriggered := false
+
+	for i := 0; i < totalWrites; i++ {
+		func() {
+			bat := catalog2.MockBatch(schema, rowsCount)
+			defer bat.Close()
+			cnBat := containers.ToCNBatch(bat)
+
+			ws.UpdateSnapshotWriteOffset()
+
+			err = relation.Write(ctx, cnBat)
+			require.NoError(t, err)
+
+			inMemSize := ws.ApproximateInMemInsertSize()
+			if inMemSize > maxInMemSize {
+				maxInMemSize = inMemSize
+			}
+
+			if i > 0 && inMemSize < maxInMemSize {
+				forceDumpTriggered = true
+			}
+		}()
+	}
+
+	require.True(t, forceDumpTriggered,
+		"expected force dump to trigger with statementID==0, "+
+			"but approximateInMemInsertSize only grew (max=%d)", maxInMemSize)
+
+	finalInMemSize := ws.ApproximateInMemInsertSize()
+	require.Less(t, finalInMemSize, uint64(3000)*2,
+		"expected final in-memory size to be bounded, got %d", finalInMemSize)
+
+	ws.EndStatement()
+
+	require.NoError(t, txn.Commit(ctx))
+
+	// Read back and verify data integrity
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		totalRows := 0
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			if done {
+				break
+			}
+			require.NoError(t, err)
+			totalRows += ret.RowCount()
+		}
+		reader.Close()
+
+		require.Equal(t, totalWrites*rowsCount, totalRows,
+			"expected %d rows but got %d", totalWrites*rowsCount, totalRows)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+}

@@ -642,6 +642,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 
 	if !dumpAll && !forceFlush {
+		forceDump := false
 		size = txn.scanInMemInsertSize(offset)
 		if size < txn.writeWorkspaceThreshold {
 			// Safety valve: even though the current statement's writes are small,
@@ -665,12 +666,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				)
 				offset = stmtStart
 				size = txn.scanInMemInsertSize(stmtStart)
+				forceDump = true
 			} else {
 				return nil
 			}
 		}
 
-		if size < txn.engine.config.extraWorkspaceThreshold {
+		if !forceDump && size < txn.engine.config.extraWorkspaceThreshold {
 			// try to increase the write threshold from quota, if failed, then dump all
 			// acquire 5M more than we need
 			quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
