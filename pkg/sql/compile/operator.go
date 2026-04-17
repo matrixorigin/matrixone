@@ -542,6 +542,14 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		return op
 	case vm.DedupJoin:
 		t := sourceOp.(*dedupjoin.DedupJoin)
+		// When OldColCapture is active (merged main-table scan for REPLACE
+		// INTO), each worker would build its own capturedVecs but the
+		// finalize merge path only combines matched bitmaps, not captured
+		// vectors. Disable parallelism to avoid losing captured old-row
+		// values from non-merger workers.
+		if len(t.OldColCapturePlaceholderIdxList) > 0 {
+			return t
+		}
 		op := dedupjoin.NewArgument()
 		if t.Channel == nil {
 			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
@@ -566,6 +574,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
 	case vm.RightDedupJoin:
 		t := sourceOp.(*rightdedupjoin.RightDedupJoin)
