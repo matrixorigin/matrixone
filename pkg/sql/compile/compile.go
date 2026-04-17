@@ -2502,6 +2502,9 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
+			if node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+				panic(moerr.NewNYI(c.proc.Ctx, "shuffle DedupJoin with OldColCapture is not supported"))
+			}
 			for i := range shuffleJoins {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
 				op.ShuffleIdx = int32(i)
@@ -2644,10 +2647,18 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		} else {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
+			// OldColCapture (merged main-table scan for REPLACE INTO) keeps
+			// captured vectors in per-worker local state; the parallel finalize
+			// path only merges the matched bitmap, not capturedVecs. Force
+			// single-worker to avoid losing captures from non-merger workers.
+			hasCapture := node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
+				if hasCapture {
+					rs[i].NodeInfo.Mcpu = 1
+				}
 			}
 			c.anal.isFirst = false
 		}

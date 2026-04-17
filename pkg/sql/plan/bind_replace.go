@@ -160,11 +160,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				return 0, err
 			}
 
-			if len(idxDef.Parts) == 1 {
-				// Single-part: alias the idx-col lookup to the raw captured column.
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+idxDef.Parts[0]]
+			// Spatial indexes look up the old index-table row via the primary
+			// column (indexLookupColumnName returns IndexTablePrimaryColName).
+			// Map it to the main-table PK so capture resolves to the correct
+			// column.
+			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+
+			if !indexTableStoresSerializedKey(idxDef) {
+				// Single-part (non-serialized): alias the idx-col lookup to
+				// the raw captured column. Use indexPrimaryPartName to
+				// resolve aliases consistently with the legacy path.
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
 			}
-			// Multi-part indexes are excluded by hasMultiPartIdx guard above.
+			// Multi-part non-spatial indexes are excluded by hasMultiPartIdx guard above.
 		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
