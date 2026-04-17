@@ -4263,10 +4263,14 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	for i := range c.cnList {
+		mcpu := max(c.cnList[i].Mcpu, 1)
+		if node.Stats.Dop > 0 {
+			mcpu = min(mcpu, int(node.Stats.Dop))
+		}
 		engNode := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
-			Mcpu:  c.cnList[i].Mcpu,
+			Mcpu:  mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
 		}

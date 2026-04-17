@@ -1143,6 +1143,69 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 	return nil
 }
 
+func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetSubtype, payload []byte) ([]byte, error) {
+		columnMetadata := strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype))
+		columnSubtype := ""
+		columnSRID := uint32(0)
+		columnSRIDDefined := false
+		if columnMetadata != "" {
+			parts := strings.Split(columnMetadata, ";")
+			head := strings.TrimSpace(parts[0])
+			if head != "" && !strings.HasPrefix(strings.ToUpper(head), "SRID=") {
+				columnSubtype = strings.ToUpper(head)
+			}
+			start := 0
+			if columnSubtype != "" {
+				start = 1
+			}
+			for _, part := range parts[start:] {
+				part = strings.TrimSpace(part)
+				if len(part) < len("SRID=") || !strings.EqualFold(part[:5], "SRID=") {
+					continue
+				}
+				parsed, err := strconv.ParseUint(strings.TrimSpace(part[5:]), 10, 32)
+				if err == nil {
+					columnSRID = uint32(parsed)
+					columnSRIDDefined = true
+					break
+				}
+			}
+		}
+
+		wkt, valueSubtype, valueSRID, valueSRIDDefined, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
+		if err != nil {
+			return nil, err
+		}
+		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
+			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
+		}
+
+		if !columnSRIDDefined {
+			return payload, nil
+		}
+		if !valueSRIDDefined {
+			valueSRID = 0
+		}
+		if valueSRID != columnSRID {
+			columnLabel := columnSubtype
+			if columnLabel == "" {
+				columnLabel = "GEOMETRY"
+			}
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"The SRID of the geometry does not match the SRID of the column '%s'. The SRID of the geometry is %d, but the SRID of the column is %d. Consider changing the SRID of the geometry or the SRID property of the column.",
+				columnLabel,
+				valueSRID,
+				columnSRID,
+			)
+		}
+		if valueSRIDDefined {
+			return payload, nil
+		}
+		return encodeGeometryPayload(wkt, columnSRID, true), nil
+	}, selectList)
+}
+
 // CastNanoToTimestamp returns timestamp string according to the nano
 func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)

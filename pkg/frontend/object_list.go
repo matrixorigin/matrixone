@@ -90,11 +90,13 @@ func processObjectListImpl(
 	// Parse against snapshot (from timestamp)
 	if stmt.AgainstSnapshot != nil && len(string(*stmt.AgainstSnapshot)) > 0 {
 		snapshotTS, err := resolveSnapshot(ctx, string(*stmt.AgainstSnapshot))
-		if err == nil && snapshotTS != nil {
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to resolve against snapshot '%s': %v", string(*stmt.AgainstSnapshot), err)
+		}
+		if snapshotTS != nil {
 			from = types.TimestampToTS(*snapshotTS)
 		} else {
-			// If parsing fails, use empty TS
-			from = types.MinTs()
+			return nil, moerr.NewInternalErrorf(ctx, "against snapshot '%s' resolved to nil timestamp", string(*stmt.AgainstSnapshot))
 		}
 	} else {
 		// If against snapshot not specified, use empty TS
@@ -110,7 +112,7 @@ func processObjectListImpl(
 		if snapshotTS != nil {
 			to = types.TimestampToTS(*snapshotTS)
 		} else {
-			to = getCurrentTS()
+			return nil, moerr.NewInternalErrorf(ctx, "snapshot '%s' resolved to nil timestamp", string(stmt.Snapshot))
 		}
 	} else {
 		// If snapshot not specified, use current timestamp
