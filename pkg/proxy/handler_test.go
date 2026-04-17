@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"testing"
@@ -314,6 +315,31 @@ func TestHandler_HandleErr(t *testing.T) {
 	require.Error(t, err)
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+}
+
+func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{logger: rt.Logger()}
+
+	called := 0
+	expectedSC := &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	tun := &tunnel{}
+	tun.mu.sc = expectedSC
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			require.Same(t, expectedSC, sc)
+			called++
+			return nil
+		},
+	}
+
+	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+	require.Equal(t, 1, called)
+
+	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
+	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
+	require.Equal(t, 1, called)
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {

@@ -265,6 +265,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return h.ctx.Err()
 	case err := <-t.errC:
 		if isEOFErr(err) || isConnEndErr(err) {
+			h.cleanupBackendOnClientDisconnect(err, cc, t)
 			h.logger.Info("connection closed",
 				zap.Uint32("Conn ID", cc.ConnID()),
 				zap.Uint64("session ID", c.ID()),
@@ -280,6 +281,22 @@ func (h *handler) handle(c goetty.IOSession) error {
 			zap.Error(err),
 		)
 		return err
+	}
+}
+
+func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
+	if cc == nil || getErrorCode(err) != codeClientDisconnect {
+		return
+	}
+	var currentSC ServerConn
+	if t != nil {
+		currentSC = t.getServerConn()
+	}
+	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
+		h.logger.Warn("failed to kill backend connection after client disconnect",
+			zap.Uint32("Conn ID", cc.ConnID()),
+			zap.Error(err),
+		)
 	}
 }
 
