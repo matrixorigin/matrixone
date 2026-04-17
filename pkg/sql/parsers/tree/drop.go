@@ -63,6 +63,21 @@ func init() {
 		func() *DropPublication { return &DropPublication{} },
 		func(d *DropPublication) { d.reset() },
 		reuse.DefaultOptions[DropPublication](), //.
+	)
+	reuse.CreatePool[DropCcprSubscription](
+		func() *DropCcprSubscription { return &DropCcprSubscription{} },
+		func(d *DropCcprSubscription) { d.reset() },
+		reuse.DefaultOptions[DropCcprSubscription](), //.
+	) //WithEnableChecker()
+	reuse.CreatePool[ResumeCcprSubscription](
+		func() *ResumeCcprSubscription { return &ResumeCcprSubscription{} },
+		func(r *ResumeCcprSubscription) { r.reset() },
+		reuse.DefaultOptions[ResumeCcprSubscription](), //.
+	) //WithEnableChecker()
+	reuse.CreatePool[PauseCcprSubscription](
+		func() *PauseCcprSubscription { return &PauseCcprSubscription{} },
+		func(p *PauseCcprSubscription) { p.reset() },
+		reuse.DefaultOptions[PauseCcprSubscription](), //.
 	) //WithEnableChecker()
 }
 
@@ -383,3 +398,99 @@ func (node *DropPublication) reset() {
 }
 
 func (node DropPublication) TypeName() string { return "tree.DropPublication" }
+
+type DropCcprSubscription struct {
+	statementImpl
+	TaskID   string
+	IfExists bool
+}
+
+func NewDropCcprSubscription(ife bool, taskID string) *DropCcprSubscription {
+	dropCcprSubscription := reuse.Alloc[DropCcprSubscription](nil)
+	dropCcprSubscription.IfExists = ife
+	dropCcprSubscription.TaskID = taskID
+	return dropCcprSubscription
+}
+
+func (node *DropCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop ccpr subscription")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteString(" '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
+}
+
+func (node *DropCcprSubscription) GetStatementType() string { return "Drop Ccpr Subscription" }
+func (node *DropCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *DropCcprSubscription) Free() {
+	reuse.Free[DropCcprSubscription](node, nil)
+}
+
+func (node *DropCcprSubscription) reset() {
+	*node = DropCcprSubscription{}
+}
+
+func (node DropCcprSubscription) TypeName() string { return "tree.DropCcprSubscription" }
+
+type ResumeCcprSubscription struct {
+	statementImpl
+	TaskID string
+}
+
+func NewResumeCcprSubscription(taskID string) *ResumeCcprSubscription {
+	resumeCcprSubscription := reuse.Alloc[ResumeCcprSubscription](nil)
+	resumeCcprSubscription.TaskID = taskID
+	return resumeCcprSubscription
+}
+
+func (node *ResumeCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("resume ccpr subscription '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
+}
+
+func (node *ResumeCcprSubscription) GetStatementType() string { return "Resume Ccpr Subscription" }
+func (node *ResumeCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *ResumeCcprSubscription) Free() {
+	reuse.Free[ResumeCcprSubscription](node, nil)
+}
+
+func (node *ResumeCcprSubscription) reset() {
+	*node = ResumeCcprSubscription{}
+}
+
+func (node ResumeCcprSubscription) TypeName() string { return "tree.ResumeCcprSubscription" }
+
+type PauseCcprSubscription struct {
+	statementImpl
+	TaskID string
+}
+
+func NewPauseCcprSubscription(taskID string) *PauseCcprSubscription {
+	pauseCcprSubscription := reuse.Alloc[PauseCcprSubscription](nil)
+	pauseCcprSubscription.TaskID = taskID
+	return pauseCcprSubscription
+}
+
+func (node *PauseCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("pause ccpr subscription '")
+	ctx.WriteString(node.TaskID)
+	ctx.WriteByte('\'')
+}
+
+func (node *PauseCcprSubscription) GetStatementType() string { return "Pause Ccpr Subscription" }
+func (node *PauseCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *PauseCcprSubscription) Free() {
+	reuse.Free[PauseCcprSubscription](node, nil)
+}
+
+func (node *PauseCcprSubscription) reset() {
+	*node = PauseCcprSubscription{}
+}
+
+func (node PauseCcprSubscription) TypeName() string { return "tree.PauseCcprSubscription" }
