@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -340,6 +341,33 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
 	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
 	require.Equal(t, 1, called)
+}
+
+func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	called := 0
+	expectedSC := &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	tun := &tunnel{}
+	tun.mu.sc = expectedSC
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			require.Same(t, expectedSC, sc)
+			called++
+			return nil
+		},
+	}
+
+	err := withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect)
+	ret := h.handleTunnelErr(err, cc, tun, 733923, 100)
+	require.Same(t, err, ret)
+	require.Equal(t, 1, called)
+	require.Equal(t, int64(1), h.counterSet.clientDisconnect.Load())
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {

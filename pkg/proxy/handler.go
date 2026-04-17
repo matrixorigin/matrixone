@@ -264,24 +264,30 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
-		if isEOFErr(err) || isConnEndErr(err) {
-			h.cleanupBackendOnClientDisconnect(err, cc, t)
-			h.logger.Info("connection closed",
-				zap.Uint32("Conn ID", cc.ConnID()),
-				zap.Uint64("session ID", c.ID()),
-				zap.Int64("goId", goId),
-			)
-			return nil
-		}
-		h.counterSet.updateWithErr(err)
-		h.logger.Error("proxy handle error",
-			zap.Uint32("Conn ID", cc.ConnID()),
-			zap.Uint64("session ID", c.ID()),
-			zap.Int64("goId", goId),
-			zap.Error(err),
-		)
-		return err
+		return h.handleTunnelErr(err, cc, t, c.ID(), goId)
 	}
+}
+
+func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
+	if getErrorCode(err) == codeClientDisconnect {
+		h.cleanupBackendOnClientDisconnect(err, cc, t)
+	}
+	if isEOFErr(err) || isConnEndErr(err) {
+		h.logger.Info("connection closed",
+			zap.Uint32("Conn ID", cc.ConnID()),
+			zap.Uint64("session ID", sessionID),
+			zap.Int64("goId", goId),
+		)
+		return nil
+	}
+	h.counterSet.updateWithErr(err)
+	h.logger.Error("proxy handle error",
+		zap.Uint32("Conn ID", cc.ConnID()),
+		zap.Uint64("session ID", sessionID),
+		zap.Int64("goId", goId),
+		zap.Error(err),
+	)
+	return err
 }
 
 func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
