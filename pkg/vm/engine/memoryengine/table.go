@@ -46,6 +46,10 @@ func (t *Table) CollectChanges(_ context.Context, from, to types.TS, skipDeletes
 	panic("not support")
 }
 
+func (t *Table) CollectObjectList(_ context.Context, from, to types.TS, _ *batch.Batch, _ *mpool.MPool) error {
+	panic("not support")
+}
+
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	return nil, nil
 }
@@ -499,4 +503,11 @@ func (t *Table) Reset(op client.TxnOperator) error {
 
 func (t *Table) GetExtraInfo() *api.SchemaExtra {
 	return nil
+}
+
+func (t *Table) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	// Not supported for memory engine
+	return types.TS{}, nil
 }
