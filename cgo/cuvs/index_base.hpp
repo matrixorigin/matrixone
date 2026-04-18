@@ -147,8 +147,11 @@ using ::distribution_mode_t;
 // protected by a double-check pattern: check version, acquire device mutex, recheck.
 // The main mutex_ is acquired as shared_lock inside the device mutex to read
 // deleted_bitset_ safely.
-// Lock order: device_bitsets_mutex_ or device_shard_bitsets_mutex_  →  device mutex
-//             → main mutex_ (shared).  Never hold device mutex when acquiring unique_lock.
+// Lock order for search/sync path: device_bitsets_mutex_ → device mutex → mutex_ (shared).
+//   device_bitsets_mutex_ is released before mutex_ is acquired (lookup only), so the
+//   effective nesting is: device mutex → mutex_ (shared).
+// Lock order for init/load path: mutex_ (unique) is acquired first, then released before
+//   device_bitsets_mutex_ or device_shard_bitsets_mutex_.  These two never overlap.
 //
 //
 // ID MAPPING
@@ -261,15 +264,7 @@ public:
     // force-flushed (trained on whatever is available).
     // Only ever accessed from submit_main() tasks (serialised), so no extra
     // locking is needed beyond what those tasks already take.
-    struct pending_float_chunk_t {
-        std::vector<float> data;   ///< count * dimension floats
-        uint64_t           count;
-        int64_t            offset; ///< -1 = append; >= 0 = explicit position
-        std::vector<IdT>   ids;    ///< empty if caller supplied no IDs
-    };
-    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
-    std::vector<pending_float_chunk_t> pending_float_chunks_;
-    uint64_t pending_total_count_ = 0;
+    // (Fields are in protected: — see below.)
 
     // ---- External ID mapping ----
     // If non-empty: host_ids[internal_pos] = external_id.
@@ -397,27 +392,33 @@ public:
     void sync_device_bitset(int dev_id, raft::resources const& res) {
         auto info = get_device_bitset_info(dev_id);
         uint64_t current_ver = bitset_version_.load();
-        
+
         if (info->version < current_ver || !info->ptr) {
             std::lock_guard<std::mutex> lock(info->mutex);
-            // Double-check after acquiring lock
             if (info->version < current_ver || !info->ptr) {
-                // We need a read lock on the main mutex to safely read deleted_bitset_
                 std::shared_lock<std::shared_mutex> base_lock(mutex_);
-                
+
                 using bs_t = raft::core::bitset<uint32_t, int64_t>;
                 auto* bs = new bs_t(res, static_cast<int64_t>(current_offset_));
-                uint32_t n_words = static_cast<uint32_t>((current_offset_ + 31) / 32);
-                
-                if (deleted_bitset_.size() < n_words) {
-                    // This shouldn't happen if init/delete are used correctly, but for safety:
-                    thrust::fill_n(raft::resource::get_thrust_policy(res), bs->data(), static_cast<int64_t>(n_words), ~0U);
+                uint64_t n_words = (current_offset_ + 31) / 32;
+
+                if (deleted_bitset_.empty()) {
+                    thrust::fill_n(raft::resource::get_thrust_policy(res),
+                                   bs->data(), static_cast<int64_t>(n_words), ~0U);
+                } else {
+                    // Copy the recorded portion first, then fill any tail beyond it.
+                    // Both ops use the same CUDA stream (from res) so ordering is guaranteed.
+                    uint64_t copy_words = std::min<uint64_t>(n_words, deleted_bitset_.size());
+                    raft::copy(res,
+                        raft::make_device_vector_view<uint32_t, int64_t>(bs->data(), static_cast<int64_t>(copy_words)),
+                        raft::make_host_vector_view<const uint32_t, int64_t>(deleted_bitset_.data(), static_cast<int64_t>(copy_words)));
+                    if (copy_words < n_words) {
+                        thrust::fill_n(raft::resource::get_thrust_policy(res),
+                                       bs->data() + static_cast<int64_t>(copy_words),
+                                       static_cast<int64_t>(n_words - copy_words), ~0U);
+                    }
                 }
-                
-                raft::copy(res,
-                    raft::make_device_vector_view<uint32_t, int64_t>(bs->data(), static_cast<int64_t>(std::min<size_t>(n_words, deleted_bitset_.size()))),
-                    raft::make_host_vector_view<const uint32_t, int64_t>(deleted_bitset_.data(), static_cast<int64_t>(std::min<size_t>(n_words, deleted_bitset_.size()))));
-                
+
                 info->ptr = std::shared_ptr<void>(bs, [](void* p){ delete static_cast<bs_t*>(p); });
                 info->version = current_ver;
             }
@@ -529,24 +530,27 @@ public:
     // Initialize (or reset) the deleted bitset after index build.
     // All positions are marked valid (1). Must be called after is_loaded_ = true.
     void init_deleted_bitset() {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
-        uint64_t n_bits = current_offset_;
-        uint64_t n_words = (n_bits + 31) / 32;
-        // Only initialize if not already set or if size changed significantly
-        if (deleted_bitset_.size() < n_words) {
-            std::vector<uint32_t> new_bitset(n_words, ~0U);
-            if (!deleted_bitset_.empty()) {
-                std::copy(deleted_bitset_.begin(), deleted_bitset_.end(), new_bitset.begin());
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            uint64_t n_bits = current_offset_;
+            uint64_t n_words = (n_bits + 31) / 32;
+            if (deleted_bitset_.size() < n_words) {
+                std::vector<uint32_t> new_bitset(n_words, ~0U);
+                if (!deleted_bitset_.empty()) {
+                    std::copy(deleted_bitset_.begin(), deleted_bitset_.end(), new_bitset.begin());
+                }
+                deleted_bitset_ = std::move(new_bitset);
             }
-            deleted_bitset_ = std::move(new_bitset);
+            bitset_version_.fetch_add(1);
+        } // release mutex_ before acquiring device cache locks (lock-order: device_*_mutex_ must not be held while waiting for mutex_ unique_lock)
+        {
+            std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
+            device_deleted_bitsets_.clear();
         }
-        // Increment version to force GPU syncs if they exist
-        bitset_version_.fetch_add(1);
-
-        std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
-        device_deleted_bitsets_.clear();
-        std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
-        device_shard_bitsets_.clear();
+        {
+            std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
+            device_shard_bitsets_.clear();
+        }
     }
 
     // Soft-delete by external ID (or internal position if no custom IDs).
@@ -657,6 +661,17 @@ public:
             std::copy(chunk_host_target.begin(), chunk_host_target.end(),
                       flattened_host_dataset.begin() + target_offset * dimension);
 
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                int num_shards = static_cast<int>(this->devices_.size());
+                if (this->shard_sizes_.size() != (size_t)num_shards) {
+                    this->shard_sizes_.assign(num_shards, 0);
+                }
+                uint64_t total = this->current_offset_;
+                uint64_t rows_per_shard = (total / num_shards) & ~static_cast<uint64_t>(31);
+                for (int i = 0; i < num_shards - 1; ++i) this->shard_sizes_[i] = rows_per_shard;
+                this->shard_sizes_.back() = total - rows_per_shard * (num_shards - 1);
+            }
+
             if (!c.ids.empty()) {
                 if (host_ids.size() < current_offset_) {
                     host_ids.resize(current_offset_);
@@ -715,9 +730,9 @@ public:
                         }
                         
                         if (!trained) return std::any();
-                        // If we found it was trained after all, fall through to trained path.
-                        // We need to use the data from 'c' though, or the original chunk_data.
-                        // Since we are serialised in submit_main, this fall-through is rare.
+                        // trained=true here means set_quantizer() was called on another thread
+                        // between the first check (shared_lock) and the re-check (unique_lock).
+                        // c was NOT pushed to pending, so fall through to process chunk_data directly.
                     }
 
                     // Quantizer already trained: quantize this chunk immediately.
@@ -768,7 +783,8 @@ public:
 
                     if (ids) {
                         this->set_ids_internal(ids, chunk_count, target_offset);
-                    }                } else {
+                    }                
+		} else {
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -786,8 +802,10 @@ public:
                     if (flattened_host_dataset.size() < required_elements) {
                         flattened_host_dataset.resize(required_elements);
                     }
+                    // For T=float: trivial copy. For T=__half: implicit float→half per element
+                    // via __half::operator=(float), which is correct (float32→float16 narrowing).
                     std::copy(chunk_data, chunk_data + chunk_count * dimension, flattened_host_dataset.begin() + (target_offset * dimension));
-                    
+
                     if (this->dist_mode == DistributionMode_SHARDED) {
                         int num_shards = static_cast<int>(this->devices_.size());
                         if (this->shard_sizes_.size() != (size_t)num_shards) {
@@ -831,7 +849,13 @@ public:
                     // 1. Flush any buffered chunks first
                     flush_pending_float_chunks_internal(handle);
 
-                    // 2. Check if still not trained (might have used add_chunk<T> instead of float)
+                    // 2. Check if still not trained (might have used add_chunk<T> instead of float).
+                    // WARNING: if data was added via add_chunk(T*) rather than add_chunk_float(),
+                    // flattened_host_dataset already holds T values (e.g. int8 in [-128,127]).
+                    // Casting them to float trains the quantizer on the compressed range, not the
+                    // original float range.  extend_float() will then clamp to the wrong range.
+                    // If extend_float() is needed after add_chunk(T*), call train_quantizer()
+                    // explicitly with representative original float data before calling build().
                     bool needs_training;
                     uint64_t n_train = 0;
                     {
@@ -982,12 +1006,15 @@ public:
             deleted_bitset_ = std::move(temp_bs);
             deleted_count_ = d_count;
             bitset_version_.fetch_add(1);
+        } // release mutex_ before acquiring device cache locks
+        {
+            std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
+            device_deleted_bitsets_.clear();
         }
-        
-        std::lock_guard<std::mutex> ds_lock(device_bitsets_mutex_);
-        device_deleted_bitsets_.clear();
-        std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
-        device_shard_bitsets_.clear();
+        {
+            std::lock_guard<std::mutex> ss_lock(device_shard_bitsets_mutex_);
+            device_shard_bitsets_.clear();
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1158,6 +1185,18 @@ protected:
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
     std::mutex extend_mutex_;
+
+    // Deferred float chunk buffer for quantizer training (1-byte types only).
+    // See class-level comment block above for full description.
+    struct pending_float_chunk_t {
+        std::vector<float> data;   ///< count * dimension floats
+        uint64_t           count;
+        int64_t            offset; ///< -1 = append; >= 0 = explicit position
+        std::vector<IdT>   ids;    ///< empty if caller supplied no IDs
+    };
+    static constexpr uint64_t kQuantizerTrainThreshold = 1000;
+    std::vector<pending_float_chunk_t> pending_float_chunks_;
+    uint64_t pending_total_count_ = 0;
 };
 
 } // namespace matrixone
