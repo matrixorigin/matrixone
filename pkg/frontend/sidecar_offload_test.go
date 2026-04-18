@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -609,6 +610,29 @@ func TestSendToSidecar_Success(t *testing.T) {
 	assert.Equal(t, 1, result.Rows)
 	assert.Len(t, result.Meta, 1)
 	assert.Equal(t, "x", result.Meta[0].Name)
+}
+
+func TestSendToSidecar_ParentCancel(t *testing.T) {
+	// Verify that cancelling the parent context aborts the sidecar HTTP call.
+	// The server simulates a slow query; parent cancellation should abort before
+	// the server responds.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+	time.AfterFunc(100*time.Millisecond, parentCancel)
+
+	start := time.Now()
+	_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sidecar request failed")
+	assert.Less(t, elapsed, time.Second, "should abort promptly, not wait for server")
 }
 
 func TestSendToSidecar_TooLarge(t *testing.T) {

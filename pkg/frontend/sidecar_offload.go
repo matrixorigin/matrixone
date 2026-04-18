@@ -434,9 +434,18 @@ func rewriteTableExpr(te tree.TableExpr, defaultDB string, manifestBaseURL strin
 // httpserver expects raw SQL as the POST body at /?default_format=JSONCompact.
 func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*sidecarResponse, error) {
 	url := strings.TrimRight(sidecarURL, "/") + "/?default_format=JSONCompact"
-	// Use a dedicated timeout instead of the session context, which may have a
+	// Use a dedicated timeout instead of the session context, which may carry a
 	// short deadline (e.g. 20 s) that is too tight for large-scale GPU queries.
+	// We still propagate the parent's cancellation signal so that client
+	// disconnect / KILL QUERY will abort the in-flight sidecar request.
 	reqCtx, cancel := context.WithTimeout(context.Background(), sidecarClient.Timeout)
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-reqCtx.Done():
+		}
+	}()
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, "POST", url, strings.NewReader(sql))
 	if err != nil {
