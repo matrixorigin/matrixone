@@ -15,6 +15,8 @@
 package proxy
 
 import (
+	"errors"
+	"net"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,4 +53,10 @@ func TestRetryableError(t *testing.T) {
 
 	e = newConnectErr(moerr.NewInternalErrorNoCtx("e"))
 	require.Equal(t, e.Error(), "internal error: e")
+}
+
+func TestErrWithCodeUnwrap(t *testing.T) {
+	err := withCode(net.ErrClosed, codeClientDisconnect)
+	require.True(t, errors.Is(err, net.ErrClosed))
+	require.True(t, isConnEndErr(err))
 }

@@ -291,15 +291,25 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 }
 
 func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
-	// Normal EOF / closed-conn client exits already tear down the backend session
-	// through the tunnel close path. Only issue an explicit KILL for wrapped client
-	// disconnects that would otherwise leave a blocked backend session behind.
-	if cc == nil || getErrorCode(err) != codeClientDisconnect || isEOFErr(err) || isConnEndErr(err) {
+	if cc == nil || getErrorCode(err) != codeClientDisconnect {
 		return
 	}
 	var currentSC ServerConn
 	if t != nil {
 		currentSC = t.getServerConn()
+	}
+	// For normal EOF / closed-connection exits, close the current backend
+	// session directly instead of creating an extra proxy->CN KILL connection.
+	if isEOFErr(err) || isConnEndErr(err) {
+		if currentSC != nil {
+			if err := currentSC.Close(); err != nil {
+				h.logger.Warn("failed to close backend connection after client disconnect",
+					zap.Uint32("Conn ID", cc.ConnID()),
+					zap.Error(err),
+				)
+			}
+		}
+		return
 	}
 	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
 		h.logger.Warn("failed to kill backend connection after client disconnect",

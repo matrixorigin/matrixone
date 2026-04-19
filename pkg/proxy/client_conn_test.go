@@ -208,7 +208,8 @@ func (r *killTestRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t 
 }
 
 type killCurrentServerConn struct {
-	cn *CNServer
+	cn      *CNServer
+	closeFn func() error
 }
 
 func (s *killCurrentServerConn) ConnID() uint32 { return s.cn.connID }
@@ -226,7 +227,12 @@ func (s *killCurrentServerConn) SetConnResponse(_ []byte) {}
 func (s *killCurrentServerConn) GetConnResponse() []byte  { return nil }
 func (s *killCurrentServerConn) CreateTime() time.Time    { return time.Now() }
 func (s *killCurrentServerConn) Quit() error              { return nil }
-func (s *killCurrentServerConn) Close() error             { return nil }
+func (s *killCurrentServerConn) Close() error {
+	if s.closeFn != nil {
+		return s.closeFn()
+	}
+	return nil
+}
 
 type killExecServerConn struct {
 	stmt internalStmt

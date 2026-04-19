@@ -323,27 +323,37 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", rt)
 	h := &handler{logger: rt.Logger()}
 
-	called := 0
-	expectedSC := &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	killCalled := 0
+	closeCalled := 0
+	expectedSC := &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
 	tun := &tunnel{}
 	tun.mu.sc = expectedSC
 	cc := &mockClientConn{
 		killFn: func(sc ServerConn) error {
 			require.Same(t, expectedSC, sc)
-			called++
+			killCalled++
 			return nil
 		},
 	}
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
-	require.Equal(t, 0, called)
+	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, closeCalled)
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
 	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
-	require.Equal(t, 0, called)
+	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, closeCalled)
 
 	h.cleanupBackendOnClientDisconnect(withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect), cc, tun)
-	require.Equal(t, 1, called)
+	require.Equal(t, 1, killCalled)
+	require.Equal(t, 1, closeCalled)
 }
 
 func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
@@ -373,7 +383,7 @@ func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
 	require.Equal(t, int64(1), h.counterSet.clientDisconnect.Load())
 }
 
-func TestHandler_handleTunnelErrSkipsCleanupForEOFClientDisconnect(t *testing.T) {
+func TestHandler_handleTunnelErrClosesBackendForEOFClientDisconnect(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
 	h := &handler{
@@ -381,19 +391,27 @@ func TestHandler_handleTunnelErrSkipsCleanupForEOFClientDisconnect(t *testing.T)
 		counterSet: newCounterSet(),
 	}
 
-	called := 0
+	killCalled := 0
+	closeCalled := 0
 	tun := &tunnel{}
-	tun.mu.sc = &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
 	cc := &mockClientConn{
 		killFn: func(sc ServerConn) error {
-			called++
+			killCalled++
 			return nil
 		},
 	}
 
 	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
 	require.NoError(t, ret)
-	require.Equal(t, 0, called)
+	require.Equal(t, 0, killCalled)
+	require.Equal(t, 1, closeCalled)
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 
