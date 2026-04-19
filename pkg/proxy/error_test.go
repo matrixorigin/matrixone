@@ -15,6 +15,9 @@
 package proxy
 
 import (
+	"errors"
+	"net"
+	"syscall"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,4 +69,14 @@ func TestTimeoutError(t *testing.T) {
 
 	// Non-connect error should not be timeout error
 	require.False(t, isTimeoutErr(moerr.NewInternalErrorNoCtx("other error")))
+}
+
+func TestErrWithCodeUnwrap(t *testing.T) {
+	err := withCode(net.ErrClosed, codeClientDisconnect)
+	require.True(t, errors.Is(err, net.ErrClosed))
+	require.True(t, isConnEndErr(err))
+
+	err = withCode(syscall.ECONNRESET, codeClientDisconnect)
+	require.True(t, errors.Is(err, syscall.ECONNRESET))
+	require.True(t, isConnEndErr(err))
 }

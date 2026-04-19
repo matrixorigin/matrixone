@@ -331,11 +331,17 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
-		defer ev.notify()
-		if err := c.handleQuitEvent(ctx); err != nil {
-			c.log.Error("failed to exec quit cmd", zap.Error(err))
-			return err
+		if c.tun != nil {
+			c.tun.markExpectedCacheQuit()
 		}
+		// Notify/finish the event immediately.
+		ev.notify()
+		// Then handle the quit event async.
+		go func() {
+			if err := c.handleQuitEvent(ctx); err != nil {
+				c.log.Error("failed to exec quit cmd", zap.Error(err))
+			}
+		}()
 		return nil
 	case *upgradeEvent:
 		return c.handleUpgradeEvent(ev, resp)

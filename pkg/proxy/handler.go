@@ -329,6 +329,22 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 	if t != nil {
 		currentSC = t.getServerConn()
 	}
+	// For normal EOF / closed-connection exits, close the current backend
+	// session directly instead of creating an extra proxy->CN KILL connection.
+	if isEOFErr(err) || isConnEndErr(err) {
+		if t != nil && t.hasExpectedCacheQuit() {
+			return
+		}
+		if currentSC != nil {
+			if err := currentSC.Close(); err != nil {
+				h.logger.Warn("failed to close backend connection after client disconnect",
+					zap.Uint32("Conn ID", cc.ConnID()),
+					zap.Error(err),
+				)
+			}
+		}
+		return
+	}
 	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
 		h.logger.Warn("failed to kill backend connection after client disconnect",
 			zap.Uint32("Conn ID", cc.ConnID()),
