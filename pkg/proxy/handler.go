@@ -291,7 +291,10 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 }
 
 func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
-	if cc == nil || getErrorCode(err) != codeClientDisconnect {
+	// Normal EOF / closed-conn client exits already tear down the backend session
+	// through the tunnel close path. Only issue an explicit KILL for wrapped client
+	// disconnects that would otherwise leave a blocked backend session behind.
+	if cc == nil || getErrorCode(err) != codeClientDisconnect || isEOFErr(err) || isConnEndErr(err) {
 		return
 	}
 	var currentSC ServerConn

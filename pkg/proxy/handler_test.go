@@ -336,10 +336,13 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 	}
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
-	require.Equal(t, 1, called)
+	require.Equal(t, 0, called)
 
 	h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeServerDisconnect), cc, tun)
 	h.cleanupBackendOnClientDisconnect(io.EOF, cc, tun)
+	require.Equal(t, 0, called)
+
+	h.cleanupBackendOnClientDisconnect(withCode(moerr.NewInternalErrorNoCtx("send message error: connection reset by peer"), codeClientDisconnect), cc, tun)
 	require.Equal(t, 1, called)
 }
 
@@ -368,6 +371,30 @@ func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
 	require.Same(t, err, ret)
 	require.Equal(t, 1, called)
 	require.Equal(t, int64(1), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrSkipsCleanupForEOFClientDisconnect(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	called := 0
+	tun := &tunnel{}
+	tun.mu.sc = &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn-new"}}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			called++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 0, called)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {
