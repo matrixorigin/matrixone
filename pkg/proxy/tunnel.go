@@ -123,6 +123,10 @@ type tunnel struct {
 	// more proactive.
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
+	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
+	// for connection caching, so the follow-up client EOF should not tear down
+	// the backend session that is being cached.
+	expectedCacheQuit atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -246,6 +250,16 @@ func (t *tunnel) getServerConn() ServerConn {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.mu.sc
+}
+
+func (t *tunnel) markExpectedCacheQuit() {
+	if t != nil {
+		t.expectedCacheQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedCacheQuit() bool {
+	return t != nil && t.expectedCacheQuit.Load()
 }
 
 // setError tries to set the tunnel error if there is no error.

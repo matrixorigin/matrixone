@@ -17,6 +17,7 @@ package proxy
 import (
 	"errors"
 	"net"
+	"syscall"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,5 +59,9 @@ func TestRetryableError(t *testing.T) {
 func TestErrWithCodeUnwrap(t *testing.T) {
 	err := withCode(net.ErrClosed, codeClientDisconnect)
 	require.True(t, errors.Is(err, net.ErrClosed))
+	require.True(t, isConnEndErr(err))
+
+	err = withCode(syscall.ECONNRESET, codeClientDisconnect)
+	require.True(t, errors.Is(err, syscall.ECONNRESET))
 	require.True(t, isConnEndErr(err))
 }

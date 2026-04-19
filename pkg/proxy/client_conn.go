@@ -323,6 +323,9 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
+		if c.tun != nil {
+			c.tun.markExpectedCacheQuit()
+		}
 		// Notify/finish the event immediately.
 		ev.notify()
 		// Then handle the quit event async.

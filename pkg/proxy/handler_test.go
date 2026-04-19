@@ -26,7 +26,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -412,6 +414,89 @@ func TestHandler_handleTunnelErrClosesBackendForEOFClientDisconnect(t *testing.T
 	require.NoError(t, ret)
 	require.Equal(t, 0, killCalled)
 	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnect(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "net.ErrClosed",
+			err:  withCode(net.ErrClosed, codeClientDisconnect),
+		},
+		{
+			name: "syscall.ECONNRESET",
+			err:  withCode(syscall.ECONNRESET, codeClientDisconnect),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			killCalled := 0
+			closeCalled := 0
+			tun := &tunnel{}
+			tun.mu.sc = &killCurrentServerConn{
+				cn: &CNServer{connID: 11, uuid: "cn-new"},
+				closeFn: func() error {
+					closeCalled++
+					return nil
+				},
+			}
+			cc := &mockClientConn{
+				killFn: func(sc ServerConn) error {
+					killCalled++
+					return nil
+				},
+			}
+
+			ret := h.handleTunnelErr(tc.err, cc, tun, 733923, 100)
+			require.NoError(t, ret)
+			require.Equal(t, 0, killCalled)
+			require.Equal(t, 1, closeCalled)
+			require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+		})
+	}
+}
+
+func TestHandler_handleTunnelErrSkipsBackendCleanupForExpectedCacheQuit(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	tun.markExpectedCacheQuit()
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 0, killCalled)
+	require.Equal(t, 0, closeCalled)
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 

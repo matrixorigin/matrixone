@@ -187,6 +187,21 @@ func (c *mockClientConn) KillCurrentBackendConn(sc ServerConn) error {
 }
 func (c *mockClientConn) Close() error { return nil }
 
+type mockConnCache struct {
+	pushFn func(cacheKey, ServerConn) bool
+}
+
+func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
+	if m.pushFn != nil {
+		return m.pushFn(key, sc)
+	}
+	return true
+}
+
+func (m *mockConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn { return nil }
+func (m *mockConnCache) Count() int                                      { return 0 }
+func (m *mockConnCache) Close() error                                    { return nil }
+
 type killTestRouter struct {
 	connectFn func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error)
 }
@@ -315,6 +330,31 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
 	require.Equal(t, "kill connection 42", execSC.stmt.s)
+}
+
+func TestClientConn_HandleQuitEventMarksExpectedCacheQuit(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+
+	c := &clientConn{
+		tun: tun,
+		sc:  &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn1"}},
+		connCache: &mockConnCache{
+			pushFn: func(key cacheKey, sc ServerConn) bool {
+				return true
+			},
+		},
+	}
+
+	e := makeQuitEvent().(*quitEvent)
+	errC := make(chan error, 1)
+	go func() {
+		errC <- c.HandleEvent(context.Background(), e, nil)
+	}()
+	e.wait()
+	require.NoError(t, <-errC)
+	require.True(t, tun.hasExpectedCacheQuit())
 }
 
 func copyCNServer(dst, src *CNServer) {
