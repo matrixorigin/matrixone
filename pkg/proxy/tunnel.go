@@ -742,7 +742,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
+			return errors.Join(
+				moerr.NewInternalErrorNoCtxf("send message error: %v", err),
+				err,
+			)
 		}
 	}
 	return ctx.Err()

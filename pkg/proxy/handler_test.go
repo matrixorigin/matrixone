@@ -23,6 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -436,6 +437,26 @@ func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnect(t
 		{
 			name: "syscall.ECONNRESET",
 			err:  withCode(syscall.ECONNRESET, codeClientDisconnect),
+		},
+		{
+			name: "joined send net.ErrClosed",
+			err: withCode(
+				errors.Join(
+					moerr.NewInternalErrorNoCtxf("send message error: %v", net.ErrClosed),
+					net.ErrClosed,
+				),
+				codeClientDisconnect,
+			),
+		},
+		{
+			name: "joined send syscall.ECONNRESET",
+			err: withCode(
+				errors.Join(
+					moerr.NewInternalErrorNoCtxf("send message error: %v", syscall.ECONNRESET),
+					syscall.ECONNRESET,
+				),
+				codeClientDisconnect,
+			),
 		},
 	}
 
