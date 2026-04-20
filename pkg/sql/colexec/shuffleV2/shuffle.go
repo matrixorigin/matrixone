@@ -143,6 +143,9 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 // and either returns the batch directly (single bucket) or splits it into the shuffle pool.
 // The original batch is NOT modified — the expression result is used only for hashing.
 func (shuffle *ShuffleV2) evalAndShuffle(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if shuffle.ShuffleType != int32(plan.ShuffleType_Hash) {
+		panic("evalAndShuffle in ShuffleV2 only supports hash shuffle type")
+	}
 	vec, err := shuffle.ctr.exprExec.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return nil, err
@@ -805,145 +808,145 @@ func rangeShuffle(ap *ShuffleV2, bat *batch.Batch, proc *process.Process) (*batc
 
 // shuffleConstVecByHash computes the bucket index for a constant vector.
 func shuffleConstVecByHash(bucketNum int32, vec *vector.Vector) uint64 {
-lenRegs := uint64(bucketNum)
-switch vec.GetType().Oid {
-case types.T_int64:
-return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int64](vec)[0]), lenRegs)
-case types.T_int32:
-return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int32](vec)[0]), lenRegs)
-case types.T_int16:
-return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int16](vec)[0]), lenRegs)
-case types.T_uint64:
-return plan2.SimpleInt64HashToRange(vector.MustFixedColNoTypeCheck[uint64](vec)[0], lenRegs)
-case types.T_uint32:
-return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint32](vec)[0]), lenRegs)
-case types.T_uint16:
-return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
-case types.T_char, types.T_varchar, types.T_text:
-groupByCol, area := vector.MustVarlenaRawData(vec)
-return plan2.SimpleCharHashToRange(groupByCol[0].GetByteSlice(area), lenRegs)
-default:
-panic("unsupported shuffle type, wrong plan!")
-}
+	lenRegs := uint64(bucketNum)
+	switch vec.GetType().Oid {
+	case types.T_int64:
+		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int64](vec)[0]), lenRegs)
+	case types.T_int32:
+		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int32](vec)[0]), lenRegs)
+	case types.T_int16:
+		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[int16](vec)[0]), lenRegs)
+	case types.T_uint64:
+		return plan2.SimpleInt64HashToRange(vector.MustFixedColNoTypeCheck[uint64](vec)[0], lenRegs)
+	case types.T_uint32:
+		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint32](vec)[0]), lenRegs)
+	case types.T_uint16:
+		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
+	case types.T_char, types.T_varchar, types.T_text:
+		groupByCol, area := vector.MustVarlenaRawData(vec)
+		return plan2.SimpleCharHashToRange(groupByCol[0].GetByteSlice(area), lenRegs)
+	default:
+		panic("unsupported shuffle type, wrong plan!")
+	}
 }
 
 // hashShuffleVecWithNull hashes a vector with null values into shuffle bucket selections.
 func hashShuffleVecWithNull(sels [][]int32, vec *vector.Vector, lenRegs uint64) {
-switch vec.GetType().Oid {
-case types.T_int64:
-col := vector.MustFixedColNoTypeCheck[int64](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_int32:
-col := vector.MustFixedColNoTypeCheck[int32](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_int16:
-col := vector.MustFixedColNoTypeCheck[int16](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint64:
-col := vector.MustFixedColNoTypeCheck[uint64](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(v, lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint32:
-col := vector.MustFixedColNoTypeCheck[uint32](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint16:
-col := vector.MustFixedColNoTypeCheck[uint16](vec)
-for row, v := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_char, types.T_varchar, types.T_text:
-col, area := vector.MustVarlenaRawData(vec)
-for row := range col {
-regIndex := uint64(0)
-if !vec.IsNull(uint64(row)) {
-regIndex = plan2.SimpleCharHashToRange(col[row].GetByteSlice(area), lenRegs)
-}
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-default:
-panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
-}
+	switch vec.GetType().Oid {
+	case types.T_int64:
+		col := vector.MustFixedColNoTypeCheck[int64](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int32:
+		col := vector.MustFixedColNoTypeCheck[int32](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int16:
+		col := vector.MustFixedColNoTypeCheck[int16](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint64:
+		col := vector.MustFixedColNoTypeCheck[uint64](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(v, lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint32:
+		col := vector.MustFixedColNoTypeCheck[uint32](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint16:
+		col := vector.MustFixedColNoTypeCheck[uint16](vec)
+		for row, v := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		col, area := vector.MustVarlenaRawData(vec)
+		for row := range col {
+			regIndex := uint64(0)
+			if !vec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleCharHashToRange(col[row].GetByteSlice(area), lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	default:
+		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
+	}
 }
 
 // hashShuffleVecWithoutNull hashes a vector without null values into shuffle bucket selections.
 func hashShuffleVecWithoutNull(sels [][]int32, vec *vector.Vector, lenRegs uint64) {
-switch vec.GetType().Oid {
-case types.T_int64:
-col := vector.MustFixedColNoTypeCheck[int64](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_int32:
-col := vector.MustFixedColNoTypeCheck[int32](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_int16:
-col := vector.MustFixedColNoTypeCheck[int16](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint64:
-col := vector.MustFixedColNoTypeCheck[uint64](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint32:
-col := vector.MustFixedColNoTypeCheck[uint32](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_uint16:
-col := vector.MustFixedColNoTypeCheck[uint16](vec)
-for row, v := range col {
-regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-case types.T_char, types.T_varchar, types.T_text:
-col, area := vector.MustVarlenaRawData(vec)
-for row := range col {
-regIndex := plan2.SimpleCharHashToRange(col[row].GetByteSlice(area), lenRegs)
-sels[regIndex] = append(sels[regIndex], int32(row))
-}
-default:
-panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
-}
+	switch vec.GetType().Oid {
+	case types.T_int64:
+		col := vector.MustFixedColNoTypeCheck[int64](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int32:
+		col := vector.MustFixedColNoTypeCheck[int32](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int16:
+		col := vector.MustFixedColNoTypeCheck[int16](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint64:
+		col := vector.MustFixedColNoTypeCheck[uint64](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint32:
+		col := vector.MustFixedColNoTypeCheck[uint32](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint16:
+		col := vector.MustFixedColNoTypeCheck[uint16](vec)
+		for row, v := range col {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		col, area := vector.MustVarlenaRawData(vec)
+		for row := range col {
+			regIndex := plan2.SimpleCharHashToRange(col[row].GetByteSlice(area), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	default:
+		panic(fmt.Sprintf("unsupported shuffle type %v, wrong plan!", vec.GetType()))
+	}
 }

@@ -378,15 +378,6 @@ func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	return nil, -1
 }
 
-// IsShuffleExpr returns true if the expression is a function expression that can be used for shuffle
-// but does not have a direct column reference (e.g., serial_full, serial).
-func IsShuffleExpr(expr *plan.Expr) bool {
-	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		return e.F.Func.ObjName == "serial_full" || e.F.Func.ObjName == "serial"
-	}
-	return false
-}
-
 func maybeSorted(node *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if node.NodeType == plan.Node_TABLE_SCAN {
@@ -482,8 +473,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	logutil.Infof("shuffle decision: join type=%v isRightJoin=%v hashmapSize=%.0f", node.JoinType, node.IsRightJoin, node.Stats.HashmapStats.HashmapSize)
-
 	switch node.JoinType {
 	case plan.Node_DEDUP:
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.GetDedupJoinCtx().GetOldColList()) > 0 {
@@ -540,7 +529,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
-			logutil.Infof("shuffle decision: skip right join, hashmapSize=%.0f < threshold=%v", node.Stats.HashmapStats.HashmapSize, threshHoldForRightJoinShuffle)
 			return
 		}
 	} else {
@@ -548,7 +536,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		rightchild := builder.qry.Nodes[node.Children[1]]
 		factor := math.Pow((leftchild.Stats.Outcnt / rightchild.Stats.Outcnt), 0.4)
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForShuffleJoin*factor {
-			logutil.Infof("shuffle decision: skip join, hashmapSize=%.0f < threshold=%.0f (factor=%.2f, leftOut=%.0f, rightOut=%.0f)", node.Stats.HashmapStats.HashmapSize, threshHoldForShuffleJoin*factor, factor, leftchild.Stats.Outcnt, rightchild.Stats.Outcnt)
 			return
 		}
 	}
@@ -564,18 +551,12 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 
 	leftHashCol, typ := GetHashColumn(expr0)
 	if leftHashCol == nil && typ == -1 {
-		logutil.Infof("shuffle decision: skip join, left GetHashColumn returned nil")
 		return
 	}
 	rightHashCol, rightTyp := GetHashColumn(expr1)
 	if rightHashCol == nil && rightTyp == -1 {
-		logutil.Infof("shuffle decision: skip join, right GetHashColumn returned nil")
 		return
 	}
-	_ = rightHashCol
-	_ = rightTyp
-
-	logutil.Infof("shuffle decision: GetHashColumn ok, leftCol=%v typ=%v rightTyp=%v", leftHashCol, typ, rightTyp)
 
 	//for now ,only support integer and string type
 	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
@@ -595,32 +576,26 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
 			}
 		}
-		logutil.Infof("shuffle decision: enabled shuffle=%v type=%v for typ=%v exprBased=%v ndv=%.0f", node.Stats.HashmapStats.Shuffle, node.Stats.HashmapStats.ShuffleType, types.T(typ), isExprBasedShuffle, node.OnList[idx].Ndv)
 	default:
-		logutil.Infof("shuffle decision: skip join, unsupported type %v", types.T(typ))
 	}
 
 	//recheck shuffle plan
 	if node.Stats.HashmapStats.Shuffle {
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
-			logutil.Infof("shuffle decision: recheck disabled hash shuffle, hashmapSize=%.0f < %v", node.Stats.HashmapStats.HashmapSize, threshHoldForHashShuffle)
 			node.Stats.HashmapStats.Shuffle = false
 		}
 
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range && node.Stats.HashmapStats.Ranges == nil && node.Stats.HashmapStats.ShuffleColMax-node.Stats.HashmapStats.ShuffleColMin < 100000 {
-			logutil.Infof("shuffle decision: recheck disabled range shuffle, ranges=nil colMax-colMin=%v", node.Stats.HashmapStats.ShuffleColMax-node.Stats.HashmapStats.ShuffleColMin)
 			node.Stats.HashmapStats.Shuffle = false
 		}
 		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
 			highestNDV := node.OnList[idx].Ndv
 			if highestNDV < ShuffleThreshHoldOfNDV {
-				logutil.Infof("shuffle decision: recheck disabled by NDV=%.0f < %v", highestNDV, ShuffleThreshHoldOfNDV)
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
 
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
-			logutil.Infof("shuffle decision: recheck disabled hash shuffle for dedup right join")
 			node.Stats.HashmapStats.Shuffle = false
 		}
 
@@ -633,8 +608,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
-
-	logutil.Infof("shuffle decision: final result shuffle=%v type=%v method=%v for join type=%v", node.Stats.HashmapStats.Shuffle, node.Stats.HashmapStats.ShuffleType, node.Stats.HashmapStats.ShuffleMethod, node.JoinType)
 }
 
 // find mergegroup or mergegroup->filter node
