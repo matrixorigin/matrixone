@@ -195,6 +195,12 @@ func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
 	}
 }
 
+func WithExtraWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.extraWorkspaceThreshold = th
+	}
+}
+
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
 		e.config.insertEntryMaxCount = th

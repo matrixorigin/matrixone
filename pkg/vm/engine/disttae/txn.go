@@ -599,6 +599,23 @@ func (txn *Transaction) checkDup() error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 // start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
 // modify txn.writes, so it can only be called right before txn.commit.
+// scanInMemInsertSize sums the in-memory INSERT batch sizes in writes[from:].
+func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
+	var size uint64
+	for i := from; i < len(txn.writes); i++ {
+		if txn.writes[i].isCatalog() {
+			continue
+		}
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			size += uint64(txn.writes[i].bat.Size())
+		}
+	}
+	return size
+}
+
 func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
@@ -625,22 +642,37 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 
 	if !dumpAll && !forceFlush {
-		for i := offset; i < len(txn.writes); i++ {
-			if txn.writes[i].isCatalog() {
-				continue
-			}
-			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-				continue
-			}
-			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-				size += uint64(txn.writes[i].bat.Size())
-			}
-		}
+		forceDump := false
+		size = txn.scanInMemInsertSize(offset)
 		if size < txn.writeWorkspaceThreshold {
-			return nil
+			// Safety valve: even though the current statement's writes are small,
+			// the global workspace may have accumulated too much data (e.g., when
+			// IncrStatementID is disabled during HNSW index creation via RunSql).
+			// In that case, rescan from the current statement's start to dump all
+			// accumulated data within this statement. We use the statement boundary
+			// (not 0) to avoid compacting prior statements' entries, which would
+			// break offsets[] used by RollbackLastStatement.
+			if txn.approximateInMemInsertSize >= txn.engine.config.extraWorkspaceThreshold {
+				stmtStart := 0
+				if txn.statementID > 0 {
+					stmtStart = txn.offsets[txn.statementID-1]
+				}
+				logutil.Info(
+					"WORKSPACE-FORCE-DUMP",
+					zap.Uint64("approximateInMemInsertSize", txn.approximateInMemInsertSize),
+					zap.Uint64("extraWorkspaceThreshold", txn.engine.config.extraWorkspaceThreshold),
+					zap.Int("stmtStart", stmtStart),
+					zap.String("txn", txn.op.Txn().DebugString()),
+				)
+				offset = stmtStart
+				size = txn.scanInMemInsertSize(stmtStart)
+				forceDump = true
+			} else {
+				return nil
+			}
 		}
 
-		if size < txn.engine.config.extraWorkspaceThreshold {
+		if !forceDump && size < txn.engine.config.extraWorkspaceThreshold {
 			// try to increase the write threshold from quota, if failed, then dump all
 			// acquire 5M more than we need
 			quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
@@ -2200,6 +2232,14 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
+}
+
+// ApproximateInMemInsertSize returns the approximate total size of in-memory
+// insert entries in the workspace. Intended for testing and diagnostics.
+func (txn *Transaction) ApproximateInMemInsertSize() uint64 {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.approximateInMemInsertSize
 }
 
 func (txn *Transaction) CloneSnapshotWS() client.Workspace {
