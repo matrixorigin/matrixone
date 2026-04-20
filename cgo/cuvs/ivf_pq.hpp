@@ -822,6 +822,10 @@ public:
 
         cuvs::neighbors::ivf_pq::search_params search_params;
         search_params.n_probes = sp.n_probes;
+        if constexpr (std::is_same_v<T, __half>) {
+            search_params.lut_dtype = CUDA_R_16F;
+            search_params.internal_distance_dtype = CUDA_R_16F;
+        }
 
         auto res = handle.get_raft_resources();
 
@@ -836,7 +840,7 @@ public:
                 handle.set_index_ptr(std::any());
             }
         }
-        
+
         if (!local_index) {
             if (!this->replicated_indices_.empty()) {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
@@ -1062,6 +1066,10 @@ public:
 
         cuvs::neighbors::ivf_pq::search_params search_params;
         search_params.n_probes = sp.n_probes;
+        if constexpr (std::is_same_v<T, __half>) {
+            search_params.lut_dtype = CUDA_R_16F;
+            search_params.internal_distance_dtype = CUDA_R_16F;
+        }
 
         const ivf_pq_index* local_index = nullptr;
         std::any cached_ptr = handle.get_index_ptr();
@@ -1074,7 +1082,7 @@ public:
                 handle.set_index_ptr(std::any());
             }
         }
-        
+
         if (!local_index) {
             if (!this->replicated_indices_.empty()) {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
