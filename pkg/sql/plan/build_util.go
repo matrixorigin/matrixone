@@ -691,6 +691,9 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		return nil
 	}
 	for _, arg := range args {
+		if arg == nil {
+			return moerr.NewInternalErrorNoCtxf("convertValueIntoBool got nil argument for function %s", name)
+		}
 		if arg.Typ.Id == int32(types.T_bool) {
 			continue
 		}

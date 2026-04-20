@@ -217,3 +217,14 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, def)
 }
+
+func TestConvertValueIntoBoolNilArg(t *testing.T) {
+	args := []*Expr{
+		makePlan2BoolConstExprWithType(true),
+		nil,
+	}
+
+	err := convertValueIntoBool("and", args, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil argument")
+}
