@@ -482,7 +482,7 @@ func NewGpuIvfPqFromDataDirectory[T VectorType](dir string, dimension uint32, me
 	cDir := C.CString(dir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_ivf_pq_load_dir(cIvfPq, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_load_dir(cIvfPq, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -606,8 +606,10 @@ func (gi *GpuIvfPq[T]) Pack(filename string) error {
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
+// mode overrides the distribution mode at load time — pass Replicated to broadcast
+// a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfPq[T]) Unpack(filename string) error {
+func (gi *GpuIvfPq[T]) Unpack(filename string, mode DistributionMode) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -626,7 +628,7 @@ func (gi *GpuIvfPq[T]) Unpack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_ivf_pq_load_dir(gi.cIvfPq, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_load_dir(gi.cIvfPq, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

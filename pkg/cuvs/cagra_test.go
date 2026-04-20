@@ -155,7 +155,7 @@ func TestGpuCagraPackUnpack(t *testing.T) {
 			if err := index2.Start(); err != nil {
 				t.Fatalf("index2 Start failed: %v", err)
 			}
-			if err := index2.Unpack(filename); err != nil {
+			if err := index2.Unpack(filename, SingleGpu); err != nil {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 

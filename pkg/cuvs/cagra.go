@@ -228,7 +228,7 @@ func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, me
 	cDir := C.CString(dir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_cagra_load_dir(cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -540,8 +540,10 @@ func (gi *GpuCagra[T]) Pack(filename string) error {
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
+// mode overrides the distribution mode at load time — pass Replicated to broadcast
+// a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuCagra[T]) Unpack(filename string) error {
+func (gi *GpuCagra[T]) Unpack(filename string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -560,7 +562,7 @@ func (gi *GpuCagra[T]) Unpack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
-	C.gpu_cagra_load_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -975,15 +977,16 @@ func (gi *GpuCagra[T]) SaveToDir(dirPath string) error {
 }
 
 // LoadFromDir loads index components from a directory using gpu_cagra_load_dir.
+// mode overrides the distribution mode at load time.
 // The index must already be initialized and started before calling LoadFromDir.
-func (gi *GpuCagra[T]) LoadFromDir(dirPath string) error {
+func (gi *GpuCagra[T]) LoadFromDir(dirPath string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
 	cDir := C.CString(dirPath)
 	defer C.free(unsafe.Pointer(cDir))
-	C.gpu_cagra_load_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

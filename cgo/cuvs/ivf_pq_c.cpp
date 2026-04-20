@@ -437,15 +437,16 @@ void gpu_ivf_pq_delete_id(gpu_ivf_pq_c index_c, int64_t id, void* errmsg) {
     }
 }
 
-void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg) {
+void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir,
+                          distribution_mode_t target_mode, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->load_dir(dir); break;
-            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->load_dir(dir); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->load_dir(dir); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->load_dir(dir); break;
+            case Quantization_F32:   static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->load_dir(dir, target_mode); break;
+            case Quantization_F16:   static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->load_dir(dir, target_mode); break;
+            case Quantization_INT8:  static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->load_dir(dir, target_mode); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->load_dir(dir, target_mode); break;
             default: break;
         }
     } catch (const std::exception& e) {

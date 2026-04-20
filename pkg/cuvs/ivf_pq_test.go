@@ -174,7 +174,7 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 			if err := index2.Start(); err != nil {
 				t.Fatalf("index2 Start failed: %v", err)
 			}
-			if err := index2.Unpack(filename); err != nil {
+			if err := index2.Unpack(filename, SingleGpu); err != nil {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 
@@ -496,6 +496,7 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 8
+	bp.KmeansTrainsetFraction = 1.0
 	// Use Float16 so ExtendFloat exercises quantization
 	index, err := NewGpuIvfPq[Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
@@ -511,10 +512,13 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	nExt := uint64(50)
 	ext := make([]float32, nExt*uint64(dimension))
 	extIDs := make([]int64, nExt)
+	// Use 200.0: far from base vectors (0-99) but within float16 PQ range.
+	// With centroid ~94.5, residual per dim = 105.5, per-subvec dist = 2*105.5^2 ≈ 22260 < float16 max (65504).
+	const extVal = float32(200.0)
 	for i := uint64(0); i < nExt; i++ {
 		extIDs[i] = int64(3000 + i)
 		for j := uint32(0); j < dimension; j++ {
-			ext[i*uint64(dimension)+uint64(j)] = 500.5
+			ext[i*uint64(dimension)+uint64(j)] = extVal
 		}
 	}
 	if err := index.ExtendFloat(ext, nExt, extIDs); err != nil {
@@ -529,16 +533,16 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	sp.NProbes = 10
 
 	// Query exactly at extended cluster; expect ID in [3000, 3050)
-	q500 := make([]float32, dimension)
-	for j := range q500 {
-		q500[j] = 500.5
+	qExt := make([]float32, dimension)
+	for j := range qExt {
+		qExt[j] = extVal
 	}
-	r, err := index.SearchFloat(q500, 1, dimension, 1, sp)
+	r, err := index.SearchFloat(qExt, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("SearchFloat failed: %v", err)
 	}
 	if r.Neighbors[0] < 3000 || r.Neighbors[0] >= 3050 {
-		t.Errorf("expected neighbor in [3000, 3050), got %d", r.Neighbors[0])
+		t.Errorf("expected neighbor in [3000, 3050), got %d dist=%f", r.Neighbors[0], r.Distances[0])
 	}
 }
 

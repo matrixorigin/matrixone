@@ -95,7 +95,8 @@ void gpu_ivf_flat_delete_id(gpu_ivf_flat_c index_c, int64_t id, void* errmsg);
 
 // Load all components from a directory previously written by gpu_ivf_flat_save_dir.
 // The index must have been created and started before calling this.
-void gpu_ivf_flat_load_dir(gpu_ivf_flat_c index_c, const char* dir, void* errmsg);
+void gpu_ivf_flat_load_dir(gpu_ivf_flat_c index_c, const char* dir,
+                            distribution_mode_t target_mode, void* errmsg);
 
 // Search function
 typedef struct {

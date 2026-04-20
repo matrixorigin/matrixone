@@ -515,7 +515,7 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	if err = gi.Unpack(idx.Path); err != nil {
+	if err = gi.Unpack(idx.Path, mode); err != nil {
 		gi.Destroy()
 		return err
 	}

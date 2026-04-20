@@ -825,7 +825,9 @@ public:
         search_params.n_probes = sp.n_probes;
         if constexpr (std::is_same_v<T, __half>) {
             search_params.lut_dtype = CUDA_R_16F;
-            search_params.internal_distance_dtype = CUDA_R_16F;
+            // Keep accumulation in float32 to prevent overflow when M sub-vector
+            // distances are summed: M * max_lut_entry can easily exceed float16 max.
+            search_params.internal_distance_dtype = CUDA_R_32F;
         }
 
         auto res = handle.get_raft_resources();
@@ -1069,7 +1071,7 @@ public:
         search_params.n_probes = sp.n_probes;
         if constexpr (std::is_same_v<T, __half>) {
             search_params.lut_dtype = CUDA_R_16F;
-            search_params.internal_distance_dtype = CUDA_R_16F;
+            search_params.internal_distance_dtype = CUDA_R_32F;
         }
 
         const ivf_pq_index* local_index = nullptr;
@@ -1346,8 +1348,13 @@ public:
     }
 
     // Restore all index state from a directory previously written by save_dir().
-    void load_dir(const std::string& dir) {
+    // target_mode overrides this->dist_mode, allowing a SINGLE_GPU .tar to be
+    // loaded as REPLICATED (broadcasts index.bin to all GPUs) without rebuilding.
+    void load_dir(const std::string& dir, distribution_mode_t target_mode) {
         auto m = this->read_manifest(dir, "ivf_pq");
+        if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
+            throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");
+        this->dist_mode = target_mode;
 
         std::string bp_json = json_object(m.raw, "build_params");
         this->build_params.n_lists =

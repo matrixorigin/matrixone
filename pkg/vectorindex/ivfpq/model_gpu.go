@@ -102,6 +102,12 @@ func (idx *IvfpqModel[T]) InitEmpty(totalCount uint64) error {
 	if err != nil {
 		return err
 	}
+	// Build on a single GPU regardless of the configured distribution mode.
+	// Pack() saves as SINGLE_GPU; LoadIndex() broadcasts to all GPUs on load.
+	buildMode := mode
+	if buildMode == cuvs.Replicated {
+		buildMode = cuvs.SingleGpu
+	}
 	gi, err := cuvs.NewGpuIvfPqEmpty[T](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsIvfpq.Dimensions),
@@ -109,7 +115,7 @@ func (idx *IvfpqModel[T]) InitEmpty(totalCount uint64) error {
 		bp,
 		idx.Devices,
 		idx.NThread,
-		mode,
+		buildMode,
 	)
 	if err != nil {
 		return err
@@ -490,7 +496,7 @@ func (idx *IvfpqModel[T]) LoadIndex(
 		return err
 	}
 
-	if err = gi.Unpack(idx.Path); err != nil {
+	if err = gi.Unpack(idx.Path, mode); err != nil {
 		gi.Destroy()
 		return err
 	}

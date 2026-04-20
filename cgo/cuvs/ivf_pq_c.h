@@ -100,8 +100,11 @@ void gpu_ivf_pq_save_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg);
 void gpu_ivf_pq_delete_id(gpu_ivf_pq_c index_c, int64_t id, void* errmsg);
 
 // Load all components from a directory previously written by gpu_ivf_pq_save_dir.
+// target_mode overrides the distribution mode at load time (e.g. load a SINGLE_GPU
+// .tar as REPLICATED to broadcast the index to all GPUs).
 // The index must have been created and started before calling this.
-void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir, void* errmsg);
+void gpu_ivf_pq_load_dir(gpu_ivf_pq_c index_c, const char* dir,
+                          distribution_mode_t target_mode, void* errmsg);
 
 // Search function
 typedef struct {

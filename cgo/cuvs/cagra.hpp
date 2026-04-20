@@ -1343,8 +1343,11 @@ public:
     // Restore all index state from a directory previously written by save_dir().
     // The index object must have been constructed with the appropriate device list
     // and worker already initialized.
-    void load_dir(const std::string& dir) {
+    void load_dir(const std::string& dir, distribution_mode_t target_mode) {
         auto m = this->read_manifest(dir, "cagra");
+        if (this->dist_mode == DistributionMode_SHARDED && target_mode != DistributionMode_SHARDED)
+            throw std::invalid_argument("cannot change dist_mode: index was built as SHARDED");
+        this->dist_mode = target_mode;
 
         std::string bp_json = json_object(m.raw, "build_params");
         this->build_params.intermediate_graph_degree =
