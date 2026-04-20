@@ -52,10 +52,6 @@ func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt ve
 	return nil
 }
 
-func (m *MockSearch) SearchFloat32WithKeyUint32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return nil
-}
-
 func (m *MockSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
@@ -79,10 +75,6 @@ func (m *MockAnySearch) Load(*sqlexec.SqlProcess) error {
 }
 
 func (m *MockAnySearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
-	return nil
-}
-
-func (m *MockAnySearch) SearchFloat32WithKeyUint32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
 	return nil
 }
 
@@ -112,10 +104,6 @@ func (m *MockSearchLoadError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query a
 	return nil
 }
 
-func (m *MockSearchLoadError) SearchFloat32WithKeyUint32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return nil
-}
-
 func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
 	return nil
 }
@@ -139,10 +127,6 @@ func (m *MockSearchSearchError) Load(*sqlexec.SqlProcess) error {
 }
 
 func (m *MockSearchSearchError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
-	return nil
-}
-
-func (m *MockSearchSearchError) SearchFloat32WithKeyUint32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
 	return nil
 }
 

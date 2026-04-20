@@ -786,5 +786,52 @@ func (s *Scope) handleVectorIvfpqIndex(
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
 ) error {
+	// 1. static check
+	if len(indexDefs) != 2 {
+		return moerr.NewInternalErrorNoCtx("invalid ivfpq index table definition")
+	}
+	if len(indexDefs[catalog.Ivfpq_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid ivfpq index part must be 1.")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
+				return err
+			}
+		}
+	}
+
+	// clear the cache
+	key := indexDefs[catalog.Ivfpq_TblType_Storage].IndexTableName
+	cache.Cache.Remove(key)
+
+	// delete old data first
+	{
+		sqls, err := genDeleteIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+
+		for _, sql := range sqls {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. build ivfpq index
+	sqls, err := genBuildIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	for _, sql := range sqls {
+		if err = c.runSql(sql); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

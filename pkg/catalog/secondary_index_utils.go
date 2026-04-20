@@ -395,6 +395,47 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
 			}
 
+		case tree.INDEX_TYPE_IVFPQ:
+			if idx.IndexOption.AlgoParamList > 0 {
+				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
+			}
+			if idx.IndexOption.AlgoParamM > 0 {
+				res[HnswM] = strconv.FormatInt(idx.IndexOption.AlgoParamM, 10)
+			}
+			if idx.IndexOption.BitsPerCode > 0 {
+				res[BitsPerCode] = strconv.FormatInt(idx.IndexOption.BitsPerCode, 10)
+			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance
+			}
+
+			if len(idx.IndexOption.Quantization) > 0 {
+				quantize := ToLower(idx.IndexOption.Quantization)
+				if !metric.ValidQuantization(quantize) {
+					return nil, moerr.NewInternalErrorNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
+				}
+				res[Quantization] = quantize
+			} else {
+				res[Quantization] = metric.Quantization_F32_Str
+			}
+
+			if len(idx.IndexOption.DistributionMode) > 0 {
+				mode := ToLower(idx.IndexOption.DistributionMode)
+				if !vectorindex.ValidDistributionMode(mode) {
+					return nil, moerr.NewInternalErrorNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
+				}
+				res[DistributionMode] = mode
+			} else {
+				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
+			}
+
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
 		}

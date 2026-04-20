@@ -125,10 +125,6 @@ func (m *MockIvfSearch[T]) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any,
 	return nil
 }
 
-func (m *MockIvfSearch[T]) SearchFloat32WithKeyUint32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return nil
-}
-
 func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

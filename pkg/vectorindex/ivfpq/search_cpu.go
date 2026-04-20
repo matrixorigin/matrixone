@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cagra
+package ivfpq
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -23,31 +23,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// CagraSearch is a dummy placeholder for non-GPU builds.
-type CagraSearch[T cuvs.VectorType] struct {
+// IvfpqSearch is a dummy placeholder for non-GPU builds.
+type IvfpqSearch[T cuvs.VectorType] struct {
 	Idxcfg  vectorindex.IndexConfig
 	Tblcfg  vectorindex.IndexTableConfig
 	Devices []int
 }
 
-func NewCagraSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[T] {
-	return &CagraSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, Devices: devices}
+func NewIvfpqSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *IvfpqSearch[T] {
+	return &IvfpqSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, Devices: devices}
 }
 
-func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
 	return nil, nil, errGPURequired
 }
 
-func (s *CagraSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+func (s *IvfpqSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return errGPURequired
 }
 
-func (s *CagraSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return errGPURequired
 }
 
-func (s *CagraSearch[T]) Destroy() {}
+func (s *IvfpqSearch[T]) Destroy() {}
 
-func (s *CagraSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+func (s *IvfpqSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return errGPURequired
 }

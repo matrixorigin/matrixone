@@ -124,6 +124,16 @@ type IvfParam struct {
 	Distribution string `json:"distribution_mode"`
 }
 
+// IVF-PQ specified parameters
+type IvfpqParam struct {
+	Lists        string `json:"lists"`
+	M            string `json:"m"`
+	BitsPerCode  string `json:"bits_per_code"`
+	OpType       string `json:"op_type"`
+	Quantization string `json:"quantization"`
+	Distribution string `json:"distribution_mode"`
+}
+
 // CAGRA specified parameters
 type CagraParam struct {
 	M                      string `json:"m"`
@@ -172,6 +182,17 @@ type CuvsCagraIndexConfig struct {
 	DistributionMode        uint16
 }
 
+type CuvsIvfpqIndexConfig struct {
+	Lists            uint
+	M                uint
+	BitsPerCode      uint
+	Metric           uint16
+	Dimensions       uint
+	Quantization     uint16
+	DistributionMode uint16
+	Version          int64
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type      string
@@ -180,6 +201,7 @@ type IndexConfig struct {
 	Ivfflat   IvfflatIndexConfig
 	CuvsIvf   CuvsIvfIndexConfig
 	CuvsCagra CuvsCagraIndexConfig
+	CuvsIvfpq CuvsIvfpqIndexConfig
 }
 
 type RuntimeConfig struct {

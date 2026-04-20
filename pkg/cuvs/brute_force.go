@@ -49,6 +49,7 @@ func NewGpuBruteForce[T VectorType](dataset []T, countVectors uint64, dimension 
 		C.uint32_t(nthread),
 		C.int(deviceID),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
@@ -79,6 +80,7 @@ func NewGpuBruteForceEmpty[T VectorType](totalCount uint64, dimension uint32, me
 		C.uint32_t(nthread),
 		C.int(deviceID),
 		C.quantization_t(qtype),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 
@@ -139,6 +141,7 @@ func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64) error {
 		gb.cIndex,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
@@ -165,6 +168,7 @@ func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64) er
 		gb.cIndex,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
+		nil,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)

@@ -46,16 +46,16 @@ struct gpu_brute_force_any_t {
 
 extern "C" {
 
-gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, const int64_t* ids, void* errmsg) {
     void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_brute_force_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<float>(static_cast<const float*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id, ids);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_brute_force_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<half>(static_cast<const half*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id, ids);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
@@ -68,16 +68,16 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
     }
 }
 
-gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, void* errmsg) {
+gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t qtype, const int64_t* ids, void* errmsg) {
     void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         switch (qtype) {
             case Quantization_F32:
-                index_ptr = new matrixone::gpu_brute_force_t<float>(total_count, dimension, metric_c, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<float>(total_count, dimension, metric_c, nthread, device_id, ids);
                 break;
             case Quantization_F16:
-                index_ptr = new matrixone::gpu_brute_force_t<half>(total_count, dimension, metric_c, nthread, device_id);
+                index_ptr = new matrixone::gpu_brute_force_t<half>(total_count, dimension, metric_c, nthread, device_id, ids);
                 break;
             default:
                 throw std::runtime_error("Unsupported quantization type for brute force (only f32 and f16 supported)");
@@ -120,13 +120,13 @@ void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg) {
     }
 }
 
-void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, void* errmsg) {
+void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count); break;
-            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count); break;
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->add_chunk(static_cast<const float*>(chunk_data), chunk_count, -1, ids); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->add_chunk(static_cast<const half*>(chunk_data), chunk_count, -1, ids); break;
             default: break;
         }
     } catch (const std::exception& e) {
@@ -135,13 +135,13 @@ void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data
     }
 }
 
-void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chunk_data, uint64_t chunk_count, void* errmsg) {
+void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
-            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count); break;
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->add_chunk_float(chunk_data, chunk_count, -1, ids); break;
             default: break;
         }
     } catch (const std::exception& e) {

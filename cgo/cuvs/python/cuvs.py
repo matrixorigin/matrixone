@@ -139,21 +139,21 @@ if _lib:
     _lib.gpu_adhoc_brute_force_search_float.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_float), ctypes.c_void_p]
 
     # CAGRA
-    _lib.gpu_cagra_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    _lib.gpu_cagra_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_cagra_new.restype = ctypes.c_void_p
-    _lib.gpu_cagra_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    _lib.gpu_cagra_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_cagra_new_empty.restype = ctypes.c_void_p
     _lib.gpu_cagra_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_cagra_load_file.restype = ctypes.c_void_p
     _lib.gpu_cagra_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_cagra_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_cagra_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    _lib.gpu_cagra_extend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
-    _lib.gpu_cagra_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
-    _lib.gpu_cagra_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_cagra_extend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_cagra_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_cagra_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_cagra_train_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_cagra_set_per_thread_device.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
-    _lib.gpu_cagra_set_use_batching.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
+    _lib.gpu_cagra_set_batch_window.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
     _lib.gpu_cagra_set_quantizer.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_void_p]
     _lib.gpu_cagra_get_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_void_p]
     _lib.gpu_cagra_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
@@ -170,13 +170,13 @@ if _lib:
     _lib.gpu_cagra_search_float_async.restype = ctypes.c_uint64
     _lib.gpu_cagra_search_wait.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_cagra_search_wait.restype = CagraSearchRes
-    _lib.gpu_cagra_get_neighbors.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint32)]
+    _lib.gpu_cagra_get_neighbors.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64)]
     _lib.gpu_cagra_get_distances.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_cagra_free_result.argtypes = [ctypes.c_void_p]
     _lib.gpu_cagra_len.argtypes = [ctypes.c_void_p]
-    _lib.gpu_cagra_len.restype = ctypes.c_uint32
+    _lib.gpu_cagra_len.restype = ctypes.c_uint64
     _lib.gpu_cagra_cap.argtypes = [ctypes.c_void_p]
-    _lib.gpu_cagra_cap.restype = ctypes.c_uint32
+    _lib.gpu_cagra_cap.restype = ctypes.c_uint64
     _lib.gpu_cagra_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_cagra_info.restype = ctypes.c_char_p
     _lib.gpu_cagra_merge.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_void_p]
@@ -194,11 +194,11 @@ if _lib:
     _lib.gpu_ivf_flat_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_flat_extend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_flat_extend_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
-    _lib.gpu_ivf_flat_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
-    _lib.gpu_ivf_flat_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_ivf_flat_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_flat_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_flat_train_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_ivf_flat_set_per_thread_device.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
-    _lib.gpu_ivf_flat_set_use_batching.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
+    _lib.gpu_ivf_flat_set_batch_window.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
     _lib.gpu_ivf_flat_set_quantizer.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_void_p]
     _lib.gpu_ivf_flat_get_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_void_p]
     _lib.gpu_ivf_flat_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
@@ -219,9 +219,9 @@ if _lib:
     _lib.gpu_ivf_flat_get_distances.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_ivf_flat_free_result.argtypes = [ctypes.c_void_p]
     _lib.gpu_ivf_flat_len.argtypes = [ctypes.c_void_p]
-    _lib.gpu_ivf_flat_len.restype = ctypes.c_uint32
+    _lib.gpu_ivf_flat_len.restype = ctypes.c_uint64
     _lib.gpu_ivf_flat_cap.argtypes = [ctypes.c_void_p]
-    _lib.gpu_ivf_flat_cap.restype = ctypes.c_uint32
+    _lib.gpu_ivf_flat_cap.restype = ctypes.c_uint64
     _lib.gpu_ivf_flat_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_flat_info.restype = ctypes.c_char_p
     _lib.gpu_ivf_flat_get_centers.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
@@ -242,11 +242,11 @@ if _lib:
     _lib.gpu_ivf_pq_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_extend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_extend_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
-    _lib.gpu_ivf_pq_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
-    _lib.gpu_ivf_pq_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_pq_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_train_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_ivf_pq_set_per_thread_device.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
-    _lib.gpu_ivf_pq_set_use_batching.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_set_batch_window.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p]
     _lib.gpu_ivf_pq_set_quantizer.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_void_p]
     _lib.gpu_ivf_pq_get_quantizer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.c_void_p]
     _lib.gpu_ivf_pq_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
@@ -267,9 +267,9 @@ if _lib:
     _lib.gpu_ivf_pq_get_distances.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_ivf_pq_free_result.argtypes = [ctypes.c_void_p]
     _lib.gpu_ivf_pq_len.argtypes = [ctypes.c_void_p]
-    _lib.gpu_ivf_pq_len.restype = ctypes.c_uint32
+    _lib.gpu_ivf_pq_len.restype = ctypes.c_uint64
     _lib.gpu_ivf_pq_cap.argtypes = [ctypes.c_void_p]
-    _lib.gpu_ivf_pq_cap.restype = ctypes.c_uint32
+    _lib.gpu_ivf_pq_cap.restype = ctypes.c_uint64
     _lib.gpu_ivf_pq_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_info.restype = ctypes.c_char_p
     _lib.gpu_ivf_pq_get_centers.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
@@ -284,15 +284,15 @@ if _lib:
     _lib.gpu_ivf_pq_get_dataset.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
     # Brute Force
-    _lib.gpu_brute_force_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_brute_force_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_brute_force_new.restype = ctypes.c_void_p
-    _lib.gpu_brute_force_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_brute_force_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_brute_force_new_empty.restype = ctypes.c_void_p
     _lib.gpu_brute_force_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_brute_force_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_brute_force_build.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    _lib.gpu_brute_force_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
-    _lib.gpu_brute_force_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_void_p]
+    _lib.gpu_brute_force_add_chunk.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_brute_force_add_chunk_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_brute_force_search.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
     _lib.gpu_brute_force_search.restype = ctypes.c_void_p
     _lib.gpu_brute_force_search_float.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
@@ -306,9 +306,9 @@ if _lib:
     _lib.gpu_brute_force_get_results.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_float)]
     _lib.gpu_brute_force_free_search_result.argtypes = [ctypes.c_void_p]
     _lib.gpu_brute_force_len.argtypes = [ctypes.c_void_p]
-    _lib.gpu_brute_force_len.restype = ctypes.c_uint32
+    _lib.gpu_brute_force_len.restype = ctypes.c_uint64
     _lib.gpu_brute_force_cap.argtypes = [ctypes.c_void_p]
-    _lib.gpu_brute_force_cap.restype = ctypes.c_uint32
+    _lib.gpu_brute_force_cap.restype = ctypes.c_uint64
     _lib.gpu_brute_force_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_brute_force_info.restype = ctypes.c_char_p
 
@@ -376,7 +376,7 @@ class CagraIndex:
         dataset = np.ascontiguousarray(dataset, dtype=np.float32)
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
-        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)) if ids is not None else None
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
         h = _lib.gpu_cagra_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dim)
@@ -385,7 +385,7 @@ class CagraIndex:
     def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = CagraBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
-        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)) if ids is not None else None
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
         h = _lib.gpu_cagra_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
@@ -406,7 +406,7 @@ class CagraIndex:
     def extend(self, new_data, new_ids=None):
         new_data = np.ascontiguousarray(new_data, dtype=np.float32)
         n_rows = len(new_data)
-        id_ptr = new_ids.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)) if new_ids is not None else None
+        id_ptr = new_ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if new_ids is not None else None
         errmsg = ctypes.c_char_p()
         _lib.gpu_cagra_extend(self.handle, new_data.ctypes.data_as(ctypes.c_void_p), n_rows, id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg)
@@ -422,9 +422,10 @@ class CagraIndex:
         dim = indices[0].dimension if indices else 0
         return cls(h, dim)
 
-    def add_chunk(self, chunk):
+    def add_chunk(self, chunk, ids=None):
         chunk = np.ascontiguousarray(chunk, dtype=np.float32)
-        errmsg = ctypes.c_char_p(); _lib.gpu_cagra_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p(); _lib.gpu_cagra_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     def train_quantizer(self, train_data):
         train_data = np.ascontiguousarray(train_data, dtype=np.float32)
         errmsg = ctypes.c_char_p(); _lib.gpu_cagra_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
@@ -434,9 +435,9 @@ class CagraIndex:
         _lib.gpu_cagra_set_per_thread_device(self.handle, bool(enable), ctypes.byref(errmsg))
         _check_error(errmsg)
 
-    def set_use_batching(self, enable):
+    def set_batch_window(self, window_us):
         errmsg = ctypes.c_char_p()
-        _lib.gpu_cagra_set_use_batching(self.handle, bool(enable), ctypes.byref(errmsg))
+        _lib.gpu_cagra_set_batch_window(self.handle, int(window_us), ctypes.byref(errmsg))
         _check_error(errmsg)
 
     def set_quantizer(self, min_val, max_val):
@@ -468,9 +469,9 @@ class CagraIndex:
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_cagra_search_float(self.handle, queries.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), num_q, dim, k, search_params, ctypes.byref(errmsg))
         _check_error(errmsg)
-        neighbors = np.zeros((num_q, k), dtype=np.uint32)
+        neighbors = np.zeros((num_q, k), dtype=np.int64)
         distances = np.zeros((num_q, k), dtype=np.float32)
-        _lib.gpu_cagra_get_neighbors(res.result_ptr, num_q * k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)))
+        _lib.gpu_cagra_get_neighbors(res.result_ptr, num_q * k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
         _lib.gpu_cagra_get_distances(res.result_ptr, num_q * k, distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         _lib.gpu_cagra_free_result(res.result_ptr); return neighbors, distances
 
@@ -487,9 +488,9 @@ class CagraIndex:
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_cagra_search_wait(self.handle, job_id, ctypes.byref(errmsg))
         _check_error(errmsg)
-        neighbors = np.zeros((num_q, k), dtype=np.uint32)
+        neighbors = np.zeros((num_q, k), dtype=np.int64)
         distances = np.zeros((num_q, k), dtype=np.float32)
-        _lib.gpu_cagra_get_neighbors(res.result_ptr, num_q * k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)))
+        _lib.gpu_cagra_get_neighbors(res.result_ptr, num_q * k, neighbors.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
         _lib.gpu_cagra_get_distances(res.result_ptr, num_q * k, distances.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         _lib.gpu_cagra_free_result(res.result_ptr); return neighbors, distances
 
@@ -557,9 +558,10 @@ class IvfFlatIndex:
         _lib.gpu_ivf_flat_extend_float(self.handle, new_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), n_rows, id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg)
 
-    def add_chunk(self, chunk):
+    def add_chunk(self, chunk, ids=None):
         chunk = np.ascontiguousarray(chunk, dtype=np.float32)
-        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_flat_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     
     def train_quantizer(self, train_data):
         train_data = np.ascontiguousarray(train_data, dtype=np.float32)
@@ -570,9 +572,9 @@ class IvfFlatIndex:
         _lib.gpu_ivf_flat_set_per_thread_device(self.handle, bool(enable), ctypes.byref(errmsg))
         _check_error(errmsg)
 
-    def set_use_batching(self, enable):
+    def set_batch_window(self, window_us):
         errmsg = ctypes.c_char_p()
-        _lib.gpu_ivf_flat_set_use_batching(self.handle, bool(enable), ctypes.byref(errmsg))
+        _lib.gpu_ivf_flat_set_batch_window(self.handle, int(window_us), ctypes.byref(errmsg))
         _check_error(errmsg)
 
     def set_quantizer(self, min_val, max_val):
@@ -713,9 +715,10 @@ class IvfPqIndex:
         _lib.gpu_ivf_pq_extend_float(self.handle, new_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), n_rows, id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg)
 
-    def add_chunk(self, chunk):
+    def add_chunk(self, chunk, ids=None):
         chunk = np.ascontiguousarray(chunk, dtype=np.float32)
-        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     
     def train_quantizer(self, train_data):
         train_data = np.ascontiguousarray(train_data, dtype=np.float32)
@@ -726,9 +729,9 @@ class IvfPqIndex:
         _lib.gpu_ivf_pq_set_per_thread_device(self.handle, bool(enable), ctypes.byref(errmsg))
         _check_error(errmsg)
 
-    def set_use_batching(self, enable):
+    def set_batch_window(self, window_us):
         errmsg = ctypes.c_char_p()
-        _lib.gpu_ivf_pq_set_use_batching(self.handle, bool(enable), ctypes.byref(errmsg))
+        _lib.gpu_ivf_pq_set_batch_window(self.handle, int(window_us), ctypes.byref(errmsg))
         _check_error(errmsg)
 
     def set_quantizer(self, min_val, max_val):
@@ -829,26 +832,29 @@ class BruteForceIndex:
         self.dimension = dimension
 
     @classmethod
-    def create(cls, dataset, metric=DistanceType.L2Expanded, nthread=4, device_id=0, qtype=Quantization.F32):
+    def create(cls, dataset, metric=DistanceType.L2Expanded, nthread=4, device_id=0, qtype=Quantization.F32, ids=None):
         dataset = np.ascontiguousarray(dataset, dtype=np.float32)
         count, dim = dataset.shape
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_brute_force_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), nthread, device_id, int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_brute_force_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), nthread, device_id, int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dim)
 
     @classmethod
-    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, nthread=4, device_id=0, qtype=Quantization.F32):
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, nthread=4, device_id=0, qtype=Quantization.F32, ids=None):
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_brute_force_new_empty(total_count, dimension, int(metric), nthread, device_id, int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_brute_force_new_empty(total_count, dimension, int(metric), nthread, device_id, int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     def start(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_start(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
     def build(self):
         errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_build(self.handle, ctypes.byref(errmsg)); _check_error(errmsg)
-    def add_chunk(self, chunk):
+    def add_chunk(self, chunk, ids=None):
         chunk = np.ascontiguousarray(chunk, dtype=np.float32)
-        errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), ctypes.byref(errmsg)); _check_error(errmsg)
+        id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
+        errmsg = ctypes.c_char_p(); _lib.gpu_brute_force_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
 
     def search(self, queries, k):
         queries = np.ascontiguousarray(queries, dtype=np.float32)

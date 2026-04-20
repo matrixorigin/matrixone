@@ -130,10 +130,6 @@ func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-func (idx *GpuAdhocBruteForceIndex[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("GpuAdhocBruteForceIndex: does not support SearchFloat32WithKeyUint32")
-}
-
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
 func (idx *GpuAdhocBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	var flattenedQueries []T
@@ -323,10 +319,6 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
 	}
 	return idx.index.Build()
-}
-
-func (idx *GpuBruteForceIndex[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("GpuBruteForceIndex: does not support SearchFloat32WithKeyUint32")
 }
 
 // SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.

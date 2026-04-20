@@ -620,6 +620,12 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 				if err != nil || newNodeID != nodeID {
 					return newNodeID, err
 				}
+
+			case catalog.MoIndexIvfpqAlgo.ToString():
+				newNodeID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vecCtx, multiTableIndex)
+				if err != nil || newNodeID != nodeID {
+					return newNodeID, err
+				}
 			}
 		}
 
@@ -833,6 +839,12 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 			} else if err != nil {
 				return nil
 			}
+		case catalog.MoIndexIvfpqAlgo.ToString():
+			if ctx, err := builder.prepareIvfpqIndexContext(vecCtx, multi); err == nil && ctx != nil {
+				return []int32{vecCtx.scanNode.NodeId}
+			} else if err != nil {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -846,7 +858,7 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
 		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
-			catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) {
+			catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),

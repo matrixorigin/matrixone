@@ -267,10 +267,6 @@ func (s *HnswSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt ve
 	return nil
 }
 
-func (s *HnswSearch[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("HnswSearch: does not support SearchFloat32WithKeyUint32")
-}
-
 func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

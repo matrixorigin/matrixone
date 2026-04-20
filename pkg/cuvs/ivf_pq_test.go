@@ -25,11 +25,11 @@ import (
 
 func TestGpuIvfPq(t *testing.T) {
 	dimension := uint32(16)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		for j := uint32(0); j < dimension; j++ {
-			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i * 10)
 		}
 	}
 
@@ -37,6 +37,7 @@ func TestGpuIvfPq(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 8 // dimension 16 is divisible by 8
+	bp.KmeansTrainsetFraction = 1.0
 	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
@@ -61,10 +62,10 @@ func TestGpuIvfPq(t *testing.T) {
 
 	query := make([]float32, dimension)
 	for i := uint32(0); i < dimension; i++ {
-		query[i] = 1.0
+		query[i] = 10.0 // Matches vector 1 exactly (1 * 10)
 	}
 	sp := DefaultIvfPqSearchParams()
-	sp.NProbes = 5
+	sp.NProbes = 10
 	result, err := index.Search(query, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -78,16 +79,19 @@ func TestGpuIvfPq(t *testing.T) {
 
 func TestGpuIvfPqSaveLoad(t *testing.T) {
 	dimension := uint32(4)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
-	for i := range dataset {
-		dataset[i] = float32(i / int(dimension))
+	for i := uint64(0); i < n_vectors; i++ {
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i * 10)
+		}
 	}
 
 	devices := []int{0}
 	bp := DefaultIvfPqBuildParams()
-	bp.NLists = 2
+	bp.NLists = 10
 	bp.M = 2
+	bp.KmeansTrainsetFraction = 1.0
 	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
@@ -121,6 +125,7 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 
 	query := make([]float32, dimension) // all zeros
 	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
 	result, err := index2.Search(query, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -132,17 +137,19 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 
 func TestGpuIvfPqPackUnpack(t *testing.T) {
 	dimension := uint32(4)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
-		dataset[i*uint64(dimension)] = float32(i)
-		dataset[i*uint64(dimension)+1] = float32(i)
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i * 10)
+		}
 	}
 
 	devices := []int{0}
 	bp := DefaultIvfPqBuildParams()
-	bp.NLists = 2
+	bp.NLists = 10
 	bp.M = 2
+	bp.KmeansTrainsetFraction = 1.0
 	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
@@ -173,6 +180,7 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 
 			query := make([]float32, dimension)
 			sp := DefaultIvfPqSearchParams()
+			sp.NProbes = 10
 			result, err := index2.Search(query, 1, dimension, 1, sp)
 			if err != nil {
 				t.Fatalf("Search failed: %v", err)
@@ -187,17 +195,19 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 
 func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 	dimension := uint32(4)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
-		dataset[i*uint64(dimension)] = float32(i)
-		dataset[i*uint64(dimension)+1] = float32(i)
+		for j := uint32(0); j < dimension; j++ {
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i * 10)
+		}
 	}
 
 	devices := []int{0}
 	bp := DefaultIvfPqBuildParams()
-	bp.NLists = 2
+	bp.NLists = 10
 	bp.M = 2
+	bp.KmeansTrainsetFraction = 1.0
 	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
@@ -232,6 +242,7 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 
 	query := make([]float32, dimension)
 	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
 	result, err := index2.Search(query, 1, dimension, 1, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -538,17 +549,18 @@ func TestGpuIvfPqDeleteId(t *testing.T) {
 	}
 
 	dimension := uint32(16)
-	n_vectors := uint64(100)
+	n_vectors := uint64(1000)
 	dataset := make([]float32, n_vectors*uint64(dimension))
 	for i := uint64(0); i < n_vectors; i++ {
 		for j := uint32(0); j < dimension; j++ {
-			dataset[i*uint64(dimension)+uint64(j)] = float32(i)
+			dataset[i*uint64(dimension)+uint64(j)] = float32(i * 10)
 		}
 	}
 
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 8
+	bp.KmeansTrainsetFraction = 1.0
 	index, err := NewGpuIvfPq[float32](dataset, n_vectors, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
@@ -561,7 +573,7 @@ func TestGpuIvfPqDeleteId(t *testing.T) {
 	// Query exactly at vector 50
 	q50 := make([]float32, dimension)
 	for i := range q50 {
-		q50[i] = 50.0
+		q50[i] = 500.0 // 50 * 10
 	}
 
 	sp := DefaultIvfPqSearchParams()

@@ -5443,6 +5443,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
 	case "cagra_search":
 		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
+	case "ivfpq_create":
+		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
+	case "ivfpq_search":
+		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

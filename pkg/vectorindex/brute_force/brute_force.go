@@ -176,10 +176,6 @@ func (idx *UsearchBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _q
 	return nil
 }
 
-func (idx *UsearchBruteForceIndex[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("UsearchBruteForceIndex: does not support SearchFloat32WithKeyUint32")
-}
-
 func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	var flatten []T
 	var queryDeallocator malloc.Deallocator
@@ -284,10 +280,6 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 
 func (idx *GoBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
-}
-
-func (idx *GoBruteForceIndex[T]) SearchFloat32WithKeyUint32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []uint32, outDists []float32) error {
-	return moerr.NewInternalErrorNoCtx("GoBruteForceIndex: does not support SearchFloat32WithKeyUint32")
 }
 
 func (idx *GoBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
