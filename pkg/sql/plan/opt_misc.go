@@ -228,6 +228,9 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 }
 
 func exprCanRemoveProject(expr *Expr) bool {
+	if expr == nil || expr.Expr == nil {
+		return false
+	}
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if ne.F.Func.ObjName == "sleep" {
