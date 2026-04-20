@@ -17,6 +17,7 @@ package function
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -121,11 +122,14 @@ func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_float32, types.T_float64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
 	default:
 		return false
 	}
-	return true
 }
 
 func modOperatorSupports(typ1, typ2 types.Type) bool {
@@ -475,17 +479,266 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
-	if paramType.Oid == types.T_float32 {
+	switch paramType.Oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return integerDivSigned(parameters, result, proc, length, selectList)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return integerDivUnsigned(parameters, result, proc, length, selectList)
+	case types.T_float32:
 		return specialTemplateForDivFunction[float32, int64](parameters, result, proc, length, func(v1, v2 float32) int64 {
 			return int64(v1 / v2)
 		}, selectList)
-	}
-	if paramType.Oid == types.T_float64 {
+	case types.T_float64:
 		return specialTemplateForDivFunction[float64, int64](parameters, result, proc, length, func(v1, v2 float64) int64 {
 			return int64(v1 / v2)
 		}, selectList)
+	case types.T_decimal64:
+		return decimalIntegerDiv[types.Decimal64](parameters, result, proc, length, selectList)
+	case types.T_decimal128:
+		return decimalIntegerDiv[types.Decimal128](parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
+}
+
+// integerDivSigned handles DIV for signed integer types
+func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	paramType := parameters[0].GetType()
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	switch paramType.Oid {
+	case types.T_int8:
+		p1 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[int8](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_int16:
+		p1 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[int16](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_int32:
+		p1 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_int64:
+		p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = v1 / v2
+			}
+		}
+	}
+	return nil
+}
+
+// integerDivUnsigned handles DIV for unsigned integer types
+func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	paramType := parameters[0].GetType()
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	switch paramType.Oid {
+	case types.T_uint8:
+		p1 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_uint16:
+		p1 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[uint16](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_uint32:
+		p1 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[uint32](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				rss[i] = int64(v1) / int64(v2)
+			}
+		}
+	case types.T_uint64:
+		p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
+		p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 || v2 == 0 {
+				rsNull.Add(i)
+			} else {
+				quotient := v1 / v2
+				if quotient > math.MaxInt64 {
+					return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+				}
+				rss[i] = int64(quotient)
+			}
+		}
+	}
+	return nil
+}
+
+// decimalIsZero checks if a decimal value is zero
+func decimalIsZero[T types.Decimal64 | types.Decimal128](v T) bool {
+	switch d := any(v).(type) {
+	case types.Decimal64:
+		return d == 0
+	case types.Decimal128:
+		return d.B0_63 == 0 && d.B64_127 == 0
+	default:
+		panic("unsupported decimal type")
+	}
+}
+
+// decimal128ToInt64 converts a Decimal128 to int64, returning error on overflow
+func decimal128ToInt64(v types.Decimal128) (int64, error) {
+	if v.Sign() {
+		if v.B64_127 != ^uint64(0) {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		if v.B0_63 < 0x8000000000000000 {
+			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+		}
+		negated := v.Minus()
+		return -int64(negated.B0_63), nil
+	}
+
+	if v.B64_127 != 0 {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
+		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	return int64(v.B0_63), nil
+}
+
+// decimalIntegerDiv performs integer division for decimal types (DIV operator)
+func decimalIntegerDiv[T types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	scale1 := p1.GetType().Scale
+	scale2 := p2.GetType().Scale
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+			continue
+		}
+
+		if decimalIsZero(v2) {
+			rsNull.Add(i)
+			continue
+		}
+
+		var err error
+		switch any(v1).(type) {
+		case types.Decimal128:
+			d1 := any(v1).(types.Decimal128)
+			d2 := any(v2).(types.Decimal128)
+			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
+			if divErr != nil {
+				return divErr
+			}
+			if resultScale > 0 {
+				divResult, divErr = divResult.Scale(-resultScale)
+				if divErr != nil {
+					return divErr
+				}
+			}
+			rss[i], err = decimal128ToInt64(divResult)
+		case types.Decimal64:
+			d1Val := any(v1).(types.Decimal64)
+			d2Val := any(v2).(types.Decimal64)
+			d1 := types.Decimal128{B0_63: uint64(d1Val), B64_127: 0}
+			if d1Val.Sign() {
+				d1.B64_127 = ^uint64(0)
+			}
+			d2 := types.Decimal128{B0_63: uint64(d2Val), B64_127: 0}
+			if d2Val.Sign() {
+				d2.B64_127 = ^uint64(0)
+			}
+			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
+			if divErr != nil {
+				return divErr
+			}
+			if resultScale > 0 {
+				divResult, divErr = divResult.Scale(-resultScale)
+				if divErr != nil {
+					return divErr
+				}
+			}
+			rss[i], err = decimal128ToInt64(divResult)
+		default:
+			panic("unsupported decimal type")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
