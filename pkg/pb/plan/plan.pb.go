@@ -5859,6 +5859,7 @@ type UpdateCtx struct {
 	InsertCols           []ColRef   `protobuf:"bytes,7,rep,name=insert_cols,json=insertCols,proto3" json:"insert_cols"`
 	DeleteCols           []ColRef   `protobuf:"bytes,8,rep,name=delete_cols,json=deleteCols,proto3" json:"delete_cols"`
 	PartitionCols        []ColRef   `protobuf:"bytes,9,rep,name=partition_cols,json=partitionCols,proto3" json:"partition_cols"`
+	IsReplace            bool       `protobuf:"varint,10,opt,name=is_replace,json=isReplace,proto3" json:"is_replace,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}   `json:"-"`
 	XXX_unrecognized     []byte     `json:"-"`
 	XXX_sizecache        int32      `json:"-"`
@@ -5930,6 +5931,13 @@ func (m *UpdateCtx) GetPartitionCols() []ColRef {
 		return m.PartitionCols
 	}
 	return nil
+}
+
+func (m *UpdateCtx) GetIsReplace() bool {
+	if m != nil {
+		return m.IsReplace
+	}
+	return false
 }
 
 type InsertCtx struct {
@@ -18840,6 +18848,16 @@ func (m *UpdateCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.IsReplace {
+		i--
+		if m.IsReplace {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x50
+	}
 	if len(m.PartitionCols) > 0 {
 		for iNdEx := len(m.PartitionCols) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -28438,6 +28456,9 @@ func (m *UpdateCtx) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 1 + l + sovPlan(uint64(l))
 		}
+	}
+	if m.IsReplace {
+		n += 2
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -42466,6 +42487,26 @@ func (m *UpdateCtx) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field IsReplace", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.IsReplace = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

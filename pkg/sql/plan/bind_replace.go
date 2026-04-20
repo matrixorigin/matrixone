@@ -661,6 +661,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:   tableDef,
 			InsertCols: insertCols,
 			DeleteCols: deleteCols,
+			IsReplace:  true,
 		})
 	}
 

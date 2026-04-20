@@ -110,6 +110,10 @@ type MultiUpdateCtx struct {
 	InsertCols    []int
 	DeleteCols    []int
 	PartitionCols []int
+	// IsReplace marks this ctx as belonging to a REPLACE INTO statement's main
+	// table. Used by addDeleteAffectRows to count replaced-out rows toward
+	// affected_rows (MySQL semantics: affected_rows = inserted + deleted).
+	IsReplace bool
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -190,13 +194,8 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
-	// For REPLACE INTO, we always count INSERT rows, regardless of update.ctr.action
-	// because REPLACE INTO should return at least the number of rows being inserted
 	switch update.ctr.action {
-	case actionInsert:
-		update.addAffectedRowsFunc(rowCount)
-	case actionUpdate:
-		// For REPLACE INTO with both DELETE and INSERT, count INSERT rows
+	case actionInsert, actionUpdate:
 		update.addAffectedRowsFunc(rowCount)
 	}
 }
@@ -205,19 +204,27 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
-	// For REPLACE INTO, we don't count DELETE rows in affected rows
-	// REPLACE INTO should only return the number of INSERT rows
-	// Only count DELETE rows for regular UPDATE operations
 	switch update.ctr.action {
 	case actionDelete:
-		// Regular DELETE operation, count it
 		update.addAffectedRowsFunc(rowCount)
 	case actionUpdate:
-		// For UPDATE operations (not REPLACE INTO), count DELETE rows
-		// But for REPLACE INTO, this should not be called or should be ignored
-		// REPLACE INTO uses actionUpdate but should only count INSERT
-		// So we don't count DELETE here for actionUpdate
+		// MySQL REPLACE semantics: affected_rows = inserted + deleted.
+		// Regular UPDATE still counts only the insert side (== rows_matched),
+		// so we only add the delete side when this MULTI_UPDATE was produced
+		// by REPLACE INTO.
+		if update.isReplace() {
+			update.addAffectedRowsFunc(rowCount)
+		}
 	}
+}
+
+// isReplace reports whether this MultiUpdate was produced by REPLACE INTO.
+// The flag lives on the main-table UpdateCtx (index 0) — see bind_replace.go.
+func (update *MultiUpdate) isReplace() bool {
+	if len(update.MultiUpdateCtx) == 0 {
+		return false
+	}
+	return update.MultiUpdateCtx[0].IsReplace
 }
 
 func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
