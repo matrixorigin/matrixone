@@ -165,6 +165,16 @@ func (shuffle *ShuffleV2) evalAndShuffle(bat *batch.Batch, proc *process.Process
 		hashShuffleVecWithoutNull(sels, vec, lenRegs)
 	}
 
+	for i := range sels {
+		if len(sels[i]) > 0 && len(sels[i]) != bat.RowCount() {
+			break
+		}
+		if len(sels[i]) == bat.RowCount() {
+			bat.ShuffleIDX = int32(i)
+			return bat, nil
+		}
+	}
+
 	err = shuffle.ctr.shufflePool.putBatchIntoShuffledPoolsBySels(bat, sels, proc)
 	return nil, err
 }
