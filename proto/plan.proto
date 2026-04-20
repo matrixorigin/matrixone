@@ -594,10 +594,26 @@ message OnDuplicateKeyCtx {
   uint32 table_version = 10;
 }
 
+message OldColCapture {
+  // build_placeholder: position on the DEDUP JOIN build (right) side that
+  // holds a NULL placeholder for the "old row" column. The operator will
+  // emit the captured probe-side value into this slot in finalize().
+  ColRef build_placeholder = 1 [(gogoproto.nullable) = false];
+  // probe_source: position on the DEDUP JOIN probe (left) side. When a
+  // build row matches a probe row via hashmap lookup, the value at this
+  // column of the probe row is captured into a per-bucket buffer.
+  ColRef probe_source = 2 [(gogoproto.nullable) = false];
+}
+
 message DedupJoinCtx {
   repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
   repeated int32 update_col_idx_list = 2;
   repeated Expr update_col_expr_list = 3;
+  // old_col_capture_list: used by REPLACE INTO's merged main-table scan.
+  // When non-empty, the DEDUP JOIN captures probe-side columns on match
+  // and emits them in finalize() into the build-side placeholder slots,
+  // eliminating the need for a preceding LEFT JOIN to fetch old row data.
+  repeated OldColCapture old_col_capture_list = 4 [(gogoproto.nullable) = false];
 }
 
 message UpdateCtx {
