@@ -212,10 +212,15 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
+		opts := []ioutil.SinkerOption{
+			ioutil.WithBuffer(writer.insertFreeLists[i], false),
+		}
+		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
+			opts = append(opts, ioutil.WithPipelineFlush())
+		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
 			proc.Mp(), fs, updateCtx.TableDef, -1, false,
-			ioutil.WithBuffer(writer.insertFreeLists[i], false),
-		)
+			opts...)
 	}
 	return nil
 }

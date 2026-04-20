@@ -35,11 +35,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
+
+type mockStatsKeyRouter struct {
+	target string
+}
+
+func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
+func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
+
+type mockStatsQueryClient struct {
+	response    *querypb.Response
+	sendStarted chan struct{}
+	allowReturn chan struct{}
+}
+
+func (m *mockStatsQueryClient) ServiceID() string {
+	return "mock-stats-query-client"
+}
+
+func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
+	close(m.sendStarted)
+	<-m.allowReturn
+	return m.response, nil
+}
+
+func (m *mockStatsQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
+	return &querypb.Request{CmdMethod: method}
+}
+
+func (m *mockStatsQueryClient) Release(*querypb.Response) {}
+
+func (m *mockStatsQueryClient) Close() error {
+	return nil
+}
 
 func runTest(
 	t *testing.T,
@@ -1770,5 +1805,272 @@ func TestRemoveTid(t *testing.T) {
 				t.Fatal("RemoveTid did not wake goroutine blocked on cond.Wait()")
 			}
 		})
+	})
+}
+
+func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		locked := true
+		e.pClient.subscribed.rw.Lock()
+		defer func() {
+			if locked {
+				e.pClient.subscribed.rw.Unlock()
+			}
+		}()
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		reachSubscribe := make(chan struct{})
+		oldSubscribeHook := gs.beforeSubscribeTable
+		var subscribeOnce sync.Once
+		gs.beforeSubscribeTable = func(statsinfo.StatsInfoKey) {
+			subscribeOnce.Do(func() { close(reachSubscribe) })
+		}
+		defer func() {
+			gs.beforeSubscribeTable = oldSubscribeHook
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		getDone := make(chan struct{})
+		go func() {
+			defer close(getDone)
+			_ = gs.Get(getCtx, key, false)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-reachSubscribe:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get did not reach subscribe path")
+
+		muAcquired := make(chan struct{})
+		go func() {
+			gs.mu.Lock()
+			gs.mu.Unlock()
+			close(muAcquired)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-getDone:
+				return false
+			default:
+			}
+			select {
+			case <-muAcquired:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get holds gs.mu while waiting on subscribe lock")
+
+		locked = false
+		e.pClient.subscribed.rw.Unlock()
+
+		select {
+		case <-getDone:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
+		}
+	})
+}
+
+func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		waitEntered := make(chan struct{})
+		waitDone := make(chan struct{})
+		var waitOnce sync.Once
+
+		go func() {
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			for {
+				if _, ok := gs.mu.statsInfoMap[key]; ok {
+					break
+				}
+				waitOnce.Do(func() { close(waitEntered) })
+				gs.mu.cond.Wait()
+			}
+			close(waitDone)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitEntered:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
+
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo)
+		require.NotNil(t, info)
+		require.Equal(t, remoteInfo, info)
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitDone:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter was not awakened by remote cache broadcast")
+	})
+}
+
+func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		qc := &mockStatsQueryClient{
+			response: &querypb.Response{
+				GetStatsInfoResponse: &querypb.GetStatsInfoResponse{StatsInfo: remoteInfo},
+			},
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		oldHook := gs.beforeCacheRemoteInfo
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+			gs.beforeCacheRemoteInfo = oldHook
+		}()
+
+		beforeCacheReached := make(chan struct{})
+		allowCache := make(chan struct{})
+		gs.beforeCacheRemoteInfo = func(statsinfo.StatsInfoKey) {
+			close(beforeCacheReached)
+			<-allowCache
+		}
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		resultCh := make(chan *statsinfo.StatsInfo, 1)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not request remote stats")
+		}
+
+		close(qc.allowReturn)
+
+		select {
+		case <-beforeCacheReached:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not reach remote cache write point")
+		}
+
+		e.pClient.subscribed.setTableUnsubscribe(dbID, tblID)
+		close(allowCache)
+
+		select {
+		case info := <-resultCh:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after unsubscribe")
+		}
+
+		gs.mu.Lock()
+		_, ok := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		assert.False(t, ok)
 	})
 }

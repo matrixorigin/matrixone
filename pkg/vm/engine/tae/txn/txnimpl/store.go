@@ -851,6 +851,27 @@ func (store *txnStore) PrepareCommit() (err error) {
 			return
 		}
 	}
+
+	// Sync protection validation for CCPR transactions
+	jobID := store.txn.GetSyncProtectionJobID()
+	if jobID != "" && store.rt.SyncProtectionValidator != nil {
+		prepareTS := store.txn.GetPrepareTS().Physical()
+		if err = store.rt.SyncProtectionValidator(jobID, prepareTS); err != nil {
+			logutil.Warn("sync protection validation failed",
+				zap.String("txn", store.txn.GetID()),
+				zap.String("job_id", jobID),
+				zap.Int64("prepare_ts", prepareTS),
+				zap.Error(err),
+			)
+			return
+		}
+		logutil.Debug("sync protection validation succeeded",
+			zap.String("txn", store.txn.GetID()),
+			zap.String("job_id", jobID),
+			zap.Int64("prepare_ts", prepareTS),
+		)
+	}
+
 	for _, db := range store.dbs {
 		if err = db.PrepareCommit(); err != nil {
 			break
