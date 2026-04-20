@@ -2008,6 +2008,17 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
 	}
+	// Check if this query has expr-based shuffle (serial_full/serial in join conditions,
+	// identified by ShuffleColIdx == -1). These benefit from single-CN execution with
+	// ShuffleV2 to avoid multi-CN lock contention while still enabling spill.
+	hasExprBasedShuffle := false
+	for _, node := range qry.GetNodes() {
+		if node.Stats != nil && node.Stats.HashmapStats != nil &&
+			node.Stats.HashmapStats.Shuffle && node.Stats.HashmapStats.ShuffleColIdx == -1 {
+			hasExprBasedShuffle = true
+			break
+		}
+	}
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -2018,6 +2029,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
+			} else if stats != nil && hasExprBasedShuffle {
+				ret = ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
