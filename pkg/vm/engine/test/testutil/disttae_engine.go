@@ -72,6 +72,7 @@ type TestDisttaeEngine struct {
 	commitWorkspaceThreshold uint64
 	writeWorkspaceThreshold  uint64
 	quota                    uint64
+	extraWorkspaceThreshold  uint64
 	insertEntryMaxCount      int
 	newTxnMu                 sync.Mutex
 
@@ -139,6 +140,9 @@ func NewTestDisttaeEngine(
 	}
 	if de.quota != 0 {
 		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThresholdQuota(de.quota))
+	}
+	if de.extraWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThreshold(de.extraWorkspaceThreshold))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {
