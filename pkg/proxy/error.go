@@ -60,6 +60,10 @@ func (e *errWithCode) Error() string {
 	return fmt.Sprintf("%s: %v", e.code, e.cause)
 }
 
+func (e *errWithCode) Unwrap() error {
+	return e.cause
+}
+
 func withCode(err error, code errorCode) error {
 	if err == nil {
 		return nil
