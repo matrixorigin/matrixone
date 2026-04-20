@@ -216,6 +216,13 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInvalidInput(proc.Ctx, "index capacity must be greater than 0")
 		}
 
+		// kmeans training fraction: read from session variable (0-100 percent → 0-1 fraction)
+		if val, err2 := proc.GetResolveVariableFunc()("kmeans_train_percent", true, false); err2 == nil && val != nil {
+			if pct := val.(float64); pct > 0 {
+				u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = pct / 100.0
+			}
+		}
+
 		// ---- validate argument types ----
 		if len(tf.Args) < 3 || tf.Args[1].Typ.Id != int32(types.T_int64) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")

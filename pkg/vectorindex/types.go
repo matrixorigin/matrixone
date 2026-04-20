@@ -183,14 +183,15 @@ type CuvsCagraIndexConfig struct {
 }
 
 type CuvsIvfpqIndexConfig struct {
-	Lists            uint
-	M                uint
-	BitsPerCode      uint
-	Metric           uint16
-	Dimensions       uint
-	Quantization     uint16
-	DistributionMode uint16
-	Version          int64
+	Lists                  uint
+	M                      uint
+	BitsPerCode            uint
+	Metric                 uint16
+	Dimensions             uint
+	Quantization           uint16
+	DistributionMode       uint16
+	Version                int64
+	KmeansTrainsetFraction float64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

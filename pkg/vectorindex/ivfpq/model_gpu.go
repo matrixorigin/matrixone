@@ -86,6 +86,9 @@ func (idx *IvfpqModel[T]) ivfpqConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.I
 	if cfg.BitsPerCode > 0 {
 		bp.BitsPerCode = uint32(cfg.BitsPerCode)
 	}
+	if cfg.KmeansTrainsetFraction > 0 {
+		bp.KmeansTrainsetFraction = cfg.KmeansTrainsetFraction
+	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
 }

@@ -379,6 +379,7 @@ public:
         index_params.n_lists = this->build_params.n_lists;
         index_params.pq_dim = this->build_params.m;
         index_params.pq_bits = this->build_params.bits_per_code;
+        index_params.kmeans_trainset_fraction = this->build_params.kmeans_trainset_fraction;
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
