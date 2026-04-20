@@ -2008,15 +2008,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
 	}
-	// Pre-check: does this query have shuffle nodes?
-	// If so, prefer ONECN with local parallel shuffle (ShuffleV2) over MULTICN broadcast.
-	hasShuffle := false
-	for _, node := range qry.GetNodes() {
-		if node.Stats != nil && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
-			hasShuffle = true
-			break
-		}
-	}
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		switch node.NodeType {
@@ -2027,8 +2018,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
-			} else if hasShuffle {
-				ret = ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
