@@ -37,6 +37,7 @@ type ivfpqIndexContext struct {
 	params       string
 	nThread      int64
 	batchWindow  int64
+	nProbe       int64
 }
 
 func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfpqIndexContext, error) {
@@ -96,6 +97,13 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	nProbe := int64(20)
+	if nProbeIf, err2 := builder.compCtx.ResolveVariable("probe_limit", true, false); err2 != nil {
+		return nil, err2
+	} else if nProbeIf != nil {
+		nProbe = nProbeIf.(int64)
+	}
+
 	return &ivfpqIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -108,6 +116,7 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		params:       idxDef.IndexAlgoParams,
 		nThread:      nThread.(int64),
 		batchWindow:  batchWindow.(int64),
+		nProbe:       nProbe,
 	}, nil
 }
 
@@ -130,14 +139,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "nprobe": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		ivfpqCtx.metaDef.IndexTableName,
 		ivfpqCtx.idxDef.IndexTableName,
 		ivfpqCtx.nThread,
 		ivfpqCtx.origFuncName,
-		ivfpqCtx.batchWindow)
+		ivfpqCtx.batchWindow,
+		ivfpqCtx.nProbe)
 
 	// JOIN between source table and ivfpq_search table function
 	tableFuncTag := builder.genNewBindTag()
