@@ -725,7 +725,7 @@ a    a - b - b
 3    7459
 4    -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM decimal07;
-invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243(Scale:0)/4(Scale:0)
+Data truncation: data out of range: data type BIGINT, 
 SELECT a, ABS(b) FROM decimal07;
 a    abs(b)
 1    3728193
