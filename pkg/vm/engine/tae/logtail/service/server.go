@@ -829,7 +829,7 @@ func (s *LogtailServer) pullActivationPhase1(ctx context.Context, act catalogAct
 				waterline,
 				allowedAccounts,
 				false, // activation: keep object meta so HandleDataObjectList GC
-				       // can clean up rows that overlap with concurrent flushes
+				// can clean up rows that overlap with concurrent flushes
 			)
 			mu.Lock()
 			defer mu.Unlock()
