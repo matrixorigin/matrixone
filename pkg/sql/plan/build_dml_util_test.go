@@ -547,3 +547,17 @@ func exprContainsColumn(expr *plan.Expr, colName string) bool {
 func columnNameMatches(got, want string) bool {
 	return got == want || strings.HasSuffix(got, "."+want)
 }
+
+func TestGetIvfIncludeColumnNamesFromParams(t *testing.T) {
+	cols, err := getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"title,category"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Nil(t, cols)
+}

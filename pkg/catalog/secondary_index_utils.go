@@ -98,22 +98,23 @@ func IsIvfpqIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists     = "lists"
-	IndexAlgoParamOpType    = "op_type"
-	HnswM                   = "m"
-	HnswEfConstruction      = "ef_construction"
-	HnswEfSearch            = "ef_search"
-	Async                   = "async"
-	AutoUpdate              = "auto_update"
-	Day                     = "day"
-	Hour                    = "hour"
-	DistributionMode        = "distribution_mode"
-	Quantization            = "quantization"
-	BitsPerCode             = "bits_per_code"
-	IntermediateGraphDegree = "intermediate_graph_degree"
-	GraphDegree             = "graph_degree"
-	ITopkSize               = "itopk_size"
-	IncludedColumns         = "included_columns"
+	IndexAlgoParamLists          = "lists"
+	IndexAlgoParamOpType         = "op_type"
+	IndexAlgoParamIncludeColumns = "include_columns"
+	HnswM                        = "m"
+	HnswEfConstruction           = "ef_construction"
+	HnswEfSearch                 = "ef_search"
+	Async                        = "async"
+	AutoUpdate                   = "auto_update"
+	Day                          = "day"
+	Hour                         = "hour"
+	DistributionMode             = "distribution_mode"
+	Quantization                 = "quantization"
+	BitsPerCode                  = "bits_per_code"
+	IntermediateGraphDegree      = "intermediate_graph_degree"
+	GraphDegree                  = "graph_degree"
+	ITopkSize                    = "itopk_size"
+	IncludedColumns              = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
@@ -125,6 +126,45 @@ const (
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
 )
+
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func ParseIncludeColumnsValue(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var cols []string
+		if err := json.Unmarshal([]byte(raw), &cols); err == nil {
+			return cols, nil
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		cols = append(cols, part)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	return cols, nil
+}
 
 /* 1. ToString Functions */
 
@@ -231,6 +271,15 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
 		}
 	}
+
+	if includeColumns, ok := result[IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
+		names, err := ParseIncludeColumnsValue(includeColumns)
+		if err != nil {
+			return "", err
+		}
+		res += fmt.Sprintf(" INCLUDE (%s) ", strings.Join(names, ", "))
+	}
+
 	return res, nil
 }
 
@@ -421,6 +470,55 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
 			// do nothing
+		case tree.INDEX_TYPE_IVFFLAT:
+			if idx.IndexOption.AlgoParamList == 0 {
+				// NOTE:
+				// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
+				// set list=0, it will fail.
+				// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
+				// set the default value as 1.
+				res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
+			} else if idx.IndexOption.AlgoParamList > 0 {
+				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
+			} else {
+				return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
+			}
+
+			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
+				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
+				if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
+					return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
+				}
+				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
+			} else {
+				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
+			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
+			}
+			if idx.IndexOption.AutoUpdate {
+				res[AutoUpdate] = "true"
+			}
+			if idx.IndexOption.Day > 0 {
+				res[Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+			}
+
+			if idx.IndexOption.Hour > 0 {
+				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+			}
+
+			if len(idx.IndexOption.IncludeColumns) > 0 {
+				names := make([]string, len(idx.IndexOption.IncludeColumns))
+				for i, col := range idx.IndexOption.IncludeColumns {
+					names[i] = col.ColName()
+				}
+				encoded, err := MarshalIncludeColumnsValue(names)
+				if err != nil {
+					return nil, err
+				}
+				res[IndexAlgoParamIncludeColumns] = encoded
+			}
 		default:
 			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
 			// algo_params via the per-plugin plan hook BuildIndexParams; they
