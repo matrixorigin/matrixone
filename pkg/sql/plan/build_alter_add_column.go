@@ -428,6 +428,10 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
+		ivfIncludeAffected, err := ivfIndexIncludesColumn(indexInfo, colName)
+		if err != nil {
+			return err
+		}
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
@@ -454,6 +458,14 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				}
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				// ivf index
+				if len(indexInfo.Parts) == 0 || ivfIncludeAffected {
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
