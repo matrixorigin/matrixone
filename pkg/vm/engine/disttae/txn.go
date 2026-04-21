@@ -699,6 +699,9 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		}
 		size = 0
 	}
+	if offset < txn.adjustWriteOffset {
+		txn.adjustWriteOffset = offset
+	}
 	txn.hasS3Op.Store(true)
 
 	var (
@@ -2240,6 +2243,7 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
+	txn.adjustWriteOffset = txn.snapshotWriteOffset
 }
 
 // ApproximateInMemInsertSize returns the approximate total size of in-memory
