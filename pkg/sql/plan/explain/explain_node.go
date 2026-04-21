@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -472,16 +473,44 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if len(msg) > 0 {
 			lines = append(lines, msg)
 		}
+		msg, err = ndesc.GetIvfSearchInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
 	}
 	return lines, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
-	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
-		result := "Sql: " + ndesc.Node.GetStats().Sql
+	if options.Verbose && ndesc.Node.Stats != nil && len(ndesc.Node.Stats.Sql) > 0 {
+		result := "Sql: " + ndesc.Node.Stats.Sql
 		return result, nil
 	}
 	return "", nil
+}
+
+func (ndesc *NodeDescribeImpl) GetIvfSearchInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType != plan.Node_FUNCTION_SCAN ||
+		ndesc.Node.TableDef == nil ||
+		ndesc.Node.TableDef.TblFunc == nil ||
+		ndesc.Node.TableDef.TblFunc.Name != "ivf_search" ||
+		len(ndesc.Node.TblFuncExprList) < 3 {
+		return "", nil
+	}
+
+	filterExpr := ndesc.Node.TblFuncExprList[2]
+	litExpr, ok := filterExpr.Expr.(*plan.Expr_Lit)
+	if !ok || litExpr.Lit == nil {
+		return "", nil
+	}
+	rawFilter := litExpr.Lit.GetSval()
+	if strings.TrimSpace(rawFilter) == "" {
+		return "", nil
+	}
+	return "Filter Cond: " + rawFilter, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {

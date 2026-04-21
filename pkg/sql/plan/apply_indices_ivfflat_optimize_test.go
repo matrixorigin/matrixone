@@ -127,21 +127,13 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 		require.NoError(t, err)
 
-		// Verification:
-		// PROJECT -> SORT -> JOIN(SCAN, FUNCTION_SCAN)
+		// A fully covered query can collapse directly to the table function.
 		sortNodeID := vecCtx.projNode.Children[0]
 		sortNode := builder.qry.Nodes[sortNodeID]
 		require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
-		joinNodeID := sortNode.Children[0]
-		joinNode := builder.qry.Nodes[joinNodeID]
-		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
-
-		// In "No Filter" case, it should NOT be the nested join structure
-		// Right child should be FUNCTION_SCAN, not another JOIN
-		rightChildID := joinNode.Children[1]
-		rightChild := builder.qry.Nodes[rightChildID]
-		assert.Equal(t, plan.Node_FUNCTION_SCAN, rightChild.NodeType)
+		childNode := builder.qry.Nodes[sortNode.Children[0]]
+		assert.Equal(t, plan.Node_FUNCTION_SCAN, childNode.NodeType)
 	})
 
 	// 2. Case: With filters. Should ENABLE pushdown (nested join)
@@ -173,17 +165,11 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 		require.NoError(t, err)
 
-		// Verification:
-		// PROJECT -> SORT -> JOIN(SCAN, JOIN(FUNCTION_SCAN, PROJECT(SCAN)))
+		// A fully pushdownable covered filter can also collapse to the table function.
 		sortNodeID := vecCtx.projNode.Children[0]
 		sortNode := builder.qry.Nodes[sortNodeID]
-		outerJoinNodeID := sortNode.Children[0]
-		outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
-		require.Equal(t, plan.Node_JOIN, outerJoinNode.NodeType)
-
-		innerJoinNodeID := outerJoinNode.Children[1]
-		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
-		assert.Equal(t, plan.Node_JOIN, innerJoinNode.NodeType, "With filter, right child should be nested JOIN")
+		childNode := builder.qry.Nodes[sortNode.Children[0]]
+		assert.Equal(t, plan.Node_FUNCTION_SCAN, childNode.NodeType)
 	})
 }
 

@@ -115,6 +115,12 @@ type deleteNodeInfo struct {
 	lockTable       bool
 }
 
+type ivfIncludeSourceCol struct {
+	name string
+	pos  int
+	typ  Type
+}
+
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert,
@@ -960,7 +966,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 					return err
 				}
 			}
-
 		}
 
 		// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
@@ -972,7 +977,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 		}
 	}
 
-	buildPreInsertMultiTableIndexes(ctx, builder, bindCtx, objRef, tableDef, sourceStep, multiTableIndexes)
+	if err = buildPreInsertMultiTableIndexes(ctx, builder, bindCtx, objRef, tableDef, sourceStep, multiTableIndexes); err != nil {
+		return err
+	}
 
 	ifInsertFromUnique := false
 	if tableDef.Pkey != nil && ifInsertFromUniqueColMap != nil {
@@ -2024,6 +2031,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	//1.a get vector & pk column details
 	var posOriginPk, posOriginVecColumn int
 	var typeOriginPk, typeOriginVecColumn Type
+	var includeSourceCols []ivfIncludeSourceCol
 	{
 		colsMap := make(map[string]int)
 		colTypes := make([]Type, len(tableDef.Cols))
@@ -2041,6 +2049,25 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 		}
 
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
+
+		includeSourceCols = make([]ivfIncludeSourceCol, 0)
+		for _, col := range indexTableDefs[2].Cols {
+			if !strings.HasPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix) {
+				continue
+			}
+
+			originColName := strings.TrimPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
+			pos, ok := colsMap[originColName]
+			if !ok {
+				return -1, moerr.NewInvalidInputf(builder.GetContext(), "IVFFLAT INCLUDE column %q not found in origin table", originColName)
+			}
+
+			includeSourceCols = append(includeSourceCols, ivfIncludeSourceCol{
+				name: originColName,
+				pos:  pos,
+				typ:  tableDef.Cols[pos].Typ,
+			})
+		}
 	}
 
 	// get optype
@@ -2072,7 +2099,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	}
 
 	// 4. create "CrossJoinL2" on tbl x centroids
-	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, optype)
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, includeSourceCols, optype)
 
 	// 5. Create a Project with CP Key for LockNode
 	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
@@ -2098,6 +2125,24 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	sourceStep := builder.appendStep(lastNodeId)
 
 	return sourceStep, nil
+}
+
+func getIvfIncludeColumnNamesFromParams(indexAlgoParams string) ([]string, error) {
+	if indexAlgoParams == "" {
+		return nil, nil
+	}
+
+	params, err := catalog.IndexParamsStringToMap(indexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+
+	includeColumns := params[catalog.IndexAlgoParamIncludeColumns]
+	if includeColumns == "" {
+		return nil, nil
+	}
+
+	return catalog.ParseIncludeColumnsValue(includeColumns)
 }
 
 func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
@@ -3672,6 +3717,37 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 }
 
+func appendProjectUpdatedRowsForRebuild(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, updateColPosMap map[string]int, rowIDSourcePos int) int32 {
+	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+	projectProjection := make([]*Expr, len(tableDef.Cols))
+	for j, col := range tableDef.Cols {
+		sourcePos := j
+		if nIdx, ok := updateColPosMap[col.Name]; ok {
+			sourcePos = nIdx
+		} else if col.Name == catalog.Row_ID && rowIDSourcePos >= 0 {
+			sourcePos = rowIDSourcePos
+		}
+
+		projectProjection[j] = &plan.Expr{
+			Typ: lastProject[sourcePos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(sourcePos),
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeId},
+		ProjectList: projectProjection,
+	}
+	return builder.appendNode(projectNode, bindCtx)
+}
+
 func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, multiTableIndexes map[string]*MultiTableIndex) error {
 	isUpdate := delCtx.updateColLength > 0
 	var err error
@@ -3729,8 +3805,8 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 				lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 				lastNodeId, err = appendDeleteIvfTablePlan(builder, bindCtx, entriesObjRef, entriesTableDef, lastNodeId, delCtx.tableDef)
 				entriesDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength // eg:- <id, embedding, row_id, <... update_col> > + 0/1
-				entriesTblPkPos = entriesDeleteIdx + 1                                // this is the compound primary key of the entries table
-				entriesTblPkTyp = entriesTableDef.Cols[4].Typ                         // 4'th column is the compound primary key <version,id, org_pk,org_embedding, cp_pk, row_id>
+				entriesTblPkPos = entriesDeleteIdx + 1                                // appendDeleteIvfTablePlan appends row_id first, then hidden entries cpkey
+				_, entriesTblPkTyp = getPkPos(entriesTableDef, false)                 // use the actual entries table pk type instead of a hard-coded column index
 			}
 
 			if err != nil {
@@ -3753,41 +3829,12 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					}
 					builder.appendStep(lastNodeId)
 				}
-				// insert ivf_sk plan
+				// insert ivf entries using the updated row image
 				{
-					//TODO: verify with ouyuanning, if this is correct
 					lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-					lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, newSourceStep)
+					lastNodeId = appendProjectUpdatedRowsForRebuild(builder, bindCtx, delCtx.tableDef, lastNodeId, delCtx.updateColPosMap, len(builder.qry.Nodes[lastNodeId].ProjectList)-2)
 
-					lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-					lastProjectForTblJoinCentroids := builder.qry.Nodes[lastNodeIdForTblJoinCentroids].ProjectList
-
-					projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
-					projectProjectionForTblJoinCentroids := make([]*Expr, len(delCtx.tableDef.Cols))
-					for j, uCols := range delCtx.tableDef.Cols {
-						if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
-							projectProjection[j] = lastProject[nIdx]
-							projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[nIdx]
-						} else {
-							if uCols.Name == catalog.Row_ID {
-								// replace the origin table's row_id with entry table's row_id
-								// it is the 2nd last column in the entry table join
-								projectProjection[j] = lastProject[len(lastProject)-2]
-								projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[len(lastProjectForTblJoinCentroids)-2]
-							} else {
-								projectProjection[j] = lastProject[j]
-								projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[j]
-							}
-						}
-					}
-					projectNode := &Node{
-						NodeType:    plan.Node_PROJECT,
-						Children:    []int32{lastNodeId},
-						ProjectList: projectProjection,
-					}
-					lastNodeId = builder.appendNode(projectNode, bindCtx)
-
-					preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
+					preEntriesStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
 					if err != nil {
 						return err
 					}
@@ -3810,10 +3857,9 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					var indexSourceColTypes []*Type
 					var fuzzymessage *OriginTableMessageForFuzzy
 					err = makeOneInsertPlan(ctx, builder, bindCtx, entriesObjRef, insertEntriesTableDef,
-						updateColLength, preUKStep, addAffectedRows, isFkRecursionCall, updatePkCol,
+						updateColLength, preEntriesStep, addAffectedRows, isFkRecursionCall, updatePkCol,
 						pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 						indexSourceColTypes, fuzzymessage)
-
 					if err != nil {
 						return err
 					}
@@ -4332,7 +4378,33 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 					return false
 				}
 
-				if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() {
+				isIvfIncludeColumnUpdated := func() (bool, error) {
+					if !catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+						return false, nil
+					}
+
+					includeCols, err := getIvfIncludeColumnNamesFromParams(indexdef.IndexAlgoParams)
+					if err != nil {
+						return false, err
+					}
+					for _, colName := range includeCols {
+						resolvedColName := catalog.ResolveAlias(colName)
+						if colIdx, ok := posMap[resolvedColName]; ok {
+							col := delCtx.tableDef.Cols[colIdx]
+							if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
+								return true, nil
+							}
+						}
+					}
+					return false, nil
+				}
+
+				includeUpdated, err := isIvfIncludeColumnUpdated()
+				if err != nil {
+					return err
+				}
+				ivfNeedsRewrite := catalog.IsIvfIndexAlgo(indexdef.IndexAlgo)
+				if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() && !includeUpdated && !ivfNeedsRewrite {
 					continue
 				}
 			}
@@ -4372,7 +4444,9 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 			}
 		}
 
-		buildDeleteMultiTableIndexes(ctx, builder, bindCtx, delCtx, multiTableIndexes)
+		if err = buildDeleteMultiTableIndexes(ctx, builder, bindCtx, delCtx, multiTableIndexes); err != nil {
+			return err
+		}
 	}
 
 	return nil

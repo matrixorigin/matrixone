@@ -192,3 +192,17 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
+
+func TestGetIvfIncludeColumnNamesFromParams(t *testing.T) {
+	cols, err := getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"title,category"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Nil(t, cols)
+}

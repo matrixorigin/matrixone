@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -55,6 +56,27 @@ var (
 		},
 	}
 )
+
+func buildIvfSearchColDefs(includeColumns []string, originalTableDef *plan.TableDef) []*plan.ColDef {
+	colDefs := DeepCopyColDefList(kIVFSearchColDefs)
+	if len(includeColumns) == 0 || originalTableDef == nil {
+		return colDefs
+	}
+
+	for _, colName := range includeColumns {
+		colIdx, ok := originalTableDef.Name2ColIndex[colName]
+		if !ok {
+			continue
+		}
+		srcCol := originalTableDef.Cols[colIdx]
+		colDefs = append(colDefs, &plan.ColDef{
+			Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + colName,
+			Typ:  srcCol.Typ,
+		})
+	}
+
+	return colDefs
+}
 
 // arg list [param, ivf.IndexTableConfig (JSON), vec]
 func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {

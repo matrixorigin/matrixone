@@ -345,6 +345,21 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, "pk", restoredOp.PkName)
 	})
 
+	t.Run("TableFunction_Limit", func(t *testing.T) {
+		op := table_function.NewArgument()
+		op.FuncName = "ivf_search"
+		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, uint64(4), pipeInstr.Limit.GetLit().GetU64Val())
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*table_function.TableFunction)
+		require.Equal(t, uint64(4), restoredOp.Limit.GetLit().GetU64Val())
+	})
+
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{

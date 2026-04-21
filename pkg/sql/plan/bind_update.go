@@ -67,6 +67,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					resolvedColName := catalog.ResolveAlias(part)
 					irregularIndexCols[resolvedColName] = true
 				}
+				if catalog.IsIvfIndexAlgo(idxDef.IndexAlgo) {
+					includeCols, err := getIvfIncludeColumnNamesFromParams(idxDef.IndexAlgoParams)
+					if err != nil {
+						return 0, err
+					}
+					for _, colName := range includeCols {
+						irregularIndexCols[catalog.ResolveAlias(colName)] = true
+					}
+				}
 			}
 		}
 

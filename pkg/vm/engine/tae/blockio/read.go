@@ -557,22 +557,52 @@ func fillOutputBatchBySelectedRows(
 
 	// cacheVectors contains all loaded columns from storage, and excludes the
 	// physical address column. Fill output columns by selected rows.
+	outputDataColumnCount := len(columns)
+	if phyAddrColumnPos >= 0 {
+		outputDataColumnCount--
+	}
+	// Some callers load one extra vector column only for ORDER BY distance evaluation.
+	// In that shape the source vector is not part of the output schema, so we must skip
+	// it while mapping cacheVectors onto the output batch. When cacheVectors and the
+	// output schema have the same number of data columns, the ORDER BY source column is
+	// already part of the output and must be materialized like any other column.
+	skipHiddenOrderByColumn := orderByLimit != nil && len(cacheVectors) == outputDataColumnCount+1
 	loadedColumnPos := 0
 	for outputColPos := range columns {
 		if outputColPos == phyAddrColumnPos {
 			continue
 		}
-		if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
+		if skipHiddenOrderByColumn && loadedColumnPos == int(orderByLimit.ColPos) {
 			loadedColumnPos++
-			continue
 		}
 		if err = outputBat.Vecs[outputColPos].PreExtendWithArea(
 			len(selectRows), 0, mp,
 		); err != nil {
 			return err
 		}
+		srcVec := &cacheVectors[loadedColumnPos]
+		if outputBat.Vecs[outputColPos].GetType().Oid != srcVec.GetType().Oid {
+			return moerr.NewInternalErrorf(
+				context.Background(),
+				"blockio fill output: type mismatch at outputColPos=%d seqnum=%d loadedColumnPos=%d skipHiddenOrderByColumn=%v dstType=%s srcType=%s cacheVectors=%d outputCols=%d orderByColPos=%d",
+				outputColPos,
+				columns[outputColPos],
+				loadedColumnPos,
+				skipHiddenOrderByColumn,
+				outputBat.Vecs[outputColPos].GetType().String(),
+				srcVec.GetType().String(),
+				len(cacheVectors),
+				len(columns),
+				func() int32 {
+					if orderByLimit == nil {
+						return -1
+					}
+					return orderByLimit.ColPos
+				}(),
+			)
+		}
 		if err = outputBat.Vecs[outputColPos].Union(
-			&cacheVectors[loadedColumnPos], selectRows, mp,
+			srcVec, selectRows, mp,
 		); err != nil {
 			return err
 		}
@@ -638,12 +668,18 @@ func BlockDataReadInner(
 	defer release()
 	defer deleteMask.Release()
 
+	loadedOutputColumnCount := len(columns)
+	if phyAddrColumnPos >= 0 {
+		loadedOutputColumnCount--
+	}
+	loadedCacheVectors := cacheVectors[:loadedOutputColumnCount]
+
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
 		var dists []float64
 
 		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, loadedCacheVectors)
 			if err != nil {
 				return err
 			}
@@ -654,7 +690,7 @@ func BlockDataReadInner(
 			columns,
 			phyAddrColumnPos,
 			outputBat,
-			cacheVectors,
+			loadedCacheVectors,
 			selectRows,
 			orderByLimit,
 			dists,
@@ -691,7 +727,15 @@ func BlockDataReadInner(
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
+		vecColPos := orderByLimit.ColPos
+		if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+			vecColPos--
+		}
+		rowCount := int(info.MetaLocation().Rows())
+		if vecColPos >= 0 && int(vecColPos) < len(loadedCacheVectors) {
+			rowCount = loadedCacheVectors[vecColPos].Length()
+		}
+		topInputRows := buildTopInputRows(rowCount, deleteMask)
 
 		var dists []float64
 		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
@@ -704,7 +748,7 @@ func BlockDataReadInner(
 			columns,
 			phyAddrColumnPos,
 			outputBat,
-			cacheVectors,
+			loadedCacheVectors,
 			selectRows,
 			orderByLimit,
 			dists,
@@ -724,7 +768,7 @@ func BlockDataReadInner(
 	loadedColumnPos := 0
 	for outputColPos := range columns {
 		if outputColPos != phyAddrColumnPos {
-			loadedCol := &cacheVectors[loadedColumnPos]
+			loadedCol := &loadedCacheVectors[loadedColumnPos]
 			if err = outputBat.Vecs[outputColPos].UnionBatch(
 				loadedCol,
 				0,

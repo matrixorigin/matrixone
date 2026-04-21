@@ -118,6 +118,40 @@ func (m *MockSearchSearchError) UpdateConfig(newalgo VectorIndexSearchIf) error 
 	return nil
 }
 
+type runtimeSearchCall struct {
+	RequestedIncludeColumns []string
+	PushdownFilterSQL       string
+	SearchCursor            *vectorindex.IvfSearchCursor
+}
+
+type MockRuntimeSearch struct {
+	loads       int
+	searchCalls []runtimeSearchCall
+}
+
+func (m *MockRuntimeSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	m.searchCalls = append(m.searchCalls, runtimeSearchCall{
+		RequestedIncludeColumns: append([]string(nil), rt.RequestedIncludeColumns...),
+		PushdownFilterSQL:       rt.PushdownFilterSQL,
+		SearchCursor:            rt.SearchCursor,
+	})
+	if rt.SearchCursor != nil {
+		rt.SearchCursor.Round = uint(len(m.searchCalls))
+	}
+	return []int64{1}, []float64{2.0}, nil
+}
+
+func (m *MockRuntimeSearch) Destroy() {}
+
+func (m *MockRuntimeSearch) Load(*sqlexec.SqlProcess) error {
+	m.loads++
+	return nil
+}
+
+func (m *MockRuntimeSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
+	return nil
+}
+
 func TestCacheServe(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -382,4 +416,44 @@ func TestCacheSearchError(t *testing.T) {
 	Cache.Destroy()
 	os.Stderr.WriteString("cache.Destroy end\n")
 	Cache = nil
+}
+
+func TestCacheReuseKeepsRuntimeConfigQueryScoped(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	Cache = NewVectorIndexCache()
+	Cache.Once()
+	defer func() {
+		Cache.Destroy()
+		Cache = nil
+	}()
+
+	cachedAlgo := &MockRuntimeSearch{}
+	_, _, err := Cache.Search(sqlproc, "__ivf_entries", cachedAlgo, []float32{1, 2, 3}, vectorindex.RuntimeConfig{
+		Limit:                   4,
+		RequestedIncludeColumns: []string{"title"},
+		PushdownFilterSQL:       "`__mo_index_include_title` = 'alpha'",
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+	})
+	require.NoError(t, err)
+
+	freshAlgo := &MockRuntimeSearch{}
+	_, _, err = Cache.Search(sqlproc, "__ivf_entries", freshAlgo, []float32{1, 2, 3}, vectorindex.RuntimeConfig{
+		Limit:                   4,
+		RequestedIncludeColumns: []string{"category"},
+		PushdownFilterSQL:       "",
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, cachedAlgo.loads)
+	require.Zero(t, freshAlgo.loads)
+	require.Len(t, cachedAlgo.searchCalls, 2)
+	require.Equal(t, []string{"title"}, cachedAlgo.searchCalls[0].RequestedIncludeColumns)
+	require.Equal(t, "`__mo_index_include_title` = 'alpha'", cachedAlgo.searchCalls[0].PushdownFilterSQL)
+	require.Equal(t, uint(1), cachedAlgo.searchCalls[0].SearchCursor.Round)
+	require.Equal(t, []string{"category"}, cachedAlgo.searchCalls[1].RequestedIncludeColumns)
+	require.Empty(t, cachedAlgo.searchCalls[1].PushdownFilterSQL)
+	require.Equal(t, uint(2), cachedAlgo.searchCalls[1].SearchCursor.Round)
 }

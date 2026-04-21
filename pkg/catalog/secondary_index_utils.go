@@ -85,17 +85,57 @@ func IsHnswIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists  = "lists"
-	IndexAlgoParamOpType = "op_type"
-	HnswM                = "m"
-	HnswEfConstruction   = "ef_construction"
-	HnswQuantization     = "quantization"
-	HnswEfSearch         = "ef_search"
-	Async                = "async"
-	AutoUpdate           = "auto_update"
-	Day                  = "day"
-	Hour                 = "hour"
+	IndexAlgoParamLists          = "lists"
+	IndexAlgoParamOpType         = "op_type"
+	IndexAlgoParamIncludeColumns = "include_columns"
+	HnswM                        = "m"
+	HnswEfConstruction           = "ef_construction"
+	HnswQuantization             = "quantization"
+	HnswEfSearch                 = "ef_search"
+	Async                        = "async"
+	AutoUpdate                   = "auto_update"
+	Day                          = "day"
+	Hour                         = "hour"
 )
+
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func ParseIncludeColumnsValue(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var cols []string
+		if err := json.Unmarshal([]byte(raw), &cols); err == nil {
+			return cols, nil
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		cols = append(cols, part)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	return cols, nil
+}
 
 /* 1. ToString Functions */
 
@@ -152,6 +192,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[Hour]; ok {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
+	}
+
+	if includeColumns, ok := result[IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
+		names, err := ParseIncludeColumnsValue(includeColumns)
+		if err != nil {
+			return "", err
+		}
+		res += fmt.Sprintf(" INCLUDE (%s) ", strings.Join(names, ", "))
 	}
 
 	return res, nil
@@ -227,7 +275,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
-			// do nothing
+		// do nothing
 		case tree.INDEX_TYPE_IVFFLAT:
 			if idx.IndexOption.AlgoParamList == 0 {
 				// NOTE:
@@ -264,6 +312,18 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if idx.IndexOption.Hour > 0 {
 				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+			}
+
+			if len(idx.IndexOption.IncludeColumns) > 0 {
+				names := make([]string, len(idx.IndexOption.IncludeColumns))
+				for i, col := range idx.IndexOption.IncludeColumns {
+					names[i] = col.ColName()
+				}
+				encoded, err := MarshalIncludeColumnsValue(names)
+				if err != nil {
+					return nil, err
+				}
+				res[IndexAlgoParamIncludeColumns] = encoded
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {

@@ -648,6 +648,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Name:     t.FuncName,
 			IsSingle: t.IsSingle,
 		}
+		in.Limit = t.Limit
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
@@ -1094,6 +1095,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()

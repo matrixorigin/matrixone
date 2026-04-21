@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -318,18 +319,10 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		}
 		cfg.KmeansMaxIteration = val.(int64)
 
-		params_str := indexDef.IndexAlgoParams
-
-		cfgbytes, err := json.Marshal(cfg)
+		sql, err = buildIvfCreateSQL(indexDef.IndexAlgoParams, cfg)
 		if err != nil {
 			return err
 		}
-
-		//part := src_alias + "." + indexDef.Parts[0]
-		insertIntoIvfIndexTableFormat := "SELECT * FROM ivf_create('%s', '%s') AS f;"
-		sql = fmt.Sprintf(insertIntoIvfIndexTableFormat,
-			params_str,
-			string(cfgbytes))
 	}
 
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
@@ -364,8 +357,8 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 			}
 
 			logutil.Infof("Ivfflat index Async = true, forceSync = true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinker_type, true, "", originalTableDef)
+			sinkerType := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinkerType, true, "", originalTableDef)
 			if err != nil {
 				return err
 			}
@@ -408,82 +401,26 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	return nil
 }
 
+func buildIvfCreateSQL(params string, cfg vectorindex.IndexTableConfig) (string, error) {
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf(
+		"SELECT * FROM ivf_create('%s', '%s') AS f;",
+		escapeSQLStringLiteral(params),
+		escapeSQLStringLiteral(string(cfgbytes)),
+	), nil
+}
+
 func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string) error {
-
-	// 1.a algo params
-	val, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	centroidsCrossL2JoinTbl, err := buildIvfEntriesInsertSQL(indexDef, qryDatabase, originalTableDef, metadataTableName, centroidsTableName)
 	if err != nil {
 		return err
 	}
-	optype, err := val.StrictString()
-	if err != nil {
-		return err
-	}
-
-	// 1. Original table's pkey name and value
-	var originalTblPkColsCommaSeperated string
-	var originalTblPkColMaySerial string
-	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		for i, part := range originalTableDef.Pkey.Names {
-			if i > 0 {
-				originalTblPkColsCommaSeperated += ","
-			}
-			originalTblPkColsCommaSeperated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
-		}
-		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeperated)
-	} else {
-		originalTblPkColsCommaSeperated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
-		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
-	}
-
-	// 2. insert into entries table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-	)
-
-	// 3. centroids table with latest version
-	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		centroidsTableName,
-	)
-
-	// 4. select * from table and cross join centroids;
-	indexColumnName := indexDef.Parts[0]
-	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
-		insertSQL,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		originalTblPkColMaySerial,
-		indexColumnName,
-
-		qryDatabase,
-		originalTableDef.Name,
-		optype,
-		centroidsTableForCurrentVersionSql,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		indexColumnName,
-	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
 	if err != nil {
@@ -525,6 +462,106 @@ func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef
 		indexDef.IndexName,
 		idxcron.Action_Ivfflat_Reindex,
 		string(metadata))
+}
+
+func buildIvfEntriesInsertSQL(indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+	metadataTableName string, centroidsTableName string) (string, error) {
+
+	// 1.a algo params
+	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("vector optype not found")
+	}
+
+	var includeCols []string
+	if includeColumns, ok := params[catalog.IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
+		includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	var originalTblPkColsCommaSeperated string
+	var originalTblPkColMaySerial string
+	srcAlias := "src"
+	centroidsAlias := "centroids_cur"
+	srcTableRef := fmt.Sprintf("`%s`.`%s`", qryDatabase, originalTableDef.Name)
+	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		for i, part := range originalTableDef.Pkey.Names {
+			if i > 0 {
+				originalTblPkColsCommaSeperated += ","
+			}
+			originalTblPkColsCommaSeperated += fmt.Sprintf("`%s`.`%s`", srcAlias, part)
+		}
+		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeperated)
+	} else {
+		originalTblPkColsCommaSeperated = fmt.Sprintf("`%s`.`%s`", srcAlias, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
+	}
+
+	insertCols := []string{
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	}
+	selectCols := []string{
+		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+		originalTblPkColMaySerial,
+		fmt.Sprintf("`%s`.`%s`", srcAlias, indexDef.Parts[0]),
+	}
+	for _, includeCol := range includeCols {
+		insertCols = append(insertCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
+		selectCols = append(selectCols, fmt.Sprintf("`%s`.`%s`", srcAlias, includeCol))
+	}
+
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) ",
+		qryDatabase,
+		indexDef.IndexTableName,
+		joinQuotedIdentifiers(insertCols),
+	)
+
+	centroidsTableForCurrentVersionSQL := fmt.Sprintf("(SELECT * FROM "+
+		"`%s`.`%s` WHERE `%s` = "+
+		"(SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version')) AS `%s`",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		centroidsAlias,
+	)
+
+	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
+		"SELECT %s"+
+		" FROM %s AS `%s` CENTROIDX ('%s') JOIN %s "+
+		" USING (`%s`, `%s`) ",
+		insertSQL,
+		strings.Join(selectCols, ", "),
+		srcTableRef,
+		srcAlias,
+		optype,
+		centroidsTableForCurrentVersionSQL,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+		indexDef.Parts[0],
+	)
+
+	return centroidsCrossL2JoinTbl, nil
+}
+
+func joinQuotedIdentifiers(cols []string) string {
+	quoted := make([]string, len(cols))
+	for i, col := range cols {
+		quoted[i] = fmt.Sprintf("`%s`", col)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {

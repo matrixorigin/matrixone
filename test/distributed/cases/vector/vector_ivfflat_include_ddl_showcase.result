@@ -1,0 +1,21 @@
+drop table if exists vector_ivfflat_include_phase1;
+create table vector_ivfflat_include_phase1(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int
+);
+insert into vector_ivfflat_include_phase1 values
+(1, "[1,2,3]", "alpha", 10),
+(2, "[2,3,4]", "beta", 20),
+(3, "[3,4,5]", "gamma", 30);
+create index idx_ivf_include using ivfflat on vector_ivfflat_include_phase1(embedding)
+lists=2 op_type "vector_l2_ops" include (title, category);
+show create table vector_ivfflat_include_phase1;
+Table    Create Table
+vector_ivfflat_include_phase1    CREATE TABLE `vector_ivfflat_include_phase1` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `title` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (title, category) \n)
+show index from vector_ivfflat_include_phase1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+vector_ivfflat_include_phase1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+vector_ivfflat_include_phase1    1    idx_ivf_include    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}    YES    embedding
+drop table vector_ivfflat_include_phase1;

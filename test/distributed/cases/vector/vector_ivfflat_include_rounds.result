@@ -1,0 +1,205 @@
+drop database if exists vector_ivfflat_include_rounds;
+create database vector_ivfflat_include_rounds;
+use vector_ivfflat_include_rounds;
+drop table if exists include_rounds_main;
+create table include_rounds_main(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int
+);
+insert into include_rounds_main values
+(1, "[0,0,0]", "a0", 10),
+(2, "[0,0,1]", "a1", 10),
+(3, "[0,1,0]", "a2", 10),
+(4, "[1,0,0]", "a3", 10),
+(5, "[10,10,10]", "b0", 20),
+(6, "[11,11,11]", "b1", 20),
+(7, "[12,12,12]", "b2", 20),
+(8, "[13,13,13]", "b3", 20);
+create index idx_ivf_include_rounds using ivfflat on include_rounds_main(embedding)
+lists=2 op_type "vector_l2_ops" include(title, category);
+explain analyze select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Analyze: timeConsumed=5ms waitTime=0ms inputRows=0 outputRows=2 (min=2, max=2) InputSize=0 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=80 bytes (min=0 bytes, max=80 bytes)  𝄀
+              Index Reader Param:  Limit: 2  𝄀
+              Limit: 2  𝄀
+              Filter Cond: (`__mo_index_include_category` = 20)  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+        Sort Key: __dist_func__ INTERNAL  𝄀
+        Limit: 12  𝄀
+        ->  Table Scan on vector_ivfflat_include_rounds.__mo_index_secondary_019db0d0-d320-7868-9540-0ab8276cfe37  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=4 (min=4, max=4) InputSize=704 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=876 bytes (min=876 bytes, max=876 bytes)  𝄀
+              Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 12  𝄀
+              Filter Cond: (__mo_index_include_category = 20), prefix_in(__mo_cpkey_col)
+explain analyze select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=post';
+➤ ap query plan on one cn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=2 (min=2, max=2) InputSize=160 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=12 outputRows=4 (min=4, max=4) InputSize=224 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.21 KiB (min=16.06 KiB, max=16.15 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=4 (min=4, max=4) InputSize=256 bytes OutputSize=128 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=392 bytes (min=392 bytes, max=392 bytes)  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=8 (min=8, max=8) InputSize=0 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=0 bytes, max=96 bytes)  𝄀
+                    Index Reader Param:  Limit: 12  𝄀
+                    Limit: 12  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=8 (min=8, max=8) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+        Sort Key: __dist_func__ INTERNAL  𝄀
+        Limit: 12  𝄀
+        ->  Table Scan on vector_ivfflat_include_rounds.__mo_index_secondary_019db0e1-0e0e-7b2b-ab78-43b059553ad1  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=8 (min=8, max=8) InputSize=480 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=584 bytes (min=584 bytes, max=584 bytes)  𝄀
+              Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 12  𝄀
+              Filter Cond: prefix_in(__mo_cpkey_col)
+explain analyze select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=pre';
+➤ ap query plan on one cn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=2 (min=2, max=2) InputSize=88 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.09 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=130 bytes (min=130 bytes, max=130 bytes)  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+                    Runtime Filter Probe: include_rounds_main.id  𝄀
+              ->  Join  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=2 (min=2, max=2) InputSize=40 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.09 KiB)  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = include_rounds_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=2 (min=2, max=2) InputSize=0 bytes OutputSize=24 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=24 bytes (min=0 bytes, max=24 bytes)  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Limit: 2  𝄀
+                    ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=88 bytes (min=88 bytes, max=88 bytes)  𝄀
+                          Filter Cond: (include_rounds_main.category = 20)  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=112 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=48 bytes (min=48 bytes, max=48 bytes)  𝄀
+  ->  Table Scan on vector_ivfflat_include_rounds.__mo_index_secondary_019db0d0-d320-7868-9540-0ab8276cfe37  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8 outputRows=4 (min=4, max=4) InputSize=416 bytes OutputSize=112 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=540 bytes (min=540 bytes, max=540 bytes)  𝄀
+        Filter Cond: __mo_index_pri_col in ([5 6 7 8]), prefix_eq(__mo_cpkey_col)
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 2  𝄀
+              Limit: 2  𝄀
+              Filter Cond: (`__mo_index_include_category` = 20)
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=post';
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 12  𝄀
+                    Limit: 12
+explain select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=pre';
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                    Filter Cond: (include_rounds_main.category = 20)  𝄀
+                    Runtime Filter Probe: include_rounds_main.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = include_rounds_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Limit: 2  𝄀
+                    ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
+                          Filter Cond: (include_rounds_main.category = 20)
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=post';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=pre';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+5  ¦  b0  ¦  20  𝄀
+6  ¦  b1  ¦  20
+drop table include_rounds_main;
+drop database vector_ivfflat_include_rounds;

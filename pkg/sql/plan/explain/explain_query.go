@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -85,9 +87,13 @@ const (
 )
 
 const (
-	Statistic_Unit_ns    = "ns"
-	Statistic_Unit_count = "count"
-	Statistic_Unit_byte  = "byte"
+	maxDefaultExpandedBackgroundQueries = 2
+	Statistic_Unit_ns                   = "ns"
+	Statistic_Unit_count                = "count"
+	Statistic_Unit_byte                 = "byte"
+
+	maxVerboseBackgroundQueryPrefix = 3
+	maxVerboseBackgroundQuerySuffix = 2
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -143,14 +149,199 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 		return err
 	}
 
-	for _, bq := range qry.BackgroundQueries {
-		err = explainPlanTree(bq, ctx, buffer, options)
-		if err != nil {
+	if len(qry.BackgroundQueries) == 0 {
+		return nil
+	}
+
+	if !options.Verbose {
+		if len(qry.BackgroundQueries) <= maxDefaultExpandedBackgroundQueries {
+			return explainVerboseBackgroundQueries(qry.BackgroundQueries, ctx, buffer, options)
+		}
+		summary := summarizeBackgroundQueries(qry)
+		if summary != "" {
+			buffer.PushNewLine(summary, false, 0)
+		}
+		return nil
+	}
+
+	return explainVerboseBackgroundQueries(qry.BackgroundQueries, ctx, buffer, options)
+}
+
+func explainVerboseBackgroundQueries(backgroundQueries []*plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
+	total := len(backgroundQueries)
+	if total == 0 {
+		return nil
+	}
+
+	if total <= maxVerboseBackgroundQueryPrefix+maxVerboseBackgroundQuerySuffix {
+		for _, bq := range backgroundQueries {
+			if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, bq := range backgroundQueries[:maxVerboseBackgroundQueryPrefix] {
+		if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
 			return err
 		}
 	}
 
+	skipped := total - maxVerboseBackgroundQueryPrefix - maxVerboseBackgroundQuerySuffix
+	buffer.PushNewLine(
+		fmt.Sprintf("Background Queries: skipped %d middle plan(s); use fewer rounds to inspect every round plan", skipped),
+		false,
+		0,
+	)
+
+	for _, bq := range backgroundQueries[total-maxVerboseBackgroundQuerySuffix:] {
+		if err := explainPlanTree(bq, ctx, buffer, options); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func summarizeBackgroundQueries(qry *plan.Query) string {
+	if len(qry.BackgroundQueries) == 0 {
+		return ""
+	}
+
+	roundCount := len(qry.BackgroundQueries)
+	roundLimits := make([]string, 0, roundCount)
+	bucketWindows := make([]string, 0, roundCount)
+	nextWindowOffset := 0
+	emptyRounds := 0
+
+	for _, bq := range qry.BackgroundQueries {
+		sql := backgroundQuerySQL(bq)
+		if limit, ok := extractSQLLimit(sql); ok {
+			roundLimits = append(roundLimits, strconv.FormatUint(uint64(limit), 10))
+		}
+		if bucketCount, ok := extractSQLInListCount(sql); ok {
+			end := nextWindowOffset + bucketCount
+			bucketWindows = append(bucketWindows, fmt.Sprintf("%d:%d", nextWindowOffset, end))
+			nextWindowOffset = end
+		}
+		if queryOutputRows(bq) == 0 {
+			emptyRounds++
+		}
+	}
+
+	parts := []string{fmt.Sprintf("Background Queries: round_count=%d", roundCount)}
+	if len(bucketWindows) > 0 {
+		parts = append(parts, "bucket_windows="+truncateSummaryList(bucketWindows, 4))
+	}
+	if len(roundLimits) > 0 {
+		parts = append(parts, "round_limits="+truncateSummaryList(roundLimits, 4))
+	}
+	parts = append(parts, fmt.Sprintf("empty_rounds=%d", emptyRounds))
+	if dedupOutputRows, ok := findIvfSearchOutputRows(qry); ok {
+		parts = append(parts, fmt.Sprintf("dedup_output_rows=%d", dedupOutputRows))
+	}
+	parts = append(parts, "use EXPLAIN VERBOSE ANALYZE to expand")
+	return strings.Join(parts, " ")
+}
+
+func backgroundQuerySQL(qry *plan.Query) string {
+	if qry == nil {
+		return ""
+	}
+	for _, rootID := range qry.Steps {
+		if int(rootID) >= len(qry.Nodes) || qry.Nodes[rootID] == nil {
+			continue
+		}
+		if qry.Nodes[rootID].Stats != nil {
+			if sql := qry.Nodes[rootID].Stats.GetSql(); sql != "" {
+				return sql
+			}
+		}
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.Stats == nil {
+			continue
+		}
+		if sql := node.Stats.GetSql(); sql != "" {
+			return sql
+		}
+	}
+	return ""
+}
+
+func extractSQLLimit(sql string) (int, bool) {
+	upper := strings.ToUpper(sql)
+	idx := strings.LastIndex(upper, " LIMIT ")
+	if idx < 0 {
+		return 0, false
+	}
+	value := strings.TrimSpace(sql[idx+len(" LIMIT "):])
+	if value == "" {
+		return 0, false
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return limit, true
+}
+
+func extractSQLInListCount(sql string) (int, bool) {
+	upper := strings.ToUpper(sql)
+	inIdx := strings.LastIndex(upper, " IN (")
+	if inIdx < 0 {
+		return 0, false
+	}
+	listStart := inIdx + len(" IN (")
+	listEnd := strings.Index(sql[listStart:], ")")
+	if listEnd < 0 {
+		return 0, false
+	}
+	content := strings.TrimSpace(sql[listStart : listStart+listEnd])
+	if content == "" {
+		return 0, false
+	}
+	return strings.Count(content, ",") + 1, true
+}
+
+func queryOutputRows(qry *plan.Query) int64 {
+	if qry == nil {
+		return 0
+	}
+	for _, rootID := range qry.Steps {
+		if int(rootID) >= len(qry.Nodes) || qry.Nodes[rootID] == nil {
+			continue
+		}
+		if analyze := qry.Nodes[rootID].AnalyzeInfo; analyze != nil {
+			return analyze.OutputRows
+		}
+	}
+	return 0
+}
+
+func findIvfSearchOutputRows(qry *plan.Query) (int64, bool) {
+	if qry == nil {
+		return 0, false
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
+			continue
+		}
+		if node.TableDef.TblFunc.Name != "ivf_search" || node.AnalyzeInfo == nil {
+			continue
+		}
+		return node.AnalyzeInfo.OutputRows, true
+	}
+	return 0, false
+}
+
+func truncateSummaryList(items []string, maxItems int) string {
+	if len(items) <= maxItems {
+		return strings.Join(items, ", ")
+	}
+	visible := append([]string{}, items[:maxItems]...)
+	visible = append(visible, "...")
+	return strings.Join(visible, ", ")
 }
 
 func explainSinglePlan(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {

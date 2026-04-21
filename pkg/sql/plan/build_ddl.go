@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -2462,6 +2463,57 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
 // )
 
+const maxIvfFlatIncludeColumns = 10
+
+func getIvfFlatIncludeColumnNames(indexInfo *tree.Index) []string {
+	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		names = append(names, col.ColName())
+	}
+	return names
+}
+
+func validateIvfFlatIncludeColumns(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, vecColName string, pkeyName string) error {
+	if indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+
+	if len(indexInfo.IndexOption.IncludeColumns) > maxIvfFlatIncludeColumns {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "IVFFLAT INCLUDE supports at most %d columns", maxIvfFlatIncludeColumns)
+	}
+
+	includeSeen := make(map[string]struct{}, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		name := col.ColName()
+		nameOrigin := col.ColNameOrigin()
+
+		if _, ok := colMap[name]; !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
+		}
+		if name == vecColName {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' cannot be both IVFFLAT key and INCLUDE column", nameOrigin)
+		}
+		if name == pkeyName {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "primary key column '%s' cannot be in IVFFLAT INCLUDE", nameOrigin)
+		}
+		if _, ok := includeSeen[name]; ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate include column '%s'", nameOrigin)
+		}
+		includeSeen[name] = struct{}{}
+
+		switch colMap[name].Typ.Id {
+		case int32(types.T_blob), int32(types.T_text):
+			logutil.Warnf("IVFFLAT INCLUDE column %q uses large type %s; entries table size may increase significantly", nameOrigin, types.T(colMap[name].Typ.Id).String())
+		}
+	}
+
+	return nil
+}
+
 func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	indexParts := make([]string, 1)
@@ -2488,6 +2540,10 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFFLAT indexes are not allowed to use the same column")
 				}
 			}
+		}
+
+		if err := validateIvfFlatIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
+			return nil, nil, err
 		}
 
 	}
@@ -2656,6 +2712,10 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 	// 3. create ivf-flat `entries` table
 	{
+		includeColNames := getIvfFlatIncludeColumnNames(indexInfo)
+		nIncludeCols := len(includeColNames)
+		cpkeyPos := 4 + nIncludeCols
+
 		// 3.a tableDefs[2] init
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
@@ -2664,7 +2724,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2] = &TableDef{
 			Name:      indexTableName,
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			Cols:      make([]*ColDef, 5),
+			Cols:      make([]*ColDef, 5+nIncludeCols),
 		}
 
 		// 3.b indexDefs[2] init
@@ -2735,9 +2795,27 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			},
 		}
 
-		tableDefs[2].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[2].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[2].Cols[4].Primary = true
+		for i, includeColName := range includeColNames {
+			srcCol := colMap[includeColName]
+			tableDefs[2].Cols[4+i] = &ColDef{
+				Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + includeColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: Type{
+					Id:    srcCol.Typ.Id,
+					Width: srcCol.Typ.Width,
+					Scale: srcCol.Typ.Scale,
+				},
+				Default: &plan.Default{
+					NullAbility:  true,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+		}
+
+		tableDefs[2].Cols[cpkeyPos] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[2].Cols[cpkeyPos].Alg = plan.CompressType_Lz4
+		tableDefs[2].Cols[cpkeyPos].Primary = true
 
 		// 3.d PK def
 		tableDefs[2].Pkey = &PrimaryKeyDef{
@@ -2747,7 +2825,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, // added to make this unique
 			},
 			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[2].Cols[4],
+			CompPkeyCol: tableDefs[2].Cols[cpkeyPos],
 		}
 
 		properties := []*plan.Property{

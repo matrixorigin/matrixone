@@ -1,0 +1,206 @@
+drop database if exists vector_ivfflat_include_phase9;
+create database vector_ivfflat_include_phase9;
+use vector_ivfflat_include_phase9;
+drop table if exists phase9_main;
+create table phase9_main(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int,
+note varchar(20)
+);
+insert into phase9_main values
+(1, "[1,2,3]", "alpha", 10, "n1"),
+(2, "[1,2,4]", "beta", 20, "n2"),
+(3, "[1,2,5]", "gamma", 30, "n3"),
+(4, "[2,2,2]", "delta", 40, "n4"),
+(5, "[9,9,9]", "epsilon", 50, "n5");
+create index idx_ivf_include_phase9 using ivfflat on phase9_main(embedding)
+lists=2 op_type "vector_l2_ops" include(title, category);
+explain analyze select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=include';
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=120 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Analyze: timeConsumed=4ms waitTime=0ms inputRows=0 outputRows=3 (min=3, max=3) InputSize=0 bytes OutputSize=120 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=120 bytes (min=0 bytes, max=120 bytes)  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3  𝄀
+              Filter Cond: (`__mo_index_include_category` >= 20)  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=160 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+        Sort Key: __dist_func__ INTERNAL  𝄀
+        Limit: 15  𝄀
+        ->  Table Scan on vector_ivfflat_include_phase9.__mo_index_secondary_019db0c7-1fe9-71ad-b376-945de6d3c0a7  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=4 (min=4, max=4) InputSize=440 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=609 bytes (min=609 bytes, max=609 bytes)  𝄀
+              Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 15  𝄀
+              Filter Cond: (__mo_index_include_category >= 20), prefix_in(__mo_cpkey_col)
+explain analyze select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=post';
+➤ ap query plan on one cn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=3 (min=3, max=3) InputSize=160 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=4 (min=4, max=4) InputSize=188 bytes OutputSize=160 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.17 KiB (min=16.06 KiB, max=16.11 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=4 (min=4, max=4) InputSize=160 bytes OutputSize=128 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=293 bytes (min=293 bytes, max=293 bytes)  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=5 (min=5, max=5) InputSize=0 bytes OutputSize=60 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=60 bytes (min=0 bytes, max=60 bytes)  𝄀
+                    Index Reader Param:  Limit: 15  𝄀
+                    Limit: 15  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=60 bytes OutputSize=60 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=60 bytes (min=60 bytes, max=60 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 (min=5, max=5) InputSize=60 bytes OutputSize=60 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=60 bytes (min=60 bytes, max=60 bytes)  𝄀
+        Sort Key: __dist_func__ INTERNAL  𝄀
+        Limit: 15  𝄀
+        ->  Table Scan on vector_ivfflat_include_phase9.__mo_index_secondary_019db0e7-4960-7c38-bec3-55c638348417  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=5 (min=5, max=5) InputSize=300 bytes OutputSize=60 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=365 bytes (min=365 bytes, max=365 bytes)  𝄀
+              Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 15  𝄀
+              Filter Cond: prefix_in(__mo_cpkey_col)
+explain analyze select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=pre';
+➤ ap query plan on one cn(10 core)[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+  ->  Sort  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=120 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=96 bytes (min=96 bytes, max=96 bytes)  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=3 (min=3, max=3) InputSize=132 bytes OutputSize=120 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.16 KiB (min=16.06 KiB, max=16.11 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=96 bytes OutputSize=96 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=195 bytes (min=195 bytes, max=195 bytes)  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+                    Runtime Filter Probe: phase9_main.id  𝄀
+              ->  Join  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=7 outputRows=3 (min=3, max=3) InputSize=52 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.09 KiB)  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = phase9_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=3 (min=3, max=3) InputSize=0 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36 bytes (min=0 bytes, max=36 bytes)  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Limit: 3  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=4 (min=4, max=4) InputSize=40 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=61 bytes (min=61 bytes, max=61 bytes)  𝄀
+                          Filter Cond: (phase9_main.category >= 20)  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=112 bytes OutputSize=48 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=48 bytes (min=48 bytes, max=48 bytes)  𝄀
+  ->  Table Scan on vector_ivfflat_include_phase9.__mo_index_secondary_019db0c7-1fe9-71ad-b376-945de6d3c0a7  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=5 outputRows=4 (min=4, max=4) InputSize=260 bytes OutputSize=112 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=381 bytes (min=381 bytes, max=381 bytes)  𝄀
+        Filter Cond: __mo_index_pri_col in ([2 3 4 5]), prefix_eq(__mo_cpkey_col)
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=include';
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3  𝄀
+              Filter Cond: (`__mo_index_include_category` >= 20)
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=post';
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 15  𝄀
+                    Limit: 15
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=pre';
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+                    Runtime Filter Probe: phase9_main.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = phase9_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Limit: 3  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                          Filter Cond: (phase9_main.category >= 20)
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=post';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=pre';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+drop table phase9_main;
+drop database vector_ivfflat_include_phase9;

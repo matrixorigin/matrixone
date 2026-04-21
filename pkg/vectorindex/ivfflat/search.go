@@ -17,7 +17,9 @@ package ivfflat
 import (
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -289,6 +292,30 @@ func (idx *IvfflatSearchIndex[T]) getCentroidsSum(centroids_ids []int64, nlists 
 	return uint64(idx.Meta.DataSize * int64(len(centroids_ids)) / int64(nlists))
 }
 
+func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig) ([]int64, error) {
+	if idx.Centroids == nil {
+		// empty index has id = 1
+		return []int64{1}, nil
+	}
+
+	limit := idxcfg.Ivfflat.Lists
+	if limit == 0 {
+		limit = 1
+	}
+	queries := [][]T{query}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
+	if err != nil {
+		return nil, err
+	}
+
+	ranked, ok := keys.([]int64)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("ivfflat: ranked centroid ids are not []int64")
+	}
+	return ranked, nil
+}
+
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if idx.Centroids == nil {
@@ -339,19 +366,29 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
-	if len(sqlproc.RuntimeFilterSpecs) == 0 {
-		return
-	}
-	spec := sqlproc.RuntimeFilterSpecs[0]
-	if !spec.UseBloomFilter {
-		return
+	if len(sqlproc.IvfRuntimeFilterData) == 0 {
+		if len(sqlproc.RuntimeFilterSpecs) == 0 {
+			return
+		}
+		spec := sqlproc.RuntimeFilterSpecs[0]
+		if !spec.UseBloomFilter {
+			return
+		}
 	}
 
-	// Get raw unique join key bytes from the build side.
-	vecbytes, err := sqlexec.WaitBloomFilter(sqlproc)
-	if err != nil {
-		return
+	sqlproc.ExactPkFilter = ""
+	sqlproc.IvfBloomFilter = nil
+
+	var vecbytes []byte
+	if len(sqlproc.IvfRuntimeFilterData) > 0 {
+		vecbytes = sqlproc.IvfRuntimeFilterData
+	} else {
+		vecbytes, err = sqlexec.WaitBloomFilter(sqlproc)
+		if err != nil {
+			return
+		}
 	}
+
 	if len(vecbytes) == 0 {
 		return
 	}
@@ -505,6 +542,254 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	return
 }
 
+func filterRequestedIncludeColumns(requested []string, configured []string) []string {
+	if len(requested) == 0 || len(configured) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]struct{}, len(configured))
+	for _, col := range configured {
+		allowed[col] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(requested))
+	for _, col := range requested {
+		if _, ok := allowed[col]; ok {
+			filtered = append(filtered, col)
+		}
+	}
+	return filtered
+}
+
+func buildActiveCentroidIDs(cursor *vectorindex.IvfSearchCursor, probe uint) []int64 {
+	if cursor == nil {
+		return nil
+	}
+
+	total := uint(len(cursor.RankedCentroidIDs))
+	if total == 0 {
+		cursor.Exhausted = true
+		return nil
+	}
+
+	if cursor.Round == 0 && cursor.CurrentBucketCount == 0 {
+		cursor.NextBucketOffset = 0
+		cursor.CurrentBucketCount = probe
+		if cursor.CurrentBucketCount == 0 {
+			cursor.CurrentBucketCount = 1
+		}
+	}
+
+	start := cursor.NextBucketOffset
+	if start >= total || cursor.CurrentBucketCount == 0 {
+		cursor.Exhausted = true
+		return nil
+	}
+
+	end := start + cursor.CurrentBucketCount
+	if end > total {
+		end = total
+	}
+	cursor.CurrentBucketCount = end - start
+	cursor.Exhausted = end >= total
+
+	return cursor.RankedCentroidIDs[start:end]
+}
+
+func buildSearchRoundSQL[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	query []T,
+	activeCentroidIDs []int64,
+	version int64,
+	includeCols []string,
+	pushdownFilterSQL string,
+	roundLimit uint,
+) string {
+	inValues := make([]string, 0, len(activeCentroidIDs))
+	for _, c := range activeCentroidIDs {
+		inValues = append(inValues, strconv.FormatInt(c, 10))
+	}
+
+	queryB64 := types.ArrayToBase64(query)
+	var distExpr string
+	switch any(query).(type) {
+	case []float32:
+		distExpr = fmt.Sprintf("%s(`%s`, vecf32_from_base64('%s')) as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			queryB64,
+		)
+	case []float64:
+		distExpr = fmt.Sprintf("%s(`%s`, vecf64_from_base64('%s')) as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			queryB64,
+		)
+	default:
+		distExpr = fmt.Sprintf("%s(`%s`, '%s') as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			types.ArrayToString(query),
+		)
+	}
+
+	selectCols := []string{
+		fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+		distExpr,
+	}
+	for _, col := range includeCols {
+		selectCols = append(selectCols, fmt.Sprintf("`%s%s`", catalog.SystemSI_IVFFLAT_IncludeColPrefix, col))
+	}
+
+	sql := fmt.Sprintf(
+		"SELECT %s FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		strings.Join(selectCols, ", "),
+		tblcfg.DbName,
+		tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		strings.Join(inValues, ","),
+	)
+	if pushdownFilterSQL != "" {
+		// pushdownFilterSQL is produced by the optimizer's AST deparse path after
+		// column remap and validation, so this concatenation only stitches in
+		// controlled SQL emitted from bound plan expressions.
+		sql += " AND " + pushdownFilterSQL
+	}
+	sql += fmt.Sprintf(" ORDER BY vec_dist LIMIT %d", roundLimit)
+
+	return sql
+}
+
+func buildExactSearchSQL[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	query []T,
+	version int64,
+	exactPkFilter string,
+	includeCols []string,
+	pushdownFilterSQL string,
+) string {
+	queryB64 := types.ArrayToBase64(query)
+	var distExpr string
+	switch any(query).(type) {
+	case []float32:
+		distExpr = fmt.Sprintf("%s(`%s`, vecf32_from_base64('%s')) as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			queryB64,
+		)
+	case []float64:
+		distExpr = fmt.Sprintf("%s(`%s`, vecf64_from_base64('%s')) as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			queryB64,
+		)
+	default:
+		distExpr = fmt.Sprintf("%s(`%s`, '%s') as vec_dist",
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			types.ArrayToString(query),
+		)
+	}
+
+	selectCols := []string{
+		fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+		distExpr,
+	}
+	for _, col := range includeCols {
+		selectCols = append(selectCols, fmt.Sprintf("`%s%s`", catalog.SystemSI_IVFFLAT_IncludeColPrefix, col))
+	}
+
+	sql := fmt.Sprintf(
+		"SELECT %s FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		strings.Join(selectCols, ", "),
+		tblcfg.DbName,
+		tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		exactPkFilter,
+	)
+	if pushdownFilterSQL != "" {
+		sql += " AND " + pushdownFilterSQL
+	}
+	return sql
+}
+
+func sortAndLimitExactResults(
+	keys []any,
+	distances []float64,
+	includeCols []string,
+	includeData map[string][]any,
+	limit uint,
+) ([]any, []float64, map[string][]any) {
+	if len(keys) <= 1 {
+		if limit > 0 && len(keys) > int(limit) {
+			keys = keys[:limit]
+			distances = distances[:limit]
+			if includeData != nil {
+				for _, col := range includeCols {
+					includeData[col] = includeData[col][:limit]
+				}
+			}
+		}
+		return keys, distances, includeData
+	}
+
+	order := make([]int, len(keys))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return distances[order[i]] < distances[order[j]]
+	})
+
+	if limit == 0 || int(limit) > len(order) {
+		limit = uint(len(order))
+	}
+
+	sortedKeys := make([]any, 0, limit)
+	sortedDistances := make([]float64, 0, limit)
+	var sortedInclude map[string][]any
+	if includeData != nil {
+		sortedInclude = make(map[string][]any, len(includeCols))
+		for _, col := range includeCols {
+			sortedInclude[col] = make([]any, 0, limit)
+		}
+	}
+
+	for _, idx := range order[:limit] {
+		sortedKeys = append(sortedKeys, keys[idx])
+		sortedDistances = append(sortedDistances, distances[idx])
+		if sortedInclude != nil {
+			for _, col := range includeCols {
+				sortedInclude[col] = append(sortedInclude[col], includeData[col][idx])
+			}
+		}
+	}
+
+	return sortedKeys, sortedDistances, sortedInclude
+}
+
+func exactResultLimit(sqlproc *sqlexec.SqlProcess, fallback uint) uint {
+	limit := fallback
+	if sqlproc == nil || sqlproc.IndexReaderParam == nil || sqlproc.IndexReaderParam.GetLimit() == nil {
+		return limit
+	}
+	lit := sqlproc.IndexReaderParam.GetLimit().GetLit()
+	if lit == nil {
+		return limit
+	}
+	readerLimit := uint(lit.GetU64Val())
+	if readerLimit > limit {
+		limit = readerLimit
+	}
+	return limit
+}
+
 // Call usearch.Search
 func (idx *IvfflatSearchIndex[T]) Search(
 	sqlproc *sqlexec.SqlProcess,
@@ -512,7 +797,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
 	rt vectorindex.RuntimeConfig,
-	nthread int64,
+	_ int64,
 ) (keys any, distances []float64, err error) {
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
@@ -520,28 +805,160 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return
 	}
 
-	centroids_ids, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, nthread)
+	if sqlproc != nil {
+		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
+		prevBloomFilter := sqlproc.IvfBloomFilter
+		prevExactPkFilter := sqlproc.ExactPkFilter
+		sqlproc.IvfRuntimeFilterData = rt.BloomFilter
+		sqlproc.IvfBloomFilter = nil
+		sqlproc.ExactPkFilter = ""
+		defer func() {
+			sqlproc.IvfRuntimeFilterData = prevRuntimeFilterData
+			sqlproc.IvfBloomFilter = prevBloomFilter
+			sqlproc.ExactPkFilter = prevExactPkFilter
+		}()
+	}
+
+	includeMode := rt.SearchCursor != nil ||
+		rt.IncludeResult != nil ||
+		len(rt.RequestedIncludeColumns) > 0 ||
+		rt.PushdownFilterSQL != "" ||
+		rt.SearchRoundLimit > 0
+
+	if includeMode {
+		cursor := rt.SearchCursor
+		if cursor == nil {
+			cursor = &vectorindex.IvfSearchCursor{}
+		}
+		if len(cursor.RankedCentroidIDs) == 0 {
+			cursor.RankedCentroidIDs, err = idx.rankCentroids(sqlproc, query, idxcfg)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+		activeCentroidIDs := buildActiveCentroidIDs(cursor, rt.Probe)
+		if len(activeCentroidIDs) == 0 {
+			return []any{}, []float64{}, nil
+		}
+		cursor.Round++
+
+		roundLimit := rt.SearchRoundLimit
+		if roundLimit == 0 {
+			roundLimit = rt.Limit
+		}
+		if roundLimit == 0 {
+			roundLimit = 1
+		}
+
+		includeCols := filterRequestedIncludeColumns(rt.RequestedIncludeColumns, tblcfg.IncludeColumns)
+		if rt.IncludeResult != nil {
+			rt.IncludeResult.ColNames = append(rt.IncludeResult.ColNames[:0], includeCols...)
+			rt.IncludeResult.Data = make(map[string][]any, len(includeCols))
+			for _, col := range includeCols {
+				rt.IncludeResult.Data[col] = make([]any, 0, roundLimit)
+			}
+		}
+
+		if err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, activeCentroidIDs); err != nil {
+			return nil, nil, err
+		}
+
+		sql := buildSearchRoundSQL(idxcfg, tblcfg, query, activeCentroidIDs, idx.Version, includeCols, rt.PushdownFilterSQL, roundLimit)
+		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+			sql = buildExactSearchSQL(
+				idxcfg,
+				tblcfg,
+				query,
+				idx.Version,
+				sqlproc.ExactPkFilter,
+				includeCols,
+				rt.PushdownFilterSQL,
+			)
+			if cursor != nil {
+				cursor.Exhausted = true
+			}
+		}
+
+		res, runErr := runSql(sqlproc, sql)
+		if runErr != nil {
+			return nil, nil, runErr
+		}
+		defer res.Close()
+
+		if len(rt.BackgroundQueries) > 0 {
+			if len(res.LogicalPlan.Nodes) > 0 && len(res.LogicalPlan.Steps) > 0 {
+				rootID := res.LogicalPlan.Steps[0]
+				if int(rootID) < len(res.LogicalPlan.Nodes) && res.LogicalPlan.Nodes[rootID] != nil {
+					if res.LogicalPlan.Nodes[rootID].Stats == nil {
+						res.LogicalPlan.Nodes[rootID].Stats = &plan.Stats{}
+					}
+					res.LogicalPlan.Nodes[rootID].Stats.Sql = sql
+				}
+			}
+			rt.BackgroundQueries[0] = res.LogicalPlan
+		}
+
+		distances = make([]float64, 0, roundLimit)
+		resid := make([]any, 0, roundLimit)
+		if len(res.Batches) == 0 {
+			return resid, distances, nil
+		}
+
+		for _, bat := range res.Batches {
+			distVec := bat.Vecs[1]
+			pkVec := bat.Vecs[0]
+			for i := 0; i < bat.RowCount(); i++ {
+				if distVec.IsNull(uint64(i)) {
+					continue
+				}
+
+				pk := vector.GetAny(pkVec, i, true)
+				resid = append(resid, pk)
+
+				dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
+				dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
+				distances = append(distances, dist)
+
+				if rt.IncludeResult != nil {
+					for j, col := range includeCols {
+						rt.IncludeResult.Data[col] = append(rt.IncludeResult.Data[col], vector.GetAny(bat.Vecs[2+j], i, true))
+					}
+				}
+			}
+		}
+
+		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+			var sortedInclude map[string][]any
+			exactLimit := exactResultLimit(sqlproc, roundLimit)
+			resid, distances, sortedInclude = sortAndLimitExactResults(resid, distances, includeCols, rt.IncludeResult.Data, exactLimit)
+			if rt.IncludeResult != nil {
+				rt.IncludeResult.Data = sortedInclude
+			}
+		}
+
+		return resid, distances, nil
+	}
+
+	centroidsIDs, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, 0)
 	if err != nil {
 		return
 	}
 
 	var instr string
-	for i, c := range centroids_ids {
+	for i, c := range centroidsIDs {
 		if i > 0 {
 			instr += ","
 		}
 		instr += strconv.FormatInt(c, 10)
 	}
 
-	err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, centroids_ids)
+	err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, centroidsIDs)
 	if err != nil {
 		return
 	}
 
 	var sql string
-	// Encode query vector as base64 of raw bytes — ~22x faster and ~48% smaller
-	// than text format [0.123, ...]. Uses vecf32_from_base64/vecf64_from_base64
-	// to decode back to the vector type inside the SQL engine.
 	queryB64 := types.ArrayToBase64(query)
 	var vecFromB64Fn string
 	switch any(query).(type) {
@@ -552,8 +969,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
-		// Exact PK path: WaitBloomFilter converted small key set into ExactPkFilter.
-		// Query entries directly by pk list, skip centroid-based filtering.
 		sql = fmt.Sprintf(
 			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
@@ -568,7 +983,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			sqlproc.ExactPkFilter,
 		)
 	} else {
-		// Standard centroid-based path with optional CBloomFilter pre-filtering.
 		sql = fmt.Sprintf(
 			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
@@ -585,10 +999,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		)
 	}
 
-	//fmt.Println("IVFFlat SQL: ", sql)
-	//os.Stderr.WriteString(sql)
-	//os.Stderr.WriteString("\n")
-
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -596,22 +1006,27 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	defer res.Close()
 
 	if len(rt.BackgroundQueries) > 0 {
+		if len(res.LogicalPlan.Nodes) > 0 && len(res.LogicalPlan.Steps) > 0 {
+			rootID := res.LogicalPlan.Steps[0]
+			if int(rootID) < len(res.LogicalPlan.Nodes) && res.LogicalPlan.Nodes[rootID] != nil {
+				if res.LogicalPlan.Nodes[rootID].Stats == nil {
+					res.LogicalPlan.Nodes[rootID].Stats = &plan.Stats{}
+				}
+				res.LogicalPlan.Nodes[rootID].Stats.Sql = sql
+			}
+		}
 		rt.BackgroundQueries[0] = res.LogicalPlan
 	}
 
 	distances = make([]float64, 0, rt.Limit)
 	resid := make([]any, 0, rt.Limit)
-
 	if len(res.Batches) == 0 {
 		return resid, distances, nil
 	}
 
-	var rowCount int64
 	for _, bat := range res.Batches {
-		rowCount += int64(bat.RowCount())
 		distVec := bat.Vecs[1]
 		pkVec := bat.Vecs[0]
-
 		for i := 0; i < bat.RowCount(); i++ {
 			if distVec.IsNull(uint64(i)) {
 				continue
@@ -624,6 +1039,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
+	}
+
+	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+		exactLimit := exactResultLimit(sqlproc, rt.Limit)
+		resid, distances, _ = sortAndLimitExactResults(resid, distances, nil, nil, exactLimit)
 	}
 
 	return resid, distances, nil

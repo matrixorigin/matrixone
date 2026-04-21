@@ -252,5 +252,6 @@ set enable_vector_auto_mode_by_default = 0;
 -- Test 6.3: Back to default (post)
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 
+set probe_limit = 5;
 drop table t_phase6;
 drop database test_retry;

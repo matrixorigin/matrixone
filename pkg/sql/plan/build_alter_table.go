@@ -210,17 +210,21 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if pkAffected {
+		affectedAllIdxCols()
+	} else {
+		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
-
-	if pkAffected {
-		affectedAllIdxCols()
-	}
-
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{

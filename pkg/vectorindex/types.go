@@ -60,18 +60,20 @@ type IndexTableConfig struct {
 	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
-	EntriesTable       string  `json:"entries"`
-	DataSize           int64   `json:"datasize"`
-	Nprobe             uint    `json:"nprobe"`
-	PKeyType           int32   `json:"pktype"`
-	KeyPartType        int32   `json:"parttype"`
-	KmeansTrainPercent float64 `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
-	Limit              uint64  `json:"limit"`
-	LowerBoundType     int8    `json:"lower_bound_type"`
-	LowerBound         float64 `json:"lower_bound"`
-	UpperBoundType     int8    `json:"upper_bound_type"`
-	UpperBound         float64 `json:"upper_bound"`
+	EntriesTable       string   `json:"entries"`
+	DataSize           int64    `json:"datasize"`
+	Nprobe             uint     `json:"nprobe"`
+	PKeyType           int32    `json:"pktype"`
+	KeyPartType        int32    `json:"parttype"`
+	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
+	Limit              uint64   `json:"limit"`
+	LowerBoundType     int8     `json:"lower_bound_type"`
+	LowerBound         float64  `json:"lower_bound"`
+	UpperBoundType     int8     `json:"upper_bound_type"`
+	UpperBound         float64  `json:"upper_bound"`
+	IncludeColumns     []string `json:"include_columns,omitempty"`
+	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
 }
 
 // HNSW specified parameters
@@ -113,12 +115,43 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
-	NThreads          uint // Brute Force Index
+	// Optional raw runtime-filter payload from the build side. IVF search turns
+	// this into either an exact-pk filter or a real entries-table bloom filter.
+	BloomFilter []byte
+	NThreads    uint // Brute Force Index
+
+	// Query-scoped IVF search state. These fields must not be cached on the
+	// shared index object because every query can ask for different output
+	// columns, push down different predicates, and advance through different
+	// search rounds.
+	//
+	// RuntimeConfig is passed to Search by value. Pointer fields such as
+	// IncludeResult and SearchCursor can be mutated by Search and observed by
+	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// copied into Search and do not propagate caller-visible mutations back out.
+	RequestedIncludeColumns []string
+	PushdownFilterSQL       string
+	IncludeResult           *IvfIncludeResult
+	TargetRows              uint
+	SearchRoundLimit        uint
+	BucketExpandStep        uint
+	SearchCursor            *IvfSearchCursor
+}
+
+type IvfIncludeResult struct {
+	ColNames []string
+	Data     map[string][]any
+}
+
+type IvfSearchCursor struct {
+	RankedCentroidIDs  []int64
+	NextBucketOffset   uint
+	CurrentBucketCount uint
+	Round              uint
+	Exhausted          bool
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {
-	// Start string                   `json:"start"`
-	// End   string                   `json:"end"`
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
@@ -170,7 +203,6 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 }
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
-
 	b, err := sonic.Marshal(h)
 	if err != nil {
 		return "", err
