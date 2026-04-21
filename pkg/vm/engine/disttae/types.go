@@ -761,6 +761,9 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	if txn.statementID > 0 {
+		if writeOffset > uint64(len(txn.writes)) {
+			writeOffset = uint64(len(txn.writes))
+		}
 		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
 			// expected in descending order
 
