@@ -31,9 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1118,7 +1118,7 @@ func (c *PushClient) doActivateTenantCatalog(ctx context.Context, e *Engine, acc
 			Phase: phase, Result: result,
 			TargetTS: targetTS, ReplayTS: replayTS,
 			DelayedApplyCount: delayedCount,
-			StartedAt: &startedAt, FinishedAt: &now,
+			StartedAt:         &startedAt, FinishedAt: &now,
 		}
 		if err != nil {
 			evt.Error = err.Error()
