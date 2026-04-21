@@ -995,6 +995,40 @@ func TestReplaceStaticScanFilterUsesInWithDeduplicatedValues(t *testing.T) {
 	}
 }
 
+func TestReplaceStaticScanFilterPushdownForIndexRowidLookup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (2, 'HR', 'LA')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	uniqueScanFiltered := make(map[string]int)
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || node.TableDef == nil {
+			continue
+		}
+		if catalog.IsUniqueIndexTable(node.TableDef.Name) {
+			uniqueScanFiltered[node.TableDef.Name]++
+		}
+	}
+
+	hasRowidLookupFiltered := false
+	for _, filteredCount := range uniqueScanFiltered {
+		// The same unique index table should be filtered in both:
+		// 1) unique dedup scan
+		// 2) index rowid lookup scan
+		if filteredCount >= 2 {
+			hasRowidLookupFiltered = true
+			break
+		}
+	}
+	assert.True(t, hasRowidLookupFiltered, "unique index rowid lookup scan should carry static filter pushdown")
+}
+
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

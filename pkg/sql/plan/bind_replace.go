@@ -837,6 +837,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		}
+		if len(idxDef.Parts) == 1 {
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			filterExpr, filterErr := buildStaticScanFilter(leftExpr, staticFilterValues[partName])
+			if filterErr != nil {
+				return 0, filterErr
+			}
+			if filterExpr != nil {
+				idxScanNode.FilterList = append(idxScanNode.FilterList, filterExpr)
+			}
+		}
 
 		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName]
 		oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName] = [2]int32{idxTag, idxTableDefs[i].Name2ColIndex[lookupColName]}
