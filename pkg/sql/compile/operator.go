@@ -568,6 +568,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
 	case vm.RightDedupJoin:
 		t := sourceOp.(*rightdedupjoin.RightDedupJoin)
@@ -1003,6 +1005,14 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
+		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			arg.OldColCapturePlaceholderIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			arg.OldColCaptureProbeIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			for i, capture := range node.DedupJoinCtx.OldColCaptureList {
+				arg.OldColCapturePlaceholderIdxList[i] = capture.BuildPlaceholder.ColPos
+				arg.OldColCaptureProbeIdxList[i] = capture.ProbeSource.ColPos
+			}
 		}
 	}
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle

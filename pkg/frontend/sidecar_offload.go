@@ -53,7 +53,16 @@ var (
 )
 
 // Shared HTTP client for sidecar requests (goroutine-safe, enables keep-alive pooling).
-var sidecarClient = &http.Client{Timeout: 5 * time.Minute}
+// Uses a dedicated transport to avoid the 20 s ResponseHeaderTimeout set by
+// fileservice on http.DefaultTransport — sidecar queries can take minutes.
+var sidecarClient = &http.Client{
+	Timeout: 30 * time.Minute,
+	Transport: &http.Transport{
+		MaxIdleConns:        10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	},
+}
 
 // debugHTTPAddr stores the -debug-http listen address, set at startup.
 var debugHTTPAddr string
@@ -108,22 +117,22 @@ func stripSidecarHint(sql string) string {
 	return sql
 }
 
-// (gpuSidecarRequest removed — httpserver accepts raw SQL body)
+// (sidecarRequest removed — httpserver accepts raw SQL body)
 
 // httpserver JSONCompact response from DuckDB sidecar.
-type gpuSidecarResponse struct {
-	Meta       []gpuColumn       `json:"meta"`
-	Data       []json.RawMessage `json:"data"`
-	Rows       int               `json:"rows"`
-	Statistics *gpuStatistics    `json:"statistics,omitempty"`
+type sidecarResponse struct {
+	Meta       []sidecarColumn    `json:"meta"`
+	Data       []json.RawMessage  `json:"data"`
+	Rows       int                `json:"rows"`
+	Statistics *sidecarStatistics `json:"statistics,omitempty"`
 }
 
-type gpuColumn struct {
+type sidecarColumn struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 }
 
-type gpuStatistics struct {
+type sidecarStatistics struct {
 	Elapsed  float64 `json:"elapsed"`
 	RowsRead int     `json:"rows_read"`
 	ByteRead int     `json:"bytes_read"`
@@ -381,6 +390,9 @@ func rewriteTableExpr(te tree.TableExpr, defaultDB string, manifestBaseURL strin
 	switch expr := te.(type) {
 	case *tree.TableName:
 		name := strings.ToLower(string(expr.ObjectName))
+		if name == "" {
+			return te // empty table name (e.g. SELECT 42) — leave unchanged
+		}
 		if cteNames[name] {
 			return te // CTE reference — leave unchanged
 		}
@@ -420,9 +432,22 @@ func rewriteTableExpr(te tree.TableExpr, defaultDB string, manifestBaseURL strin
 
 // sendToSidecar sends the rewritten SQL to the DuckDB httpserver extension.
 // httpserver expects raw SQL as the POST body at /?default_format=JSONCompact.
-func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSidecarResponse, error) {
+func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*sidecarResponse, error) {
 	url := strings.TrimRight(sidecarURL, "/") + "/?default_format=JSONCompact"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(sql))
+	// Use a dedicated timeout instead of the session context, which may carry a
+	// short deadline (e.g. 20 s) that is too tight for large-scale GPU queries.
+	// We still propagate the parent's cancellation signal so that client
+	// disconnect / KILL QUERY will abort the in-flight sidecar request.
+	reqCtx, cancel := context.WithTimeout(context.Background(), sidecarClient.Timeout)
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-reqCtx.Done():
+		}
+	}()
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST", url, strings.NewReader(sql))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create sidecar request: %v", err)
 	}
@@ -449,7 +474,7 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 		return nil, moerr.NewInternalErrorf(ctx, "sidecar error (%d): %s", resp.StatusCode, string(body))
 	}
 
-	var result gpuSidecarResponse
+	var result sidecarResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to parse sidecar response: %v", err)
 	}
@@ -462,12 +487,12 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*gpuSide
 }
 
 // buildGPUResultSet populates a MysqlResultSet from the httpserver JSONCompact response.
-func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSidecarResponse) error {
+func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *sidecarResponse) error {
 
-	// Precompute column types once (avoid per-row gpuTypeToMysql calls).
+	// Precompute column types once (avoid per-row sidecarTypeToMysql calls).
 	colTypes := make([]defines.MysqlType, len(result.Meta))
 	for i, col := range result.Meta {
-		colTypes[i] = gpuTypeToMysql(col.Type)
+		colTypes[i] = sidecarTypeToMysql(col.Type)
 		mc := new(MysqlColumn)
 		mc.SetName(col.Name)
 		mc.SetColumnType(colTypes[i])
@@ -519,8 +544,8 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *gpuSide
 	return nil
 }
 
-// gpuTypeToMysql maps DuckDB type names to MySQL column types.
-func gpuTypeToMysql(duckType string) defines.MysqlType {
+// sidecarTypeToMysql maps DuckDB type names to MySQL column types.
+func sidecarTypeToMysql(duckType string) defines.MysqlType {
 	// Normalize: strip parameters like DECIMAL(38,4) → DECIMAL
 	upper := strings.ToUpper(duckType)
 	base := upper

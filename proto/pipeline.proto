@@ -284,6 +284,12 @@ message DedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  // Parallel arrays for the REPLACE INTO merged main-table scan. Each entry
+  // at index i means: at probe time, when the build bucket for a row is hit,
+  // capture left (probe) column old_col_capture_probe_idx_list[i] and emit
+  // it in finalize() into right (build) column old_col_capture_placeholder_idx_list[i].
+  repeated int32 old_col_capture_placeholder_idx_list = 17;
+  repeated int32 old_col_capture_probe_idx_list = 18;
 }
 
 message RightDedupJoin {

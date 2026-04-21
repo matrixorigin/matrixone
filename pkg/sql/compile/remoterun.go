@@ -715,22 +715,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *dedupjoin.DedupJoin:
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
-			RelList:                relList,
-			ColList:                colList,
-			LeftCond:               t.Conditions[0],
-			RightCond:              t.Conditions[1],
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			IsShuffle:              t.IsShuffle,
-			JoinMapTag:             t.JoinMapTag,
-			ShuffleIdx:             t.ShuffleIdx,
-			OnDuplicateAction:      t.OnDuplicateAction,
-			DedupColName:           t.DedupColName,
-			DedupColTypes:          t.DedupColTypes,
-			DelColIdx:              t.DelColIdx,
-			LeftTypes:              convertToPlanTypes(t.LeftTypes),
-			RightTypes:             convertToPlanTypes(t.RightTypes),
-			UpdateColIdxList:       t.UpdateColIdxList,
-			UpdateColExprList:      t.UpdateColExprList,
+			RelList:                         relList,
+			ColList:                         colList,
+			LeftCond:                        t.Conditions[0],
+			RightCond:                       t.Conditions[1],
+			RuntimeFilterBuildList:          t.RuntimeFilterSpecs,
+			IsShuffle:                       t.IsShuffle,
+			JoinMapTag:                      t.JoinMapTag,
+			ShuffleIdx:                      t.ShuffleIdx,
+			OnDuplicateAction:               t.OnDuplicateAction,
+			DedupColName:                    t.DedupColName,
+			DedupColTypes:                   t.DedupColTypes,
+			DelColIdx:                       t.DelColIdx,
+			LeftTypes:                       convertToPlanTypes(t.LeftTypes),
+			RightTypes:                      convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:                t.UpdateColIdxList,
+			UpdateColExprList:               t.UpdateColExprList,
+			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
+			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
 		}
 	case *rightdedupjoin.RightDedupJoin:
 		relList, colList := getRelColList(t.Result)
@@ -1181,6 +1183,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()

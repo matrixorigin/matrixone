@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -260,8 +261,8 @@ func TestTaeScanRefFormat(t *testing.T) {
 }
 
 func TestBuildGPUResultSet(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
 			{Name: "id", Type: "INTEGER"},
 			{Name: "name", Type: "VARCHAR"},
 		},
@@ -287,12 +288,12 @@ func TestBuildGPUResultSet(t *testing.T) {
 }
 
 func TestGpuTypeToMysql(t *testing.T) {
-	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql("INTEGER"))
-	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql("BIGINT"))
-	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("DOUBLE"))
-	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, gpuTypeToMysql("VARCHAR"))
-	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, gpuTypeToMysql("DATE"))
-	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, gpuTypeToMysql("unknown_type"))
+	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql("INTEGER"))
+	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql("BIGINT"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, sidecarTypeToMysql("DOUBLE"))
+	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, sidecarTypeToMysql("VARCHAR"))
+	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, sidecarTypeToMysql("DATE"))
+	assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, sidecarTypeToMysql("unknown_type"))
 }
 
 func TestRewriteEndToEnd(t *testing.T) {
@@ -335,6 +336,12 @@ func TestRewriteEndToEnd(t *testing.T) {
 			tables:   []string{"tpch.lineitem"},
 			keywords: []string{"as sub"},
 		},
+		{
+			name:     "no FROM clause",
+			sql:      "SELECT 42 AS answer",
+			tables:   nil,
+			keywords: []string{"42"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -349,6 +356,9 @@ func TestRewriteEndToEnd(t *testing.T) {
 			for _, tbl := range tc.tables {
 				expected := fmt.Sprintf("tae_scan('http://mo:6060/debug/tae/manifest?table=%s')", tbl)
 				assert.Contains(t, result, expected, "should contain tae_scan for %s", tbl)
+			}
+			if tc.tables == nil {
+				assert.NotContains(t, result, "tae_scan", "should not contain tae_scan")
 			}
 			for _, kw := range tc.keywords {
 				assert.Contains(t, result, kw, "should contain keyword %s", kw)
@@ -385,34 +395,34 @@ func TestGpuTypeToMysql_AllTypes(t *testing.T) {
 		"UINTEGER", "UINT32", "UBIGINT", "UINT64",
 		"USMALLINT", "UINT16", "UTINYINT", "UINT8", "HUGEINT",
 	} {
-		assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql(typ), "type %s", typ)
+		assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql(typ), "type %s", typ)
 	}
 	// Float types
-	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("FLOAT"))
-	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("REAL"))
-	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, gpuTypeToMysql("FLOAT4"))
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, sidecarTypeToMysql("FLOAT"))
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, sidecarTypeToMysql("REAL"))
+	assert.Equal(t, defines.MYSQL_TYPE_FLOAT, sidecarTypeToMysql("FLOAT4"))
 	// Double types
-	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("DOUBLE"))
-	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("FLOAT8"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, sidecarTypeToMysql("DOUBLE"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, sidecarTypeToMysql("FLOAT8"))
 	// Bool
-	assert.Equal(t, defines.MYSQL_TYPE_BOOL, gpuTypeToMysql("BOOLEAN"))
-	assert.Equal(t, defines.MYSQL_TYPE_BOOL, gpuTypeToMysql("BOOL"))
+	assert.Equal(t, defines.MYSQL_TYPE_BOOL, sidecarTypeToMysql("BOOLEAN"))
+	assert.Equal(t, defines.MYSQL_TYPE_BOOL, sidecarTypeToMysql("BOOL"))
 	// Blob
-	assert.Equal(t, defines.MYSQL_TYPE_BLOB, gpuTypeToMysql("BLOB"))
-	assert.Equal(t, defines.MYSQL_TYPE_BLOB, gpuTypeToMysql("BYTEA"))
+	assert.Equal(t, defines.MYSQL_TYPE_BLOB, sidecarTypeToMysql("BLOB"))
+	assert.Equal(t, defines.MYSQL_TYPE_BLOB, sidecarTypeToMysql("BYTEA"))
 	// VARCHAR-mapped types
 	for _, typ := range []string{"DATE", "TIMESTAMP", "DECIMAL(38,2)", "VARCHAR", "TEXT"} {
-		assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, gpuTypeToMysql(typ), "type %s", typ)
+		assert.Equal(t, defines.MYSQL_TYPE_VARCHAR, sidecarTypeToMysql(typ), "type %s", typ)
 	}
 	// Case insensitive
-	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, gpuTypeToMysql("integer"))
-	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, gpuTypeToMysql("double"))
+	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql("integer"))
+	assert.Equal(t, defines.MYSQL_TYPE_DOUBLE, sidecarTypeToMysql("double"))
 }
 
 func TestBuildGPUResultSet_BigintPrecision(t *testing.T) {
 	// Verify that large integers (>2^53) are preserved via json.Number
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
 			{Name: "big_id", Type: "BIGINT"},
 			{Name: "price", Type: "DOUBLE"},
 			{Name: "label", Type: "VARCHAR"},
@@ -440,8 +450,8 @@ func TestBuildGPUResultSet_BigintPrecision(t *testing.T) {
 }
 
 func TestBuildGPUResultSet_NullValues(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
 			{Name: "id", Type: "INTEGER"},
 			{Name: "val", Type: "VARCHAR"},
 		},
@@ -459,8 +469,8 @@ func TestBuildGPUResultSet_NullValues(t *testing.T) {
 }
 
 func TestBuildGPUResultSet_EmptyResult(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{{Name: "x", Type: "INTEGER"}},
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{{Name: "x", Type: "INTEGER"}},
 		Data: []json.RawMessage{},
 		Rows: 0,
 	}
@@ -473,8 +483,8 @@ func TestBuildGPUResultSet_EmptyResult(t *testing.T) {
 }
 
 func TestBuildGPUResultSet_InvalidJSON(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{{Name: "x", Type: "INTEGER"}},
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{{Name: "x", Type: "INTEGER"}},
 		Data: []json.RawMessage{json.RawMessage(`{invalid}`)},
 		Rows: 1,
 	}
@@ -538,8 +548,8 @@ func TestCollectCTENames_Nil(t *testing.T) {
 }
 
 func TestBuildGPUResultSet_ColumnCountMismatch(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
 			{Name: "a", Type: "INTEGER"},
 			{Name: "b", Type: "VARCHAR"},
 			{Name: "c", Type: "DOUBLE"},
@@ -558,8 +568,8 @@ func TestBuildGPUResultSet_ColumnCountMismatch(t *testing.T) {
 }
 
 func TestBuildGPUResultSet_ExtraColumns(t *testing.T) {
-	result := &gpuSidecarResponse{
-		Meta: []gpuColumn{
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
 			{Name: "a", Type: "INTEGER"},
 		},
 		Data: []json.RawMessage{
@@ -600,6 +610,29 @@ func TestSendToSidecar_Success(t *testing.T) {
 	assert.Equal(t, 1, result.Rows)
 	assert.Len(t, result.Meta, 1)
 	assert.Equal(t, "x", result.Meta[0].Name)
+}
+
+func TestSendToSidecar_ParentCancel(t *testing.T) {
+	// Verify that cancelling the parent context aborts the sidecar HTTP call.
+	// The server simulates a slow query; parent cancellation should abort before
+	// the server responds.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	defer srv.Close()
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+	time.AfterFunc(100*time.Millisecond, parentCancel)
+
+	start := time.Now()
+	_, err := sendToSidecar(parentCtx, srv.URL, "SELECT 1")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sidecar request failed")
+	assert.Less(t, elapsed, time.Second, "should abort promptly, not wait for server")
 }
 
 func TestSendToSidecar_TooLarge(t *testing.T) {

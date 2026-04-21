@@ -280,37 +280,76 @@ func (h *handler) handle(c goetty.IOSession) error {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	case err := <-t.errC:
-		if isEOFErr(err) || isConnEndErr(err) {
-			// On abnormal client disconnect, no COM_QUIT may be sent.
-			// Trigger quit path once to avoid leaking backend connections.
-			if h.connCache != nil {
-				if clientConn, ok := cc.(*clientConn); ok {
-					if quitErr := clientConn.handleQuitEvent(h.ctx); quitErr != nil &&
-						!errors.Is(quitErr, errPipeClosed) {
-						h.logger.Warn("failed to clean up backend connection on close",
-							zap.Uint32("Conn ID", cc.ConnID()),
-							zap.Uint64("session ID", c.ID()),
-							zap.Int64("goId", goId),
-							zap.Error(quitErr),
-						)
-					}
+		return h.handleTunnelErr(err, cc, t, c.ID(), goId)
+	}
+}
+
+func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
+	if getErrorCode(err) == codeClientDisconnect {
+		h.cleanupBackendOnClientDisconnect(err, cc, t)
+	}
+	if isEOFErr(err) || isConnEndErr(err) {
+		// On abnormal client disconnect, no COM_QUIT may be sent.
+		// Trigger quit path once to avoid leaking backend connections.
+		if h.connCache != nil {
+			if clientConn, ok := cc.(*clientConn); ok {
+				if quitErr := clientConn.handleQuitEvent(h.ctx); quitErr != nil &&
+					!errors.Is(quitErr, errPipeClosed) {
+					h.logger.Warn("failed to clean up backend connection on close",
+						zap.Uint32("Conn ID", cc.ConnID()),
+						zap.Uint64("session ID", sessionID),
+						zap.Int64("goId", goId),
+						zap.Error(quitErr),
+					)
 				}
 			}
-			h.logger.Info("connection closed",
-				zap.Uint32("Conn ID", cc.ConnID()),
-				zap.Uint64("session ID", c.ID()),
-				zap.Int64("goId", goId),
-			)
-			return nil
 		}
-		h.counterSet.updateWithErr(err)
-		h.logger.Error("proxy handle error",
+		h.logger.Info("connection closed",
 			zap.Uint32("Conn ID", cc.ConnID()),
-			zap.Uint64("session ID", c.ID()),
+			zap.Uint64("session ID", sessionID),
 			zap.Int64("goId", goId),
+		)
+		return nil
+	}
+	h.counterSet.updateWithErr(err)
+	h.logger.Error("proxy handle error",
+		zap.Uint32("Conn ID", cc.ConnID()),
+		zap.Uint64("session ID", sessionID),
+		zap.Int64("goId", goId),
+		zap.Error(err),
+	)
+	return err
+}
+
+func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
+	if cc == nil || getErrorCode(err) != codeClientDisconnect {
+		return
+	}
+	var currentSC ServerConn
+	if t != nil {
+		currentSC = t.getServerConn()
+	}
+	// For normal EOF / closed-connection exits, close the current backend
+	// session directly instead of creating an extra proxy->CN KILL connection.
+	if isEOFErr(err) || isConnEndErr(err) {
+		if t != nil && t.hasExpectedCacheQuit() {
+			return
+		}
+		if currentSC != nil {
+			if err := currentSC.Close(); err != nil {
+				h.logger.Warn("failed to close backend connection after client disconnect",
+					zap.Uint32("Conn ID", cc.ConnID()),
+					zap.Error(err),
+				)
+			}
+		}
+		return
+	}
+	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
+		h.logger.Warn("failed to kill backend connection after client disconnect",
+			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Error(err),
 		)
-		return err
 	}
 }
 
