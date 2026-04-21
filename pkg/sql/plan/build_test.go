@@ -923,7 +923,7 @@ func TestReplaceStaticScanFilterPushdownForValues(t *testing.T) {
 	assert.GreaterOrEqual(t, uniqueScanFiltered, 1, "single-part unique dedup scan should carry static filter")
 }
 
-func TestReplaceStaticScanFilterNoPushdownForExplicitColumns(t *testing.T) {
+func TestReplaceStaticScanFilterPushdownForExplicitColumns(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept(deptno, dname, loc) VALUES (1, 'Sales', 'NY')")
@@ -934,17 +934,65 @@ func TestReplaceStaticScanFilterNoPushdownForExplicitColumns(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.NotNil(t, query)
 
-	filteredScanCount := 0
+	mainScanFiltered := 0
+	uniqueScanFiltered := 0
 	for _, node := range query.Nodes {
 		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || node.TableDef == nil {
 			continue
 		}
-		if node.TableDef.Name == "dept" || catalog.IsUniqueIndexTable(node.TableDef.Name) {
-			filteredScanCount++
+		if node.TableDef.Name == "dept" {
+			mainScanFiltered++
+		}
+		if catalog.IsUniqueIndexTable(node.TableDef.Name) {
+			uniqueScanFiltered++
 		}
 	}
 
-	assert.Equal(t, 0, filteredScanCount, "explicit-column REPLACE should keep conservative no-pushdown path")
+	assert.Equal(t, 1, mainScanFiltered, "explicit-column REPLACE should push down static filter for pk dedup scan")
+	assert.GreaterOrEqual(t, uniqueScanFiltered, 1, "explicit-column REPLACE should push down static filter for unique dedup scan")
+}
+
+func TestReplaceStaticScanFilterUsesInWithDeduplicatedValues(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (1, 'Sales2', 'SF'), (2, 'HR', 'LA')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	foundInFilter := false
+	foundInListForm := false
+	foundDedupedTwoValues := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
+			continue
+		}
+		for _, filter := range node.FilterList {
+			f := filter.GetF()
+			if f == nil || f.Func == nil || f.Func.ObjName != "in" {
+				continue
+			}
+			foundInFilter = true
+			if len(f.Args) != 2 {
+				continue
+			}
+			if f.Args[1].GetList() == nil {
+				continue
+			}
+			foundInListForm = true
+			if len(f.Args[1].GetList().List) == 2 {
+				foundDedupedTwoValues = true
+			}
+		}
+	}
+
+	assert.True(t, foundInFilter, "static scan filter should prefer IN when multiple values exist")
+	if foundInListForm {
+		assert.True(t, foundDedupedTwoValues, "duplicate key values should be deduplicated in IN list")
+	}
 }
 
 func TestReplaceSelfRefPlanStructure(t *testing.T) {

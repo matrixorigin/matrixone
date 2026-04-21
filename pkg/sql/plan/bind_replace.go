@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+const maxReplaceStaticFilterRows = 1024
+
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
 	// REPLACE has its own conflict handling; bypass the generic FK table rejection
@@ -64,21 +66,15 @@ func (builder *QueryBuilder) collectReplaceStaticFilterValues(stmt *tree.Replace
 		return nil, nil
 	}
 
-	// Keep the first version conservative: only handle VALUES without explicit
-	// column list so value-to-column mapping is unambiguous.
-	if stmt.Columns != nil {
-		return nil, nil
-	}
-
 	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
 	if !ok || len(valuesClause.Rows) == 0 {
 		return nil, nil
 	}
-	if len(valuesClause.Rows) > 256 {
+	if len(valuesClause.Rows) > maxReplaceStaticFilterRows {
 		return nil, nil
 	}
 
-	insertColumns, err := builder.getInsertColsFromStmt(nil, tableDef)
+	insertColumns, err := builder.getInsertColsFromStmt(stmt.Columns, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +280,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}
 	buildStaticScanFilter := func(scanCol *plan.Expr, values []*plan.Expr) (*plan.Expr, error) {
 		nonNullVals := make([]*plan.Expr, 0, len(values))
+		seenVals := make(map[string]struct{}, len(values))
 		for _, value := range values {
 			if value == nil {
 				continue
@@ -291,13 +288,42 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if lit := value.GetLit(); lit != nil && lit.Isnull {
 				continue
 			}
+			key, marshalErr := value.Marshal()
+			if marshalErr == nil {
+				if _, ok := seenVals[string(key)]; ok {
+					continue
+				}
+				seenVals[string(key)] = struct{}{}
+			}
 			nonNullVals = append(nonNullVals, value)
 		}
 		if len(nonNullVals) == 0 {
 			return nil, nil
 		}
 
-		filterExpr, err := bindFn("=", scanCol, nonNullVals[0])
+		if len(nonNullVals) == 1 {
+			filterExpr, err := bindFn("=", scanCol, nonNullVals[0])
+			if err != nil {
+				return nil, nil
+			}
+			return filterExpr, nil
+		}
+
+		inExpr := &plan.Expr{
+			Typ: scanCol.Typ,
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: nonNullVals,
+				},
+			},
+		}
+		filterExpr, err := bindFn("in", scanCol, inExpr)
+		if err == nil {
+			return filterExpr, nil
+		}
+
+		// Fallback to OR-equality chain when IN is unsupported for this type.
+		filterExpr, err = bindFn("=", scanCol, nonNullVals[0])
 		if err != nil {
 			// Filter pushdown is an optimization only.
 			return nil, nil
