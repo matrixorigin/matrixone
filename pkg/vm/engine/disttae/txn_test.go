@@ -384,22 +384,26 @@ func TestTransactionCheckDupUsesWriteEntryPKMetadata(t *testing.T) {
 	})
 }
 
-func TestAdjustUpdateOrderLockedClampsStaleWriteOffset(t *testing.T) {
+func TestAdjustUpdateOrderLockedFallsBackToStatementStart(t *testing.T) {
 	txn := &Transaction{
 		statementID: 1,
+		offsets:     []int{1},
 		writes: []Entry{
-			{typ: DELETE, tableId: 1},
+			{typ: INSERT, tableId: 99},
 			{typ: INSERT, tableId: 1},
+			{typ: DELETE, tableId: 1},
 		},
 	}
 
 	require.NotPanics(t, func() {
-		require.NoError(t, txn.adjustUpdateOrderLocked(3))
+		require.NoError(t, txn.adjustUpdateOrderLocked(4))
 	})
 
-	require.Len(t, txn.writes, 2)
-	require.Equal(t, DELETE, txn.writes[0].typ)
-	require.Equal(t, INSERT, txn.writes[1].typ)
+	require.Len(t, txn.writes, 3)
+	require.Equal(t, INSERT, txn.writes[0].typ)
+	require.Equal(t, uint64(99), txn.writes[0].tableId)
+	require.Equal(t, DELETE, txn.writes[1].typ)
+	require.Equal(t, INSERT, txn.writes[2].typ)
 }
 
 func TestTransactionGetTableNilGuards(t *testing.T) {

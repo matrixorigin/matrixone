@@ -762,7 +762,14 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	if txn.statementID > 0 {
 		if writeOffset > uint64(len(txn.writes)) {
-			writeOffset = uint64(len(txn.writes))
+			stmtStart := 0
+			if len(txn.offsets) >= txn.statementID {
+				stmtStart = txn.offsets[txn.statementID-1]
+			}
+			if stmtStart > len(txn.writes) {
+				stmtStart = len(txn.writes)
+			}
+			writeOffset = uint64(stmtStart)
 		}
 		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
 			// expected in descending order
