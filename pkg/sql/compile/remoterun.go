@@ -711,6 +711,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
+		in.Limit = t.Limit
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
@@ -1205,6 +1206,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()

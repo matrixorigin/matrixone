@@ -136,6 +136,7 @@ SET @entries = (
 
 -- Direct entries query with large LIMIT to reproduce panic.
 -- Keep this query shape aligned with vector_search_panic_entries_stable.py.
+-- After the panic fix, the top-20000 subquery should complete and return 20000 rows.
 SET @q = CONCAT(
     'SELECT COUNT(*) AS cnt FROM (',
     'SELECT __mo_index_pri_col, ',

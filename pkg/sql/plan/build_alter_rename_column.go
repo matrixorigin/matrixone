@@ -127,6 +127,12 @@ func updateRenameColumnInTableDef(
 		))
 	}
 
+	ivfAlgoParamSQLs, err := renameColumnInIvfIndexAlgoParams(tableDef, oldColName, newColName)
+	if err != nil {
+		return nil, err
+	}
+	sqls = append(sqls, ivfAlgoParamSQLs...)
+
 	// update primary key
 	primaryKeyDef := tableDef.Pkey
 	primaryKeyAffected := false
