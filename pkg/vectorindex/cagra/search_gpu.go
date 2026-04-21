@@ -65,7 +65,15 @@ func (s *CagraSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 	if s.Idxcfg.CuvsCagra.ITopkSize > 0 {
 		sp.ItopkSize = s.Idxcfg.CuvsCagra.ITopkSize
 	}
-	neighbors64, dists32, err := s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+	var (
+		neighbors64 []int64
+		dists32     []float32
+	)
+	if rt.FilterJSON != "" {
+		neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+	} else {
+		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

@@ -40,6 +40,11 @@ type CagraBuild[T cuvs.VectorType] struct {
 	devices []int
 	count   int64    // vectors in current sub-index
 	idBuf   [1]int64 // reusable buffer for AddFloat to avoid per-call heap allocation
+
+	// Filter column metadata (INCLUDE columns). Stashed once via SetFilterColumns
+	// and re-applied to every new sub-index allocated by getOrCreateCurrent, so
+	// each sub-index carries its own filter data buffer.
+	filterColMetaJSON string
 }
 
 // NewCagraBuild creates a new CagraBuild ready for AddFloat calls.
@@ -89,11 +94,34 @@ func (b *CagraBuild[T]) getOrCreateCurrent() (*CagraModel[T], error) {
 			m.Destroy()
 			return nil, err
 		}
+		if b.filterColMetaJSON != "" {
+			if err = m.Index.SetFilterColumns(b.filterColMetaJSON, uint64(capacity)); err != nil {
+				m.Destroy()
+				return nil, err
+			}
+		}
 		b.current = m
 		b.count = 0
 	}
 
 	return b.current, nil
+}
+
+// SetFilterColumns registers pre-filter (INCLUDE column) metadata. The JSON
+// is re-applied to each new sub-index allocated during the build. Must be
+// called before the first AddFloat.
+func (b *CagraBuild[T]) SetFilterColumns(colMetaJSON string) {
+	b.filterColMetaJSON = colMetaJSON
+}
+
+// AddFilterChunk appends nrows raw filter-column bytes to the *current*
+// sub-index being filled. Call once per filter column per row batch, in the
+// same cadence as AddFloat (which drives sub-index rotation).
+func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+	if b.current == nil {
+		return fmt.Errorf("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
+	}
+	return b.current.Index.AddFilterChunk(colIdx, data, nrows)
 }
 
 // AddFloat appends one float32 vector with the given int64 id.

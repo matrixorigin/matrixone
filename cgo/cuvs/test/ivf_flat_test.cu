@@ -587,11 +587,138 @@ TEST(GpuIvfFlatTest, ManualShardedGetCenters) {
     gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
-    
+
     // In sharded mode, each GPU built its own index with n_lists=50.
     // get_centers() returns centers from the "primary" or first available index it finds.
     auto centers = index.get_centers();
     ASSERT_EQ(centers.size(), (size_t)(bp.n_lists * dimension));
+
+    index.destroy();
+}
+
+// Pre-filtered search tests — mirrors GpuCagraTest::FilteredSearch* pattern.
+// IDs 0-2 are distinct close neighbors; 3..count-1 are far-away padding.
+TEST(GpuIvfFlatTest, FilteredSearchIncludesOnlyAllowedCategories) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;  // ID 0, cat 10
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;  // ID 1, cat 20
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;  // ID 2, cat 30
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 4;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+                                DistanceType_L2Expanded, bp, devices, 1,
+                                DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query = {1.0, 2.0, 3.0};
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 4;
+
+    auto base = index.search_with_filter(query.data(), 1, dimension, 2, sp, "");
+    ASSERT_EQ(base.neighbors[0], 0LL);
+    ASSERT_EQ(base.neighbors[1], 1LL);
+
+    auto filtered = index.search_with_filter(
+        query.data(), 1, dimension, 2, sp,
+        "[{\"col\":0,\"op\":\"!=\",\"val\":10}]");
+    ASSERT_EQ(filtered.neighbors[0], 1LL);
+    ASSERT_EQ(filtered.neighbors[1], 2LL);
+
+    auto in_pred = index.search_with_filter(
+        query.data(), 1, dimension, 1, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[30]}]");
+    ASSERT_EQ(in_pred.neighbors[0], 2LL);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, FilteredSearchCombinesWithDeleteBitset) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 4;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+                                DistanceType_L2Expanded, bp, devices, 1,
+                                DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    index.delete_id(1);
+
+    std::vector<float> query = {1.0, 2.0, 3.0};
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 4;
+    auto result = index.search_with_filter(
+        query.data(), 1, dimension, 2, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[10, 20, 30]}]");
+
+    ASSERT_EQ(result.neighbors[0], 0LL);
+    ASSERT_EQ(result.neighbors[1], 2LL);
+
+    index.destroy();
+}
+
+TEST(GpuIvfFlatTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_flat_build_params_t bp = ivf_flat_build_params_default();
+    bp.n_lists = 4;
+    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+                                DistanceType_L2Expanded, bp, devices, 1,
+                                DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query = {1.0, 2.0, 3.0};
+    ivf_flat_search_params_t sp = ivf_flat_search_params_default();
+    sp.n_probes = 4;
+    auto unfiltered = index.search(query.data(), 1, dimension, 3, sp);
+    auto empty_pred = index.search_with_filter(query.data(), 1, dimension, 3, sp, "");
+
+    ASSERT_EQ(unfiltered.neighbors[0], empty_pred.neighbors[0]);
+    ASSERT_EQ(unfiltered.neighbors[1], empty_pred.neighbors[1]);
+    ASSERT_EQ(unfiltered.neighbors[2], empty_pred.neighbors[2]);
 
     index.destroy();
 }

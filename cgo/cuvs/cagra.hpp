@@ -720,6 +720,45 @@ public:
         return this->search_batch_internal(queries_data, num_queries, limit, sp);
     }
 
+    // Filtered variant of search(). Threads preds_json through to search_internal which
+    // calls build_search_bitset() for the combined (user-filter AND NOT deleted) mask.
+    // Per-query filters make request-level batching invalid, so we always take the
+    // non-batched path here. Empty preds_json falls back to the unfiltered behavior.
+    search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
+                                       uint32_t /*query_dimension*/, uint32_t limit,
+                                       const cagra_search_params_t& sp,
+                                       const std::string& preds_json) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            int num_shards = this->devices_.size();
+            std::vector<search_result_t> shard_results(num_shards);
+            auto shard_search_task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                return this->search_internal(gpu_handle, queries_data, num_queries, limit, sp, preds_json);
+            };
+            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+            for (int i = 0; i < num_shards; ++i) {
+                auto res = this->worker->wait(job_ids[i]).get();
+                if (res.error) std::rethrow_exception(res.error);
+                shard_results[i] = std::any_cast<search_result_t>(res.result);
+            }
+            return this->merge_sharded_results(shard_results, num_queries, limit);
+        }
+
+        auto task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_data, num_queries, limit, sp, preds_json);
+        };
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        uint64_t job_id = this->worker->submit(task);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
     uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
         {
@@ -795,7 +834,7 @@ public:
         return future.get();
     }
 
-    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp) {
+    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp, const std::string& preds_json = "") {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
@@ -849,21 +888,19 @@ public:
             auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            if (this->deleted_count_ > 0) {
-                using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                bs_t* bs;
-                if (this->dist_mode == DistributionMode_SHARDED) {
-                    int rank = handle.get_rank();
-                    uint64_t shard_sz = this->shard_sizes_[rank];
-                    uint64_t shard_offset = 0;
-                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
-                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
-                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
-                } else {
-                    this->sync_device_bitset(handle.get_device_id(), *res);
-                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
-                }
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
+            // Compute this device's row range for build_search_bitset. Matches the
+            // slicing used by sync_shard_bitset (shard_offset is always % 32 == 0).
+            uint64_t start_row = 0, shard_sz = this->count;
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                int rank = handle.get_rank();
+                shard_sz = this->shard_sizes_[rank];
+                start_row = 0;
+                for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
+            }
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+
+            if (bs_ptr) {
+                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
                 cuvs::neighbors::cagra::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device.view()),
                                                     neighbors_device.view(), distances_device.view(), filter);
@@ -977,6 +1014,42 @@ public:
         return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
     }
 
+    // Filtered variant of search_float() — see search_with_filter() for rationale.
+    search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
+                                             uint32_t query_dimension, uint32_t limit,
+                                             const cagra_search_params_t& sp,
+                                             const std::string& preds_json) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+        }
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            int num_shards = this->devices_.size();
+            std::vector<search_result_t> shard_results(num_shards);
+            auto shard_search_task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                return this->search_float_internal(gpu_handle, queries_data, num_queries, this->dimension, limit, sp, preds_json);
+            };
+            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+            for (int i = 0; i < num_shards; ++i) {
+                auto res = this->worker->wait(job_ids[i]).get();
+                if (res.error) std::rethrow_exception(res.error);
+                shard_results[i] = std::any_cast<search_result_t>(res.result);
+            }
+            return this->merge_sharded_results(shard_results, num_queries, limit);
+        }
+
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        };
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        uint64_t job_id = this->worker->submit(task);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
     uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
         if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
         {
@@ -1047,7 +1120,7 @@ public:
     }
 
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
-                        uint32_t limit, const cagra_search_params_t& sp) {
+                        uint32_t limit, const cagra_search_params_t& sp, const std::string& preds_json = "") {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
@@ -1113,21 +1186,17 @@ public:
             auto neighbors_device = raft::make_device_matrix<uint32_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            if (this->deleted_count_ > 0) {
-                using bs_t = raft::core::bitset<uint32_t, int64_t>;
-                bs_t* bs;
-                if (this->dist_mode == DistributionMode_SHARDED) {
-                    int rank = handle.get_rank();
-                    uint64_t shard_sz = this->shard_sizes_[rank];
-                    uint64_t shard_offset = 0;
-                    for (int r = 0; r < rank; ++r) shard_offset += this->shard_sizes_[r];
-                    this->sync_shard_bitset(handle.get_device_id(), shard_offset, shard_sz, *res);
-                    bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(handle.get_device_id())->ptr.get());
-                } else {
-                    this->sync_device_bitset(handle.get_device_id(), *res);
-                    bs = static_cast<bs_t*>(this->get_device_bitset_info(handle.get_device_id())->ptr.get());
-                }
-                auto filter = cuvs::neighbors::filtering::bitset_filter(bs->view());
+            uint64_t start_row = 0, shard_sz = this->count;
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                int rank = handle.get_rank();
+                shard_sz = this->shard_sizes_[rank];
+                start_row = 0;
+                for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
+            }
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+
+            if (bs_ptr) {
+                auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
                 cuvs::neighbors::cagra::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(q_dev_t.view()),
                                                     neighbors_device.view(), distances_device.view(), filter);

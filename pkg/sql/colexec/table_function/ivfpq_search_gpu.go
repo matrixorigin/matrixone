@@ -46,6 +46,8 @@ type ivfpqSearchState struct {
 	limit     uint64
 	keys      []int64
 	distances []float64
+	// Filter predicates JSON — see cagraSearchState.predsJSON.
+	predsJSON string
 	// holding one call batch, ivfpqSearchState owns it.
 	batch *batch.Batch
 }
@@ -228,6 +230,17 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
+	u.predsJSON = ""
+	if len(tf.ctr.argVecs) > 2 {
+		pVec := tf.ctr.argVecs[2]
+		if pVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "third argument (filter predicates) must be a string")
+		}
+		if !pVec.IsNull(uint64(nthRow)) {
+			u.predsJSON = pVec.UnsafeGetStringAt(nthRow)
+		}
+	}
+
 	veccache.Cache.Once()
 
 	return runIvfpqSearch[float32](proc, u, faVec, nthRow)
@@ -244,6 +257,7 @@ func runIvfpqSearch[T types.RealNumbers](proc *process.Process, u *ivfpqSearchSt
 	rt := vectorindex.RuntimeConfig{
 		Limit:        uint(u.limit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
+		FilterJSON:   u.predsJSON,
 	}
 	var keys any
 	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)

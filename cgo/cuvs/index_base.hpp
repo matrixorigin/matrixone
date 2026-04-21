@@ -25,10 +25,13 @@
 #include <raft/core/resources.hpp>
 #include <raft/core/device_mdspan.hpp>
 #include <thrust/fill.h>
+#include <thrust/functional.h>
+#include <thrust/transform.h>
 #pragma GCC diagnostic pop
 
 #include "cuvs_types.h"
 #include "cuvs_worker.hpp"
+#include "filter.hpp"
 #include "quantize.hpp"
 #include "json.hpp"
 #include <cuvs/distance/distance.hpp>
@@ -319,6 +322,13 @@ public:
     // Used only when host_ids is non-empty.
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
+    // ---- Host-resident filter columns for pre-filtered search (protected by mutex_) ----
+    // Populated before build() via set_filter_columns() + add_filter_chunk().
+    // Retained for the lifetime of the index — search-time predicate eval reads
+    // directly from this store (see filter.hpp / eval_filter_bitmap_cpu).
+    // Empty means the index has no INCLUDE columns and only unfiltered search applies.
+    FilterStore filter_host_;
+
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
         destroy();
@@ -425,6 +435,99 @@ public:
         }
     }
 
+    // Build a raft::core::bitset<uint32_t, int64_t> for rows [start_row, start_row+shard_sz)
+    // that represents (user_filter AND NOT deleted). Dispatches on four cases:
+    //
+    //   no filter, no deletes    → returns nullptr (caller runs the unfiltered search path)
+    //   no filter, has deletes   → reuses the cached device delete bitset (shared_ptr aliased)
+    //   filter, no deletes       → evaluates CPU bitmap, uploads H2D, returns a new owning bitset
+    //   filter + deletes         → uploads user bitmap, then AND with cached delete bitset via
+    //                              thrust::transform (in place on the newly allocated bitset)
+    //
+    // `start_row`, `shard_sz` match the shard-local slicing used by sync_shard_bitset:
+    //   - SINGLE_GPU / REPLICATED: start_row=0, shard_sz=current_offset_
+    //   - SHARDED:                 start_row aligned to 32, shard_sz from shard_sizes_
+    //
+    // Caller is responsible for holding the returned shared_ptr alive for the duration
+    // of the cuVS search call.
+    std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
+    build_search_bitset(raft_handle_wrapper_t& handle,
+                        const std::string& preds_json,
+                        uint64_t start_row,
+                        uint64_t shard_sz) {
+        using bs_t = raft::core::bitset<uint32_t, int64_t>;
+        auto res   = handle.get_raft_resources();  // shared_ptr<raft::resources>
+        int dev_id = handle.get_device_id();
+
+        // Parse user preds outside the lock; empty JSON → no user filter.
+        std::vector<PredOp> preds;
+        if (!preds_json.empty()) preds = parse_preds(preds_json);
+        const bool has_user = !preds.empty();
+
+        uint64_t del_count;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            del_count = this->deleted_count_;
+        }
+        const bool has_del = del_count > 0;
+
+        if (!has_user && !has_del) {
+            return nullptr;  // unfiltered path — caller skips the bitset arg
+        }
+
+        const bool sharded = (this->dist_mode == DistributionMode_SHARDED);
+
+        // Deletes-only path: reuse the cached delete bitset without copying.
+        if (!has_user) {
+            if (sharded) {
+                this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
+                return std::static_pointer_cast<bs_t>(
+                    this->get_device_shard_bitset_info(dev_id)->ptr);
+            }
+            this->sync_device_bitset(dev_id, *res);
+            return std::static_pointer_cast<bs_t>(
+                this->get_device_bitset_info(dev_id)->ptr);
+        }
+
+        // User-filter path: evaluate on CPU under a shared lock.
+        std::vector<uint32_t> host_mask;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            host_mask = eval_filter_bitmap_cpu(this->filter_host_, preds, start_row, shard_sz);
+        }
+        const uint64_t nwords = host_mask.size();
+
+        auto bs = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz));
+
+        // Upload H2D on the search stream (same mechanism as sync_device_bitset).
+        raft::copy(
+            *res,
+            raft::make_device_vector_view<uint32_t, int64_t>(
+                bs->data(), static_cast<int64_t>(nwords)),
+            raft::make_host_vector_view<const uint32_t, int64_t>(
+                host_mask.data(), static_cast<int64_t>(nwords)));
+
+        if (has_del) {
+            // AND with the cached delete bitset in place.
+            bs_t* del_bs;
+            if (sharded) {
+                this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
+                del_bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(dev_id)->ptr.get());
+            } else {
+                this->sync_device_bitset(dev_id, *res);
+                del_bs = static_cast<bs_t*>(this->get_device_bitset_info(dev_id)->ptr.get());
+            }
+            thrust::transform(
+                raft::resource::get_thrust_policy(*res),
+                bs->data(), bs->data() + nwords,
+                del_bs->data(),
+                bs->data(),
+                thrust::bit_and<uint32_t>{});
+        }
+
+        return bs;
+    }
+
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
         std::unique_lock<std::shared_mutex> lock(mutex_);
@@ -525,6 +628,31 @@ public:
                 id_to_index_[ids[i]] = target_offset + i;
             }
         }
+    }
+
+    // ---- Filter column ingest (build-time only) ----
+    //
+    // Typical call sequence (mirrors add_chunk for vectors):
+    //   idx.set_filter_columns("[{\"name\":\"price\",\"type\":2}, ...]", total_count);
+    //   for each batch:
+    //       idx.add_filter_chunk(0, prices_bytes, nrows);
+    //       idx.add_filter_chunk(1, cats_bytes,   nrows);
+    //   idx.build();
+    //
+    // Both throw if the index is already built.  filter_host_ is read-only
+    // after build() and is persisted alongside the index via save_dir().
+
+    void set_filter_columns(const std::string& col_meta_json, uint64_t total_count) {
+        auto cols = parse_filter_col_meta(col_meta_json);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (is_loaded_) throw std::runtime_error("Cannot set filter columns on built index");
+        filter_host_.init(std::move(cols), total_count);
+    }
+
+    void add_filter_chunk(uint32_t col_idx, const void* data, uint64_t nrows) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (is_loaded_) throw std::runtime_error("Cannot add filter chunk to built index");
+        filter_host_.add_chunk(col_idx, data, nrows);
     }
 
     // Initialize (or reset) the deleted bitset after index build.
@@ -1027,27 +1155,35 @@ public:
         bool has_ids       = false;
         bool has_quantizer = false;
         bool has_bitset    = false;
+        bool has_filter    = false;
     };
 
-    // Saves ids, quantizer, and bitset (when present) to dir.
+    // Saves ids, quantizer, bitset, and filter data (when present) to dir.
     // Returns comp_entry strings for each saved file.
     std::vector<std::string> save_common_components(const std::string& dir) const {
-        bool has_ids, has_quantizer, has_bitset;
+        bool has_ids, has_quantizer, has_bitset, has_filter;
+        // Snapshot the filter data under the lock; writing to disk happens without
+        // holding the lock since FilterStore::save only reads from its buffers.
+        FilterStore filter_snapshot;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
             has_ids       = !this->host_ids.empty();
             has_quantizer = this->quantizer_.is_trained();
             has_bitset    = !this->deleted_bitset_.empty();
+            has_filter    = !this->filter_host_.empty();
+            if (has_filter) filter_snapshot = this->filter_host_;  // copy
         }
 
         if (has_ids)       this->save_ids(dir + "/ids.bin");
         if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
         if (has_bitset)    this->save_bitset(dir);
+        if (has_filter)    filter_snapshot.save(dir + "/filter_data.bin");
 
         std::vector<std::string> entries;
         if (has_ids)       entries.push_back("    \"ids\": \"ids.bin\"");
         if (has_quantizer) entries.push_back("    \"quantizer\": \"quantizer.bin\"");
         if (has_bitset)    entries.push_back("    \"bitset\": \"bitset.bin\"");
+        if (has_filter)    entries.push_back("    \"filter_data\": \"filter_data.bin\"");
         return entries;
     }
 
@@ -1068,13 +1204,14 @@ public:
     void write_manifest(const std::string& dir, const std::string& index_type,
                         const std::string& build_params_json,
                         const std::vector<std::string>& comp_entries) const {
-        bool has_ids, has_quantizer, has_bitset;
+        bool has_ids, has_quantizer, has_bitset, has_filter;
         uint64_t cap_val, len_val, del_count, bs_ver;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
             has_ids       = !this->host_ids.empty();
             has_quantizer = this->quantizer_.is_trained();
             has_bitset    = !this->deleted_bitset_.empty();
+            has_filter    = !this->filter_host_.empty();
             cap_val       = this->count;
             len_val       = this->current_offset_;
             del_count     = this->deleted_count_;
@@ -1096,6 +1233,7 @@ public:
         mf << "  \"has_ids\": "         << (has_ids       ? "true" : "false") << ",\n";
         mf << "  \"has_quantizer\": "   << (has_quantizer ? "true" : "false") << ",\n";
         mf << "  \"has_bitset\": "      << (has_bitset    ? "true" : "false") << ",\n";
+        mf << "  \"has_filter\": "      << (has_filter    ? "true" : "false") << ",\n";
         mf << "  \"deleted_count\": "   << del_count                     << ",\n";
         mf << "  \"bitset_version\": "  << bs_ver                        << ",\n";
         mf << "  \"devices\": [";
@@ -1144,10 +1282,11 @@ public:
         m.has_ids       = json_bool(raw, "has_ids");
         m.has_quantizer = json_bool(raw, "has_quantizer");
         m.has_bitset    = json_bool(raw, "has_bitset");
+        m.has_filter    = json_bool(raw, "has_filter");
         return m;
     }
 
-    // Loads ids, quantizer, and bitset from dir using the parsed manifest data.
+    // Loads ids, quantizer, bitset, and filter data from dir using the parsed manifest data.
     void load_common_components(const std::string& dir, const manifest_data_t& m) {
         if (m.has_ids) {
             this->load_ids(dir + "/" + json_value(m.comp_json, "ids"));
@@ -1157,6 +1296,11 @@ public:
         }
         if (m.has_bitset) {
             this->load_bitset_from_file(dir + "/" + json_value(m.comp_json, "bitset"));
+        }
+        if (m.has_filter) {
+            std::string fname = json_value(m.comp_json, "filter_data");
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            this->filter_host_.load(dir + "/" + fname);
         }
     }
 

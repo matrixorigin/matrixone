@@ -165,6 +165,24 @@ uint32_t gpu_ivf_pq_get_dim_ext(gpu_ivf_pq_c index_c);
 // Gets the flattened dataset (for debugging)
 void gpu_ivf_pq_get_dataset(gpu_ivf_pq_c index_c, void* out_data);
 
+// ---------- Pre-filter (INCLUDE columns) ----------
+// See cagra_c.h for JSON format details.
+void gpu_ivf_pq_set_filter_columns(gpu_ivf_pq_c index_c, const char* col_meta_json,
+                                    uint64_t total_count, void* errmsg);
+
+void gpu_ivf_pq_add_filter_chunk(gpu_ivf_pq_c index_c, uint32_t col_idx,
+                                  const void* data, uint64_t nrows, void* errmsg);
+
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_with_filter(gpu_ivf_pq_c index_c, const void* queries_data,
+                                                       uint64_t num_queries, uint32_t query_dimension,
+                                                       uint32_t limit, ivf_pq_search_params_t search_params,
+                                                       const char* preds_json, void* errmsg);
+
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_float_with_filter(gpu_ivf_pq_c index_c, const float* queries_data,
+                                                             uint64_t num_queries, uint32_t query_dimension,
+                                                             uint32_t limit, ivf_pq_search_params_t search_params,
+                                                             const char* preds_json, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif

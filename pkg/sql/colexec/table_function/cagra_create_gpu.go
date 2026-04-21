@@ -244,6 +244,16 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 
+		// ---- pre-filter (INCLUDE columns) setup ----
+		if len(u.tblcfg.FilterColumns) > 0 {
+			if err = validateFilterArgCount(tf.ctr.argVecs, 3, u.tblcfg.FilterColumns); err != nil {
+				return err
+			}
+			if err = initFilterColumns(u.activeBuilder(), u.tblcfg.FilterColumns); err != nil {
+				return err
+			}
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -274,5 +284,32 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	case u.buildui8 != nil:
 		err = u.buildui8.AddFloat(id, fa)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// ---- per-row: append filter column values (if any) ----
+	if len(u.tblcfg.FilterColumns) > 0 {
+		if err = appendFilterRow(u.activeBuilder(), u.tblcfg.FilterColumns, tf.ctr.argVecs, 3, nthRow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// activeBuilder returns whichever quantization-specialised builder is live,
+// exposed through the narrow filterColumnBuilder interface. Exactly one of
+// the four fields is non-nil after a successful NewCagraBuild dispatch.
+func (u *cagraCreateState) activeBuilder() filterColumnBuilder {
+	switch {
+	case u.buildf32 != nil:
+		return u.buildf32
+	case u.buildf16 != nil:
+		return u.buildf16
+	case u.buildi8 != nil:
+		return u.buildi8
+	case u.buildui8 != nil:
+		return u.buildui8
+	}
+	return nil
 }

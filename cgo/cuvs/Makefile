@@ -36,7 +36,7 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC"
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
 CPP_SRCS := helper.cpp
-TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu
+TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)

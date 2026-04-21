@@ -637,6 +637,91 @@ uint32_t gpu_ivf_flat_get_n_list(gpu_ivf_flat_c index_c) {
     }
 }
 
+// ---------- Pre-filter API ----------
+
+void gpu_ivf_flat_set_filter_columns(gpu_ivf_flat_c index_c, const char* col_meta_json,
+                                      uint64_t total_count, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        std::string s = col_meta_json ? col_meta_json : "";
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->set_filter_columns(s, total_count); break;
+            case Quantization_F16:   static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->set_filter_columns(s, total_count); break;
+            case Quantization_INT8:  static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->set_filter_columns(s, total_count); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->set_filter_columns(s, total_count); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_set_filter_columns", e.what());
+    }
+}
+
+void gpu_ivf_flat_add_filter_chunk(gpu_ivf_flat_c index_c, uint32_t col_idx,
+                                    const void* data, uint64_t nrows, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32:   static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            case Quantization_F16:   static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            case Quantization_INT8:  static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_add_filter_chunk", e.what());
+    }
+}
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_with_filter(gpu_ivf_flat_c index_c, const void* queries_data,
+                                                           uint64_t num_queries, uint32_t query_dimension,
+                                                           uint32_t limit, ivf_flat_search_params_t sp,
+                                                           const char* preds_json, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    gpu_ivf_flat_search_res_t result = {nullptr};
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        auto* cpp_res = new ivf_flat_search_result_t();
+        std::string preds = preds_json ? preds_json : "";
+        switch (any->qtype) {
+            case Quantization_F32:   *cpp_res = static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->search_with_filter(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_F16:   *cpp_res = static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->search_with_filter(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_INT8:  *cpp_res = static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->search_with_filter(static_cast<const int8_t*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->search_with_filter(static_cast<const uint8_t*>(queries_data), num_queries, query_dimension, limit, sp, preds); break;
+            default: break;
+        }
+        result.result_ptr = static_cast<gpu_ivf_flat_result_c>(cpp_res);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_search_with_filter", e.what());
+    }
+    return result;
+}
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_float_with_filter(gpu_ivf_flat_c index_c, const float* queries_data,
+                                                                 uint64_t num_queries, uint32_t query_dimension,
+                                                                 uint32_t limit, ivf_flat_search_params_t sp,
+                                                                 const char* preds_json, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    gpu_ivf_flat_search_res_t result = {nullptr};
+    try {
+        auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
+        auto* cpp_res = new ivf_flat_search_result_t();
+        std::string preds = preds_json ? preds_json : "";
+        switch (any->qtype) {
+            case Quantization_F32:   *cpp_res = static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_F16:   *cpp_res = static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_INT8:  *cpp_res = static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
+            case Quantization_UINT8: *cpp_res = static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds); break;
+            default: break;
+        }
+        result.result_ptr = static_cast<gpu_ivf_flat_result_c>(cpp_res);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_search_float_with_filter", e.what());
+    }
+    return result;
+}
+
 } // extern "C"
 
 namespace matrixone {

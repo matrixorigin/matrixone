@@ -140,6 +140,31 @@ void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t
 // Merge function
 gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nthread, const int* devices, int device_count, void* errmsg);
 
+// ---------- Pre-filter (INCLUDE columns) ----------
+
+// Register filter column metadata. Must be called before add_filter_chunk(), before build().
+// col_meta_json: JSON array, e.g. [{"name":"price","type":2},{"name":"cat","type":1}]
+//   type values: 0=int32, 1=int64, 2=float32, 3=float64, 4=uint64 (VARCHAR hash)
+void gpu_cagra_set_filter_columns(gpu_cagra_c index_c, const char* col_meta_json,
+                                   uint64_t total_count, void* errmsg);
+
+// Append nrows raw values for filter column col_idx. data is raw bytes
+// (nrows * elem_size, row-major). Must precede build().
+void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
+                                 const void* data, uint64_t nrows, void* errmsg);
+
+// Filtered variants of gpu_cagra_search / gpu_cagra_search_float. preds_json is a JSON
+// predicate array; passing NULL or "" yields unfiltered behavior.
+gpu_cagra_search_res_t gpu_cagra_search_with_filter(gpu_cagra_c index_c, const void* queries_data,
+                                                     uint64_t num_queries, uint32_t query_dimension,
+                                                     uint32_t limit, cagra_search_params_t search_params,
+                                                     const char* preds_json, void* errmsg);
+
+gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, const float* queries_data,
+                                                           uint64_t num_queries, uint32_t query_dimension,
+                                                           uint32_t limit, cagra_search_params_t search_params,
+                                                           const char* preds_json, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif

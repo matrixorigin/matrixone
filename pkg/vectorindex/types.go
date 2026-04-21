@@ -19,6 +19,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -104,6 +105,12 @@ type IndexTableConfig struct {
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
+
+	// Pre-filter (INCLUDE columns) — set when the user has declared INCLUDE
+	// columns at CREATE INDEX time. Empty for indexes without INCLUDE.
+	// The table function forwards these descriptors verbatim to CGo; Go
+	// never inspects the column values.
+	FilterColumns []cuvsfilter.ColumnMeta `json:"filter_columns,omitempty"`
 }
 
 // HNSW specified parameters
@@ -211,6 +218,12 @@ type RuntimeConfig struct {
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 	NThreads          uint // Brute Force Index
+
+	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
+	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
+	// Go never parses this payload; it's produced by the SQL layer and
+	// consumed by the C++ eval_filter_bitmap_cpu.
+	FilterJSON string
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

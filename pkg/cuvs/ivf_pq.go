@@ -1041,3 +1041,139 @@ type SearchResultIvfPq struct {
 	Neighbors []int64
 	Distances []float32
 }
+
+// SetFilterColumns registers filter-column metadata. See GpuCagra.SetFilterColumns.
+func (gi *GpuIvfPq[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	var errmsg *C.char
+	cMeta := C.CString(colMetaJSON)
+	defer C.free(unsafe.Pointer(cMeta))
+	C.gpu_ivf_pq_set_filter_columns(gi.cIvfPq, cMeta, C.uint64_t(totalCount), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddFilterChunk appends raw filter-column bytes. See GpuCagra.AddFilterChunk.
+func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+	if gi.cIvfPq == nil {
+		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(data) == 0 || nrows == 0 {
+		return nil
+	}
+	var errmsg *C.char
+	C.gpu_ivf_pq_add_filter_chunk(
+		gi.cIvfPq,
+		C.uint32_t(colIdx),
+		unsafe.Pointer(&data[0]),
+		C.uint64_t(nrows),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(data)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
+func (gi *GpuIvfPq[T]) SearchWithFilter(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+	if gi.cIvfPq == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResultIvfPq{}, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+
+	res := C.gpu_ivf_pq_search_with_filter(
+		gi.cIvfPq,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_ivf_pq_free_result(res.result_ptr)
+
+	return SearchResultIvfPq{Neighbors: neighbors, Distances: distances}, nil
+}
+
+// SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
+func (gi *GpuIvfPq[T]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+	if gi.cIvfPq == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResultIvfPq{}, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+
+	res := C.gpu_ivf_pq_search_float_with_filter(
+		gi.cIvfPq,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_ivf_pq_free_result(res.result_ptr)
+
+	return SearchResultIvfPq{Neighbors: neighbors, Distances: distances}, nil
+}

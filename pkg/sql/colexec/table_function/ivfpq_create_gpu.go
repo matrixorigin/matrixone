@@ -258,6 +258,16 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 
+		// ---- pre-filter (INCLUDE columns) setup ----
+		if len(u.tblcfg.FilterColumns) > 0 {
+			if err = validateFilterArgCount(tf.ctr.argVecs, 3, u.tblcfg.FilterColumns); err != nil {
+				return err
+			}
+			if err = initFilterColumns(u.activeBuilder(), u.tblcfg.FilterColumns); err != nil {
+				return err
+			}
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -288,5 +298,30 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	case u.buildui8 != nil:
 		err = u.buildui8.AddFloat(id, fa)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	if len(u.tblcfg.FilterColumns) > 0 {
+		if err = appendFilterRow(u.activeBuilder(), u.tblcfg.FilterColumns, tf.ctr.argVecs, 3, nthRow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// activeBuilder returns the live quantization-specialised builder through the
+// filterColumnBuilder interface. See cagraCreateState.activeBuilder.
+func (u *ivfpqCreateState) activeBuilder() filterColumnBuilder {
+	switch {
+	case u.buildf32 != nil:
+		return u.buildf32
+	case u.buildf16 != nil:
+		return u.buildf16
+	case u.buildi8 != nil:
+		return u.buildi8
+	case u.buildui8 != nil:
+		return u.buildui8
+	}
+	return nil
 }

@@ -145,6 +145,24 @@ void gpu_ivf_flat_get_centers(gpu_ivf_flat_c index_c, void* centers, void* errms
 // Gets the number of lists (centroids)
 uint32_t gpu_ivf_flat_get_n_list(gpu_ivf_flat_c index_c);
 
+// ---------- Pre-filter (INCLUDE columns) ----------
+// See cagra_c.h for JSON format details.
+void gpu_ivf_flat_set_filter_columns(gpu_ivf_flat_c index_c, const char* col_meta_json,
+                                      uint64_t total_count, void* errmsg);
+
+void gpu_ivf_flat_add_filter_chunk(gpu_ivf_flat_c index_c, uint32_t col_idx,
+                                    const void* data, uint64_t nrows, void* errmsg);
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_with_filter(gpu_ivf_flat_c index_c, const void* queries_data,
+                                                           uint64_t num_queries, uint32_t query_dimension,
+                                                           uint32_t limit, ivf_flat_search_params_t search_params,
+                                                           const char* preds_json, void* errmsg);
+
+gpu_ivf_flat_search_res_t gpu_ivf_flat_search_float_with_filter(gpu_ivf_flat_c index_c, const float* queries_data,
+                                                                 uint64_t num_queries, uint32_t query_dimension,
+                                                                 uint32_t limit, ivf_flat_search_params_t search_params,
+                                                                 const char* preds_json, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif

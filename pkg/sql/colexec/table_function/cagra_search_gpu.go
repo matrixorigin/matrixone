@@ -46,6 +46,9 @@ type cagraSearchState struct {
 	limit     uint64
 	keys      []int64
 	distances []float64
+	// Filter predicates JSON for the current row, populated from argVecs[2]
+	// when a third arg is present; empty → unfiltered.
+	predsJSON string
 	// holding one call batch, cagraSearchState owns it.
 	batch *batch.Batch
 }
@@ -225,6 +228,18 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
+	// ---- optional per-row filter predicates (arg 2) ----
+	u.predsJSON = ""
+	if len(tf.ctr.argVecs) > 2 {
+		pVec := tf.ctr.argVecs[2]
+		if pVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "third argument (filter predicates) must be a string")
+		}
+		if !pVec.IsNull(uint64(nthRow)) {
+			u.predsJSON = pVec.UnsafeGetStringAt(nthRow)
+		}
+	}
+
 	veccache.Cache.Once()
 
 	return runCagraSearch[float32](proc, u, faVec, nthRow)
@@ -241,6 +256,7 @@ func runCagraSearch[T types.RealNumbers](proc *process.Process, u *cagraSearchSt
 	rt := vectorindex.RuntimeConfig{
 		Limit:        uint(u.limit),
 		OrigFuncName: u.tblcfg.OrigFuncName,
+		FilterJSON:   u.predsJSON,
 	}
 	var keys any
 	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)

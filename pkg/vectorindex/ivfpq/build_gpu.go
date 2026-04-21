@@ -40,6 +40,9 @@ type IvfpqBuild[T cuvs.VectorType] struct {
 	devices []int
 	count   int64
 	idBuf   [1]int64
+
+	// Filter column metadata (INCLUDE columns) — see CagraBuild.filterColMetaJSON.
+	filterColMetaJSON string
 }
 
 func NewIvfpqBuild[T cuvs.VectorType](
@@ -85,11 +88,30 @@ func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
 			m.Destroy()
 			return nil, err
 		}
+		if b.filterColMetaJSON != "" {
+			if err = m.Index.SetFilterColumns(b.filterColMetaJSON, uint64(capacity)); err != nil {
+				m.Destroy()
+				return nil, err
+			}
+		}
 		b.current = m
 		b.count = 0
 	}
 
 	return b.current, nil
+}
+
+// SetFilterColumns — see cagra.CagraBuild.SetFilterColumns.
+func (b *IvfpqBuild[T]) SetFilterColumns(colMetaJSON string) {
+	b.filterColMetaJSON = colMetaJSON
+}
+
+// AddFilterChunk — see cagra.CagraBuild.AddFilterChunk.
+func (b *IvfpqBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+	if b.current == nil {
+		return fmt.Errorf("IvfpqBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
+	}
+	return b.current.Index.AddFilterChunk(colIdx, data, nrows)
 }
 
 func (b *IvfpqBuild[T]) AddFloat(id int64, vec []float32) error {

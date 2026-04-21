@@ -322,6 +322,137 @@ TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
     index.destroy();
 }
 
+// Exercises the full pre-filter path end-to-end: set_filter_columns →
+// add_filter_chunk → build → search_with_filter → build_search_bitset →
+// cuVS bitset_filter. IDs 0-2 are distinct close neighbors; 3..129 are
+// far-away padding needed to satisfy default graph_degree=64 build params.
+TEST(GpuCagraTest, FilteredSearchIncludesOnlyAllowedCategories) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;  // ID 0, cat 10
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;  // ID 1, cat 20
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;  // ID 2, cat 30
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+                             DistanceType_L2Expanded, bp, devices, 1,
+                             DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query = {1.0, 2.0, 3.0};  // closest to ID 0
+    cagra_search_params_t sp = cagra_search_params_default();
+
+    // Baseline: unfiltered search returns [0, 1] as top-2.
+    auto base = index.search_with_filter(query.data(), 1, dimension, 2, sp, "");
+    ASSERT_EQ(base.neighbors[0], 0LL);
+    ASSERT_EQ(base.neighbors[1], 1LL);
+
+    // Filter cat != 10 via NE: excludes ID 0, top-2 should be [1, 2].
+    auto filtered = index.search_with_filter(
+        query.data(), 1, dimension, 2, sp,
+        "[{\"col\":0,\"op\":\"!=\",\"val\":10}]");
+    ASSERT_EQ(filtered.neighbors[0], 1LL);
+    ASSERT_EQ(filtered.neighbors[1], 2LL);
+
+    // IN predicate — only cat 30 allowed, top-1 must be ID 2.
+    auto in_pred = index.search_with_filter(
+        query.data(), 1, dimension, 1, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[30]}]");
+    ASSERT_EQ(in_pred.neighbors[0], 2LL);
+
+    index.destroy();
+}
+
+// Verifies user filter is AND-ed with the delete bitset. Deleting ID 1 and
+// then filtering "cat IN [10, 20, 30]" should still exclude ID 1 — top-2
+// must be IDs 0 and 2 in distance order.
+TEST(GpuCagraTest, FilteredSearchCombinesWithDeleteBitset) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;  // ID 0
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;  // ID 1
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;  // ID 2
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+                             DistanceType_L2Expanded, bp, devices, 1,
+                             DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    index.delete_id(1);
+
+    std::vector<float> query = {1.0, 2.0, 3.0};
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search_with_filter(
+        query.data(), 1, dimension, 2, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[10, 20, 30]}]");
+
+    ASSERT_EQ(result.neighbors[0], 0LL);
+    ASSERT_EQ(result.neighbors[1], 2LL);  // ID 1 excluded via delete bitset
+
+    index.destroy();
+}
+
+// Empty preds_json path must behave identically to unfiltered search even
+// when filter columns are present (exercises the nullptr-from-build_search_bitset case).
+TEST(GpuCagraTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
+    const uint32_t dimension = 3;
+    const uint64_t count = 130;
+    std::vector<float> dataset(count * dimension);
+    dataset[0] = 1.0; dataset[1] = 2.0; dataset[2] = 3.0;
+    dataset[3] = 4.0; dataset[4] = 5.0; dataset[5] = 6.0;
+    dataset[6] = 7.0; dataset[7] = 8.0; dataset[8] = 9.0;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e6f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+                             DistanceType_L2Expanded, bp, devices, 1,
+                             DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query = {1.0, 2.0, 3.0};
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto unfiltered = index.search(query.data(), 1, dimension, 3, sp);
+    auto empty_pred = index.search_with_filter(query.data(), 1, dimension, 3, sp, "");
+
+    ASSERT_EQ(unfiltered.neighbors[0], empty_pred.neighbors[0]);
+    ASSERT_EQ(unfiltered.neighbors[1], empty_pred.neighbors[1]);
+    ASSERT_EQ(unfiltered.neighbors[2], empty_pred.neighbors[2]);
+
+    index.destroy();
+}
+
 TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     const uint32_t dimension = 16;
     const uint64_t n_base = 200; // must be > intermediate_graph_degree (128)

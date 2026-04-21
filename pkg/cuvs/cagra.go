@@ -994,3 +994,155 @@ func (gi *GpuCagra[T]) LoadFromDir(dirPath string, mode DistributionMode) error 
 	}
 	return nil
 }
+
+// SetFilterColumns registers filter-column metadata before AddFilterChunk.
+// colMetaJSON is a JSON array of {"name":"...","type":N} entries, where N is
+// 0=int32, 1=int64, 2=float32, 3=float64, 4=uint64 (VARCHAR hash).
+// Must be called after Start() and before Build().
+func (gi *GpuCagra[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	cMeta := C.CString(colMetaJSON)
+	defer C.free(unsafe.Pointer(cMeta))
+	C.gpu_cagra_set_filter_columns(gi.cCagra, cMeta, C.uint64_t(totalCount), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddFilterChunk appends nrows raw values for filter column colIdx.
+// data must be a row-major byte slice sized nrows * elem_size(colType).
+// Ownership transfers to C++ at call return — the Go slice can be freed.
+func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+	if gi.cCagra == nil {
+		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(data) == 0 || nrows == 0 {
+		return nil
+	}
+	var errmsg *C.char
+	C.gpu_cagra_add_filter_chunk(
+		gi.cCagra,
+		C.uint32_t(colIdx),
+		unsafe.Pointer(&data[0]),
+		C.uint64_t(nrows),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(data)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// SearchWithFilter runs a filtered K-NN search. predsJSON is a JSON predicate
+// array; passing "" yields unfiltered behavior identical to Search().
+func (gi *GpuCagra[T]) SearchWithFilter(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+	if gi.cCagra == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResult{}, nil
+	}
+
+	sp = gi.adjustSearchParams(sp, limit)
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+
+	res := C.gpu_cagra_search_with_filter(
+		gi.cCagra,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_cagra_free_result(res.result_ptr)
+
+	return SearchResult{Neighbors: neighbors, Distances: distances}, nil
+}
+
+// SearchFloatWithFilter runs a filtered K-NN search with float32 queries.
+func (gi *GpuCagra[T]) SearchFloatWithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+	if gi.cCagra == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResult{}, nil
+	}
+
+	sp = gi.adjustSearchParams(sp, limit)
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+
+	res := C.gpu_cagra_search_float_with_filter(
+		gi.cCagra,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_cagra_free_result(res.result_ptr)
+
+	return SearchResult{Neighbors: neighbors, Distances: distances}, nil
+}

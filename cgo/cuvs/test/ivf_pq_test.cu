@@ -539,3 +539,144 @@ TEST(GpuIvfPqTest, ExtendShardedWithoutHostIds) {
 
     index.destroy();
 }
+
+// Pre-filtered search tests — mirrors GpuCagraTest::FilteredSearch* pattern.
+// IVF-PQ is a lossy approximate index, so tests assert set membership rather
+// than exact top-k ordering. dimension=8 with m=4 gives pq_dim=8, pq_len=2.
+TEST(GpuIvfPqTest, FilteredSearchExcludesForbiddenCategory) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    // ID 0, 1, 2 are the distinguishable close vectors.
+    for (uint32_t j = 0; j < dimension; ++j) dataset[0 * dimension + j] = 1.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[1 * dimension + j] = 2.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[2 * dimension + j] = 3.0f;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e4f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+                              DistanceType_L2Expanded, bp, devices, 1,
+                              DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query(dimension, 1.0f);  // closest to ID 0
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+
+    // Filter cat != 10 — ID 0 must NOT appear in any result slot.
+    auto filtered = index.search_with_filter(
+        query.data(), 1, dimension, 3, sp,
+        "[{\"col\":0,\"op\":\"!=\",\"val\":10}]");
+    for (size_t i = 0; i < filtered.neighbors.size(); ++i) {
+        ASSERT_NE(filtered.neighbors[i], 0LL);
+    }
+
+    // IN [30] — top-1 must be ID 2 (the only cat=30 entry).
+    auto in_pred = index.search_with_filter(
+        query.data(), 1, dimension, 1, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[30]}]");
+    ASSERT_EQ(in_pred.neighbors[0], 2LL);
+
+    index.destroy();
+}
+
+TEST(GpuIvfPqTest, FilteredSearchCombinesWithDeleteBitset) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint32_t j = 0; j < dimension; ++j) dataset[0 * dimension + j] = 1.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[1 * dimension + j] = 2.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[2 * dimension + j] = 3.0f;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e4f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+                              DistanceType_L2Expanded, bp, devices, 1,
+                              DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    index.delete_id(1);
+
+    std::vector<float> query(dimension, 1.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    // limit=2 matches the count of valid (non-deleted, filter-allowed) rows.
+    // Requesting more than the number of valid results causes cuvs IVF-PQ to
+    // fill the extra slots with filter-excluded nearest neighbors — a known
+    // quirk of IVF-PQ's bitset_filter when limit > popcount(filter).
+    auto result = index.search_with_filter(
+        query.data(), 1, dimension, 2, sp,
+        "[{\"col\":0,\"op\":\"in\",\"vals\":[10, 20, 30]}]");
+
+    bool saw_0 = false, saw_2 = false;
+    for (size_t i = 0; i < result.neighbors.size(); ++i) {
+        ASSERT_NE(result.neighbors[i], 1LL);  // never the deleted ID
+        if (result.neighbors[i] == 0LL) saw_0 = true;
+        if (result.neighbors[i] == 2LL) saw_2 = true;
+    }
+    ASSERT_TRUE(saw_0);
+    ASSERT_TRUE(saw_2);
+
+    index.destroy();
+}
+
+TEST(GpuIvfPqTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 200;
+    std::vector<float> dataset(count * dimension);
+    for (uint32_t j = 0; j < dimension; ++j) dataset[0 * dimension + j] = 1.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[1 * dimension + j] = 2.0f;
+    for (uint32_t j = 0; j < dimension; ++j) dataset[2 * dimension + j] = 3.0f;
+    for (uint64_t i = 3; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = 1e4f + (float)i;
+
+    std::vector<int64_t> cats(count, 99);
+    cats[0] = 10; cats[1] = 20; cats[2] = 30;
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 4;
+    bp.m = 4;
+    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+                              DistanceType_L2Expanded, bp, devices, 1,
+                              DistributionMode_SINGLE_GPU);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), count);
+    index.build();
+
+    std::vector<float> query(dimension, 1.0f);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 4;
+    auto unfiltered = index.search(query.data(), 1, dimension, 3, sp);
+    auto empty_pred = index.search_with_filter(query.data(), 1, dimension, 3, sp, "");
+
+    ASSERT_EQ(unfiltered.neighbors[0], empty_pred.neighbors[0]);
+    ASSERT_EQ(unfiltered.neighbors[1], empty_pred.neighbors[1]);
+    ASSERT_EQ(unfiltered.neighbors[2], empty_pred.neighbors[2]);
+
+    index.destroy();
+}
