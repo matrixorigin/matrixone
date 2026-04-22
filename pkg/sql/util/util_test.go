@@ -16,8 +16,11 @@ package util
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 type kase struct {
@@ -72,5 +75,45 @@ func Test_SplitNameOfPartitionTable(t *testing.T) {
 			require.Equal(t, a, k.a)
 			require.Equal(t, b, k.b)
 		}
+	}
+}
+
+func TestGetAccountNameFromUserName(t *testing.T) {
+	cases := []struct {
+		name     string
+		userName string
+		want     string
+	}{
+		{name: "colon with role", userName: "tenant1:admin:accountadmin", want: "tenant1"},
+		{name: "hash with role", userName: "tenant1#admin#accountadmin", want: "tenant1"},
+		{name: "colon with label", userName: "tenant1:admin:accountadmin?k:v", want: "tenant1"},
+		{name: "hash with label", userName: "tenant1#admin#accountadmin?k:v", want: "tenant1"},
+		{name: "plain user", userName: "tenant1", want: "tenant1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, getAccountNameFromUserName(tc.userName))
+		})
+	}
+}
+
+func TestBuildSysLogFilters(t *testing.T) {
+	cases := []struct {
+		name      string
+		userName  string
+		buildExpr func(string) tree.Expr
+	}{
+		{name: "statement colon", userName: "tenant1:admin:accountadmin", buildExpr: BuildSysStatementInfoFilter},
+		{name: "statement hash", userName: "tenant1#admin#accountadmin", buildExpr: BuildSysStatementInfoFilter},
+		{name: "metric colon", userName: "tenant1:admin:accountadmin", buildExpr: BuildSysMetricFilter},
+		{name: "metric hash", userName: "tenant1#admin#accountadmin", buildExpr: BuildSysMetricFilter},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := tc.buildExpr(tc.userName)
+			require.Equal(t, "account = tenant1", tree.String(expr, dialect.MYSQL))
+		})
 	}
 }
