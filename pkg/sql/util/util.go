@@ -154,11 +154,13 @@ func BuildSysMetricFilter(acctName string) tree.Expr {
 
 func getAccountNameFromUserName(userName string) string {
 	userName = strings.Split(userName, "?")[0]
-	splitPos := strings.IndexAny(userName, ":#")
-	if splitPos == -1 {
-		return userName
+	if splitPos := strings.IndexByte(userName, ':'); splitPos != -1 {
+		return userName[:splitPos]
 	}
-	return userName[:splitPos]
+	if splitPos := strings.IndexByte(userName, '#'); splitPos != -1 {
+		return userName[:splitPos]
+	}
+	return userName
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:

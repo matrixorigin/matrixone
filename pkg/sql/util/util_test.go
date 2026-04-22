@@ -16,6 +16,7 @@ package util
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -86,8 +87,10 @@ func TestGetAccountNameFromUserName(t *testing.T) {
 	}{
 		{name: "colon with role", userName: "tenant1:admin:accountadmin", want: "tenant1"},
 		{name: "hash with role", userName: "tenant1#admin#accountadmin", want: "tenant1"},
+		{name: "hash in account with colon delimiter", userName: "a#b:admin:accountadmin", want: "a#b"},
 		{name: "colon with label", userName: "tenant1:admin:accountadmin?k:v", want: "tenant1"},
 		{name: "hash with label", userName: "tenant1#admin#accountadmin?k:v", want: "tenant1"},
+		{name: "hash in account with colon delimiter and label", userName: "a#b:admin:accountadmin?k:v", want: "a#b"},
 		{name: "plain user", userName: "tenant1", want: "tenant1"},
 	}
 
@@ -106,14 +109,20 @@ func TestBuildSysLogFilters(t *testing.T) {
 	}{
 		{name: "statement colon", userName: "tenant1:admin:accountadmin", buildExpr: BuildSysStatementInfoFilter},
 		{name: "statement hash", userName: "tenant1#admin#accountadmin", buildExpr: BuildSysStatementInfoFilter},
+		{name: "statement hash in account with colon delimiter", userName: "a#b:admin:accountadmin", buildExpr: BuildSysStatementInfoFilter},
 		{name: "metric colon", userName: "tenant1:admin:accountadmin", buildExpr: BuildSysMetricFilter},
 		{name: "metric hash", userName: "tenant1#admin#accountadmin", buildExpr: BuildSysMetricFilter},
+		{name: "metric hash in account with colon delimiter", userName: "a#b:admin:accountadmin", buildExpr: BuildSysMetricFilter},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := tc.buildExpr(tc.userName)
-			require.Equal(t, "account = tenant1", tree.String(expr, dialect.MYSQL))
+			want := "account = tenant1"
+			if strings.HasPrefix(tc.userName, "a#b:") {
+				want = "account = a#b"
+			}
+			require.Equal(t, want, tree.String(expr, dialect.MYSQL))
 		})
 	}
 }
