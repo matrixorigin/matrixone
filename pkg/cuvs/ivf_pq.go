@@ -1060,7 +1060,7 @@ func (gi *GpuIvfPq[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) e
 }
 
 // AddFilterChunk appends raw filter-column bytes. See GpuCagra.AddFilterChunk.
-func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1068,14 +1068,20 @@ func (gi *GpuIvfPq[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) 
 		return nil
 	}
 	var errmsg *C.char
+	var cNullBitmap *C.uint32_t
+	if len(nullBitmap) > 0 {
+		cNullBitmap = (*C.uint32_t)(unsafe.Pointer(&nullBitmap[0]))
+	}
 	C.gpu_ivf_pq_add_filter_chunk(
 		gi.cIvfPq,
 		C.uint32_t(colIdx),
 		unsafe.Pointer(&data[0]),
+		cNullBitmap,
 		C.uint64_t(nrows),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(data)
+	runtime.KeepAlive(nullBitmap)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

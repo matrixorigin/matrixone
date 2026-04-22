@@ -30,10 +30,19 @@ import (
 // pkg/vectorindex/{cagra,ivfpq} — both expose the same two-method filter API.
 // The table function uses this narrow interface so the helpers stay generic
 // across CAGRA / IVF-PQ.
+//
+// AddFilterChunk's nullBitmap follows MO null-mask semantics: LSB-first,
+// bit i = 1 means row i IS NULL. The C++ side (FilterStore::add_chunk) inverts
+// into its internal validity array (bit=1 = not-null) at the boundary.
 type filterColumnBuilder interface {
 	SetFilterColumns(colMetaJSON string)
-	AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error
+	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
 }
+
+// Null bitmap for a 1-row chunk where the single row is null: bit 0 = 1.
+// Shared so the hot path doesn't allocate per call; C++ copies bits out
+// before returning.
+var nullBitmapOneRowIsNull = []uint32{1}
 
 // initFilterColumns serialises IndexTableConfig.FilterColumns into the JSON
 // shape accepted by gpu_<idx>_set_filter_columns and registers it on the
@@ -72,42 +81,49 @@ func appendFilterRow(
 ) error {
 	for i, meta := range cols {
 		v := argVecs[argOffset+i]
-		// NULLs are not currently supported in the C++ filter evaluator —
-		// skip this row's filter write so the value buffer stays in lockstep.
-		// (Better: reject nulls at DDL time. For Phase 1 we accept the skew
-		// with non-null inputs only.)
+		// Per-row append. Under MO's null-mask contract (bit=1 means NULL),
+		// a null row passes a 1-word bitmap with bit 0 = 1. A non-null row
+		// passes nil, letting the C++ side keep the column dense (no validity
+		// allocation) — this is the fast path worth preserving, since MO
+		// vectors are typically dense.
+		//
+		// For null rows the byte payload is undefined (MO's fixed-width array
+		// holds whatever pattern was left at that slot). That's fine: the
+		// validity AND in eval_filter_bitmap_cpu masks the comparison result
+		// to 0 regardless of the payload bytes.
+		var nullBitmap []uint32
 		if v.IsNull(uint64(nthRow)) {
-			return moerr.NewInternalErrorNoCtx("filter column value must not be NULL")
+			nullBitmap = nullBitmapOneRowIsNull
 		}
 		switch meta.TypeOid {
 		case cuvsfilter.ColTypeInt32:
 			val := vector.GetFixedAtNoTypeCheck[int32](v, nthRow)
 			buf := (*[4]byte)(unsafe.Pointer(&val))[:]
-			if err := build.AddFilterChunk(uint32(i), buf, 1); err != nil {
+			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeInt64:
 			val := vector.GetFixedAtNoTypeCheck[int64](v, nthRow)
 			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-			if err := build.AddFilterChunk(uint32(i), buf, 1); err != nil {
+			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeFloat32:
 			val := vector.GetFixedAtNoTypeCheck[float32](v, nthRow)
 			buf := (*[4]byte)(unsafe.Pointer(&val))[:]
-			if err := build.AddFilterChunk(uint32(i), buf, 1); err != nil {
+			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeFloat64:
 			val := vector.GetFixedAtNoTypeCheck[float64](v, nthRow)
 			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-			if err := build.AddFilterChunk(uint32(i), buf, 1); err != nil {
+			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeUint64:
 			val := vector.GetFixedAtNoTypeCheck[uint64](v, nthRow)
 			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-			if err := build.AddFilterChunk(uint32(i), buf, 1); err != nil {
+			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		default:

@@ -117,11 +117,13 @@ func (b *CagraBuild[T]) SetFilterColumns(colMetaJSON string) {
 // AddFilterChunk appends nrows raw filter-column bytes to the *current*
 // sub-index being filled. Call once per filter column per row batch, in the
 // same cadence as AddFloat (which drives sub-index rotation).
-func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+// nullBitmap is a packed []uint32 (LSB-first, bit i = 1 means row i IS NULL)
+// of ceil(nrows/32) entries, or nil when the chunk has no nulls.
+func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
 		return fmt.Errorf("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
 	}
-	return b.current.Index.AddFilterChunk(colIdx, data, nrows)
+	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
 // AddFloat appends one float32 vector with the given int64 id.

@@ -35,21 +35,27 @@ type mockFilterBuilder struct {
 }
 
 type mockChunk struct {
-	colIdx uint32
-	data   []byte
-	nrows  uint64
+	colIdx     uint32
+	data       []byte
+	nullBitmap []uint32
+	nrows      uint64
 }
 
 func (m *mockFilterBuilder) SetFilterColumns(colMetaJSON string) {
 	m.metaJSON = colMetaJSON
 }
 
-func (m *mockFilterBuilder) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+func (m *mockFilterBuilder) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	// Copy: the helper hands us slices aliased over the original value which
 	// goes out of scope after the loop iteration.
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	m.chunks = append(m.chunks, mockChunk{colIdx: colIdx, data: cp, nrows: nrows})
+	var nb []uint32
+	if nullBitmap != nil {
+		nb = make([]uint32, len(nullBitmap))
+		copy(nb, nullBitmap)
+	}
+	m.chunks = append(m.chunks, mockChunk{colIdx: colIdx, data: cp, nullBitmap: nb, nrows: nrows})
 	return nil
 }
 
@@ -140,22 +146,35 @@ func TestAppendFilterRowAllTypes(t *testing.T) {
 		mb.chunks[4].data)
 }
 
-// Row with a NULL filter-column value must reject the whole row — otherwise
-// the filter buffer would drift out of step with the vector insertions.
-func TestAppendFilterRowRejectsNull(t *testing.T) {
+// A NULL filter-column value is accepted and forwarded with a nullBitmap so
+// the C++ side can record the validity bit. Non-null rows pass nil so the
+// column stays dense (no validity allocation) in the common case.
+func TestAppendFilterRowNullMarksValidity(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	v := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(v, int64(0), true, mp)) // null
-	argVecs := []*vector.Vector{nil, nil, nil, v}
+	vNull := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
 
-	mb := &mockFilterBuilder{}
+	vLive := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vLive, int64(42), false, mp))
+
 	cols := []cuvsfilter.ColumnMeta{
 		{Name: "a", TypeOid: cuvsfilter.ColTypeInt64},
 	}
-	err := appendFilterRow(mb, cols, argVecs, 3, 0)
-	require.Error(t, err)
-	require.Empty(t, mb.chunks)
+
+	// Null row → bitmap [1] (bit 0 = 1 = null, MO null-mask semantics).
+	mb := &mockFilterBuilder{}
+	require.NoError(t, appendFilterRow(mb, cols, []*vector.Vector{nil, nil, nil, vNull}, 3, 0))
+	require.Len(t, mb.chunks, 1)
+	require.Equal(t, []uint32{1}, mb.chunks[0].nullBitmap)
+	require.Equal(t, uint64(1), mb.chunks[0].nrows)
+
+	// Live row → nil bitmap (fast path; column stays dense).
+	mb = &mockFilterBuilder{}
+	require.NoError(t, appendFilterRow(mb, cols, []*vector.Vector{nil, nil, nil, vLive}, 3, 0))
+	require.Len(t, mb.chunks, 1)
+	require.Nil(t, mb.chunks[0].nullBitmap)
+	require.Equal(t, uint64(1), mb.chunks[0].nrows)
 }
 
 func TestValidateFilterArgCount(t *testing.T) {

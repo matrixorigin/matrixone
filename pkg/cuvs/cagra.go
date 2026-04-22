@@ -1017,8 +1017,11 @@ func (gi *GpuCagra[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) e
 
 // AddFilterChunk appends nrows raw values for filter column colIdx.
 // data must be a row-major byte slice sized nrows * elem_size(colType).
+// nullBitmap is a packed []uint32 (LSB-first, bit i = 1 means row i IS NULL,
+// matching MO's null-mask convention) of ceil(nrows/32) entries, or nil when
+// the chunk has no nulls.
 // Ownership transfers to C++ at call return — the Go slice can be freed.
-func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1026,14 +1029,20 @@ func (gi *GpuCagra[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) 
 		return nil
 	}
 	var errmsg *C.char
+	var cNullBitmap *C.uint32_t
+	if len(nullBitmap) > 0 {
+		cNullBitmap = (*C.uint32_t)(unsafe.Pointer(&nullBitmap[0]))
+	}
 	C.gpu_cagra_add_filter_chunk(
 		gi.cCagra,
 		C.uint32_t(colIdx),
 		unsafe.Pointer(&data[0]),
+		cNullBitmap,
 		C.uint64_t(nrows),
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(data)
+	runtime.KeepAlive(nullBitmap)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))

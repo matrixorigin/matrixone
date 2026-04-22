@@ -107,11 +107,11 @@ func (b *IvfpqBuild[T]) SetFilterColumns(colMetaJSON string) {
 }
 
 // AddFilterChunk — see cagra.CagraBuild.AddFilterChunk.
-func (b *IvfpqBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nrows uint64) error {
+func (b *IvfpqBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
 		return fmt.Errorf("IvfpqBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
 	}
-	return b.current.Index.AddFilterChunk(colIdx, data, nrows)
+	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
 
 func (b *IvfpqBuild[T]) AddFloat(id int64, vec []float32) error {
