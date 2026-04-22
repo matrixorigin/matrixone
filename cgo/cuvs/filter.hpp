@@ -538,47 +538,92 @@ template <> inline uint64_t pred_value_as<uint64_t>(const PredValue& v) { return
 template <> inline float    pred_value_as<float>(const PredValue& v)    { return static_cast<float>(v.f64); }
 template <> inline double   pred_value_as<double>(const PredValue& v)   { return v.f64; }
 
+// Per-predicate 32-row evaluator. Dispatches once on (column type, op);
+// the inner row loop is tight, branchless, and fixed-stride so the compiler
+// can unroll + auto-vectorize (SSE/AVX2 on x86, NEON on aarch64).
+//
+// Returns a uint32_t where bit k is 1 iff row (base_row + k) satisfies `p`.
+// Bits at positions >= rows_in_word are left as 0, so the caller can AND
+// predicate masks together and the unused tail bits stay zero.
 template <typename T>
-inline bool cmp_scalar(const void* cell, const PredOp& p) {
-    T x = *reinterpret_cast<const T*>(cell);
+inline uint32_t eval_pred_word_typed(const T* col,
+                                     uint64_t base_row,
+                                     uint32_t rows_in_word,
+                                     const PredOp& p) {
+    uint32_t bits = 0;
+    const T vv = pred_value_as<T>(p.val);
     switch (p.op) {
-        case PredOpType::EQ: return x == pred_value_as<T>(p.val);
-        case PredOpType::NE: return x != pred_value_as<T>(p.val);
-        case PredOpType::LT: return x <  pred_value_as<T>(p.val);
-        case PredOpType::LE: return x <= pred_value_as<T>(p.val);
-        case PredOpType::GT: return x >  pred_value_as<T>(p.val);
-        case PredOpType::GE: return x >= pred_value_as<T>(p.val);
-        case PredOpType::BETWEEN:
-            return x >= pred_value_as<T>(p.lo) && x <= pred_value_as<T>(p.hi);
-        case PredOpType::IN:
-            for (const auto& iv : p.in_vals) {
-                if (x == pred_value_as<T>(iv)) return true;
+        case PredOpType::EQ:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] == vv) << k;
+            return bits;
+        case PredOpType::NE:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] != vv) << k;
+            return bits;
+        case PredOpType::LT:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] <  vv) << k;
+            return bits;
+        case PredOpType::LE:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] <= vv) << k;
+            return bits;
+        case PredOpType::GT:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] >  vv) << k;
+            return bits;
+        case PredOpType::GE:
+            for (uint32_t k = 0; k < rows_in_word; ++k)
+                bits |= static_cast<uint32_t>(col[base_row + k] >= vv) << k;
+            return bits;
+        case PredOpType::BETWEEN: {
+            const T lo = pred_value_as<T>(p.lo);
+            const T hi = pred_value_as<T>(p.hi);
+            for (uint32_t k = 0; k < rows_in_word; ++k) {
+                T x = col[base_row + k];
+                bits |= static_cast<uint32_t>(x >= lo && x <= hi) << k;
             }
-            return false;
+            return bits;
+        }
+        case PredOpType::IN: {
+            // Branchless across in_vals — no early break so the row loop
+            // stays straight-line. Expect small in_vals lists in practice.
+            for (uint32_t k = 0; k < rows_in_word; ++k) {
+                T x = col[base_row + k];
+                uint32_t hit = 0;
+                for (const auto& iv : p.in_vals) {
+                    hit |= static_cast<uint32_t>(x == pred_value_as<T>(iv));
+                }
+                bits |= (hit != 0 ? 1u : 0u) << k;
+            }
+            return bits;
+        }
     }
-    return false;
+    return 0;
 }
 
-inline bool eval_pred(const FilterStore& fs, const PredOp& p, uint64_t row) {
-    const auto& meta = fs.columns[p.col_idx];
-    const void* cell = fs.row_ptr(p.col_idx, row);
-    switch (meta.type) {
-        case FilterColType::INT32:   return cmp_scalar<int32_t>(cell, p);
-        case FilterColType::INT64:   return cmp_scalar<int64_t>(cell, p);
-        case FilterColType::FLOAT32: return cmp_scalar<float>(cell, p);
-        case FilterColType::FLOAT64: return cmp_scalar<double>(cell, p);
-        case FilterColType::UINT64:  return cmp_scalar<uint64_t>(cell, p);
+inline uint32_t eval_pred_word(const FilterStore& fs, const PredOp& p,
+                               uint64_t base_row, uint32_t rows_in_word) {
+    const void* col_base = fs.data[p.col_idx].data();
+    switch (fs.columns[p.col_idx].type) {
+        case FilterColType::INT32:
+            return eval_pred_word_typed<int32_t>(
+                reinterpret_cast<const int32_t*>(col_base), base_row, rows_in_word, p);
+        case FilterColType::INT64:
+            return eval_pred_word_typed<int64_t>(
+                reinterpret_cast<const int64_t*>(col_base), base_row, rows_in_word, p);
+        case FilterColType::FLOAT32:
+            return eval_pred_word_typed<float>(
+                reinterpret_cast<const float*>(col_base), base_row, rows_in_word, p);
+        case FilterColType::FLOAT64:
+            return eval_pred_word_typed<double>(
+                reinterpret_cast<const double*>(col_base), base_row, rows_in_word, p);
+        case FilterColType::UINT64:
+            return eval_pred_word_typed<uint64_t>(
+                reinterpret_cast<const uint64_t*>(col_base), base_row, rows_in_word, p);
     }
-    return false;
-}
-
-inline bool row_matches_all(const FilterStore& fs,
-                            const std::vector<PredOp>& preds,
-                            uint64_t row) {
-    for (const auto& p : preds) {
-        if (!eval_pred(fs, p, row)) return false;
-    }
-    return true;
+    return 0;
 }
 
 }  // namespace detail
@@ -609,17 +654,30 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
 
     // Each iteration owns one uint32_t word (32 consecutive rows). No atomics,
     // no false sharing across threads (each thread writes to its own word).
+    // Per-predicate (type, op) dispatch happens once per word outside the row
+    // loop, so the inner 32-row loop is tight and auto-vectorizable.
+    uint64_t full_words = num_rows / 32;
     #pragma omp parallel for schedule(static)
-    for (int64_t w = 0; w < static_cast<int64_t>(nwords); ++w) {
-        uint32_t bits = 0;
+    for (int64_t w = 0; w < static_cast<int64_t>(full_words); ++w) {
         uint64_t base = static_cast<uint64_t>(w) * 32;
-        uint64_t end  = base + 32 < num_rows ? base + 32 : num_rows;
-        for (uint64_t r = base; r < end; ++r) {
-            if (detail::row_matches_all(fs, preds, start_row + r)) {
-                bits |= (1u << (r - base));
-            }
+        uint32_t bits = 0xFFFFFFFFu;
+        for (const auto& p : preds) {
+            bits &= detail::eval_pred_word(fs, p, start_row + base, 32);
         }
         mask[w] = bits;
+    }
+
+    // Tail word (fewer than 32 live rows). Each predicate mask has bit k = 0
+    // for k >= tail, so starting from all-ones and ANDing naturally leaves
+    // those positions zero in the result. Runs at most once.
+    if (full_words < nwords) {
+        uint64_t base = full_words * 32;
+        uint32_t tail = static_cast<uint32_t>(num_rows - base);
+        uint32_t bits = 0xFFFFFFFFu;
+        for (const auto& p : preds) {
+            bits &= detail::eval_pred_word(fs, p, start_row + base, tail);
+        }
+        mask[full_words] = bits;
     }
     return mask;
 }

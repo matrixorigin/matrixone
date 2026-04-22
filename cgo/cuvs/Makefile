@@ -54,7 +54,7 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs test_kmeans
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
 
 release: all
 
@@ -82,11 +82,15 @@ benchmark_cuvs: obj/test/benchmark_cuvs.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+benchmark_filter: obj/test/benchmark_filter.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs test_kmeans
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
 	rm -rf obj
