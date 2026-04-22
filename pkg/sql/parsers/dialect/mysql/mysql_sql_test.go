@@ -3439,6 +3439,35 @@ func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
 	require.Contains(t, formatted, "'FAIL'")
 }
 
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create table task (task int, id int)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Equal(t, "task", string(createStmt.Table.ObjectName))
+	require.Len(t, createStmt.Defs, 2)
+}
+
+func TestTaskStatementsStillParse(t *testing.T) {
+	cases := []struct {
+		sql      string
+		expected any
+	}{
+		{sql: "create task parser_task as begin select 1; end", expected: &tree.CreateSQLTask{}},
+		{sql: "alter task parser_task suspend", expected: &tree.AlterSQLTask{}},
+		{sql: "drop task parser_task", expected: &tree.DropSQLTask{}},
+		{sql: "execute task parser_task", expected: &tree.ExecuteSQLTask{}},
+		{sql: "show task runs for parser_task limit 1", expected: &tree.ShowSQLTaskRuns{}},
+	}
+
+	for _, tc := range cases {
+		stmt, err := ParseOne(context.TODO(), tc.sql, 1)
+		require.NoError(t, err, tc.sql)
+		require.IsType(t, tc.expected, stmt, tc.sql)
+	}
+}
+
 func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
 	require.NoError(t, err)
