@@ -2050,7 +2050,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			if txnHaveDDL {
 				return ExecTypeAP_ONECN
 			} else if stats != nil && hasExprBasedShuffle {
-				ret = ExecTypeAP_ONECN
+				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
