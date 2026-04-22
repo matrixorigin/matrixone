@@ -508,14 +508,19 @@ public:
                 host_mask.data(), static_cast<int64_t>(nwords)));
 
         if (has_del) {
-            // AND with the cached delete bitset in place.
-            bs_t* del_bs;
+            // Hold a shared_ptr to the cached delete bitset so a concurrent
+            // sync_*_bitset() replacing info->ptr cannot free it out from under
+            // the thrust::transform below. (info->ptr assignment drops the
+            // previous owning reference under info->mutex.)
+            std::shared_ptr<bs_t> del_bs;
             if (sharded) {
                 this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
-                del_bs = static_cast<bs_t*>(this->get_device_shard_bitset_info(dev_id)->ptr.get());
+                del_bs = std::static_pointer_cast<bs_t>(
+                    this->get_device_shard_bitset_info(dev_id)->ptr);
             } else {
                 this->sync_device_bitset(dev_id, *res);
-                del_bs = static_cast<bs_t*>(this->get_device_bitset_info(dev_id)->ptr.get());
+                del_bs = std::static_pointer_cast<bs_t>(
+                    this->get_device_bitset_info(dev_id)->ptr);
             }
             thrust::transform(
                 raft::resource::get_thrust_policy(*res),
