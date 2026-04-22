@@ -246,7 +246,7 @@ int main() {
                                  cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
         index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", cfg.n_vectors);
-        index.add_filter_chunk(0, cats.data(), cfg.n_vectors);
+        index.add_filter_chunk(0, cats.data(), nullptr, cfg.n_vectors);
         index.build();
 
         cagra_search_params_t sp = cagra_search_params_default();
@@ -266,7 +266,7 @@ int main() {
                                     cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
         index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", cfg.n_vectors);
-        index.add_filter_chunk(0, cats.data(), cfg.n_vectors);
+        index.add_filter_chunk(0, cats.data(), nullptr, cfg.n_vectors);
         index.build();
 
         ivf_flat_search_params_t sp = ivf_flat_search_params_default();
@@ -286,7 +286,7 @@ int main() {
                                   cfg.n_threads, DistributionMode_SINGLE_GPU);
         index.start();
         index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", cfg.n_vectors);
-        index.add_filter_chunk(0, cats.data(), cfg.n_vectors);
+        index.add_filter_chunk(0, cats.data(), nullptr, cfg.n_vectors);
         index.build();
 
         ivf_pq_search_params_t sp = ivf_pq_search_params_default();

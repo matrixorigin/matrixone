@@ -642,8 +642,8 @@ public:
     // Typical call sequence (mirrors add_chunk for vectors):
     //   idx.set_filter_columns("[{\"name\":\"price\",\"type\":2}, ...]", total_count);
     //   for each batch:
-    //       idx.add_filter_chunk(0, prices_bytes, nrows);
-    //       idx.add_filter_chunk(1, cats_bytes,   nrows);
+    //       idx.add_filter_chunk(0, prices_bytes, price_null_bm, nrows);
+    //       idx.add_filter_chunk(1, cats_bytes,   nullptr,       nrows);
     //   idx.build();
     //
     // Both throw if the index is already built.  filter_host_ is read-only
@@ -656,10 +656,13 @@ public:
         filter_host_.init(std::move(cols), total_count);
     }
 
-    void add_filter_chunk(uint32_t col_idx, const void* data, uint64_t nrows) {
+    // null_bitmap: packed uint32 words, LSB-first (bit i = row i is not-null).
+    //              nullptr means the chunk has no nulls.
+    void add_filter_chunk(uint32_t col_idx, const void* data,
+                          const uint32_t* null_bitmap, uint64_t nrows) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (is_loaded_) throw std::runtime_error("Cannot add filter chunk to built index");
-        filter_host_.add_chunk(col_idx, data, nrows);
+        filter_host_.add_chunk(col_idx, data, null_bitmap, nrows);
     }
 
     // Initialize (or reset) the deleted bitset after index build.

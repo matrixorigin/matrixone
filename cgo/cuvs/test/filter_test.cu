@@ -56,8 +56,8 @@ FilterStore make_store_i32_f32(uint64_t nrows) {
         prices[i] = static_cast<float>(i);       // 0.0, 1.0, 2.0, ...
         cats[i]   = static_cast<int32_t>(i % 5); // cycles 0..4
     }
-    fs.add_chunk(0, prices.data(), nrows);
-    fs.add_chunk(1, cats.data(),   nrows);
+    fs.add_chunk(0, prices.data(), nullptr, nrows);
+    fs.add_chunk(1, cats.data(), nullptr, nrows);
     return fs;
 }
 
@@ -88,11 +88,11 @@ TEST(FilterStoreTest, AddChunkAdvancesCountInLockstep) {
     std::vector<int32_t> a{1, 2, 3};
     std::vector<int64_t> b{10, 20, 30};
 
-    fs.add_chunk(0, a.data(), 3);
+    fs.add_chunk(0, a.data(), nullptr, 3);
     // Only col 0 has 3 rows; col 1 still empty → count = min = 0.
     ASSERT_EQ(fs.count, 0u);
 
-    fs.add_chunk(1, b.data(), 3);
+    fs.add_chunk(1, b.data(), nullptr, 3);
     ASSERT_EQ(fs.count, 3u);
 
     ASSERT_EQ(*reinterpret_cast<const int32_t*>(fs.row_ptr(0, 0)), 1);
@@ -106,7 +106,7 @@ TEST(FilterStoreTest, AddChunkGrowsBuffers) {
     fs.init({{"a", FilterColType::INT32, 0}}, 2);  // undersized capacity
 
     std::vector<int32_t> a{100, 200, 300, 400, 500};
-    fs.add_chunk(0, a.data(), 5);  // forces resize from 2 → 5
+    fs.add_chunk(0, a.data(), nullptr, 5);  // forces resize from 2 → 5
     ASSERT_EQ(fs.count, 5u);
     ASSERT_EQ(*reinterpret_cast<const int32_t*>(fs.row_ptr(0, 4)), 500);
 }
@@ -115,7 +115,7 @@ TEST(FilterStoreTest, AddChunkRejectsBadColIdx) {
     FilterStore fs;
     fs.init({{"a", FilterColType::INT32, 0}}, 4);
     int32_t v = 0;
-    ASSERT_THROW(fs.add_chunk(5, &v, 1), std::out_of_range);
+    ASSERT_THROW(fs.add_chunk(5, &v, nullptr, 1), std::out_of_range);
 }
 
 // =============================================================================
@@ -131,9 +131,9 @@ TEST(FilterStoreTest, SaveLoadRoundtrip) {
     std::vector<double>   prices{1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5};
     std::vector<uint64_t> hashes{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
     std::vector<int32_t>  qtys{-3, -2, -1, 0, 1, 2, 3};
-    src.add_chunk(0, prices.data(), 7);
-    src.add_chunk(1, hashes.data(), 7);
-    src.add_chunk(2, qtys.data(),   7);
+    src.add_chunk(0, prices.data(), nullptr, 7);
+    src.add_chunk(1, hashes.data(), nullptr, 7);
+    src.add_chunk(2, qtys.data(), nullptr, 7);
 
     auto path = tmp_path("roundtrip");
     src.save(path);
@@ -357,7 +357,7 @@ TEST(EvalFilterBitmapTest, ShardSliceWithStartRow) {
     fs.init({{"v", FilterColType::INT64, 0}}, 200);
     std::vector<int64_t> v(200);
     for (uint64_t i = 0; i < 200; ++i) v[i] = static_cast<int64_t>(i);
-    fs.add_chunk(0, v.data(), 200);
+    fs.add_chunk(0, v.data(), nullptr, 200);
 
     auto mask = eval_filter_bitmap_cpu(fs,
         "[{\"col\":0,\"op\":\">=\",\"val\":120}]",
@@ -379,7 +379,7 @@ TEST(EvalFilterBitmapTest, Uint64EqFromHash) {
     fs.init({{"h", FilterColType::UINT64, 0}}, 8);
     std::vector<uint64_t> h{1ULL<<40, 2ULL<<40, 3ULL<<40, 4ULL<<40,
                             5ULL<<40, 6ULL<<40, 7ULL<<40, 8ULL<<40};
-    fs.add_chunk(0, h.data(), 8);
+    fs.add_chunk(0, h.data(), nullptr, 8);
 
     // 3<<40 = 3298534883328
     auto mask = eval_filter_bitmap_cpu(fs,
@@ -395,7 +395,7 @@ TEST(EvalFilterBitmapTest, Float64Comparison) {
     FilterStore fs;
     fs.init({{"d", FilterColType::FLOAT64, 0}}, 4);
     std::vector<double> d{-1.5, 0.0, 1.5, 3.0};
-    fs.add_chunk(0, d.data(), 4);
+    fs.add_chunk(0, d.data(), nullptr, 4);
 
     auto mask = eval_filter_bitmap_cpu(fs,
         "[{\"col\":0,\"op\":\">\",\"val\":0.0}]", 0, 4);
@@ -411,7 +411,7 @@ TEST(EvalFilterBitmapTest, TailBitsZeroedEvenWhenAllMatch) {
     FilterStore fs;
     fs.init({{"v", FilterColType::INT32, 0}}, 5);
     std::vector<int32_t> v{7, 7, 7, 7, 7};
-    fs.add_chunk(0, v.data(), 5);
+    fs.add_chunk(0, v.data(), nullptr, 5);
 
     auto mask = eval_filter_bitmap_cpu(fs,
         "[{\"col\":0,\"op\":\"=\",\"val\":7}]", 0, 5);
@@ -431,7 +431,7 @@ TEST(EvalFilterBitmapTest, LargeParallelMatchesSerialReference) {
     std::vector<int64_t> v(N);
     std::mt19937_64 rng(42);
     for (uint64_t i = 0; i < N; ++i) v[i] = static_cast<int64_t>(rng() % 1000);
-    fs.add_chunk(0, v.data(), N);
+    fs.add_chunk(0, v.data(), nullptr, N);
 
     auto mask = eval_filter_bitmap_cpu(fs,
         "[{\"col\":0,\"op\":\"between\",\"lo\":200,\"hi\":700}]", 0, N);
@@ -505,15 +505,15 @@ TEST(IndexBaseFilterTest, AddFilterChunkAccumulatesLockstep) {
 
     std::vector<int32_t> a{1, 2, 3};
     std::vector<int64_t> b{10, 20, 30};
-    idx.add_filter_chunk(0, a.data(), 3);
+    idx.add_filter_chunk(0, a.data(), nullptr, 3);
     ASSERT_EQ(idx.filter_host_.count, 0u);  // col 0 ahead, col 1 empty
-    idx.add_filter_chunk(1, b.data(), 3);
+    idx.add_filter_chunk(1, b.data(), nullptr, 3);
     ASSERT_EQ(idx.filter_host_.count, 3u);
 
     std::vector<int32_t> a2{4, 5};
     std::vector<int64_t> b2{40, 50};
-    idx.add_filter_chunk(0, a2.data(), 2);
-    idx.add_filter_chunk(1, b2.data(), 2);
+    idx.add_filter_chunk(0, a2.data(), nullptr, 2);
+    idx.add_filter_chunk(1, b2.data(), nullptr, 2);
     ASSERT_EQ(idx.filter_host_.count, 5u);
     ASSERT_EQ(*reinterpret_cast<const int32_t*>(idx.filter_host_.row_ptr(0, 4)), 5);
     ASSERT_EQ(*reinterpret_cast<const int64_t*>(idx.filter_host_.row_ptr(1, 4)), 50);
@@ -525,7 +525,7 @@ TEST(IndexBaseFilterTest, IngestThrowsAfterIsLoaded) {
     idx.is_loaded_ = true;  // simulate post-build
 
     int32_t v = 7;
-    ASSERT_THROW(idx.add_filter_chunk(0, &v, 1), std::runtime_error);
+    ASSERT_THROW(idx.add_filter_chunk(0, &v, nullptr, 1), std::runtime_error);
     ASSERT_THROW(
         idx.set_filter_columns("[{\"name\":\"b\",\"type\":1}]", 8),
         std::runtime_error);
@@ -542,8 +542,8 @@ TEST(IndexBaseFilterTest, ManifestSaveLoadRoundtripIncludesFilter) {
 
         std::vector<float>   prices{1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
         std::vector<int64_t> cats{100, 200, 300, 400, 500};
-        src.add_filter_chunk(0, prices.data(), 5);
-        src.add_filter_chunk(1, cats.data(),   5);
+        src.add_filter_chunk(0, prices.data(), nullptr, 5);
+        src.add_filter_chunk(1, cats.data(), nullptr, 5);
 
         // Pretend build is done so the manifest is sensible.
         src.count = 5;

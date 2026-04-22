@@ -658,15 +658,16 @@ void gpu_ivf_flat_set_filter_columns(gpu_ivf_flat_c index_c, const char* col_met
 }
 
 void gpu_ivf_flat_add_filter_chunk(gpu_ivf_flat_c index_c, uint32_t col_idx,
-                                    const void* data, uint64_t nrows, void* errmsg) {
+                                    const void* data, const uint32_t* null_bitmap,
+                                    uint64_t nrows, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_ivf_flat_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_F16:   static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_INT8:  static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            case Quantization_F32:   static_cast<gpu_ivf_flat_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_F16:   static_cast<gpu_ivf_flat_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_INT8:  static_cast<gpu_ivf_flat_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_flat_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
             default: break;
         }
     } catch (const std::exception& e) {

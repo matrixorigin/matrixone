@@ -170,8 +170,10 @@ void gpu_ivf_pq_get_dataset(gpu_ivf_pq_c index_c, void* out_data);
 void gpu_ivf_pq_set_filter_columns(gpu_ivf_pq_c index_c, const char* col_meta_json,
                                     uint64_t total_count, void* errmsg);
 
+// null_bitmap: LSB-first bits where 1 = row is NULL; NULL pointer = dense.
 void gpu_ivf_pq_add_filter_chunk(gpu_ivf_pq_c index_c, uint32_t col_idx,
-                                  const void* data, uint64_t nrows, void* errmsg);
+                                  const void* data, const uint32_t* null_bitmap,
+                                  uint64_t nrows, void* errmsg);
 
 gpu_ivf_pq_search_res_t gpu_ivf_pq_search_with_filter(gpu_ivf_pq_c index_c, const void* queries_data,
                                                        uint64_t num_queries, uint32_t query_dimension,

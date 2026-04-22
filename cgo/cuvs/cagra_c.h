@@ -149,9 +149,12 @@ void gpu_cagra_set_filter_columns(gpu_cagra_c index_c, const char* col_meta_json
                                    uint64_t total_count, void* errmsg);
 
 // Append nrows raw values for filter column col_idx. data is raw bytes
-// (nrows * elem_size, row-major). Must precede build().
+// (nrows * elem_size, row-major). null_bitmap is packed uint32 words
+// (LSB-first, bit i = 1 means row i IS NULL) of ceil(nrows/32) entries, or
+// NULL when the chunk has no nulls. Must precede build().
 void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
-                                 const void* data, uint64_t nrows, void* errmsg);
+                                 const void* data, const uint32_t* null_bitmap,
+                                 uint64_t nrows, void* errmsg);
 
 // Filtered variants of gpu_cagra_search / gpu_cagra_search_float. preds_json is a JSON
 // predicate array; passing NULL or "" yields unfiltered behavior.

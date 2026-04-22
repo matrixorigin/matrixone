@@ -82,8 +82,16 @@ struct FilterColMeta {
 // -----------------------------------------------------------------------------
 
 struct FilterStore {
-    std::vector<FilterColMeta>        columns;
-    std::vector<std::vector<uint8_t>> data;  // data[c] has count*elem_size bytes
+    std::vector<FilterColMeta>         columns;
+    std::vector<std::vector<uint8_t>>  data;      // data[c] has count*elem_size bytes
+    // Per-column null bitmap — uint32_t words, LSB-first. Bit i = 1 means
+    // row i IS NULL (matches the SQL/Go/MO null-mask convention, consistent
+    // with add_chunk's null_bitmap input). An empty vector means the column
+    // is dense (no nulls ever observed); callers skip the null-mask step
+    // entirely on that column. Materialized lazily by add_chunk(): stays
+    // empty until the first chunk carrying a null arrives, then grown with
+    // new words = 0 (all not-null by default).
+    std::vector<std::vector<uint32_t>> nulls;
     uint64_t count    = 0;                   // rows currently populated
     uint64_t capacity = 0;                   // rows pre-allocated
 
@@ -91,6 +99,7 @@ struct FilterStore {
         columns = std::move(cols);
         for (auto& m : columns) m.elem_size = filter_col_elem_size(m.type);
         data.assign(columns.size(), {});
+        nulls.assign(columns.size(), {});
         for (size_t c = 0; c < columns.size(); ++c) {
             data[c].resize(cap * columns[c].elem_size);
         }
@@ -100,16 +109,29 @@ struct FilterStore {
 
     // Appends nrows values for column col_idx. Grows the backing buffer if needed.
     // Caller owns the encoding of `src` (must be nrows * elem_size bytes).
+    //
+    // null_bitmap: uint32_t words, LSB-first — bit i = 1 means row i of this
+    // chunk IS NULL (MO convention, matches the SQL/Go null-mask). nullptr
+    // means the chunk has no nulls. Bits are stored at matching positions in
+    // the per-column `nulls` array — same polarity, no inversion.
+    //
+    // If all past chunks were nullptr and the new chunk has no set bits,
+    // nulls[col_idx] stays empty (dense fast path).
+    //
     // count is advanced by nrows only on the first column written per batch;
     // subsequent columns in the same batch must match that row count.
     // Simplification: we track count per-column in col_counts_ and expose the
     // minimum as `count` — so all columns stay in lockstep.
-    void add_chunk(uint32_t col_idx, const void* src, uint64_t nrows) {
+    void add_chunk(uint32_t col_idx, const void* src,
+                   const uint32_t* null_bitmap, uint64_t nrows) {
         if (col_idx >= columns.size()) {
             throw std::out_of_range("add_chunk: col_idx out of range");
         }
         if (col_counts_.size() != columns.size()) {
             col_counts_.assign(columns.size(), 0);
+        }
+        if (nulls.size() != columns.size()) {
+            nulls.assign(columns.size(), {});
         }
         uint64_t off_bytes = col_counts_[col_idx] * columns[col_idx].elem_size;
         uint64_t add_bytes = nrows * columns[col_idx].elem_size;
@@ -117,6 +139,47 @@ struct FilterStore {
             data[col_idx].resize(off_bytes + add_bytes);
         }
         std::memcpy(data[col_idx].data() + off_bytes, src, add_bytes);
+
+        // Null-bitmap handling. Fast path: column has no nulls bitmap yet AND
+        // the incoming null_bitmap is all-zeros (no nulls in the chunk) →
+        // leave nulls[col_idx] empty. Any set bit in null_bitmap forces us
+        // into the "materialize nulls" path.
+        uint64_t row_base = col_counts_[col_idx];
+        bool has_incoming_nulls = false;
+        if (null_bitmap != nullptr) {
+            uint64_t nwords_in = (nrows + 31) / 32;
+            for (uint64_t w = 0; w < nwords_in; ++w) {
+                uint64_t rows_in_this = std::min<uint64_t>(nrows - w * 32, 32);
+                uint32_t tail_mask = (rows_in_this == 32) ? ~0u
+                                                          : ((1u << rows_in_this) - 1u);
+                if ((null_bitmap[w] & tail_mask) != 0u) {
+                    has_incoming_nulls = true;
+                    break;
+                }
+            }
+        }
+        if (!nulls[col_idx].empty() || has_incoming_nulls) {
+            // Grow to cover [0, row_base + nrows). New words start as 0
+            // (all not-null by default) so prior chunks that passed nullptr
+            // stay correctly reflected as not-null without explicit backfill.
+            uint64_t need_words = ((row_base + nrows) + 31) / 32;
+            if (need_words > nulls[col_idx].size()) {
+                nulls[col_idx].resize(need_words, 0u);
+            }
+            // Set nulls bits in [row_base, row_base + nrows) for each
+            // null_bitmap bit that is SET (row is null). Same polarity as the
+            // input so we OR straight in.
+            if (null_bitmap != nullptr) {
+                for (uint64_t r = 0; r < nrows; ++r) {
+                    uint32_t src_bit = (null_bitmap[r >> 5] >> (r & 31)) & 1u;
+                    if (src_bit) {  // bit=1 in null_bitmap ⇒ row is null
+                        uint64_t dst = row_base + r;
+                        nulls[col_idx][dst >> 5] |= (1u << (dst & 31));
+                    }
+                }
+            }
+        }
+
         col_counts_[col_idx] += nrows;
 
         // count = min(col_counts_[*]) — the number of rows complete across all cols.
@@ -129,6 +192,11 @@ struct FilterStore {
     }
 
     bool empty() const { return columns.empty() || count == 0; }
+
+    // True if column `col_idx` has any nulls (its nulls bitmap is non-empty).
+    bool has_nulls(uint32_t col_idx) const {
+        return col_idx < nulls.size() && !nulls[col_idx].empty();
+    }
 
     // Raw pointer to row `row` of column `col_idx`. No bounds check in the hot path.
     const void* row_ptr(uint32_t col_idx, uint64_t row) const {
@@ -147,11 +215,14 @@ struct FilterStore {
     //
     // [column descriptors — ncols entries]
     //   uint8   type_tag
+    //   uint8   has_nulls     (0=dense, 1=nulls bitmap follows column data)
     //   uint8   name_len
     //   char[]  name (name_len bytes, no null terminator)
     //
     // [column data — ncols contiguous blocks]
     //   column c: nrows * elem_size(type_tag_c) bytes, row-major
+    //   if has_nulls_c == 1:
+    //     ceil(nrows/32) * 4 bytes of uint32 nulls words (LSB-first, 1=null)
     // -------------------------------------------------------------------------
 
     static constexpr uint32_t kMagic   = 0x544C4946u;  // 'FILT' (LE)
@@ -172,22 +243,32 @@ struct FilterStore {
         os.write(reinterpret_cast<const char*>(&nrows),    sizeof(nrows));
         os.write(reinterpret_cast<const char*>(&reserved), sizeof(reserved));
 
-        for (const auto& m : columns) {
-            uint8_t tag = static_cast<uint8_t>(m.type);
+        for (size_t c = 0; c < columns.size(); ++c) {
+            const auto& m = columns[c];
+            uint8_t tag       = static_cast<uint8_t>(m.type);
+            uint8_t has_nulls = (c < nulls.size() && !nulls[c].empty()) ? 1u : 0u;
             if (m.name.size() > 255) {
                 throw std::runtime_error("FilterStore::save: column name too long");
             }
             uint8_t name_len = static_cast<uint8_t>(m.name.size());
-            os.write(reinterpret_cast<const char*>(&tag),      1);
-            os.write(reinterpret_cast<const char*>(&name_len), 1);
+            os.write(reinterpret_cast<const char*>(&tag),       1);
+            os.write(reinterpret_cast<const char*>(&has_nulls), 1);
+            os.write(reinterpret_cast<const char*>(&name_len),  1);
             os.write(m.name.data(), name_len);
         }
 
+        uint64_t nvwords = (nrows + 31) / 32;
         for (size_t c = 0; c < columns.size(); ++c) {
             uint64_t nbytes = nrows * columns[c].elem_size;
             if (nbytes > 0) {
                 os.write(reinterpret_cast<const char*>(data[c].data()),
                          static_cast<std::streamsize>(nbytes));
+            }
+            if (c < nulls.size() && !nulls[c].empty()) {
+                // Write exactly nvwords words; nulls[c] may be longer than
+                // that (capacity-sized) but we only persist the live range.
+                os.write(reinterpret_cast<const char*>(nulls[c].data()),
+                         static_cast<std::streamsize>(nvwords * sizeof(uint32_t)));
             }
         }
     }
@@ -212,11 +293,14 @@ struct FilterStore {
                                      std::to_string(version));
         }
 
+        std::vector<uint8_t> per_col_has_nulls(ncols, 0);
+
         columns.clear();
         columns.reserve(ncols);
         for (uint32_t c = 0; c < ncols; ++c) {
-            uint8_t tag = 0, name_len = 0;
-            is.read(reinterpret_cast<char*>(&tag),      1);
+            uint8_t tag = 0, has_nulls = 0, name_len = 0;
+            is.read(reinterpret_cast<char*>(&tag), 1);
+            is.read(reinterpret_cast<char*>(&has_nulls), 1);
             is.read(reinterpret_cast<char*>(&name_len), 1);
             std::string name(name_len, '\0');
             if (name_len) is.read(name.data(), name_len);
@@ -226,15 +310,25 @@ struct FilterStore {
             m.type      = static_cast<FilterColType>(tag);
             m.elem_size = filter_col_elem_size(m.type);
             columns.push_back(std::move(m));
+            per_col_has_nulls[c] = has_nulls;
         }
 
         data.assign(ncols, {});
+        nulls.assign(ncols, {});
+        uint64_t nvwords = (nrows + 31) / 32;
         for (uint32_t c = 0; c < ncols; ++c) {
             uint64_t nbytes = nrows * columns[c].elem_size;
             data[c].resize(nbytes);
             if (nbytes > 0) {
                 is.read(reinterpret_cast<char*>(data[c].data()),
                         static_cast<std::streamsize>(nbytes));
+            }
+            if (per_col_has_nulls[c]) {
+                nulls[c].resize(nvwords);
+                if (nvwords > 0) {
+                    is.read(reinterpret_cast<char*>(nulls[c].data()),
+                            static_cast<std::streamsize>(nvwords * sizeof(uint32_t)));
+                }
             }
             if (!is) {
                 throw std::runtime_error("FilterStore::load: short column data");
@@ -255,14 +349,16 @@ private:
 // -----------------------------------------------------------------------------
 
 enum class PredOpType : uint8_t {
-    EQ      = 0,
-    NE      = 1,
-    LT      = 2,
-    LE      = 3,
-    GT      = 4,
-    GE      = 5,
-    BETWEEN = 6,
-    IN      = 7,
+    EQ          = 0,
+    NE          = 1,
+    LT          = 2,
+    LE          = 3,
+    GT          = 4,
+    GE          = 5,
+    BETWEEN     = 6,
+    IN          = 7,
+    IS_NULL     = 8,
+    IS_NOT_NULL = 9,
 };
 
 // Union-ish scalar value. Both fields are populated from JSON; the reader
@@ -365,6 +461,8 @@ inline PredOpType op_from_string(const std::string& s) {
     if (s == ">=" || s == "ge")              return PredOpType::GE;
     if (s == "between")                      return PredOpType::BETWEEN;
     if (s == "in")                           return PredOpType::IN;
+    if (s == "is_null"     || s == "isnull")    return PredOpType::IS_NULL;
+    if (s == "is_not_null" || s == "isnotnull") return PredOpType::IS_NOT_NULL;
     throw std::runtime_error("parse_preds: unknown op '" + s + "'");
 }
 
@@ -586,6 +684,11 @@ inline uint32_t eval_pred_word_typed(const T* col,
             }
             return bits;
         }
+        case PredOpType::IS_NULL:
+        case PredOpType::IS_NOT_NULL:
+            // Null-ops short-circuit in eval_pred_word and never reach this
+            // typed dispatcher. Listed here only to keep the switch exhaustive.
+            return 0;
         case PredOpType::IN: {
             // Branchless across in_vals — no early break so the row loop
             // stays straight-line. Expect small in_vals lists in practice.
@@ -603,27 +706,65 @@ inline uint32_t eval_pred_word_typed(const T* col,
     return 0;
 }
 
+// Returns the nulls word (bit=1 = row is null) for a 32-row window, with
+// trailing bits beyond rows_in_word cleared. Dense columns return 0.
+//
+// Precondition: base_row is a multiple of 32 — SINGLE/REPLICATED always pass 0
+// and SHARDED aligns shard boundaries to 32 at build time.
+inline uint32_t nulls_word(const FilterStore& fs, uint32_t col_idx,
+                           uint64_t base_row, uint32_t rows_in_word) {
+    if (!fs.has_nulls(col_idx)) return 0u;  // dense → no nulls
+    const uint32_t tail_mask = (rows_in_word == 32) ? ~0u
+                                                    : ((1u << rows_in_word) - 1u);
+    const uint64_t vword = base_row / 32;
+    const auto& v = fs.nulls[col_idx];
+    uint32_t w = (vword < v.size()) ? v[vword] : 0u;  // past end → 0 (shouldn't happen)
+    return w & tail_mask;
+}
+
 inline uint32_t eval_pred_word(const FilterStore& fs, const PredOp& p,
                                uint64_t base_row, uint32_t rows_in_word) {
+    // IS_NULL / IS_NOT_NULL: consult nulls only; skip the data bytes entirely.
+    if (p.op == PredOpType::IS_NULL) {
+        return nulls_word(fs, p.col_idx, base_row, rows_in_word);
+    }
+    if (p.op == PredOpType::IS_NOT_NULL) {
+        const uint32_t tail_mask = (rows_in_word == 32) ? ~0u
+                                                        : ((1u << rows_in_word) - 1u);
+        return (~nulls_word(fs, p.col_idx, base_row, rows_in_word)) & tail_mask;
+    }
+
     const void* col_base = fs.data[p.col_idx].data();
+    uint32_t bits = 0;
     switch (fs.columns[p.col_idx].type) {
         case FilterColType::INT32:
-            return eval_pred_word_typed<int32_t>(
+            bits = eval_pred_word_typed<int32_t>(
                 reinterpret_cast<const int32_t*>(col_base), base_row, rows_in_word, p);
+            break;
         case FilterColType::INT64:
-            return eval_pred_word_typed<int64_t>(
+            bits = eval_pred_word_typed<int64_t>(
                 reinterpret_cast<const int64_t*>(col_base), base_row, rows_in_word, p);
+            break;
         case FilterColType::FLOAT32:
-            return eval_pred_word_typed<float>(
+            bits = eval_pred_word_typed<float>(
                 reinterpret_cast<const float*>(col_base), base_row, rows_in_word, p);
+            break;
         case FilterColType::FLOAT64:
-            return eval_pred_word_typed<double>(
+            bits = eval_pred_word_typed<double>(
                 reinterpret_cast<const double*>(col_base), base_row, rows_in_word, p);
+            break;
         case FilterColType::UINT64:
-            return eval_pred_word_typed<uint64_t>(
+            bits = eval_pred_word_typed<uint64_t>(
                 reinterpret_cast<const uint64_t*>(col_base), base_row, rows_in_word, p);
+            break;
     }
-    return 0;
+    // SQL three-valued logic: NULL cells fail every value comparison. Clear
+    // the predicate bit for any row marked null. Cheap no-op when the column
+    // is dense (nulls_word returns 0, ~0 = all ones, AND preserves bits).
+    if (fs.has_nulls(p.col_idx)) {
+        bits &= ~nulls_word(fs, p.col_idx, base_row, rows_in_word);
+    }
+    return bits;
 }
 
 }  // namespace detail

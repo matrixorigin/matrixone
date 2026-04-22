@@ -620,7 +620,7 @@ TEST(GpuIvfFlatTest, FilteredSearchIncludesOnlyAllowedCategories) {
                                 DistributionMode_SINGLE_GPU);
     index.start();
     index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
-    index.add_filter_chunk(0, cats.data(), count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
     index.build();
 
     std::vector<float> query = {1.0, 2.0, 3.0};
@@ -667,7 +667,7 @@ TEST(GpuIvfFlatTest, FilteredSearchCombinesWithDeleteBitset) {
                                 DistributionMode_SINGLE_GPU);
     index.start();
     index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
-    index.add_filter_chunk(0, cats.data(), count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
     index.build();
 
     index.delete_id(1);
@@ -707,7 +707,7 @@ TEST(GpuIvfFlatTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
                                 DistributionMode_SINGLE_GPU);
     index.start();
     index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
-    index.add_filter_chunk(0, cats.data(), count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
     index.build();
 
     std::vector<float> query = {1.0, 2.0, 3.0};

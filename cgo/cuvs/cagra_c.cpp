@@ -638,15 +638,16 @@ void gpu_cagra_set_filter_columns(gpu_cagra_c index_c, const char* col_meta_json
 }
 
 void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
-                                 const void* data, uint64_t nrows, void* errmsg) {
+                                 const void* data, const uint32_t* null_bitmap,
+                                 uint64_t nrows, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         auto* any = static_cast<gpu_cagra_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32:   static_cast<gpu_cagra_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_F16:   static_cast<gpu_cagra_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_INT8:  static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
-            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, nrows); break;
+            case Quantization_F32:   static_cast<gpu_cagra_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_F16:   static_cast<gpu_cagra_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_INT8:  static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_UINT8: static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
             default: break;
         }
     } catch (const std::exception& e) {
