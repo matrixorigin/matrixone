@@ -506,6 +506,8 @@ public:
                 bs->data(), static_cast<int64_t>(nwords)),
             raft::make_host_vector_view<const uint32_t, int64_t>(
                 host_mask.data(), static_cast<int64_t>(nwords)));
+        // Drain the H2D DMA before host_mask (stack-local) goes out of scope at return.
+        raft::resource::sync_stream(*res);
 
         if (has_del) {
             // Hold a shared_ptr to the cached delete bitset so a concurrent
