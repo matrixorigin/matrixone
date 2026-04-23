@@ -3494,6 +3494,22 @@ var (
 			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
 			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
 		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price)",
+			output: "create index idx using cagra on a (a) INCLUDE (price) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
+			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
+		},
 	}
 )
 

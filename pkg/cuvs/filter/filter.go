@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build gpu
+
 // Package filter holds pre-filter (INCLUDE column) metadata types for GPU
-// vector indexes. Kept as a leaf package (no downstream imports) so both the
-// SQL/plan layer and pkg/cuvs can depend on it without creating a cycle —
-// pkg/cuvs already imports pkg/vectorindex (via multi_index.go), so the
+// vector indexes. Kept as a leaf package (no downstream imports) so the
+// gpu-tagged table-function and pkg/cuvs wrappers can depend on it without
+// creating a cycle — pkg/cuvs already imports pkg/vectorindex, so the
 // filter-meta types cannot live in pkg/vectorindex or directly in pkg/cuvs.
 //
-// Builds without the gpu tag: only this file is compiled from pkg/cuvs/filter,
-// letting the plan / DDL layer construct metadata even on CPU-only builds.
+// Gated behind the gpu build tag: every importer is a //go:build gpu file
+// (cagra_create_gpu.go, ivfpq_create_gpu.go, filter_helper_gpu.go), so
+// CPU-only builds skip this package entirely.
 package filter
 
 // ColType identifies the physical type of a filter (INCLUDE) column.

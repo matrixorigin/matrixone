@@ -113,6 +113,7 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
+	IncludedColumns         = "included_columns"
 )
 
 /* 1. ToString Functions */
@@ -195,6 +196,19 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	if val, ok := result[ITopkSize]; ok {
 		res += fmt.Sprintf(" %s = %s ", ITopkSize, val)
 	}
+
+	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
+		raw := strings.Split(val, ",")
+		parts := make([]string, 0, len(raw))
+		for _, p := range raw {
+			if p = strings.TrimSpace(p); p != "" {
+				parts = append(parts, p)
+			}
+		}
+		if len(parts) > 0 {
+			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
+		}
+	}
 	return res, nil
 }
 
@@ -253,6 +267,24 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 		}
 	}
 	return res, nil
+}
+
+// joinIncludeColumns flattens the parsed INCLUDE column list into a
+// comma-separated string suitable for the flat map[string]string
+// params pipeline. Names are lowercased to match Parts convention.
+func joinIncludeColumns(cols []*tree.UnresolvedName) string {
+	if len(cols) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(cols))
+	for _, c := range cols {
+		name := c.ColName()
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
 }
 
 func indexParamsToMap(def interface{}) (map[string]string, error) {
@@ -395,6 +427,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
 			}
 
+			if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
+				res[IncludedColumns] = joined
+			}
+
 		case tree.INDEX_TYPE_IVFPQ:
 			if idx.IndexOption.AlgoParamList > 0 {
 				res[IndexAlgoParamLists] = strconv.FormatInt(idx.IndexOption.AlgoParamList, 10)
@@ -434,6 +470,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[DistributionMode] = mode
 			} else {
 				res[DistributionMode] = vectorindex.DistributionMode_SINGLE_GPU_Str
+			}
+
+			if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
+				res[IncludedColumns] = joined
 			}
 
 		default:

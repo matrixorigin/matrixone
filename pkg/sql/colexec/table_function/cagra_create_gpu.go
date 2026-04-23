@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
@@ -48,6 +50,11 @@ type cagraCreateState struct {
 	tblcfg   vectorindex.IndexTableConfig
 	idxcfg   vectorindex.IndexConfig
 	offset   int
+
+	// filterCols is the INCLUDE column metadata derived at start() from
+	// param.IncludedColumns (names) + argVecs[3:] (types). Empty when the
+	// index has no INCLUDE columns.
+	filterCols []cuvsfilter.ColumnMeta
 
 	// holding one call batch, cagraCreateState owns it.
 	batch *batch.Batch
@@ -245,11 +252,16 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- pre-filter (INCLUDE columns) setup ----
-		if len(u.tblcfg.FilterColumns) > 0 {
-			if err = validateFilterArgCount(tf.ctr.argVecs, 3, u.tblcfg.FilterColumns); err != nil {
-				return err
-			}
-			if err = initFilterColumns(u.activeBuilder(), u.tblcfg.FilterColumns); err != nil {
+		// Derive filter column metadata from the INCLUDE names stashed in
+		// the params JSON paired with the types of the trailing argVecs —
+		// the DDL layer emits names, the table-function layer resolves types.
+		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
+			return err
+		}
+		if len(u.filterCols) > 0 {
+			logutil.Infof("CAGRA create: INCLUDE columns = %v (from %d arg vectors)",
+				u.filterCols, len(tf.ctr.argVecs)-3)
+			if err = initFilterColumns(u.activeBuilder(), u.filterCols); err != nil {
 				return err
 			}
 		}
@@ -289,8 +301,8 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	}
 
 	// ---- per-row: append filter column values (if any) ----
-	if len(u.tblcfg.FilterColumns) > 0 {
-		if err = appendFilterRow(u.activeBuilder(), u.tblcfg.FilterColumns, tf.ctr.argVecs, 3, nthRow); err != nil {
+	if len(u.filterCols) > 0 {
+		if err = appendFilterRow(u.activeBuilder(), u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
 			return err
 		}
 	}

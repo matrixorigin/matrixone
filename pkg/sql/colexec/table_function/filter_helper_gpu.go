@@ -18,10 +18,12 @@ package table_function
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
 )
@@ -44,10 +46,10 @@ type filterColumnBuilder interface {
 // before returning.
 var nullBitmapOneRowIsNull = []uint32{1}
 
-// initFilterColumns serialises IndexTableConfig.FilterColumns into the JSON
-// shape accepted by gpu_<idx>_set_filter_columns and registers it on the
-// builder. A no-op when FilterColumns is empty. Call once in start() after
-// the builder is constructed.
+// initFilterColumns serialises the derived []cuvsfilter.ColumnMeta into the
+// JSON shape accepted by gpu_<idx>_set_filter_columns and registers it on
+// the builder. A no-op when cols is empty. Call once in start() after the
+// builder is constructed.
 func initFilterColumns(build filterColumnBuilder, cols []cuvsfilter.ColumnMeta) error {
 	if len(cols) == 0 {
 		return nil
@@ -143,4 +145,79 @@ func validateFilterArgCount(argVecs []*vector.Vector, baseArgCount int, cols []c
 			len(argVecs), baseArgCount+len(cols), baseArgCount, len(cols)))
 	}
 	return nil
+}
+
+// parseIncludedColumnNames splits the comma-joined "included_columns" entry
+// from an index's params JSON (CagraParam.IncludedColumns /
+// IvfpqParam.IncludedColumns). Empty input produces nil — callers treat that
+// as "no INCLUDE columns declared" and skip filter setup entirely.
+func parseIncludedColumnNames(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	raw := strings.Split(joined, ",")
+	out := make([]string, 0, len(raw))
+	for _, n := range raw {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// buildFilterColumnsFromParam pairs the INCLUDE column names from the params
+// JSON with the types of the corresponding argVecs to produce the full
+// []cuvsfilter.ColumnMeta expected by the C++ FilterStore. argOffset is the
+// index of the first filter-column arg (3 for both cagra_create and
+// ivfpq_create — tblcfg, pk, vec, then filter cols).
+//
+// Returns (nil, nil) when the index has no INCLUDE columns declared; callers
+// should treat that as "skip all filter setup". Returns an error when the
+// number of arg vectors is insufficient or any vector's type isn't supported
+// by FilterStore.
+func buildFilterColumnsFromParam(
+	includedNames string,
+	argVecs []*vector.Vector,
+	argOffset int,
+) ([]cuvsfilter.ColumnMeta, error) {
+	names := parseIncludedColumnNames(includedNames)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	if len(argVecs) < argOffset+len(names) {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"filter args mismatch: have %d args, need %d (%d base + %d INCLUDE columns from params)",
+			len(argVecs), argOffset+len(names), argOffset, len(names)))
+	}
+	cols := make([]cuvsfilter.ColumnMeta, len(names))
+	for i, name := range names {
+		oid := argVecs[argOffset+i].GetType().Oid
+		ct, err := filterColTypeFromOid(oid)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"INCLUDE column '%s' has unsupported type %s", name, oid.String()))
+		}
+		cols[i] = cuvsfilter.ColumnMeta{Name: name, TypeOid: ct}
+	}
+	return cols, nil
+}
+
+// filterColTypeFromOid maps a MO types.T onto the narrow physical set the
+// C++ FilterStore understands. T_uint64 is reserved for VARCHAR/char columns
+// the DDL layer has already FNV-hashed before reaching the table function.
+func filterColTypeFromOid(t types.T) (cuvsfilter.ColType, error) {
+	switch t {
+	case types.T_int32:
+		return cuvsfilter.ColTypeInt32, nil
+	case types.T_int64:
+		return cuvsfilter.ColTypeInt64, nil
+	case types.T_float32:
+		return cuvsfilter.ColTypeFloat32, nil
+	case types.T_float64:
+		return cuvsfilter.ColTypeFloat64, nil
+	case types.T_uint64:
+		return cuvsfilter.ColTypeUint64, nil
+	}
+	return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported INCLUDE column type %s", t.String()))
 }

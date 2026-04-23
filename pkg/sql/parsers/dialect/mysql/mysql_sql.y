@@ -378,7 +378,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -7854,6 +7854,8 @@ index_option_list:
               opt1.BitsPerCode = opt2.BitsPerCode
             } else if opt2.ITopkSize > 0 {
               opt1.ITopkSize = opt2.ITopkSize
+            } else if len(opt2.IncludeColumns) > 0 {
+              opt1.IncludeColumns = opt2.IncludeColumns
             }
             $$ = opt1
         }
@@ -7974,6 +7976,12 @@ index_option:
         io.ITopkSize = val
         $$ = io
      }
+|   INCLUDE '(' column_name_list ')'
+    {
+        io := tree.NewIndexOption()
+        io.IncludeColumns = $3
+        $$ = io
+    }
 |   QUANTIZATION STRING
     {
         io := tree.NewIndexOption()

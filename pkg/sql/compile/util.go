@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -631,6 +632,37 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	return []string{sql}, nil
 }
 
+// filterColumnsFromParams reads the comma-joined "included_columns" entry
+// stashed in the index algo-params JSON and returns ", src.col1, src.col2, …"
+// — a suffix suitable for appending to the positional arg list of
+// cagra_create / ivfpq_create. Returns "" when the index has no INCLUDE
+// columns or the key is absent.
+func filterColumnsFromParams(indexAlgoParams, srcAlias string) string {
+	if len(indexAlgoParams) == 0 {
+		return ""
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
+	if err != nil {
+		return ""
+	}
+	joined, err := val.StrictString()
+	if err != nil || len(joined) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, name := range strings.Split(joined, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		sb.WriteString(", ")
+		sb.WriteString(srcAlias)
+		sb.WriteByte('.')
+		sb.WriteString(name)
+	}
+	return sb.String()
+}
+
 func genDeleteCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
 	idxdef_meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]
 	if !ok {
@@ -692,7 +724,7 @@ func genBuildCagraIndex(proc *process.Process, indexDefs map[string]*plan.IndexD
 		return nil, err
 	}
 
-	part := src_alias + "." + idxdef_index.Parts[0]
+	part := src_alias + "." + idxdef_index.Parts[0] + filterColumnsFromParams(params, src_alias)
 
 	sql := fmt.Sprintf(insertIntoCagraIndexTableFormat,
 		qryDatabase, originalTableDef.Name,
@@ -762,7 +794,7 @@ func genBuildIvfpqIndex(proc *process.Process, indexDefs map[string]*plan.IndexD
 		return nil, err
 	}
 
-	part := src_alias + "." + idxdef_index.Parts[0]
+	part := src_alias + "." + idxdef_index.Parts[0] + filterColumnsFromParams(params, src_alias)
 
 	sql := fmt.Sprintf(insertIntoIvfpqIndexTableFormat,
 		qryDatabase, originalTableDef.Name,

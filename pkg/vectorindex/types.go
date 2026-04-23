@@ -19,7 +19,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -105,12 +104,6 @@ type IndexTableConfig struct {
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
-
-	// Pre-filter (INCLUDE columns) — set when the user has declared INCLUDE
-	// columns at CREATE INDEX time. Empty for indexes without INCLUDE.
-	// The table function forwards these descriptors verbatim to CGo; Go
-	// never inspects the column values.
-	FilterColumns []cuvsfilter.ColumnMeta `json:"filter_columns,omitempty"`
 }
 
 // HNSW specified parameters
@@ -133,12 +126,13 @@ type IvfParam struct {
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists        string `json:"lists"`
-	M            string `json:"m"`
-	BitsPerCode  string `json:"bits_per_code"`
-	OpType       string `json:"op_type"`
-	Quantization string `json:"quantization"`
-	Distribution string `json:"distribution_mode"`
+	Lists           string `json:"lists"`
+	M               string `json:"m"`
+	BitsPerCode     string `json:"bits_per_code"`
+	OpType          string `json:"op_type"`
+	Quantization    string `json:"quantization"`
+	Distribution    string `json:"distribution_mode"`
+	IncludedColumns string `json:"included_columns"`
 }
 
 // CAGRA specified parameters
@@ -153,6 +147,7 @@ type CagraParam struct {
 	IntermediateGraphDegee string `json:"intermediate_graph_degree"`
 	GraphDegee             string `json:"graph_degree"`
 	ITopkSize              string `json:"itopk_size"`
+	IncludedColumns        string `json:"included_columns"`
 }
 
 type IvfflatIndexConfig struct {
@@ -187,6 +182,7 @@ type CuvsCagraIndexConfig struct {
 	VectorType              int32
 	Quantization            uint16
 	DistributionMode        uint16
+	IncludedColumns         []string
 }
 
 type CuvsIvfpqIndexConfig struct {
@@ -199,6 +195,7 @@ type CuvsIvfpqIndexConfig struct {
 	DistributionMode       uint16
 	Version                int64
 	KmeansTrainsetFraction float64
+	IncludedColumns        []string
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

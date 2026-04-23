@@ -20,6 +20,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -142,8 +143,48 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		cagraCtx.origFuncName,
 	        cagraCtx.batchWindow)
 
+	// Predicate pushdown on INCLUDE columns: peel filters that reference
+	// only INCLUDE columns into a JSON array passed as the cagra_search
+	// 3rd arg. Unserializable/mixed predicates stay on the TABLE_SCAN.
+	includeCols, err := parseIncludedColumnsFromParams(cagraCtx.idxDef.IndexAlgoParams)
+	if err != nil {
+		return nodeID, err
+	}
+	if len(includeCols) > 0 {
+		logutil.Infof("CAGRA pushdown: INCLUDE columns = %v, scan filters = %d",
+			includeCols, len(scanNode.FilterList))
+	}
+	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
+		scanNode.FilterList, scanNode, includeCols)
+	if err != nil {
+		return nodeID, err
+	}
+	if predsJSON != "" {
+		logutil.Infof("CAGRA pushdown: peeled %d filter(s), %d residual, preds_json = %s",
+			len(peeled), len(residualFilters), predsJSON)
+		scanNode.FilterList = residualFilters
+	}
+
 	// JOIN between source table and cagra_search table function
 	tableFuncTag := builder.genNewBindTag()
+	tableFuncExprs := []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: tblCfgStr,
+					},
+				},
+			},
+		},
+		DeepCopyExpr(cagraCtx.vecLitArg),
+	}
+	if predsJSON != "" {
+		tableFuncExprs = append(tableFuncExprs, makePlan2StringConstExprWithType(predsJSON))
+	}
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -156,22 +197,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			},
 			Cols: DeepCopyColDefList(kCAGRASearchColDefs),
 		},
-		BindingTags: []int32{tableFuncTag},
-		TblFuncExprList: []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id: int32(types.T_varchar),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
-						},
-					},
-				},
-			},
-			DeepCopyExpr(cagraCtx.vecLitArg),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		TblFuncExprList: tableFuncExprs,
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

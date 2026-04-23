@@ -90,10 +90,11 @@ func (builder *QueryBuilder) buildIvfpqCreate(tbl *tree.TableFunction, ctx *Bind
 	return builder.appendNode(node, ctx), nil
 }
 
-// arg list [param, ivfpq.IndexTableConfig (JSON), search_vec]
+// arg list [param, IndexTableConfig (JSON), search_vec, filter_predicates_json?]
+// The trailing filter_predicates_json is optional — omitted for unfiltered search.
 func (builder *QueryBuilder) buildIvfpqSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
+	if len(exprs) != 3 && len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
 
 	colDefs := DeepCopyColDefList(kIVFPQSearchColDefs)

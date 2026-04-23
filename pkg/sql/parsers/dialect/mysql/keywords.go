@@ -92,6 +92,7 @@ func init() {
 		"column_format":              COLUMN_FORMAT,
 		"engine_attribute":           ENGINE_ATTRIBUTE,
 		"secondary_engine_attribute": SECONDARY_ENGINE_ATTRIBUTE,
+		"include":                    INCLUDE,
 		"insert_method":              INSERT_METHOD,
 		"intermediate_graph_degree":  INTERMEDIATE_GRAPH_DEGREE,
 		"itopk_size":                 ITOPK_SIZE,

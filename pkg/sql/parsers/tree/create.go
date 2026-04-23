@@ -2127,6 +2127,7 @@ type IndexOption struct {
 	Quantization             string
 	DistributionMode         string
 	ITopkSize                int64
+	IncludeColumns           []*UnresolvedName
 }
 
 // Must follow the following sequence when test
@@ -2139,7 +2140,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Hour != 0 ||
 		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
 		node.Quantization != "" || node.DistributionMode != "" ||
-		node.BitsPerCode != 0 || node.ITopkSize != 0 {
+		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
+		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2233,6 +2235,16 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString("ITOPK_SIZE ")
 		ctx.WriteString(strconv.FormatInt(node.ITopkSize, 10))
 		ctx.WriteByte(' ')
+	}
+	if len(node.IncludeColumns) != 0 {
+		ctx.WriteString("INCLUDE (")
+		for i, c := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			c.Format(ctx)
+		}
+		ctx.WriteString(") ")
 	}
 
 }
