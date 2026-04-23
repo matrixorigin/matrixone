@@ -1569,22 +1569,6 @@ func validateLeadingRowID(side, tableName string, isTombstone bool, bat *batch.B
 	return nil
 }
 
-func stripLeadingRowIDFromBatch(bat *batch.Batch, mp *mpool.MPool) {
-	if bat == nil || bat.VectorCount() == 0 || bat.Vecs[0] == nil || bat.Vecs[0].GetType().Oid != types.T_Rowid {
-		return
-	}
-	bat.Vecs[0].Free(mp)
-	bat.Vecs = bat.Vecs[1:]
-	if len(bat.Attrs) > 0 {
-		bat.Attrs = bat.Attrs[1:]
-	}
-	if bat.VectorCount() > 0 {
-		bat.SetRowCount(bat.Vecs[0].Length())
-	} else {
-		bat.SetRowCount(0)
-	}
-}
-
 func appendTupleValueToVector(vec *vector.Vector, val any, mp *mpool.MPool) error {
 	if val == nil {
 		return vector.AppendNull(vec, mp)

@@ -17,7 +17,6 @@ package logtailreplay
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -2748,57 +2747,6 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, 
 		bat.Attrs = append(bat.Attrs, objectio.DefaultCommitTS_Attr)
 	}
 	return nil
-}
-
-func batchSampleRowsForLog(bat *batch.Batch, limit int) []string {
-	if bat == nil || bat.RowCount() == 0 || limit <= 0 {
-		return nil
-	}
-	if limit > bat.RowCount() {
-		limit = bat.RowCount()
-	}
-	rows := make([]string, 0, limit)
-	for rowIdx := 0; rowIdx < limit; rowIdx++ {
-		cols := make([]string, 0, bat.VectorCount())
-		for _, vec := range bat.Vecs {
-			if vec == nil {
-				cols = append(cols, "<nil>")
-				continue
-			}
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				cols = append(cols, "NULL")
-				continue
-			}
-			cols = append(cols, fmt.Sprintf("%v", types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)))
-		}
-		rows = append(rows, fmt.Sprintf("[%s]", strings.Join(cols, ", ")))
-	}
-	return rows
-}
-
-func objectEntrySamplesForLog(entries []*objectio.ObjectEntry, limit int) []string {
-	if len(entries) == 0 || limit <= 0 {
-		return nil
-	}
-	if limit > len(entries) {
-		limit = len(entries)
-	}
-	samples := make([]string, 0, limit)
-	for i := 0; i < limit; i++ {
-		entry := entries[i]
-		if entry == nil {
-			samples = append(samples, "<nil>")
-			continue
-		}
-		samples = append(samples, fmt.Sprintf(
-			"%s(create=%s,delete=%s,appendable=%t)",
-			entry.ObjectShortName().ShortString(),
-			entry.CreateTime.ToString(),
-			entry.DeleteTime.ToString(),
-			entry.GetAppendable(),
-		))
-	}
-	return samples
 }
 
 // TestGetObjectsFromCheckpointEntries exposes getObjectsFromCheckpointEntries for tests in other packages.

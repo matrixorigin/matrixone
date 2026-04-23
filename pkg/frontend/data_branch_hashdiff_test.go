@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -926,17 +928,19 @@ func (s *stubEngineChangesHandle) Close() error {
 func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
-	bat := batch.NewWithSize(4)
-	bat.SetAttributes([]string{"id", "name", "hidden", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat := batch.NewWithSize(5)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 
-	for _, row := range rows {
+	for rowIdx, row := range rows {
 		require.Len(t, row, 4)
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], buildHashDiffRowID(t, rowIdx), mp))
 		for i, val := range row {
-			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
 	}
 	bat.SetRowCount(len(rows))
@@ -946,19 +950,29 @@ func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.
 func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
-	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"id", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-	for _, row := range rows {
+	for rowIdx, row := range rows {
 		require.Len(t, row, 2)
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], buildHashDiffRowID(t, rowIdx), mp))
 		for i, val := range row {
-			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func buildHashDiffRowID(t *testing.T, rowIdx int) types.Rowid {
+	t.Helper()
+	uid, err := types.BuildUuid()
+	require.NoError(t, err)
+	blkID := objectio.NewBlockid(&uid, 0, 1)
+	return types.NewRowid(blkID, uint32(rowIdx))
 }
 
 func commitTSBytes(ts types.TS) []byte {
