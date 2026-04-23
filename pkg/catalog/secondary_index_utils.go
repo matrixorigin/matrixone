@@ -194,14 +194,6 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
 	}
 
-	if includeColumns, ok := result[IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
-		names, err := ParseIncludeColumnsValue(includeColumns)
-		if err != nil {
-			return "", err
-		}
-		res += fmt.Sprintf(" INCLUDE (%s) ", strings.Join(names, ", "))
-	}
-
 	return res, nil
 }
 
@@ -314,17 +306,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 			}
 
-			if len(idx.IndexOption.IncludeColumns) > 0 {
-				names := make([]string, len(idx.IndexOption.IncludeColumns))
-				for i, col := range idx.IndexOption.IncludeColumns {
-					names[i] = col.ColName()
-				}
-				encoded, err := MarshalIncludeColumnsValue(names)
-				if err != nil {
-					return nil, err
-				}
-				res[IndexAlgoParamIncludeColumns] = encoded
-			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")

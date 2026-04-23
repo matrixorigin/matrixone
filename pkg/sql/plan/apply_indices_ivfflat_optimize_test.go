@@ -25,6 +25,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newIvfLogicalTestIndexDefs(part string) []*plan.IndexDef {
+	idxAlgoParams := `{"op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	return []*plan.IndexDef{
+		{
+			IndexName:          "idx_vec",
+			IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+			IndexAlgoParams:    idxAlgoParams,
+			Parts:              []string{part},
+		},
+		{
+			IndexName:          "idx_vec",
+			IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+			IndexAlgoParams:    idxAlgoParams,
+			Parts:              []string{part},
+		},
+		{
+			IndexName:          "idx_vec",
+			IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+			IndexAlgoParams:    idxAlgoParams,
+			Parts:              []string{part},
+		},
+	}
+}
+
+func makeConsistentIvfMultiTableIndexForOptimizeTest(part, idxAlgoParams string) *MultiTableIndex {
+	return &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexName:          "idx_vec",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{part},
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				IndexName:          "idx_vec",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centroids",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{part},
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {
+				IndexName:          "idx_vec",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{part},
+			},
+		},
+	}
+}
+
 func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 	// Setup Compiler Context with mocked variables
 	baseMockCtx := NewMockCompilerContext(false)
@@ -56,23 +115,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 
 	// Setup MultiTableIndex
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	multiTableIndex := &MultiTableIndex{
-		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "centroids",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName: "entries",
-			},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForOptimizeTest("v", idxAlgoParams)
 
 	float32Typ := plan.Type{Id: int32(types.T_array_float32)}
 
@@ -239,23 +282,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtectio
 	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: schemaName, ObjName: indexTable}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	multiTableIndex := &MultiTableIndex{
-		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "centroids",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName: "entries",
-			},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForOptimizeTest("v", idxAlgoParams)
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	ctx := NewBindContext(builder, nil)
@@ -411,23 +438,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 	mockCtx.objects[indexTable] = &plan.ObjectRef{SchemaName: schemaName, ObjName: indexTable}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	multiTableIndex := &MultiTableIndex{
-		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "centroids",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName: "entries",
-			},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForOptimizeTest("v", idxAlgoParams)
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 	ctx := NewBindContext(builder, nil)
@@ -692,23 +703,7 @@ func newExactVectorFallbackApplyIndicesCase(t *testing.T, sortFlag plan.OrderByS
 		},
 		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
 		Name2ColIndex: map[string]int32{"id": 0, "vec": 1},
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			},
-		},
+		Indexes:       newIvfLogicalTestIndexDefs("vec"),
 	}
 
 	scanTag := builder.genNewBindTag()
@@ -786,23 +781,7 @@ func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilde
 		},
 		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
 		Name2ColIndex: map[string]int32{"id": 0, "vec": 1},
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			},
-		},
+		Indexes:       newIvfLogicalTestIndexDefs("vec"),
 	}
 
 	scanTag := builder.genNewBindTag()
@@ -906,23 +885,7 @@ func newProjectedHiddenPkExactVectorFallbackApplyIndicesCase(t *testing.T) (*Que
 		},
 		Pkey:          &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName},
 		Name2ColIndex: map[string]int32{catalog.CPrimaryKeyColName: 0, "file_id": 1, "vec": 2},
-		Indexes: []*plan.IndexDef{
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			},
-			{
-				IndexName:          "idx_vec",
-				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			},
-		},
+		Indexes:       newIvfLogicalTestIndexDefs("vec"),
 	}
 
 	scanTag := builder.genNewBindTag()

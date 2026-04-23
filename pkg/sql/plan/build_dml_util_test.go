@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func Test_runSql(t *testing.T) {
@@ -193,16 +195,55 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
 
-func TestGetIvfIncludeColumnNamesFromParams(t *testing.T) {
-	cols, err := getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`)
-	require.NoError(t, err)
-	require.Equal(t, []string{"title", "category"}, cols)
+func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "title", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "note", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	posMap := map[string]int{
+		"id":        0,
+		"embedding": 1,
+		"title":     2,
+		"category":  3,
+		"note":      4,
+	}
+	colMap := make(map[string]*plan.ColDef, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colMap[col.Name] = col
+	}
+	indexDef := &plan.IndexDef{
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		Parts:           []string{"embedding"},
+		IndexAlgoParams: `{"lists":"2","op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
+		IncludedColumns: []string{"title", "category"},
+	}
 
-	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops","include_columns":"title,category"}`)
-	require.NoError(t, err)
-	require.Equal(t, []string{"title", "category"}, cols)
+	tests := []struct {
+		name       string
+		updateCols map[string]int
+		want       bool
+	}{
+		{name: "unrelated column does not rewrite ivf", updateCols: map[string]int{"note": 4}, want: false},
+		{name: "vector key rewrites ivf", updateCols: map[string]int{"embedding": 1}, want: true},
+		{name: "primary key rewrites ivf", updateCols: map[string]int{"id": 0}, want: true},
+		{name: "first include column rewrites ivf", updateCols: map[string]int{"title": 2}, want: true},
+		{name: "second include column rewrites ivf", updateCols: map[string]int{"category": 3}, want: true},
+	}
 
-	cols, err = getIvfIncludeColumnNamesFromParams(`{"lists":"2","op_type":"vector_l2_ops"}`)
-	require.NoError(t, err)
-	require.Nil(t, cols)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := indexNeedsRewriteForUpdate(tableDef, indexDef, tt.updateCols, posMap, colMap)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }

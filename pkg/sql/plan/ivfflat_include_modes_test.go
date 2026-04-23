@@ -66,22 +66,37 @@ func newIvfIncludeModeTestBuilder(t *testing.T) (*QueryBuilder, *BindContext, *p
 		},
 	}
 
-	idxAlgoParams := `{"op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `","include_columns":"title,category"}`
+	idxAlgoParams := `{"op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	includedColumns := []string{"title", "category"}
 	multiTableIndex := &MultiTableIndex{
 		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
 		IndexDefs: map[string]*plan.IndexDef{
 			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_include_modes",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{"embedding"},
+				IncludedColumns:    includedColumns,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "centroids",
-				Parts:           []string{"embedding"},
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_include_modes",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centroids",
+				Parts:              []string{"embedding"},
+				IndexAlgoParams:    idxAlgoParams,
+				IncludedColumns:    includedColumns,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName:  "entries",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_include_modes",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{"embedding"},
+				IncludedColumns:    includedColumns,
 			},
 		},
 	}
@@ -256,11 +271,11 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	require.NotNil(t, tableFuncNode)
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(12), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(12), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, maxSafeIvfSearchRoundLimit, tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, maxSafeIvfSearchRoundLimit, tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
-	assert.Equal(t, uint64(12), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+	assert.Equal(t, maxSafeIvfSearchRoundLimit, tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
 
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
@@ -367,6 +382,9 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPo
 	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams = idxAlgoParams
 	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexAlgoParams = idxAlgoParams
 	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexAlgoParams = idxAlgoParams
+	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IncludedColumns = nil
+	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IncludedColumns = nil
+	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IncludedColumns = nil
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
 

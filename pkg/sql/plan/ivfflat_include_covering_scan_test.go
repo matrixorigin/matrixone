@@ -77,22 +77,37 @@ func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *tes
 		Name2ColIndex: map[string]int32{"id": 0, "v": 1, "title": 2},
 	}
 
-	idxAlgoParams := `{"op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `","include_columns":"title"}`
+	idxAlgoParams := `{"op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`
+	includedColumns := []string{"title"}
 	multiTableIndex := &MultiTableIndex{
 		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
 		IndexDefs: map[string]*plan.IndexDef{
 			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexTableName:  "meta",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_covering",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{"v"},
+				IncludedColumns:    includedColumns,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				IndexTableName:  "centroids",
-				Parts:           []string{"v"},
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_covering",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centroids",
+				Parts:              []string{"v"},
+				IndexAlgoParams:    idxAlgoParams,
+				IncludedColumns:    includedColumns,
 			},
 			catalog.SystemSI_IVFFLAT_TblType_Entries: {
-				IndexTableName:  "entries",
-				IndexAlgoParams: idxAlgoParams,
+				IndexName:          "idx_covering",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries",
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              []string{"v"},
+				IncludedColumns:    includedColumns,
 			},
 		},
 	}

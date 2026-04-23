@@ -602,7 +602,7 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 
 		for _, multiTableIndexKey := range multiTableIndexKeys {
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			switch multiTableIndex.IndexAlgo {
+			switch getVectorIndexLogicalAlgo(multiTableIndex) {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
 				if err != nil || newNodeID != nodeID {
@@ -808,7 +808,7 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	}
 
 	for _, multi := range multiTableIndexes {
-		switch multi.IndexAlgo {
+		switch getVectorIndexLogicalAlgo(multi) {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			if ctx, err := builder.prepareIvfIndexContext(vecCtx, multi); err == nil && ctx != nil {
 				return []int32{vecCtx.scanNode.NodeId}
@@ -843,7 +843,105 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 	}
+
+	for name, multiTableIndex := range multiTableIndexes {
+		logicalDef, ok := constructVectorIndexLogicalDef(multiTableIndex)
+		if !ok {
+			delete(multiTableIndexes, name)
+			continue
+		}
+		multiTableIndex.LogicalDef = logicalDef
+		multiTableIndex.IndexAlgo = catalog.ToLower(logicalDef.IndexAlgo)
+	}
 	return multiTableIndexes
+}
+
+func constructVectorIndexLogicalDef(multiTableIndex *MultiTableIndex) (*plan.IndexDef, bool) {
+	if multiTableIndex == nil || len(multiTableIndex.IndexDefs) == 0 {
+		return nil, false
+	}
+
+	var logicalDef *plan.IndexDef
+	for _, indexDef := range multiTableIndex.IndexDefs {
+		if indexDef == nil {
+			return nil, false
+		}
+		if logicalDef == nil {
+			logicalDef = &plan.IndexDef{
+				IndexName:       indexDef.IndexName,
+				IndexAlgo:       catalog.ToLower(indexDef.IndexAlgo),
+				Parts:           slices.Clone(indexDef.Parts),
+				IncludedColumns: slices.Clone(indexDef.IncludedColumns),
+				Comment:         indexDef.Comment,
+				Visible:         indexDef.Visible,
+			}
+			continue
+		}
+		if !vectorIndexLogicalDefMatches(logicalDef, indexDef) {
+			return nil, false
+		}
+	}
+
+	if logicalDef == nil || logicalDef.IndexName == "" || logicalDef.IndexAlgo == "" || len(logicalDef.Parts) == 0 {
+		return nil, false
+	}
+	return logicalDef, true
+}
+
+func ensureVectorIndexLogicalDef(multiTableIndex *MultiTableIndex) *plan.IndexDef {
+	if multiTableIndex == nil {
+		return nil
+	}
+	if multiTableIndex.LogicalDef != nil {
+		return multiTableIndex.LogicalDef
+	}
+	logicalDef, ok := constructVectorIndexLogicalDef(multiTableIndex)
+	if !ok {
+		return nil
+	}
+	multiTableIndex.LogicalDef = logicalDef
+	multiTableIndex.IndexAlgo = catalog.ToLower(logicalDef.IndexAlgo)
+	return logicalDef
+}
+
+func vectorIndexLogicalDefMatches(logicalDef *plan.IndexDef, indexDef *plan.IndexDef) bool {
+	if logicalDef == nil || indexDef == nil {
+		return false
+	}
+	return logicalDef.IndexName == indexDef.IndexName &&
+		// The constructed logical view stores a normalized lowercase algo name, so
+		// each physical def is compared after the same normalization.
+		logicalDef.IndexAlgo == catalog.ToLower(indexDef.IndexAlgo) &&
+		slices.Equal(logicalDef.Parts, indexDef.Parts) &&
+		slices.Equal(logicalDef.IncludedColumns, indexDef.IncludedColumns) &&
+		logicalDef.Comment == indexDef.Comment &&
+		logicalDef.Visible == indexDef.Visible
+}
+
+func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) []string {
+	logicalDef := ensureVectorIndexLogicalDef(multiTableIndex)
+	if logicalDef == nil {
+		return nil
+	}
+	return slices.Clone(logicalDef.IncludedColumns)
+}
+
+func getVectorIndexLogicalParts(multiTableIndex *MultiTableIndex) []string {
+	logicalDef := ensureVectorIndexLogicalDef(multiTableIndex)
+	if logicalDef == nil {
+		return nil
+	}
+	return slices.Clone(logicalDef.Parts)
+}
+
+func getVectorIndexLogicalAlgo(multiTableIndex *MultiTableIndex) string {
+	if multiTableIndex == nil {
+		return ""
+	}
+	if logicalDef := ensureVectorIndexLogicalDef(multiTableIndex); logicalDef != nil {
+		return catalog.ToLower(logicalDef.IndexAlgo)
+	}
+	return catalog.ToLower(multiTableIndex.IndexAlgo)
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

@@ -17,58 +17,80 @@ insert into vector_ivfflat_include_phase7_include values
 (3, "[9,9,9]", "gamma", 30, "n3"),
 (4, "[2,2,2]", "delta", 40, "n4");
 show create table vector_ivfflat_include_phase7_include;
-Table    Create Table
-vector_ivfflat_include_phase7_include    CREATE TABLE `vector_ivfflat_include_phase7_include` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `title` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include_phase7` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (title, category) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+vector_ivfflat_include_phase7_include  ¦  CREATE TABLE `vector_ivfflat_include_phase7_include` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `title` varchar(20) DEFAULT NULL,
+  `category` int DEFAULT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include_phase7` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)
+)
 show index from vector_ivfflat_include_phase7_include;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-vector_ivfflat_include_phase7_include    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-vector_ivfflat_include_phase7_include    1    idx_ivf_include_phase7    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}    YES    embedding
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+vector_ivfflat_include_phase7_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 alter table vector_ivfflat_include_phase7_include rename column title to headline;
 show create table vector_ivfflat_include_phase7_include;
-Table    Create Table
-vector_ivfflat_include_phase7_include    CREATE TABLE `vector_ivfflat_include_phase7_include` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `headline` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include_phase7` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (headline, category) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+vector_ivfflat_include_phase7_include  ¦  CREATE TABLE `vector_ivfflat_include_phase7_include` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `headline` varchar(20) DEFAULT NULL,
+  `category` int DEFAULT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include_phase7` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`headline`, `category`)
+)
 show index from vector_ivfflat_include_phase7_include;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-vector_ivfflat_include_phase7_include    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-vector_ivfflat_include_phase7_include    1    idx_ivf_include_phase7    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"[\"headline\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}    YES    embedding
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+vector_ivfflat_include_phase7_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 explain select id, headline, category
 from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=force';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: l2_distance(vector_ivfflat_include_phase7_include.embedding, ) INTERNAL, vector_ivfflat_include_phase7_include.id INTERNAL
-        Limit: 2
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(vector_ivfflat_include_phase7_include.embedding, ) INTERNAL, vector_ivfflat_include_phase7_include.id INTERNAL  𝄀
+        Limit: 2  𝄀
         ->  Table Scan on vector_ivfflat_include_phase7.vector_ivfflat_include_phase7_include
 select id, headline, category
 from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=force';
-id    headline    category
-1    alpha    10
-2    beta    20
+➤ id[4,32,0]  ¦  headline[12,-1,0]  ¦  category[4,32,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20
 alter table vector_ivfflat_include_phase7_include drop column category;
 show create table vector_ivfflat_include_phase7_include;
-Table    Create Table
-vector_ivfflat_include_phase7_include    CREATE TABLE `vector_ivfflat_include_phase7_include` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `headline` varchar(20) DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+vector_ivfflat_include_phase7_include  ¦  CREATE TABLE `vector_ivfflat_include_phase7_include` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `headline` varchar(20) DEFAULT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
 explain select id, headline
 from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: l2_distance(vector_ivfflat_include_phase7_include.embedding, ) INTERNAL
-        Limit: 2
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(vector_ivfflat_include_phase7_include.embedding, ) INTERNAL  𝄀
+        Limit: 2  𝄀
         ->  Table Scan on vector_ivfflat_include_phase7.vector_ivfflat_include_phase7_include
 select id, headline
 from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-id    headline
-1    alpha
-2    beta
+➤ id[4,32,0]  ¦  headline[12,-1,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
 drop table vector_ivfflat_include_phase7_include;
 drop table if exists vector_ivfflat_include_phase7_plain;
 create table vector_ivfflat_include_phase7_plain(
@@ -88,26 +110,26 @@ from vector_ivfflat_include_phase7_plain
 where note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-AP QUERY PLAN ON ONE CN(10 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 2
-        ->  Join
-              Join Type: INNER
-              Join Cond: (vector_ivfflat_include_phase7_plain.id = mo_ivf_alias_0.pkid)
-              ->  Table Scan on vector_ivfflat_include_phase7.vector_ivfflat_include_phase7_plain
-                    Filter Cond: vector_ivfflat_include_phase7_plain.note in ([n2 n4])
-              ->  Table Function on ivf_search
-                    Index Reader Param:  Limit: 12
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (vector_ivfflat_include_phase7_plain.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase7.vector_ivfflat_include_phase7_plain  𝄀
+                    Filter Cond: vector_ivfflat_include_phase7_plain.note in ([n2 n4])  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 12  𝄀
                     Limit: 12
 select id, note
 from vector_ivfflat_include_phase7_plain
 where note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-id    note
-2    n2
-4    n4
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+2  ¦  n2  𝄀
+4  ¦  n4
 drop table vector_ivfflat_include_phase7_plain;
 drop database vector_ivfflat_include_phase7;

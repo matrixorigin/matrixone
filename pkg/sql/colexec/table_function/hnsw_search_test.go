@@ -122,6 +122,28 @@ func newMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTable
 	return &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 }
 
+type capturingMockSearch struct {
+	Idxcfg vectorindex.IndexConfig
+	Tblcfg vectorindex.IndexTableConfig
+	rt     *vectorindex.RuntimeConfig
+}
+
+func (m *capturingMockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	*m.rt = rt
+	return []int64{1}, []float64{2.0}, nil
+}
+
+func (m *capturingMockSearch) Destroy() {
+}
+
+func (m *capturingMockSearch) Load(*sqlexec.SqlProcess) error {
+	return nil
+}
+
+func (m *capturingMockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+	return nil
+}
+
 func TestHnswSearch(t *testing.T) {
 
 	newHnswAlgo = newMockAlgoFn
@@ -159,6 +181,75 @@ func TestHnswSearch(t *testing.T) {
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
 
 	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+func TestHnswSearchPassesFilterPayloadToRuntime(t *testing.T) {
+	oldNewHnswAlgo := newHnswAlgo
+	defer func() {
+		newHnswAlgo = oldNewHnswAlgo
+	}()
+
+	var captured vectorindex.RuntimeConfig
+	newHnswAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
+		return &capturingMockSearch{
+			Idxcfg: idxcfg,
+			Tblcfg: tblcfg,
+			rt:     &captured,
+		}
+	}
+
+	const indexTable = "__index_filter_payload"
+	veccache.Cache.Remove(indexTable)
+	defer veccache.Cache.Remove(indexTable)
+
+	param := "{\"op_type\": \"vector_l2_ops\"}"
+	ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	inbat := makeBatchHnswSearch(ut.proc)
+	payload := `{"version":1,"conj":"and","column_mode":"logical_name","exprs":[{"kind":"func","op":"=","args":[{"kind":"column","column":"category"},{"kind":"literal","value":2}]}]}`
+	ut.arg.Args = []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: 512,
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: `{"db":"db", "src":"src", "metadata":"__metadata", "index":"` + indexTable + `"}`,
+					},
+				},
+			},
+		},
+		plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+		{
+			Typ: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: 512,
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: payload,
+					},
+				},
+			},
+		},
+	}
+
+	err := ut.arg.Prepare(ut.proc)
+	require.NoError(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, payload, captured.FilterPayload)
+	assert.Equal(t, uint(1), captured.Limit)
+
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 

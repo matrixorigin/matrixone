@@ -2127,24 +2127,6 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	return sourceStep, nil
 }
 
-func getIvfIncludeColumnNamesFromParams(indexAlgoParams string) ([]string, error) {
-	if indexAlgoParams == "" {
-		return nil, nil
-	}
-
-	params, err := catalog.IndexParamsStringToMap(indexAlgoParams)
-	if err != nil {
-		return nil, err
-	}
-
-	includeColumns := params[catalog.IndexAlgoParamIncludeColumns]
-	if includeColumns == "" {
-		return nil, nil
-	}
-
-	return catalog.ParseIncludeColumnsValue(includeColumns)
-}
-
 func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
@@ -4296,6 +4278,49 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	return nil
 }
 
+func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateColPosMap map[string]int, posMap map[string]int, colMap map[string]*ColDef) (bool, error) {
+	columnUpdated := func(colName string) bool {
+		if _, exists := updateColPosMap[colName]; exists {
+			return true
+		}
+		col := colMap[colName]
+		return col != nil && col.OnUpdate != nil
+	}
+
+	if tableDef.Pkey != nil {
+		pkeyName := tableDef.Pkey.PkeyColName
+		if pkeyName == catalog.CPrimaryKeyColName {
+			for _, pkPartColName := range tableDef.Pkey.Names {
+				if columnUpdated(pkPartColName) {
+					return true, nil
+				}
+			}
+		} else if columnUpdated(pkeyName) {
+			return true, nil
+		}
+	}
+
+	for _, colName := range indexdef.Parts {
+		resolvedColName := catalog.ResolveAlias(colName)
+		if _, ok := posMap[resolvedColName]; ok && columnUpdated(resolvedColName) {
+			return true, nil
+		}
+	}
+
+	if !catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+		return false, nil
+	}
+
+	for _, colName := range indexdef.IncludedColumns {
+		resolvedColName := catalog.ResolveAlias(colName)
+		if _, ok := posMap[resolvedColName]; ok && columnUpdated(resolvedColName) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // make delete index plans here
 func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
 
@@ -4339,72 +4364,11 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 		for idx, indexdef := range delCtx.tableDef.Indexes {
 
 			if isUpdate {
-				pkeyName := delCtx.tableDef.Pkey.PkeyColName
-
-				// Check if primary key is being updated.
-				isPrimaryKeyUpdated := func() bool {
-					if pkeyName == catalog.CPrimaryKeyColName {
-						// Handle compound primary key.
-						for _, pkPartColName := range delCtx.tableDef.Pkey.Names {
-							if _, exists := delCtx.updateColPosMap[pkPartColName]; exists || colMap[pkPartColName].OnUpdate != nil {
-								return true
-							}
-						}
-					} else if pkeyName == catalog.FakePrimaryKeyColName {
-						// Handle programmatically generated primary key.
-						if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
-							return true
-						}
-					} else {
-						// Handle single primary key.
-						if _, exists := delCtx.updateColPosMap[pkeyName]; exists || colMap[pkeyName].OnUpdate != nil {
-							return true
-						}
-					}
-					return false
-				}
-
-				// Check if secondary key is being updated.
-				isSecondaryKeyUpdated := func() bool {
-					for _, colName := range indexdef.Parts {
-						resolvedColName := catalog.ResolveAlias(colName)
-						if colIdx, ok := posMap[resolvedColName]; ok {
-							col := delCtx.tableDef.Cols[colIdx]
-							if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
-								return true
-							}
-						}
-					}
-					return false
-				}
-
-				isIvfIncludeColumnUpdated := func() (bool, error) {
-					if !catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
-						return false, nil
-					}
-
-					includeCols, err := getIvfIncludeColumnNamesFromParams(indexdef.IndexAlgoParams)
-					if err != nil {
-						return false, err
-					}
-					for _, colName := range includeCols {
-						resolvedColName := catalog.ResolveAlias(colName)
-						if colIdx, ok := posMap[resolvedColName]; ok {
-							col := delCtx.tableDef.Cols[colIdx]
-							if _, exists := delCtx.updateColPosMap[resolvedColName]; exists || col.OnUpdate != nil {
-								return true, nil
-							}
-						}
-					}
-					return false, nil
-				}
-
-				includeUpdated, err := isIvfIncludeColumnUpdated()
+				needsRewrite, err := indexNeedsRewriteForUpdate(delCtx.tableDef, indexdef, delCtx.updateColPosMap, posMap, colMap)
 				if err != nil {
 					return err
 				}
-				ivfNeedsRewrite := catalog.IsIvfIndexAlgo(indexdef.IndexAlgo)
-				if !isPrimaryKeyUpdated() && !isSecondaryKeyUpdated() && !includeUpdated && !ivfNeedsRewrite {
+				if !needsRewrite {
 					continue
 				}
 			}

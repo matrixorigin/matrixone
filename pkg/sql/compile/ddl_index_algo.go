@@ -477,13 +477,7 @@ func buildIvfEntriesInsertSQL(indexDef *plan.IndexDef, qryDatabase string, origi
 		return "", moerr.NewInternalErrorNoCtx("vector optype not found")
 	}
 
-	var includeCols []string
-	if includeColumns, ok := params[catalog.IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
-		includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
-		if err != nil {
-			return "", err
-		}
-	}
+	includeCols := slices.Clone(indexDef.IncludedColumns)
 
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string

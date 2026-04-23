@@ -35,7 +35,7 @@ set @entries = (
 );
 
 set @q = concat(
-    'select `__mo_index_pri_col`, `__mo_index_include_title`, `__mo_index_include_category` ',
+    'select `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`, `__mo_index_include_title`, `__mo_index_include_category` ',
     'from `', database(), '`.`', @entries, '` ',
     'order by `__mo_index_pri_col`'
 );
@@ -44,7 +44,22 @@ prepare s1 from @q;
 execute s1;
 
 update vector_ivfflat_include_phase3
+set note = 'n2-only'
+where id = 2;
+execute s1;
+
+update vector_ivfflat_include_phase3
 set title = 'beta2', category = 200, note = 'n2b'
+where id = 2;
+execute s1;
+
+update vector_ivfflat_include_phase3
+set embedding = "[4,5,7]"
+where id = 2;
+execute s1;
+
+update vector_ivfflat_include_phase3
+set id = 20
 where id = 2;
 execute s1;
 

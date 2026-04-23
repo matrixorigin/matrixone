@@ -28,7 +28,8 @@ func TestBuildIvfEntriesInsertSQL_IncludesIncludeColumns(t *testing.T) {
 	indexDef := &plan.IndexDef{
 		IndexTableName:  "idx_entries_tbl",
 		Parts:           []string{"embedding"},
-		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"title", "category"},
 	}
 	originalTableDef := &plan.TableDef{
 		Name: "src_tbl",
@@ -72,7 +73,7 @@ func TestBuildIvfEntriesInsertSQL_UsesSerialForCompositePrimaryKey(t *testing.T)
 	require.Contains(t, sql, "serial(`src`.`tenant_id`,`src`.`doc_id`)")
 }
 
-func TestBuildIvfCreateSQL_EscapesIncludeColumnsJSON(t *testing.T) {
+func TestBuildIvfCreateSQL_UsesAlgorithmParamsOnly(t *testing.T) {
 	cfg := vectorindex.IndexTableConfig{
 		DbName:        "test_db",
 		SrcTable:      "src_tbl",
@@ -83,12 +84,12 @@ func TestBuildIvfCreateSQL_EscapesIncludeColumnsJSON(t *testing.T) {
 	}
 
 	sql, err := buildIvfCreateSQL(
-		`{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
+		`{"lists":"2","op_type":"vector_l2_ops"}`,
 		cfg,
 	)
 	require.NoError(t, err)
 
-	require.Contains(t, sql, `ivf_create('{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\\"title\\",\\"category\\"]"}',`)
+	require.Contains(t, sql, `ivf_create('{"lists":"2","op_type":"vector_l2_ops"}',`)
 	require.Contains(t, sql, `{"db":"test_db","src":"src_tbl","metadata":"meta_tbl"`)
 	require.Contains(t, sql, `"index":"idx_tbl","pkey":"src.id","part":"embedding"`)
 }

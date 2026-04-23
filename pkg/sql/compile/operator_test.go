@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -137,4 +138,21 @@ func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
+	op := table_function.NewArgument()
+	op.FuncName = "ivf_search"
+	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
+		{Tag: 8, UseBloomFilter: true},
+	}
+	op.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
+		OrigFuncName: "l2_distance",
+	}
+
+	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
+	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
+	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
 }

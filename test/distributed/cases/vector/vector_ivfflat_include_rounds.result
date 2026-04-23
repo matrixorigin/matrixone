@@ -201,5 +201,36 @@ limit 2 by rank with option 'mode=pre';
 ➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
+drop table if exists include_rounds_residual;
+create table include_rounds_residual(
+id int primary key,
+embedding vecf32(3),
+note varchar(20),
+category int
+);
+insert into include_rounds_residual values
+(1, "[0,0,1]", "reject", 20),
+(2, "[0,0,2]", "reject", 20),
+(3, "[0,0,3]", "reject", 20),
+(4, "[0,0,4]", "reject", 20),
+(5, "[0,0,5]", "reject", 20),
+(6, "[0,0,6]", "reject", 20),
+(7, "[0,0,7]", "reject", 20),
+(8, "[0,0,8]", "reject", 20),
+(9, "[0,0,9]", "reject", 20),
+(10, "[0,0,10]", "reject", 20),
+(11, "[0,0,11]", "reject", 20),
+(12, "[100,100,100]", "far", 20),
+(13, "[0,0,12]", "target", 20);
+create index idx_ivf_include_residual using ivfflat on include_rounds_residual(embedding)
+lists=1 op_type "vector_l2_ops" include(category);
+select id, note
+from include_rounds_residual
+where category = 20 and note = "target"
+order by l2_distance(embedding, "[0,0,0]")
+limit 1 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+13  ¦  target
+drop table include_rounds_residual;
 drop table include_rounds_main;
 drop database vector_ivfflat_include_rounds;

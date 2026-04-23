@@ -641,12 +641,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:              t.Attrs,
+			Rets:               t.Rets,
+			Args:               t.Args,
+			Params:             t.Params,
+			Name:               t.FuncName,
+			IsSingle:           t.IsSingle,
+			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			IndexReaderParam:   t.IndexReaderParam,
 		}
 		in.Limit = t.Limit
 
@@ -764,12 +766,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.TableFunction.Attrs,
-			Rets:     t.TableFunction.Rets,
-			Args:     t.TableFunction.Args,
-			Params:   t.TableFunction.Params,
-			Name:     t.TableFunction.FuncName,
-			IsSingle: t.TableFunction.IsSingle,
+			Attrs:              t.TableFunction.Attrs,
+			Rets:               t.TableFunction.Rets,
+			Args:               t.TableFunction.Args,
+			Params:             t.TableFunction.Params,
+			Name:               t.TableFunction.FuncName,
+			IsSingle:           t.TableFunction.IsSingle,
+			RuntimeFilterSpecs: t.TableFunction.RuntimeFilterSpecs,
+			IndexReaderParam:   t.TableFunction.IndexReaderParam,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1096,6 +1100,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.Limit = opr.Limit
+		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterSpecs
+		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1219,6 +1225,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterSpecs
+		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

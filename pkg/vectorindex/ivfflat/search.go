@@ -899,12 +899,16 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			rt.BackgroundQueries[0] = res.LogicalPlan
 		}
 
-		distances = make([]float64, 0, roundLimit)
-		resid := make([]any, 0, roundLimit)
 		if len(res.Batches) == 0 {
-			return resid, distances, nil
+			return []any{}, []float64{}, nil
 		}
 
+		resultCap := 0
+		for _, bat := range res.Batches {
+			resultCap += bat.RowCount()
+		}
+		distances = make([]float64, 0, resultCap)
+		resid := make([]any, 0, resultCap)
 		for _, bat := range res.Batches {
 			distVec := bat.Vecs[1]
 			pkVec := bat.Vecs[0]

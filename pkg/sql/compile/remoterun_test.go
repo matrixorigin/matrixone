@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -349,15 +350,32 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := table_function.NewArgument()
 		op.FuncName = "ivf_search"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
+		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
+			{Tag: 9, UseBloomFilter: true},
+		}
+		op.IndexReaderParam = &planpb.IndexReaderParam{
+			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),
+			OrigFuncName: "l2_distance",
+		}
 
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, uint64(4), pipeInstr.Limit.GetLit().GetU64Val())
+		require.Len(t, pipeInstr.TableFunction.RuntimeFilterSpecs, 1)
+		require.NotNil(t, pipeInstr.TableFunction.IndexReaderParam)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		data, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		var decoded pipeline.Instruction
+		require.NoError(t, decoded.Unmarshal(data))
+
+		restored, err := convertToVmOperator(&decoded, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*table_function.TableFunction)
 		require.Equal(t, uint64(4), restoredOp.Limit.GetLit().GetU64Val())
+		require.Equal(t, op.RuntimeFilterSpecs, restoredOp.RuntimeFilterSpecs)
+		require.Equal(t, uint64(4), restoredOp.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+		require.Equal(t, "l2_distance", restoredOp.IndexReaderParam.GetOrigFuncName())
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {

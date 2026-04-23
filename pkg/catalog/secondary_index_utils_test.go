@@ -53,7 +53,7 @@ func unresolvedName(name string) *tree.UnresolvedName {
 	return tree.NewUnresolvedName(tree.NewCStr(name, 1))
 }
 
-func TestIndexParamsToJsonString_IvfFlatIncludeColumns(t *testing.T) {
+func TestIndexParamsToJsonString_DoesNotSerializeIvfFlatIncludeColumns(t *testing.T) {
 	idx := tree.NewIndex(
 		false,
 		[]*tree.KeyPart{tree.NewKeyPart(unresolvedName("embedding"), -1, tree.DefaultDirection, nil)},
@@ -76,15 +76,17 @@ func TestIndexParamsToJsonString_IvfFlatIncludeColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "10", paramMap[IndexAlgoParamLists])
 	require.Equal(t, "vector_l2_ops", paramMap[IndexAlgoParamOpType])
-	require.Equal(t, `["title","category"]`, paramMap[IndexAlgoParamIncludeColumns])
+	_, ok := paramMap[IndexAlgoParamIncludeColumns]
+	require.False(t, ok)
 }
 
-func TestIndexParamsToStringList_IvfFlatIncludeColumns(t *testing.T) {
+func TestIndexParamsToStringList_DoesNotRenderIncludeColumns(t *testing.T) {
 	paramList, err := IndexParamsToStringList(`{"lists":"10","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`)
 	require.NoError(t, err)
 	require.Contains(t, paramList, "lists = 10")
 	require.Contains(t, paramList, "op_type 'vector_l2_ops'")
-	require.Contains(t, paramList, "INCLUDE (title, category)")
+	require.NotContains(t, paramList, "INCLUDE")
+	require.NotContains(t, paramList, "title")
 }
 
 func TestParseIncludeColumnsValue_BackwardCompatible(t *testing.T) {

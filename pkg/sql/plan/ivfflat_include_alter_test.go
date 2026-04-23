@@ -24,27 +24,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func makeIvfIncludeAlterIndexDef(indexName string, includedColumns []string) *planpb.IndexDef {
+	return &planpb.IndexDef{
+		IndexName:       indexName,
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		Parts:           []string{"embedding"},
+		IncludedColumns: append([]string(nil), includedColumns...),
+	}
+}
+
 func TestHandleDropColumnWithIndexRemovesIvfIndexForIncludeColumn(t *testing.T) {
 	def := TableDef{
 		Indexes: []*IndexDef{
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
 		},
 	}
 
@@ -67,24 +62,9 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 			PkeyColName: "id",
 		},
 		Indexes: []*planpb.IndexDef{
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
-			{
-				IndexName:       "idx_ivf",
-				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-				Parts:           []string{"embedding"},
-			},
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
 		},
 	}
 
@@ -99,11 +79,12 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], `set algo_params = '{"include_columns":"[\\"headline\\",\\"category\\"]","lists":"2","op_type":"vector_l2_ops"}'`)
+	require.Contains(t, sqls[0], `set included_columns = '["headline","category"]'`)
 	require.Contains(t, sqls[0], "name = 'idx_ivf'")
 
 	for _, indexDef := range tableDef.Indexes {
-		require.Contains(t, indexDef.IndexAlgoParams, `"include_columns":"[\"headline\",\"category\"]"`)
+		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
+		require.NotContains(t, indexDef.IndexAlgoParams, "include_columns")
 	}
 	require.Equal(t, "headline", tableDef.Cols[1].Name)
 	require.Equal(t, "headline", tableDef.Cols[1].OriginName)
@@ -111,18 +92,8 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 
 func TestCollectAffectedIndexNamesForAlterIncludesIvfIncludeColumns(t *testing.T) {
 	indexes := []*planpb.IndexDef{
-		{
-			IndexName:       "idx_ivf",
-			IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-			IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-			Parts:           []string{"embedding"},
-		},
-		{
-			IndexName:       "idx_ivf",
-			IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-			IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"category\"]"}`,
-			Parts:           []string{"embedding"},
-		},
+		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
 		{
 			IndexName: "idx_note",
 			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),

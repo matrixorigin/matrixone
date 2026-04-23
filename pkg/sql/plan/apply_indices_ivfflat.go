@@ -194,10 +194,6 @@ func (builder *QueryBuilder) calculateAdaptiveNprobe(baseNprobe int64, stats *pl
 
 var ivfTreeEmptyLocale = ""
 
-func parseIvfIncludeColumns(indexAlgoParams string) ([]string, error) {
-	return getIvfIncludeColumnNamesFromParams(indexAlgoParams)
-}
-
 func buildIvfTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr, pushdownFilterSQL string, searchRoundLimit uint64, bucketExpandStep uint64) []*plan.Expr {
 	args := []*plan.Expr{
 		{
@@ -296,15 +292,11 @@ func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, tableDe
 
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if impl.Col.RelPos != scanTag {
-			return
+		if colName, ok := vectorIndexColumnNameFromTableDef(impl.Col, tableDef, scanTag); ok {
+			out[colName] = struct{}{}
 		}
-		if int(impl.Col.ColPos) >= len(tableDef.Cols) {
-			return
-		}
-		out[tableDef.Cols[impl.Col.ColPos].Name] = struct{}{}
 	case *plan.Expr_F:
-		if isIvfDistanceExpr(expr, scanTag, partPos) {
+		if isVectorDistanceExpr(expr, scanTag, partPos) {
 			return
 		}
 		for _, arg := range impl.F.Args {
@@ -317,40 +309,12 @@ func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, tableDe
 	}
 }
 
-func isIvfDistanceExpr(expr *plan.Expr, scanTag, partPos int32) bool {
-	fn := expr.GetF()
-	if fn == nil {
-		return false
-	}
-	if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
-		return false
-	}
-	if len(fn.Args) != 2 {
-		return false
-	}
-
-	for _, arg := range fn.Args {
-		col := arg.GetCol()
-		if col != nil && col.RelPos == scanTag && col.ColPos == partPos {
-			return true
-		}
-	}
-	return false
-}
-
 func canDoIndexOnlyScan(requiredCols map[string]struct{}, tableDef *plan.TableDef, includeColumns []string) bool {
 	if tableDef == nil || tableDef.Pkey == nil {
 		return false
 	}
 
-	covered := make(map[string]struct{}, len(includeColumns)+1)
-	for _, col := range includeColumns {
-		covered[col] = struct{}{}
-	}
-	if len(tableDef.Pkey.Names) == 1 {
-		covered[tableDef.Pkey.PkeyColName] = struct{}{}
-	}
-
+	covered := buildVectorIndexCoveredColumns(tableDef, includeColumns)
 	for col := range requiredCols {
 		if _, ok := covered[col]; !ok {
 			return false
@@ -359,90 +323,12 @@ func canDoIndexOnlyScan(requiredCols map[string]struct{}, tableDef *plan.TableDe
 	return true
 }
 
-func splitFiltersByIncludeColumns(
-	filters []*plan.Expr,
-	scanNode *plan.Node,
-	includeColumns []string,
-	partPos int32,
-) (pushdownFilters, remainingFilters []*plan.Expr) {
-	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
-		return nil, filters
-	}
-
-	covered := make(map[string]struct{}, len(includeColumns)+1)
-	for _, col := range includeColumns {
-		covered[col] = struct{}{}
-	}
-	if scanNode.TableDef.Pkey != nil && len(scanNode.TableDef.Pkey.Names) == 1 {
-		covered[scanNode.TableDef.Pkey.PkeyColName] = struct{}{}
-	}
-
-	scanTag := scanNode.BindingTags[0]
-	for _, expr := range filters {
-		if exprRefsOnlyCoveredColumns(expr, scanTag, partPos, scanNode.TableDef, covered) {
-			pushdownFilters = append(pushdownFilters, expr)
-		} else {
-			remainingFilters = append(remainingFilters, expr)
-		}
-	}
-	return pushdownFilters, remainingFilters
-}
-
-func exprRefsOnlyCoveredColumns(expr *plan.Expr, scanTag, partPos int32, tableDef *plan.TableDef, covered map[string]struct{}) bool {
-	if expr == nil {
-		return true
-	}
-
-	switch impl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if impl.Col.RelPos != scanTag {
-			return false
-		}
-		if int(impl.Col.ColPos) >= len(tableDef.Cols) {
-			return false
-		}
-		colName := tableDef.Cols[impl.Col.ColPos].Name
-		_, ok := covered[colName]
-		return ok
-	case *plan.Expr_F:
-		if isIvfDistanceExpr(expr, scanTag, partPos) {
-			return false
-		}
-		for _, arg := range impl.F.Args {
-			if !exprRefsOnlyCoveredColumns(arg, scanTag, partPos, tableDef, covered) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_Lit:
-		return true
-	case *plan.Expr_List:
-		for _, sub := range impl.List.List {
-			if !exprRefsOnlyCoveredColumns(sub, scanTag, partPos, tableDef, covered) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_T:
-		return true
-	default:
-		return false
-	}
-}
-
 func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string, partPos int32) (string, []*plan.Expr, []*plan.Expr, error) {
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return "", nil, filters, nil
 	}
 
-	covered := make(map[string]struct{}, len(includeColumns)+1)
-	for _, col := range includeColumns {
-		covered[col] = struct{}{}
-	}
-	if scanNode.TableDef.Pkey != nil && len(scanNode.TableDef.Pkey.Names) == 1 {
-		covered[scanNode.TableDef.Pkey.PkeyColName] = struct{}{}
-	}
-
+	covered := buildVectorIndexCoveredColumns(scanNode.TableDef, includeColumns)
 	scanTag := scanNode.BindingTags[0]
 	sqlParts := make([]string, 0, len(filters))
 	pushdownFilters := make([]*plan.Expr, 0, len(filters))
@@ -465,7 +351,7 @@ func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeCol
 }
 
 func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Expr, bool, error) {
-	if !exprRefsOnlyCoveredColumns(expr, scanTag, partPos, scanNode.TableDef, covered) {
+	if !vectorIndexExprRefsOnlyCoveredColumns(expr, scanTag, partPos, scanNode.TableDef, covered) {
 		return nil, false, nil
 	}
 
@@ -844,15 +730,18 @@ func ivfCanFormatAsFunctionName(name string) bool {
 	return true
 }
 
+// ivfFilterColumnToAST is the IVF lowering boundary. It converts the planner's
+// bound ColRef coordinates to a logical column name before building the SQL
+// string payload, so the payload never depends on outer scan binding positions.
 func ivfFilterColumnToAST(col *plan.ColRef, scanNode *plan.Node) (tree.Expr, error) {
-	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil {
+	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || len(scanNode.BindingTags) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid ivf filter scan node")
 	}
-	if int(col.ColPos) >= len(scanNode.TableDef.Cols) {
+	colName, ok := vectorIndexColumnNameFromColRef(col, scanNode, scanNode.BindingTags[0])
+	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("invalid ivf filter column position")
 	}
 
-	colName := scanNode.TableDef.Cols[col.ColPos].Name
 	mappedName := catalog.SystemSI_IVFFLAT_IncludeColPrefix + colName
 	if len(scanNode.TableDef.Pkey.Names) == 1 && colName == scanNode.TableDef.Pkey.PkeyColName {
 		mappedName = catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
@@ -1139,6 +1028,8 @@ func buildIvfScanToTableFuncMap(tableFuncTag int32, tableFuncIncludeColumns []st
 	return projMap
 }
 
+const maxSafeIvfSearchRoundLimit = uint64(1<<63 - 1)
+
 func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 	if limit == nil || limit.GetLit() == nil {
 		return 0
@@ -1151,6 +1042,13 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 
 	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+}
+
+func firstIvfIncludeSearchRoundLimit(limit *plan.Expr, hasPushdownFilters bool, hasResidualFilters bool) uint64 {
+	if hasResidualFilters {
+		return maxSafeIvfSearchRoundLimit
+	}
+	return firstIvfSearchRoundLimit(limit, hasPushdownFilters)
 }
 
 func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfIndexContext, error) {
@@ -1232,7 +1130,11 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
-	keyPart := idxDef.Parts[0]
+	keyParts := getVectorIndexLogicalParts(multiTableIndex)
+	if len(keyParts) == 0 {
+		return nil, nil
+	}
+	keyPart := keyParts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
 	if !found {
@@ -1412,10 +1314,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx)
-	includeColumns, err := parseIvfIncludeColumns(ivfCtx.entriesDef.IndexAlgoParams)
-	if err != nil {
-		return nodeID, err
-	}
+	includeColumns := getVectorIndexIncludedColumns(multiTableIndex)
 	includeAwareColumns := includeColumns
 	if vecCtx.rankOption != nil {
 		switch vecCtx.rankOption.Mode {
@@ -1426,7 +1325,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos)
 	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos)
-	coveragePushdown, _ := splitFiltersByIncludeColumns(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
+	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
 	pushdownFilterSQL, serializedPushdownFilters, _, err := serializeFiltersToSQL(coveragePushdown, scanNode, includeAwareColumns, ivfCtx.partPos)
 	if err != nil {
 		return nodeID, err
@@ -1486,7 +1385,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	firstRoundLimit := uint64(0)
 	bucketExpandStep := uint64(0)
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" {
-		firstRoundLimit = firstIvfSearchRoundLimit(limit, len(serializedPushdownFilters) > 0 || len(remainingFilters) > 0)
+		firstRoundLimit = firstIvfIncludeSearchRoundLimit(limit, len(serializedPushdownFilters) > 0, len(remainingFilters) > 0)
 		if firstRoundLimit == 0 && limit != nil {
 			firstRoundLimit = 1
 		}
@@ -1539,9 +1438,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 	}
 
-	// When there are filters, over-fetch to get more candidates.
-	// This ensures we have enough candidates after filtering.
-	if len(remainingFilters) > 0 && !ivfCtx.pushdownEnabled {
+	includeModeHasResidualFilters := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
+	if includeModeHasResidualFilters {
+		// Residual filters are applied outside ivf_search, so the table function
+		// must not stop after the usual over-fetch budget rejects all candidates.
+		limitExpr = makePlan2Uint64ConstExprWithType(maxSafeIvfSearchRoundLimit)
+	} else if len(remainingFilters) > 0 && !ivfCtx.pushdownEnabled {
+		// When there are filters, over-fetch to get more candidates.
+		// This ensures we have enough candidates after filtering.
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
 		if limitConst := limitExpr.GetLit(); limitConst != nil {

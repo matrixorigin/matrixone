@@ -54,7 +54,17 @@ func makeIvfIndexWithInclude(vecCol string, includeCols ...string) *tree.Index {
 	)
 }
 
-func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInAlgoParams(t *testing.T) {
+func makeHnswIndexWithInclude(vecCol string, includeCols ...string) *tree.Index {
+	return tree.NewIndex(
+		false,
+		[]*tree.KeyPart{tree.NewKeyPart(tree.NewUnresolvedName(tree.NewCStr(vecCol, 1)), -1, tree.DefaultDirection, nil)},
+		"idx_hnsw",
+		tree.INDEX_TYPE_HNSW,
+		makeIncludeIndexOption(includeCols...),
+	)
+}
+
+func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing.T) {
 	ctx := NewMockOptimizer(false).CurrentContext()
 	indexInfo := makeIvfIndexWithInclude("embedding", "title", "category")
 	colMap := map[string]*ColDef{
@@ -69,9 +79,34 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInAlgoParams(t *testi
 	require.Len(t, indexDefs, 3)
 
 	for _, indexDef := range indexDefs {
+		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
 		paramMap, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 		require.NoError(t, err)
-		require.Equal(t, `["title","category"]`, paramMap[catalog.IndexAlgoParamIncludeColumns])
+		_, ok := paramMap[catalog.IndexAlgoParamIncludeColumns]
+		require.False(t, ok)
+	}
+}
+
+func TestBuildHnswSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing.T) {
+	ctx := NewMockOptimizer(false).CurrentContext()
+	indexInfo := makeHnswIndexWithInclude("embedding", "title", "category")
+	colMap := map[string]*ColDef{
+		"id":        makeTestColDef("id", types.T_int64),
+		"embedding": makeTestColDef("embedding", types.T_array_float32),
+		"title":     makeTestColDef("title", types.T_varchar),
+		"category":  makeTestColDef("category", types.T_varchar),
+	}
+
+	indexDefs, _, err := buildHnswSecondaryIndexDef(ctx, indexInfo, colMap, nil, "id")
+	require.NoError(t, err)
+	require.Len(t, indexDefs, 2)
+
+	for _, indexDef := range indexDefs {
+		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
+		paramMap, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		_, ok := paramMap[catalog.IndexAlgoParamIncludeColumns]
+		require.False(t, ok)
 	}
 }
 

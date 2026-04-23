@@ -36,14 +36,15 @@ import (
 )
 
 type hnswSearchState struct {
-	inited    bool
-	param     vectorindex.HnswParam
-	tblcfg    vectorindex.IndexTableConfig
-	idxcfg    vectorindex.IndexConfig
-	offset    int
-	limit     uint64
-	keys      []int64
-	distances []float64
+	inited        bool
+	param         vectorindex.HnswParam
+	tblcfg        vectorindex.IndexTableConfig
+	idxcfg        vectorindex.IndexConfig
+	offset        int
+	limit         uint64
+	filterPayload string
+	keys          []int64
+	distances     []float64
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -188,6 +189,17 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		// array vector
 		faVec := tf.ctr.argVecs[1]
 
+		if len(tf.ctr.argVecs) >= 3 {
+			filterPayloadVec := tf.ctr.argVecs[2]
+			if filterPayloadVec.GetType().Oid != types.T_varchar {
+				return moerr.NewInvalidInput(proc.Ctx, "Third argument (filter payload) must be a string")
+			}
+			if !filterPayloadVec.IsConst() {
+				return moerr.NewInternalError(proc.Ctx, "Filter payload must be a String constant")
+			}
+			u.filterPayload = filterPayloadVec.UnsafeGetStringAt(0)
+		}
+
 		// quantization
 		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
 		if err != nil {
@@ -239,8 +251,9 @@ func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchStat
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
 	rt := vectorindex.RuntimeConfig{
-		Limit:        uint(u.limit),
-		OrigFuncName: u.tblcfg.OrigFuncName,
+		Limit:         uint(u.limit),
+		OrigFuncName:  u.tblcfg.OrigFuncName,
+		FilterPayload: u.filterPayload,
 	}
 	var keys any
 	keys, u.distances, err = veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, fa, rt)

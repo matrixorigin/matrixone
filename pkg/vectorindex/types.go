@@ -111,9 +111,12 @@ type IndexConfig struct {
 }
 
 type RuntimeConfig struct {
-	Limit             uint
-	Probe             uint
-	OrigFuncName      string
+	Limit        uint
+	Probe        uint
+	OrigFuncName string
+	// Optional name-based filter payload for backends that can consume planner
+	// filter lowering without depending on scan binding coordinates.
+	FilterPayload     string
 	BackgroundQueries []*plan.Query
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a real entries-table bloom filter.

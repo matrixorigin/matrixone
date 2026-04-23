@@ -12,10 +12,17 @@ insert into vector_ivfflat_include_phase1 values
 create index idx_ivf_include using ivfflat on vector_ivfflat_include_phase1(embedding)
 lists=2 op_type "vector_l2_ops" include (title, category);
 show create table vector_ivfflat_include_phase1;
-Table    Create Table
-vector_ivfflat_include_phase1    CREATE TABLE `vector_ivfflat_include_phase1` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `title` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (title, category) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+vector_ivfflat_include_phase1  ¦  CREATE TABLE `vector_ivfflat_include_phase1` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `title` varchar(20) DEFAULT NULL,
+  `category` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)
+)
 show index from vector_ivfflat_include_phase1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-vector_ivfflat_include_phase1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-vector_ivfflat_include_phase1    1    idx_ivf_include    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}    YES    embedding
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+vector_ivfflat_include_phase1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+vector_ivfflat_include_phase1  ¦  1  ¦  idx_ivf_include  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 drop table vector_ivfflat_include_phase1;

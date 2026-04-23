@@ -2463,9 +2463,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
 // )
 
-const maxIvfFlatIncludeColumns = 10
+const maxVectorIndexIncludeColumns = 10
 
-func getIvfFlatIncludeColumnNames(indexInfo *tree.Index) []string {
+func getVectorIndexIncludeColumnNames(indexInfo *tree.Index) []string {
 	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
 		return nil
 	}
@@ -2477,16 +2477,25 @@ func getIvfFlatIncludeColumnNames(indexInfo *tree.Index) []string {
 	return names
 }
 
-func validateIvfFlatIncludeColumns(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, vecColName string, pkeyName string) error {
-	if indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+func vectorIndexIncludeAlgoName(indexInfo *tree.Index) string {
+	if indexInfo == nil {
+		return "VECTOR INDEX"
+	}
+	return strings.ToUpper(indexInfo.KeyType.ToString())
+}
+
+func validateVectorIndexIncludeColumns(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, vecColName string, pkeyName string) error {
+	includeColNames := getVectorIndexIncludeColumnNames(indexInfo)
+	if len(includeColNames) == 0 {
 		return nil
 	}
 
-	if len(indexInfo.IndexOption.IncludeColumns) > maxIvfFlatIncludeColumns {
-		return moerr.NewInvalidInputf(ctx.GetContext(), "IVFFLAT INCLUDE supports at most %d columns", maxIvfFlatIncludeColumns)
+	algoName := vectorIndexIncludeAlgoName(indexInfo)
+	if len(includeColNames) > maxVectorIndexIncludeColumns {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "%s INCLUDE supports at most %d columns", algoName, maxVectorIndexIncludeColumns)
 	}
 
-	includeSeen := make(map[string]struct{}, len(indexInfo.IndexOption.IncludeColumns))
+	includeSeen := make(map[string]struct{}, len(includeColNames))
 	for _, col := range indexInfo.IndexOption.IncludeColumns {
 		name := col.ColName()
 		nameOrigin := col.ColNameOrigin()
@@ -2495,10 +2504,10 @@ func validateIvfFlatIncludeColumns(ctx CompilerContext, indexInfo *tree.Index, c
 			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 		}
 		if name == vecColName {
-			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' cannot be both IVFFLAT key and INCLUDE column", nameOrigin)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' cannot be both %s key and INCLUDE column", nameOrigin, algoName)
 		}
 		if name == pkeyName {
-			return moerr.NewInvalidInputf(ctx.GetContext(), "primary key column '%s' cannot be in IVFFLAT INCLUDE", nameOrigin)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "primary key column '%s' cannot be in %s INCLUDE", nameOrigin, algoName)
 		}
 		if _, ok := includeSeen[name]; ok {
 			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate include column '%s'", nameOrigin)
@@ -2507,7 +2516,7 @@ func validateIvfFlatIncludeColumns(ctx CompilerContext, indexInfo *tree.Index, c
 
 		switch colMap[name].Typ.Id {
 		case int32(types.T_blob), int32(types.T_text):
-			logutil.Warnf("IVFFLAT INCLUDE column %q uses large type %s; entries table size may increase significantly", nameOrigin, types.T(colMap[name].Typ.Id).String())
+			logutil.Warnf("%s INCLUDE column %q uses large type %s; index storage size may increase significantly", algoName, nameOrigin, types.T(colMap[name].Typ.Id).String())
 		}
 	}
 
@@ -2542,7 +2551,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			}
 		}
 
-		if err := validateIvfFlatIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
+		if err := validateVectorIndexIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
 			return nil, nil, err
 		}
 
@@ -2712,7 +2721,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 	// 3. create ivf-flat `entries` table
 	{
-		includeColNames := getIvfFlatIncludeColumnNames(indexInfo)
+		includeColNames := getVectorIndexIncludeColumnNames(indexInfo)
 		nIncludeCols := len(includeColNames)
 		cpkeyPos := 4 + nIncludeCols
 
@@ -2904,6 +2913,9 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 			}
 		}
 
+		if err := validateVectorIndexIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	indexDefs := make([]*plan.IndexDef, 2)
@@ -3121,6 +3133,8 @@ func CreateIndexDef(indexInfo *tree.Index,
 
 	indexDef.IndexTableName = indexTableName
 	indexDef.Parts = indexParts
+	// INCLUDE is logical index metadata shared by vector backends, not an algorithm param.
+	indexDef.IncludedColumns = getVectorIndexIncludeColumnNames(indexInfo)
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
