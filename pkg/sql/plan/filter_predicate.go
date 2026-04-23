@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -138,11 +139,20 @@ func buildFilterPredicateJSON(
 	if len(preds) == 0 {
 		return "", nil, residual, nil
 	}
-	buf, err := json.Marshal(preds)
-	if err != nil {
+	// SetEscapeHTML(false): the default json.Marshal escapes <, >, & as
+	// <, >, & for safety when the JSON ends up embedded in an
+	// HTML page. Our output goes to the C++ parse_preds() in filter.hpp whose
+	// op_from_string does a literal-string compare against "<", "<=", ">",
+	// ">=" — if parse_string there doesn't unescape \u sequences, the escaped
+	// form would be rejected. Emit the unescaped form to be safe.
+	var jb bytes.Buffer
+	enc := json.NewEncoder(&jb)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(preds); err != nil {
 		return "", nil, nil, err
 	}
-	return string(buf), serialized, residual, nil
+	// Encoder.Encode always appends a trailing newline; strip it.
+	return strings.TrimRight(jb.String(), "\n"), serialized, residual, nil
 }
 
 // filterExprToPreds produces zero-or-more filterJSONPred entries for a single
