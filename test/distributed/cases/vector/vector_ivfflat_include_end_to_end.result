@@ -18,58 +18,66 @@ insert into phase8_main values
 create index idx_ivf_include_phase8 using ivfflat on phase8_main(embedding)
 lists=2 op_type "vector_l2_ops" include(title, category);
 show create table phase8_main;
-Table    Create Table
-phase8_main    CREATE TABLE `phase8_main` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `title` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include_phase8` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (title, category) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+phase8_main  ¦  CREATE TABLE `phase8_main` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `title` varchar(20) DEFAULT NULL,
+  `category` int DEFAULT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include_phase8` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)
+)
 explain select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 3
-        ->  Table Function on ivf_search
-              Index Reader Param:  Limit: 3
-              Limit: 3
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3  𝄀
               Filter Cond: (`__mo_index_include_category` >= 20)
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-id    title    category
-2    beta    20
-4    delta    40
-5    epsilon    50
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+5  ¦  epsilon  ¦  50
 explain select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-AP QUERY PLAN ON ONE CN(10 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 2
-        ->  Join
-              Join Type: INNER
-              Join Cond: (phase8_main.id = mo_ivf_alias_0.pkid)
-              ->  Table Scan on vector_ivfflat_include_phase8.phase8_main
-                    Filter Cond: phase8_main.note in ([n2 n5])
-              ->  Table Function on ivf_search
-                    Index Reader Param:  Limit: 12
-                    Limit: 12
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase8_main.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase8.phase8_main  𝄀
+                    Filter Cond: phase8_main.note in ([n2 n5])  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 9223372036854775807  𝄀
+                    Limit: 9223372036854775807  𝄀
                     Filter Cond: (`__mo_index_include_category` >= 20)
 select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-id    title    note
-2    beta    n2
-5    epsilon    n5
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  note[12,-1,0]  𝄀
+2  ¦  beta  ¦  n2  𝄀
+5  ¦  epsilon  ¦  n5
 set @entries = (
 select index_table_name
 from mo_catalog.mo_indexes
@@ -91,12 +99,12 @@ set @entries_sql = concat(
 );
 prepare s_entries from @entries_sql;
 execute s_entries;
-__mo_index_pri_col    __mo_index_include_title    __mo_index_include_category
-1    alpha    10
-2    beta    20
-3    gamma    30
-4    delta    40
-5    epsilon    50
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20  𝄀
+3  ¦  gamma  ¦  30  𝄀
+4  ¦  delta  ¦  40  𝄀
+5  ¦  epsilon  ¦  50
 update phase8_main
 set title = 'beta2', category = 25, note = 'n2b'
 where id = 2;
@@ -104,30 +112,38 @@ insert into phase8_main values
 (6, "[1,2,3.5]", "zeta", 35, "n6");
 delete from phase8_main where id = 1;
 execute s_entries;
-__mo_index_pri_col    __mo_index_include_title    __mo_index_include_category
-2    beta2    25
-3    gamma    30
-4    delta    40
-5    epsilon    50
-6    zeta    35
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+2  ¦  beta2  ¦  25  𝄀
+3  ¦  gamma  ¦  30  𝄀
+4  ¦  delta  ¦  40  𝄀
+5  ¦  epsilon  ¦  50  𝄀
+6  ¦  zeta  ¦  35
 deallocate prepare s_entries;
 select id, title, category, note
 from phase8_main
 order by id;
-id    title    category    note
-2    beta2    25    n2b
-3    gamma    30    n3
-4    delta    40    n4
-5    epsilon    50    n5
-6    zeta    35    n6
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  ¦  note[12,-1,0]  𝄀
+2  ¦  beta2  ¦  25  ¦  n2b  𝄀
+3  ¦  gamma  ¦  30  ¦  n3  𝄀
+4  ¦  delta  ¦  40  ¦  n4  𝄀
+5  ¦  epsilon  ¦  50  ¦  n5  𝄀
+6  ¦  zeta  ¦  35  ¦  n6
 alter table phase8_main alter reindex idx_ivf_include_phase8 ivfflat lists=3;
 show create table phase8_main;
-Table    Create Table
-phase8_main    CREATE TABLE `phase8_main` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `title` varchar(20) DEFAULT NULL,\n  `category` int DEFAULT NULL,\n  `note` varchar(20) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include_phase8` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops'  INCLUDE (title, category) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+phase8_main  ¦  CREATE TABLE `phase8_main` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `title` varchar(20) DEFAULT NULL,
+  `category` int DEFAULT NULL,
+  `note` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include_phase8` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)
+)
 show index from phase8_main;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-phase8_main    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-phase8_main    1    idx_ivf_include_phase8    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"["title","category"]","lists":"3","op_type":"vector_l2_ops"}    YES    embedding
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+phase8_main  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+phase8_main  ¦  1  ¦  idx_ivf_include_phase8  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 set @entries = (
 select index_table_name
 from mo_catalog.mo_indexes
@@ -149,36 +165,36 @@ set @entries_sql = concat(
 );
 prepare s_entries from @entries_sql;
 execute s_entries;
-__mo_index_pri_col    __mo_index_include_title    __mo_index_include_category
-2    beta2    25
-3    gamma    30
-4    delta    40
-5    epsilon    50
-6    zeta    35
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+2  ¦  beta2  ¦  25  𝄀
+3  ¦  gamma  ¦  30  𝄀
+4  ¦  delta  ¦  40  𝄀
+5  ¦  epsilon  ¦  50  𝄀
+6  ¦  zeta  ¦  35
 deallocate prepare s_entries;
 explain select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 3
-        ->  Table Function on ivf_search
-              Index Reader Param:  Limit: 3
-              Limit: 3
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3  𝄀
               Filter Cond: (`__mo_index_include_category` >= 20)
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-id    title    category
-6    zeta    35
-2    beta2    25
-4    delta    40
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+6  ¦  zeta  ¦  35  𝄀
+2  ¦  beta2  ¦  25  𝄀
+4  ¦  delta  ¦  40
 drop table phase8_main;
 drop table if exists phase8_empty;
 create table phase8_empty(
@@ -193,19 +209,19 @@ explain select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
 limit 2 by rank with option 'mode=include';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 2
-        ->  Table Function on ivf_search
-              Index Reader Param:  Limit: 2
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 2  𝄀
               Limit: 2
 select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
 limit 2 by rank with option 'mode=include';
-id    title    category
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]
 drop table phase8_empty;
 drop table if exists phase8_nulls;
 create table phase8_nulls(
@@ -224,10 +240,10 @@ select id, title, category
 from phase8_nulls
 order by l2_distance(embedding, "[1,1,1]")
 limit 3 by rank with option 'mode=include';
-id    title    category
-1        10
-2    beta    0
-3    gamma    30
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+1  ¦    ¦  10  𝄀
+2  ¦  beta  ¦  0  𝄀
+3  ¦  gamma  ¦  30
 drop table phase8_nulls;
 drop table if exists phase8_many_include;
 create table phase8_many_include(
@@ -246,19 +262,30 @@ insert into phase8_many_include values
 create index idx_ivf_include_phase8_many using ivfflat on phase8_many_include(embedding)
 lists=2 op_type "vector_l2_ops" include(c1, c2, c3, c4, c5, c6);
 show create table phase8_many_include;
-Table    Create Table
-phase8_many_include    CREATE TABLE `phase8_many_include` (\n  `id` int NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `c1` varchar(10) DEFAULT NULL,\n  `c2` varchar(10) DEFAULT NULL,\n  `c3` int DEFAULT NULL,\n  `c4` int DEFAULT NULL,\n  `c5` varchar(10) DEFAULT NULL,\n  `c6` varchar(10) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf_include_phase8_many` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (c1, c2, c3, c4, c5, c6) \n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+phase8_many_include  ¦  CREATE TABLE `phase8_many_include` (
+  `id` int NOT NULL,
+  `embedding` vecf32(3) DEFAULT NULL,
+  `c1` varchar(10) DEFAULT NULL,
+  `c2` varchar(10) DEFAULT NULL,
+  `c3` int DEFAULT NULL,
+  `c4` int DEFAULT NULL,
+  `c5` varchar(10) DEFAULT NULL,
+  `c6` varchar(10) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ivf_include_phase8_many` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`c1`, `c2`, `c3`, `c4`, `c5`, `c6`)
+)
 show index from phase8_many_include;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-phase8_many_include    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-phase8_many_include    1    idx_ivf_include_phase8_many    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"include_columns":"[\"c1\",\"c2\",\"c3\",\"c4\",\"c5\",\"c6\"]","lists":"2","op_type":"vector_l2_ops"}    YES    embedding
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+phase8_many_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+phase8_many_include  ¦  1  ¦  idx_ivf_include_phase8_many  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 select id, c1, c2, c3, c4, c5, c6
 from phase8_many_include
 order by l2_distance(embedding, "[1,0,0]")
 limit 2 by rank with option 'mode=include';
-id    c1    c2    c3    c4    c5    c6
-1    a1    b1    11    21    e1    f1
-2    a2    b2    12    22    e2    f2
+➤ id[4,32,0]  ¦  c1[12,-1,0]  ¦  c2[12,-1,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[12,-1,0]  ¦  c6[12,-1,0]  𝄀
+1  ¦  a1  ¦  b1  ¦  11  ¦  21  ¦  e1  ¦  f1  𝄀
+2  ¦  a2  ¦  b2  ¦  12  ¦  22  ¦  e2  ¦  f2
 drop table phase8_many_include;
 drop table if exists phase8_perf_include;
 create table phase8_perf_include(
@@ -300,34 +327,34 @@ from phase8_perf_include
 where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=include';
-TP QUERY PLAN
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 20
-        ->  Table Function on ivf_search
-              Index Reader Param:  Limit: 20
-              Limit: 20
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 20  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 20  𝄀
+              Limit: 20  𝄀
               Filter Cond: (`__mo_index_include_category` between 20 and 120)
 explain select id, title, category
 from phase8_perf_plain
 where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=post';
-AP QUERY PLAN ON ONE CN(10 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 20
-        ->  Join
-              Join Type: INNER
-              Join Cond: (phase8_perf_plain.id = mo_ivf_alias_0.pkid)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on vector_ivfflat_include_phase8.phase8_perf_plain
-                    Filter Cond: phase8_perf_plain.category BETWEEN 20 AND 120
-                    Runtime Filter Probe: phase8_perf_plain.id
-              ->  Table Function on ivf_search
-                    Index Reader Param:  Limit: 100
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 20  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase8_perf_plain.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase8.phase8_perf_plain  𝄀
+                    Filter Cond: phase8_perf_plain.category BETWEEN 20 AND 120  𝄀
+                    Runtime Filter Probe: phase8_perf_plain.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 100  𝄀
                     Limit: 100
 select count(*) from (
 select id, title, category
@@ -336,7 +363,7 @@ where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=include'
 ) as t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 20
 select count(*) from (
 select id, title, category
@@ -345,7 +372,7 @@ where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=post'
 ) as t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 20
 drop table phase8_perf_include;
 drop table phase8_perf_plain;

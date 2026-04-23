@@ -23,22 +23,13 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func ivfIndexIncludesColumn(indexDef *planpb.IndexDef, colName string) (bool, error) {
-	if !catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-		return false, nil
-	}
-
-	includeCols, err := getIvfIncludeColumnNamesFromParams(indexDef.IndexAlgoParams)
-	if err != nil {
-		return false, err
-	}
-
-	for _, includeCol := range includeCols {
+func indexIncludesColumn(indexDef *planpb.IndexDef, colName string) bool {
+	for _, includeCol := range indexDef.IncludedColumns {
 		if catalog.ResolveAlias(includeCol) == colName {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, error) {
@@ -48,7 +39,7 @@ func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, erro
 		}
 	}
 
-	return ivfIndexIncludesColumn(indexDef, colName)
+	return indexIncludesColumn(indexDef, colName), nil
 }
 
 func collectAffectedIndexNamesForAlter(indexDefs []*planpb.IndexDef, affectedCols []string) ([]string, error) {
@@ -81,64 +72,39 @@ func collectAffectedIndexNamesForAlter(indexDefs []*planpb.IndexDef, affectedCol
 	return names, nil
 }
 
-func rewriteIvfIncludeColumnNames(indexAlgoParams, oldColName, newColName string) (string, bool, error) {
+func rewriteIncludedColumnNames(includedColumns []string, oldColName, newColName string) ([]string, bool) {
 	if oldColName == newColName {
-		return indexAlgoParams, false, nil
+		return includedColumns, false
+	}
+	if len(includedColumns) == 0 {
+		return includedColumns, false
 	}
 
-	includeCols, err := getIvfIncludeColumnNamesFromParams(indexAlgoParams)
-	if err != nil {
-		return "", false, err
-	}
-	if len(includeCols) == 0 {
-		return indexAlgoParams, false, nil
-	}
-
+	newIncludedColumns := append([]string(nil), includedColumns...)
 	changed := false
-	for i, includeCol := range includeCols {
+	for i, includeCol := range newIncludedColumns {
 		if catalog.ResolveAlias(includeCol) == oldColName {
-			includeCols[i] = newColName
+			newIncludedColumns[i] = newColName
 			changed = true
 		}
 	}
-	if !changed {
-		return indexAlgoParams, false, nil
-	}
-
-	params, err := catalog.IndexParamsStringToMap(indexAlgoParams)
-	if err != nil {
-		return "", false, err
-	}
-	encoded, err := catalog.MarshalIncludeColumnsValue(includeCols)
-	if err != nil {
-		return "", false, err
-	}
-	params[catalog.IndexAlgoParamIncludeColumns] = encoded
-
-	newParams, err := catalog.IndexParamsMapToJsonString(params)
-	if err != nil {
-		return "", false, err
-	}
-	return newParams, true, nil
+	return newIncludedColumns, changed
 }
 
-func renameColumnInIvfIndexAlgoParams(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {
+func renameColumnInVectorIndexIncludedColumns(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {
 	if oldColName == newColName {
 		return nil, nil
 	}
 
-	updatedByIndexName := make(map[string]string)
+	updatedByIndexName := make(map[string][]string)
 	for _, indexDef := range tableDef.Indexes {
-		newParams, changed, err := rewriteIvfIncludeColumnNames(indexDef.IndexAlgoParams, oldColName, newColName)
-		if err != nil {
-			return nil, err
-		}
+		newIncludedColumns, changed := rewriteIncludedColumnNames(indexDef.IncludedColumns, oldColName, newColName)
 		if !changed {
 			continue
 		}
 
-		indexDef.IndexAlgoParams = newParams
-		updatedByIndexName[indexDef.IndexName] = newParams
+		indexDef.IncludedColumns = newIncludedColumns
+		updatedByIndexName[indexDef.IndexName] = newIncludedColumns
 	}
 
 	if len(updatedByIndexName) == 0 {
@@ -153,9 +119,13 @@ func renameColumnInIvfIndexAlgoParams(tableDef *planpb.TableDef, oldColName, new
 
 	sqls := make([]string, 0, len(indexNames))
 	for _, indexName := range indexNames {
+		encoded, err := catalog.MarshalIncludeColumnsValue(updatedByIndexName[indexName])
+		if err != nil {
+			return nil, err
+		}
 		sqls = append(sqls, fmt.Sprintf(
-			"update `mo_catalog`.`mo_indexes` set algo_params = '%s' where table_id = %d and name = '%s' ; ",
-			escapeSQLStringLiteral(updatedByIndexName[indexName]),
+			"update `mo_catalog`.`mo_indexes` set included_columns = '%s' where table_id = %d and name = '%s' ; ",
+			escapeSQLStringLiteral(encoded),
 			tableDef.TblId,
 			indexName,
 		))

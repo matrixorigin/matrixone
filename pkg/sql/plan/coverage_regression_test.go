@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -117,7 +118,8 @@ func TestRenameColumnUpdatesAlterContextAndClusterMetadata(t *testing.T) {
 	require.Equal(t, "headline", copyTable.ClusterBy.Name)
 	require.Equal(t, "title", alterCtx.alterColMap["headline"].sexprStr)
 	require.Len(t, alterCtx.UpdateSqls, 2)
-	require.Contains(t, copyTable.Indexes[0].IndexAlgoParams, "headline")
+	require.Equal(t, []string{"headline", "note"}, copyTable.Indexes[0].IncludedColumns)
+	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 	require.Equal(t, "headline", alterCtx.changColDefMap[3].Name)
 }
 
@@ -168,8 +170,9 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.Equal(t, "title", alterCtx.alterColMap["headline"].sexprStr)
 	require.Equal(t, "headline", alterCtx.changColDefMap[3].Name)
 	require.Len(t, alterCtx.UpdateSqls, 3)
-	require.Contains(t, alterCtx.UpdateSqls[2], "algo_params")
-	require.Contains(t, copyTable.Indexes[0].IndexAlgoParams, "headline")
+	require.Contains(t, strings.Join(alterCtx.UpdateSqls, "\n"), "included_columns")
+	require.Equal(t, []string{"headline", "note"}, copyTable.Indexes[0].IncludedColumns)
+	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }
 
 func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
@@ -321,7 +324,8 @@ func makeAlterCoverageTableDef() *TableDef {
 			{
 				IndexName:       "idx_ivf",
 				IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops","include_columns":"[\"title\",\"note\"]"}`,
+				IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+				IncludedColumns: []string{"title", "note"},
 				Parts:           []string{"embedding"},
 			},
 		},

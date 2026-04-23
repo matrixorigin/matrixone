@@ -311,6 +311,9 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includeList := indexIncludeColumnsToString(indexdef.IncludedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -671,6 +674,22 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
 }
 
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
