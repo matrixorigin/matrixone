@@ -127,7 +127,7 @@ func updateRenameColumnInTableDef(
 		))
 	}
 
-	ivfAlgoParamSQLs, err := renameColumnInIvfIndexAlgoParams(tableDef, oldColName, newColName)
+	ivfAlgoParamSQLs, err := renameColumnInVectorIndexIncludedColumns(tableDef, oldColName, newColName)
 	if err != nil {
 		return nil, err
 	}

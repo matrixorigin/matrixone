@@ -153,11 +153,11 @@ func TestIvfIncludeHelperFilterCoverageAndSerialization(t *testing.T) {
 		MakePlan2Float64ConstExprWithType(0.5),
 	)
 
-	assert.True(t, exprRefsOnlyCoveredColumns(categoryEq, scanTag, 1, scanNode.TableDef, covered))
-	assert.False(t, exprRefsOnlyCoveredColumns(noteEq, scanTag, 1, scanNode.TableDef, covered))
-	assert.False(t, exprRefsOnlyCoveredColumns(distFilter, scanTag, 1, scanNode.TableDef, covered))
-	assert.True(t, exprRefsOnlyCoveredColumns(&Expr{Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}, scanTag, 1, scanNode.TableDef, covered))
-	assert.True(t, exprRefsOnlyCoveredColumns(
+	assert.True(t, vectorIndexExprRefsOnlyCoveredColumns(categoryEq, scanTag, 1, scanNode.TableDef, covered))
+	assert.False(t, vectorIndexExprRefsOnlyCoveredColumns(noteEq, scanTag, 1, scanNode.TableDef, covered))
+	assert.False(t, vectorIndexExprRefsOnlyCoveredColumns(distFilter, scanTag, 1, scanNode.TableDef, covered))
+	assert.True(t, vectorIndexExprRefsOnlyCoveredColumns(&Expr{Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}, scanTag, 1, scanNode.TableDef, covered))
+	assert.True(t, vectorIndexExprRefsOnlyCoveredColumns(
 		&Expr{
 			Expr: &planpb.Expr_List{
 				List: &planpb.ExprList{List: []*Expr{MakePlan2Int32ConstExprWithType(1), MakePlan2Int32ConstExprWithType(2)}},
@@ -165,7 +165,7 @@ func TestIvfIncludeHelperFilterCoverageAndSerialization(t *testing.T) {
 		},
 		scanTag, 1, scanNode.TableDef, covered,
 	))
-	assert.False(t, exprRefsOnlyCoveredColumns(
+	assert.False(t, vectorIndexExprRefsOnlyCoveredColumns(
 		&Expr{
 			Typ: scanNode.TableDef.Cols[0].Typ,
 			Expr: &planpb.Expr_Col{
@@ -175,7 +175,7 @@ func TestIvfIncludeHelperFilterCoverageAndSerialization(t *testing.T) {
 		scanTag, 1, scanNode.TableDef, covered,
 	))
 
-	pushdown, remaining := splitFiltersByIncludeColumns([]*Expr{categoryEq, noteEq, distFilter}, scanNode, []string{"title", "category"}, 1)
+	pushdown, remaining := splitFiltersByVectorIndexCoverage([]*Expr{categoryEq, noteEq, distFilter}, scanNode, []string{"title", "category"}, 1)
 	require.Len(t, pushdown, 1)
 	require.Len(t, remaining, 2)
 	assert.Same(t, categoryEq, pushdown[0])
@@ -733,6 +733,8 @@ func TestIvfFilterColumnAndDistanceRangeHelpers(t *testing.T) {
 	_, err := ivfFilterColumnToAST(&ColRef{ColPos: 0}, nil)
 	require.Error(t, err)
 	_, err = ivfFilterColumnToAST(&ColRef{ColPos: 99}, scanNode)
+	require.Error(t, err)
+	_, err = ivfFilterColumnToAST(&ColRef{RelPos: scanTag + 1, ColPos: 2, Name: "title"}, scanNode)
 	require.Error(t, err)
 
 	pkExpr, err := ivfFilterColumnToAST(&ColRef{RelPos: scanTag, ColPos: 0, Name: "id"}, scanNode)

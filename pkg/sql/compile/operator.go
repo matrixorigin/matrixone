@@ -355,6 +355,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
 		op.Limit = t.Limit
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.IndexReaderParam = t.IndexReaderParam
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
@@ -558,6 +559,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.IsSingle = t.TableFunction.IsSingle
+		op.TableFunction.Limit = t.TableFunction.Limit
+		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
