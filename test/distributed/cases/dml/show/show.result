@@ -256,6 +256,9 @@ show tables;
 mo_account  𝄀
 mo_branch_metadata  𝄀
 mo_cache  𝄀
+mo_ccpr_dbs  𝄀
+mo_ccpr_log  𝄀
+mo_ccpr_tables  𝄀
 mo_cdc_task  𝄀
 mo_cdc_watermark  𝄀
 mo_columns  𝄀
@@ -299,7 +302,7 @@ mo_variables  𝄀
 mo_version
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-44
+47
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

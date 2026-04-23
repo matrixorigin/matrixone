@@ -103,6 +103,10 @@ type ClientConn interface {
 	BuildConnWithServer(prevAddr string) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
 	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
+	// KillCurrentBackendConn kills the backend connection that is currently
+	// serving this client connection. It is used when the client side has
+	// already disconnected, but the backend statement may still be blocked.
+	KillCurrentBackendConn(sc ServerConn) error
 	// Close closes the client connection.
 	Close() error
 }
@@ -327,11 +331,17 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
-		defer ev.notify()
-		if err := c.handleQuitEvent(ctx); err != nil {
-			c.log.Error("failed to exec quit cmd", zap.Error(err))
-			return err
+		if c.tun != nil {
+			c.tun.markExpectedCacheQuit()
 		}
+		// Notify/finish the event immediately.
+		ev.notify()
+		// Then handle the quit event async.
+		go func() {
+			if err := c.handleQuitEvent(ctx); err != nil {
+				c.log.Error("failed to exec quit cmd", zap.Error(err))
+			}
+		}()
 		return nil
 	case *upgradeEvent:
 		return c.handleUpgradeEvent(ev, resp)
@@ -382,6 +392,34 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("exec error")
 	}
 	return nil
+}
+
+// KillCurrentBackendConn implements the ClientConn interface.
+func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
+	if sc == nil {
+		return nil
+	}
+	currentCN := sc.GetCNServer()
+	if currentCN == nil {
+		return nil
+	}
+
+	tempCN := &CNServer{
+		uuid: currentCN.uuid,
+		addr: currentCN.addr,
+		salt: currentCN.salt,
+	}
+	if c.mysqlProto != nil {
+		tempCN.salt = c.mysqlProto.GetSalt()
+	}
+
+	cid, err := c.genConnID()
+	if err != nil {
+		return err
+	}
+	tempCN.connID = cid
+
+	return c.connAndExec(tempCN, fmt.Sprintf("kill connection %d", c.ConnID()), nil)
 }
 
 // handleKill handles the kill event.

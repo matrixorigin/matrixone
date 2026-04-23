@@ -30,6 +30,7 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -191,13 +192,21 @@ func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
 
+	if !s.task.runnerReady.Load() {
+		return
+	}
+
 	if s.task.runner != nil {
+		return
+	}
+
+	if s.task.holder == nil {
 		return
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
-		panic("task service must created")
+		return
 	}
 
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,
@@ -340,6 +349,17 @@ func (s *service) registerExecutorsLocked() {
 		),
 	)
 
+	s.task.runner.RegisterExecutor(task.TaskCode_PublicationExecutor,
+		publication.PublicationTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			common.PublicationAllocator,
+			nil,
+			s.pu, // pass ParameterUnit from service
+		),
+	)
 	s.task.runner.RegisterExecutor(task.TaskCode_IndexUpdateTaskExecutor,
 		idxcron.IndexUpdateTaskExecutorFactory(
 			s.cfg.UUID,

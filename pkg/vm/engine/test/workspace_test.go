@@ -1857,3 +1857,296 @@ func TestGCFiles(t *testing.T) {
 		}
 	}
 }
+
+// Test_WorkspaceForceDumpOnGlobalAccumulation verifies that the workspace
+// safety valve forces a dump when global in-memory insert size accumulates
+// beyond extraWorkspaceThreshold, even when IncrStatementID is disabled
+// (simulating HNSW index creation via RunSql).
+//
+// Without the fix, writes keep accumulating because:
+// 1. IncrStatementID is disabled (no cumulative dump from offset 0)
+// 2. Each write's offset-scanned size < raised writeWorkspaceThreshold
+// 3. Only quota check on first write, threshold raised permanently
+//
+// With the fix, a global safety valve triggers dump when
+// approximateInMemInsertSize >= extraWorkspaceThreshold.
+func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	// Use small thresholds to trigger the safety valve with small batches:
+	// - writeWorkspaceThreshold = 100 bytes: writes > 100 bytes trigger quota check
+	// - extraWorkspaceThreshold = 3000 bytes: global accumulation > 3000 bytes triggers force dump
+	// - quota = 100MB: enough for quota acquisition
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(100),
+		testutil.WithDisttaeEngineExtraWorkspaceThreshold(3000),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(100*1024*1024),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 10
+	totalWrites := 10
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	ws := txn.GetWorkspace().(*disttae.Transaction)
+
+	// Start the outer statement boundary for the SQL that triggers HNSW creation.
+	// The loop below simulates DisableIncrStatement behavior for sub-writes by
+	// reusing this statement context instead of incrementing the statement ID again.
+	ws.StartStatement()
+	require.NoError(t, ws.IncrStatementID(ctx, false))
+
+	// Simulate DisableIncrStatement for the repeated writes: write multiple batches
+	// without any additional IncrStatementID or StartStatement/EndStatement calls,
+	// but still call UpdateSnapshotWriteOffset between writes (as NewCompile does).
+	var maxInMemSize uint64
+	forceDumpTriggered := false
+
+	for i := 0; i < totalWrites; i++ {
+		func() {
+			bat := catalog2.MockBatch(schema, rowsCount)
+			defer bat.Close()
+			cnBat := containers.ToCNBatch(bat)
+
+			// Simulate NewCompile → UpdateSnapshotWriteOffset
+			ws.UpdateSnapshotWriteOffset()
+
+			err = relation.Write(ctx, cnBat)
+			require.NoError(t, err)
+
+			inMemSize := ws.ApproximateInMemInsertSize()
+			if inMemSize > maxInMemSize {
+				maxInMemSize = inMemSize
+			}
+
+			// If inMemSize dropped, a dump was triggered
+			if i > 0 && inMemSize < maxInMemSize {
+				forceDumpTriggered = true
+			}
+		}()
+	}
+
+	// Verify that the safety valve triggered at least once
+	require.True(t, forceDumpTriggered,
+		"expected force dump to trigger when global accumulation exceeds extraWorkspaceThreshold, "+
+			"but approximateInMemInsertSize only grew (max=%d)", maxInMemSize)
+
+	// Verify that the final in-memory size is bounded
+	finalInMemSize := ws.ApproximateInMemInsertSize()
+	require.Less(t, finalInMemSize, uint64(3000)*2,
+		"expected final in-memory size to be bounded by ~2x extraWorkspaceThreshold, got %d", finalInMemSize)
+
+	// End the statement and commit
+	ws.EndStatement()
+
+	// Commit and verify data integrity
+	require.NoError(t, txn.Commit(ctx))
+
+	// Read back all rows to verify data wasn't lost during force dump
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		totalRows := 0
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			if done {
+				break
+			}
+			require.NoError(t, err)
+			totalRows += ret.RowCount()
+		}
+		reader.Close()
+
+		// We wrote totalWrites * rowsCount rows total
+		require.Equal(t, totalWrites*rowsCount, totalRows,
+			"expected %d rows but got %d after force dump + commit", totalWrites*rowsCount, totalRows)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+}
+
+// Test_WorkspaceForceDumpNoIncrStatement simulates the real HNSW scenario where
+// IncrStatementID is completely disabled (statementID==0). This verifies the safety
+// valve works when stmtStart falls back to 0, which is the actual code path hit
+// during HNSW index creation via sqlexec.RunSql with WithDisableIncrStatement.
+func Test_WorkspaceForceDumpNoIncrStatement(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(100),
+		testutil.WithDisttaeEngineExtraWorkspaceThreshold(3000),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(100*1024*1024),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 10
+	totalWrites := 10
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	ws := txn.GetWorkspace().(*disttae.Transaction)
+
+	// Only call StartStatement — NO IncrStatementID. This is the real HNSW path:
+	// sqlexec.RunSql uses WithDisableIncrStatement, so IncrStatementID is never called,
+	// leaving statementID==0 and offsets[] empty.
+	ws.StartStatement()
+
+	var maxInMemSize uint64
+	forceDumpTriggered := false
+
+	for i := 0; i < totalWrites; i++ {
+		func() {
+			bat := catalog2.MockBatch(schema, rowsCount)
+			defer bat.Close()
+			cnBat := containers.ToCNBatch(bat)
+
+			ws.UpdateSnapshotWriteOffset()
+
+			err = relation.Write(ctx, cnBat)
+			require.NoError(t, err)
+
+			inMemSize := ws.ApproximateInMemInsertSize()
+			if inMemSize > maxInMemSize {
+				maxInMemSize = inMemSize
+			}
+
+			if i > 0 && inMemSize < maxInMemSize {
+				forceDumpTriggered = true
+			}
+		}()
+	}
+
+	require.True(t, forceDumpTriggered,
+		"expected force dump to trigger with statementID==0, "+
+			"but approximateInMemInsertSize only grew (max=%d)", maxInMemSize)
+
+	finalInMemSize := ws.ApproximateInMemInsertSize()
+	require.Less(t, finalInMemSize, uint64(3000)*2,
+		"expected final in-memory size to be bounded, got %d", finalInMemSize)
+
+	ws.EndStatement()
+
+	require.NoError(t, txn.Commit(ctx))
+
+	// Read back and verify data integrity
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		totalRows := 0
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			if done {
+				break
+			}
+			require.NoError(t, err)
+			totalRows += ret.RowCount()
+		}
+		reader.Close()
+
+		require.Equal(t, totalWrites*rowsCount, totalRows,
+			"expected %d rows but got %d", totalWrites*rowsCount, totalRows)
+
+		require.NoError(t, txn.Commit(ctx))
+	}
+}
