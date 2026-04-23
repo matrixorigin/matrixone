@@ -441,8 +441,12 @@ public:
     //   no filter, no deletes    → returns nullptr (caller runs the unfiltered search path)
     //   no filter, has deletes   → reuses the cached device delete bitset (shared_ptr aliased)
     //   filter, no deletes       → evaluates CPU bitmap, uploads H2D, returns a new owning bitset
-    //   filter + deletes         → uploads user bitmap, then AND with cached delete bitset via
-    //                              thrust::transform (in place on the newly allocated bitset)
+    //   filter + deletes         → evaluates CPU bitmap, ANDs with host delete slice on the CPU,
+    //                              uploads the already-combined bitmap in one H2D copy —
+    //                              no device-side thrust::transform. Faster than the old
+    //                              device-AND path: one fewer kernel launch per search, and
+    //                              the IVF-PQ post-filter can reuse *out_user_mask directly
+    //                              without re-ANDing.
     //
     // `start_row`, `shard_sz` match the shard-local slicing used by sync_shard_bitset:
     //   - SINGLE_GPU / REPLICATED: start_row=0, shard_sz=current_offset_
@@ -450,11 +454,19 @@ public:
     //
     // Caller is responsible for holding the returned shared_ptr alive for the duration
     // of the cuVS search call.
+    //
+    // `out_user_mask` (optional): if non-null AND a user filter is present, the
+    // function populates *out_user_mask with the packed host bitmap uploaded to
+    // the device — i.e. (user_filter AND NOT deleted) when both are present, or
+    // user_filter alone when no deletes. The IVF-PQ post-filter reuses this to
+    // suppress the bitset_filter padding quirk. Left empty on the deletes-only
+    // and unfiltered paths (the cached device delete bitset is enough there).
     std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
     build_search_bitset(raft_handle_wrapper_t& handle,
                         const std::string& preds_json,
                         uint64_t start_row,
-                        uint64_t shard_sz) {
+                        uint64_t shard_sz,
+                        std::vector<uint32_t>* out_user_mask = nullptr) {
         using bs_t = raft::core::bitset<uint32_t, int64_t>;
         auto res   = handle.get_raft_resources();  // shared_ptr<raft::resources>
         int dev_id = handle.get_device_id();
@@ -489,11 +501,27 @@ public:
                 this->get_device_bitset_info(dev_id)->ptr);
         }
 
-        // User-filter path: evaluate on CPU under a shared lock.
+        // User-filter path: evaluate on CPU, AND in the delete slice on CPU
+        // (when present), then upload the already-combined bitmap. Keeping the
+        // AND on the host is cheaper than a device thrust::transform — one
+        // fewer kernel launch — and lets the IVF-PQ post-filter reuse the
+        // combined host bitmap without any further work.
         std::vector<uint32_t> host_mask;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
             host_mask = eval_filter_bitmap_cpu(this->filter_host_, preds, start_row, shard_sz);
+            if (has_del && !this->deleted_bitset_.empty()) {
+                // start_row is 0 (non-SHARDED) or a multiple of 32 (SHARDED),
+                // so start_word is always an integer (see class-level doc).
+                const uint64_t start_word = start_row / 32;
+                const uint64_t del_words  = this->deleted_bitset_.size();
+                for (uint64_t w = 0; w < host_mask.size(); ++w) {
+                    uint32_t del_w = (start_word + w < del_words)
+                                       ? this->deleted_bitset_[start_word + w]
+                                       : 0xFFFFFFFFu;
+                    host_mask[w] &= del_w;
+                }
+            }
         }
         const uint64_t nwords = host_mask.size();
 
@@ -509,29 +537,7 @@ public:
         // Drain the H2D DMA before host_mask (stack-local) goes out of scope at return.
         raft::resource::sync_stream(*res);
 
-        if (has_del) {
-            // Hold a shared_ptr to the cached delete bitset so a concurrent
-            // sync_*_bitset() replacing info->ptr cannot free it out from under
-            // the thrust::transform below. (info->ptr assignment drops the
-            // previous owning reference under info->mutex.)
-            std::shared_ptr<bs_t> del_bs;
-            if (sharded) {
-                this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
-                del_bs = std::static_pointer_cast<bs_t>(
-                    this->get_device_shard_bitset_info(dev_id)->ptr);
-            } else {
-                this->sync_device_bitset(dev_id, *res);
-                del_bs = std::static_pointer_cast<bs_t>(
-                    this->get_device_bitset_info(dev_id)->ptr);
-            }
-            thrust::transform(
-                raft::resource::get_thrust_policy(*res),
-                bs->data(), bs->data() + nwords,
-                del_bs->data(),
-                bs->data(),
-                thrust::bit_and<uint32_t>{});
-        }
-
+        if (out_user_mask) *out_user_mask = std::move(host_mask);
         return bs;
     }
 

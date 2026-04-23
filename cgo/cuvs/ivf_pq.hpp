@@ -855,6 +855,80 @@ public:
         return future.get();
     }
 
+    // =====================================================================
+    // WARNING: cuVS IVF-PQ bitset_filter quirk — filter-excluded rows leak
+    //          into the result when popcount(filter) < limit.
+    // ---------------------------------------------------------------------
+    // When the number of rows passing (user_filter AND NOT deleted) is less
+    // than `limit`, cuVS IVF-PQ pads the remaining result slots with
+    // filter-excluded nearest neighbors instead of returning sentinels.
+    // So rows explicitly excluded by predicate or by soft-delete can still
+    // appear in search_res.neighbors.
+    //   Canonical reproducer: FilteredSearchAndDeletionCombine in
+    //   cgo/cuvs/test/ivf_pq_test.cu.
+    //
+    // Mitigation: re-apply the combined (user_filter AND NOT deleted) mask
+    // on the host and replace any failing slot with (-1, float::max). The
+    // Go layer already treats -1 as an empty slot (see multi_index.go), so
+    // callers see a result array with fewer than `limit` valid neighbors,
+    // not a corrupted one. Only IVF-PQ is patched; IVF-Flat and CAGRA paths
+    // correctly write -1 for filter-excluded slots natively.
+    //
+    // Mask sources (after build_search_bitset refactor):
+    //   * User filter present — user_host_mask already holds (user ∧ ¬deleted)
+    //     because build_search_bitset ANDs on the host before upload. Just
+    //     bit-test it; no further combine needed.
+    //   * Deletes-only path  — user_host_mask is empty (cached device delete
+    //     bitset is reused for the search itself). Synthesize a host mask
+    //     here by copying the delete-bitset slice over [start_row,
+    //     start_row+shard_sz).
+    //
+    // Caveats:
+    //   * Suppresses junk only — cannot recover valid rows that cuVS never
+    //     scored (e.g. rows living in non-probed IVF lists).
+    //
+    // Caller must hold mutex_ as shared_lock; this function reads
+    // deleted_bitset_ / deleted_count_.
+    // =====================================================================
+    void apply_pq_post_filter_locked(search_result_t& search_res,
+                                     uint64_t start_row,
+                                     uint64_t shard_sz,
+                                     std::vector<uint32_t>& user_host_mask) const {
+        const bool has_user = !user_host_mask.empty();  // non-empty iff build_search_bitset ran the user-filter path
+        const bool has_del  = this->deleted_count_ > 0;
+        if (!has_user && !has_del) return;
+
+        std::vector<uint32_t>& host_mask = user_host_mask;
+        if (!has_user) {
+            // Deletes-only: copy the delete-bitset slice straight into host_mask.
+            // start_row is 0 (non-SHARDED) or a multiple of 32 (SHARDED), so
+            // start_word is always an integer (see index_base.hpp lifecycle).
+            const uint64_t n_mask_words = (shard_sz + 31) / 32;
+            const uint64_t start_word   = start_row / 32;
+            const uint64_t del_words    = this->deleted_bitset_.size();
+            host_mask.resize(n_mask_words);
+            for (uint64_t w = 0; w < n_mask_words; ++w) {
+                host_mask[w] = (start_word + w < del_words)
+                                 ? this->deleted_bitset_[start_word + w]
+                                 : 0xFFFFFFFFu;
+            }
+            // Tail bits past shard_sz are unreachable: the raw-position check
+            // below rejects p >= shard_sz before touching host_mask.
+        }
+
+        const float kDistSentinel = std::numeric_limits<float>::max();
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            int64_t raw = search_res.neighbors[i];
+            if (raw < 0) continue;
+            uint64_t p = static_cast<uint64_t>(raw);
+            if (p >= shard_sz
+                || !((host_mask[p / 32] >> (p % 32)) & 1U)) {
+                search_res.neighbors[i] = -1;
+                search_res.distances[i] = kDistSentinel;
+            }
+        }
+    }
+
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp, const std::string& preds_json = "") {
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
@@ -898,6 +972,12 @@ public:
             if (local_index) handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_index));
         }
 
+        // Declared at function scope so the post-filter block after the GPU
+        // search can reuse the shard range and the host-side user-filter mask
+        // (see WARNING comment below).
+        uint64_t start_row = 0, shard_sz = this->count;
+        std::vector<uint32_t> user_host_mask;  // populated by build_search_bitset when user filter is present
+
         if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
             raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
@@ -906,14 +986,13 @@ public:
             auto neighbors_device_internal = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device_internal = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int rank = handle.get_rank();
                 shard_sz = this->shard_sizes_[rank];
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask);
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -938,6 +1017,9 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+
+            apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];
@@ -1172,18 +1254,23 @@ public:
             if (local_index) handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_index));
         }
 
+        // Declared at function scope so the post-filter block after the GPU
+        // search can reuse the shard range and the host-side user-filter mask
+        // (see WARNING comment below).
+        uint64_t start_row = 0, shard_sz = this->count;
+        std::vector<uint32_t> user_host_mask;  // populated by build_search_bitset when user filter is present
+
         if (local_index) {
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
             auto distances_device = raft::make_device_matrix<float, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
-            uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int rank = handle.get_rank();
                 shard_sz = this->shard_sizes_[rank];
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask);
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1209,6 +1296,9 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+
+            apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int64_t offset = 0;
                 for (int r = 0; r < handle.get_rank(); ++r) offset += (int64_t)this->shard_sizes_[r];

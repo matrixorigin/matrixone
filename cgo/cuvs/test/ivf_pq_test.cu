@@ -622,22 +622,33 @@ TEST(GpuIvfPqTest, FilteredSearchCombinesWithDeleteBitset) {
     std::vector<float> query(dimension, 1.0f);
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     sp.n_probes = 4;
-    // limit=2 matches the count of valid (non-deleted, filter-allowed) rows.
-    // Requesting more than the number of valid results causes cuvs IVF-PQ to
-    // fill the extra slots with filter-excluded nearest neighbors — a known
-    // quirk of IVF-PQ's bitset_filter when limit > popcount(filter).
+    // limit=5 deliberately exceeds the number of valid rows (2: IDs 0 and 2;
+    // ID 1 is soft-deleted). Exercises the host-side post-filter in
+    // gpu_ivf_pq_t::apply_pq_post_filter_locked, which was added to defeat
+    // cuVS IVF-PQ's bitset_filter padding quirk: without it, the 3 extra
+    // result slots would be filled with filter-excluded (cat=99) rows rather
+    // than the -1 sentinel.
+    const uint32_t k = 5;
     auto result = index.search_with_filter(
-        query.data(), 1, dimension, 2, sp,
+        query.data(), 1, dimension, k, sp,
         "[{\"col\":0,\"op\":\"in\",\"vals\":[10, 20, 30]}]");
+    ASSERT_EQ(result.neighbors.size(), (size_t)k);
 
     bool saw_0 = false, saw_2 = false;
+    int valid_slots = 0;
     for (size_t i = 0; i < result.neighbors.size(); ++i) {
         ASSERT_NE(result.neighbors[i], 1LL);  // never the deleted ID
+        if (result.neighbors[i] == -1) continue;
+        ++valid_slots;
+        // Only IDs that pass (cat IN {10,20,30}) AND are not deleted may appear.
+        // A cat=99 ID leaking here would indicate the post-filter failed.
+        ASSERT_TRUE(result.neighbors[i] == 0LL || result.neighbors[i] == 2LL);
         if (result.neighbors[i] == 0LL) saw_0 = true;
         if (result.neighbors[i] == 2LL) saw_2 = true;
     }
     ASSERT_TRUE(saw_0);
     ASSERT_TRUE(saw_2);
+    ASSERT_EQ(valid_slots, 2);  // exactly the 2 filter-matching, non-deleted rows
 
     index.destroy();
 }
