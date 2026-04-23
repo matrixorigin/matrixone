@@ -1974,3 +1974,39 @@ func TestShouldReadBlock_WithBuildBlockPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, read, "block doesn't overlap range → should NOT read")
 }
+
+func TestUpdateCNTombstoneBatch_NilGuard(t *testing.T) {
+mp := mpool.MustNewZero()
+
+t.Run("nil batch", func(t *testing.T) {
+err := updateCNTombstoneBatch(nil, types.BuildTS(1, 0), nil, false, mp)
+require.Error(t, err)
+})
+
+t.Run("missing pk vector", func(t *testing.T) {
+bat := batch.NewWithSize(1)
+bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 0), false, mp))
+err := updateCNTombstoneBatch(bat, types.BuildTS(2, 0), nil, false, mp)
+require.Error(t, err)
+require.Contains(t, err.Error(), "missing pk vector")
+})
+}
+
+func TestUpdateCNDataBatch_NilGuard(t *testing.T) {
+mp := mpool.MustNewZero()
+
+t.Run("nil batch", func(t *testing.T) {
+err := updateCNDataBatch(nil, types.BuildTS(1, 0), nil, false, mp)
+require.Error(t, err)
+})
+
+t.Run("only ts column - no vectors after strip", func(t *testing.T) {
+bat := batch.NewWithSize(1)
+bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 0), false, mp))
+err := updateCNDataBatch(bat, types.BuildTS(2, 0), nil, false, mp)
+require.Error(t, err)
+require.Contains(t, err.Error(), "no vectors after stripping commit-ts")
+})
+}

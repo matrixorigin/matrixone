@@ -2688,6 +2688,9 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, blk *types.Blockid, 
 	return nil
 }
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: nil batch")
+	}
 	if retainRowID {
 		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
 			return err
@@ -2709,6 +2712,12 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Bloc
 			pk = vec
 		}
 	}
+	if pk == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: tombstone batch missing pk vector")
+	}
+	if retainRowID && rowid == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: retainRowID set but rowid vector missing")
+	}
 	commitTS, err := vector.NewConstFixed(types.T_TS.ToType(), committs, pk.Length(), mp)
 	if err != nil {
 		return err
@@ -2723,6 +2732,9 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Bloc
 	return nil
 }
 func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: nil batch")
+	}
 	for i, vec := range bat.Vecs {
 		if vec.GetType().Oid == types.T_TS {
 			vec.Free(mp)
@@ -2737,6 +2749,9 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, 
 		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
 			return err
 		}
+	}
+	if len(bat.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: data batch has no vectors after stripping commit-ts")
 	}
 	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
 	if err != nil {

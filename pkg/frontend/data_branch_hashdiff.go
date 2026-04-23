@@ -1512,6 +1512,10 @@ func batchSampleRowsForLog(bat *batch.Batch, limit int) []string {
 				cols = append(cols, "<nil>")
 				continue
 			}
+			if rowIdx >= vec.Length() {
+				cols = append(cols, "<oob>")
+				continue
+			}
 			if vec.GetNulls().Contains(uint64(rowIdx)) {
 				cols = append(cols, "NULL")
 				continue
@@ -1527,17 +1531,19 @@ func validateLeadingRowID(side, tableName string, isTombstone bool, bat *batch.B
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
-	fields := []zap.Field{
-		zap.String("side", side),
-		zap.String("table-name", tableName),
-		zap.Bool("tombstone", isTombstone),
-		zap.Int("row-cnt", bat.RowCount()),
-		zap.Int("vec-cnt", bat.VectorCount()),
-		zap.Strings("attrs", append([]string(nil), bat.Attrs...)),
-		zap.Strings("samples", batchSampleRowsForLog(bat, 4)),
+	buildFields := func() []zap.Field {
+		return []zap.Field{
+			zap.String("side", side),
+			zap.String("table-name", tableName),
+			zap.Bool("tombstone", isTombstone),
+			zap.Int("row-cnt", bat.RowCount()),
+			zap.Int("vec-cnt", bat.VectorCount()),
+			zap.Strings("attrs", append([]string(nil), bat.Attrs...)),
+			zap.Strings("samples", batchSampleRowsForLog(bat, 4)),
+		}
 	}
 	fail := func(msg string, extra ...zap.Field) error {
-		logutil.Error(msg, append(fields, extra...)...)
+		logutil.Error(msg, append(buildFields(), extra...)...)
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
 	if bat.VectorCount() == 0 || bat.Vecs[0] == nil {
