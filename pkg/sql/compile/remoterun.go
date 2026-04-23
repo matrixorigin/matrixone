@@ -503,6 +503,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleRangesUint64 = t.ShuffleRangeUint64
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
+		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -714,22 +715,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *dedupjoin.DedupJoin:
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
-			RelList:                relList,
-			ColList:                colList,
-			LeftCond:               t.Conditions[0],
-			RightCond:              t.Conditions[1],
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			IsShuffle:              t.IsShuffle,
-			JoinMapTag:             t.JoinMapTag,
-			ShuffleIdx:             t.ShuffleIdx,
-			OnDuplicateAction:      t.OnDuplicateAction,
-			DedupColName:           t.DedupColName,
-			DedupColTypes:          t.DedupColTypes,
-			DelColIdx:              t.DelColIdx,
-			LeftTypes:              convertToPlanTypes(t.LeftTypes),
-			RightTypes:             convertToPlanTypes(t.RightTypes),
-			UpdateColIdxList:       t.UpdateColIdxList,
-			UpdateColExprList:      t.UpdateColExprList,
+			RelList:                         relList,
+			ColList:                         colList,
+			LeftCond:                        t.Conditions[0],
+			RightCond:                       t.Conditions[1],
+			RuntimeFilterBuildList:          t.RuntimeFilterSpecs,
+			IsShuffle:                       t.IsShuffle,
+			JoinMapTag:                      t.JoinMapTag,
+			ShuffleIdx:                      t.ShuffleIdx,
+			OnDuplicateAction:               t.OnDuplicateAction,
+			DedupColName:                    t.DedupColName,
+			DedupColTypes:                   t.DedupColTypes,
+			DelColIdx:                       t.DelColIdx,
+			LeftTypes:                       convertToPlanTypes(t.LeftTypes),
+			RightTypes:                      convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:                t.UpdateColIdxList,
+			UpdateColExprList:               t.UpdateColExprList,
+			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
+			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
 		}
 	case *rightdedupjoin.RightDedupJoin:
 		relList, colList := getRelColList(t.Result)
@@ -922,6 +925,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleRangeInt64 = t.ShuffleRangesInt64
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
+		arg.ShuffleExpr = t.ShuffleExpr
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1179,6 +1183,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()

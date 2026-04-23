@@ -183,6 +183,7 @@ func newS3Writer(
 		writer.action = actionUpdate
 		writer.flushThreshold = threshold
 		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
@@ -212,10 +213,15 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
+		opts := []ioutil.SinkerOption{
+			ioutil.WithBuffer(writer.insertFreeLists[i], false),
+		}
+		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
+			opts = append(opts, ioutil.WithPipelineFlush())
+		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
 			proc.Mp(), fs, updateCtx.TableDef, -1, false,
-			ioutil.WithBuffer(writer.insertFreeLists[i], false),
-		)
+			opts...)
 	}
 	return nil
 }
@@ -387,10 +393,6 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 
 			if blockMap[blkid] == nil {
 				blockMap[blkid] = newDeleteBlockData(bat, 1)
-				err := blockMap[blkid].bat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
-				if err != nil {
-					return nil, err
-				}
 
 				tableId := uint64(0)
 				txnID := []byte(nil)

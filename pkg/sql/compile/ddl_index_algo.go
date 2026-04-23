@@ -65,6 +65,11 @@ func (s *Scope) handleUniqueIndexTable(
 
 func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	// Skip index data population for CCPR tables when this is a CCPR task transaction.
+	// The index data will be synced via CCPR data synchronization instead.
+	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
+		return nil
+	}
 	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
 	err := c.runSql(insertSQL)
 	if err != nil {
@@ -116,6 +121,12 @@ func (s *Scope) handleMasterIndexTable(
 		return err
 	}
 
+	// Skip index data population for CCPR tables when this is a CCPR task transaction.
+	// The index data will be synced via CCPR data synchronization instead.
+	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
+		return nil
+	}
+
 	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
@@ -149,6 +160,12 @@ func (s *Scope) handleFullTextIndexTable(
 		}
 	}
 
+	// Skip index data population for CCPR tables when this is a CCPR task transaction.
+	// The index data will be synced via CCPR data synchronization instead.
+	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
+		return nil
+	}
+
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
@@ -157,8 +174,8 @@ func (s *Scope) handleFullTextIndexTable(
 	if async {
 		logutil.Infof("fulltext index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDef.IndexName, sinker_type, false, "")
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId,
+			indexDef.IndexName, sinker_type, false, "", originalTableDef)
 		if err != nil {
 			return err
 		}
@@ -350,7 +367,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 			logutil.Infof("Ivfflat index Async = true, forceSync = true")
 			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, true, "")
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinker_type, true, "", originalTableDef)
 			if err != nil {
 				return err
 			}
@@ -367,7 +384,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 			logutil.Infof("Ivfflat index Async is true")
 			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinker_type, false, sql, originalTableDef)
 			if err != nil {
 				return err
 			}
@@ -641,6 +658,12 @@ func (s *Scope) handleVectorHnswIndex(
 		}
 	}
 
+	// Skip index data population for CCPR tables when this is a CCPR task transaction.
+	// The index data will be synced via CCPR data synchronization instead.
+	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
+		return nil
+	}
+
 	// clear the cache (it only work in standalone mode though)
 	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
 	cache.Cache.Remove(key)
@@ -682,7 +705,7 @@ func (s *Scope) handleVectorHnswIndex(
 		// register ISCP job with startFromNow = true
 		// 4. register ISCP job for async update
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true, "")
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true, "", originalTableDef)
 		if err != nil {
 			return err
 		}
@@ -697,7 +720,7 @@ func (s *Scope) handleVectorHnswIndex(
 
 		// 4. register ISCP job for async update with startFromNow = false
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "")
+		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "", originalTableDef)
 		if err != nil {
 			return err
 		}

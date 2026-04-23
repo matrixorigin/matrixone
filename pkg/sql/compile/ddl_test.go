@@ -1029,6 +1029,8 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		// Return non-numeric string to skip CCPR check (strconv.ParseUint will fail)
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
 		// Relations returns an error to stop execution after the snapshot advance.
 		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
 
@@ -1089,6 +1091,9 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		// Return non-numeric string to skip CCPR check (strconv.ParseUint will fail)
+		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
 		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)

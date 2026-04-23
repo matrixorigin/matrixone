@@ -4287,15 +4287,13 @@ func decimal64ToDecimal64(
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	fromtype := from.GetType()
 	totype := to.GetType()
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
 		if totype.Width < fromtype.Width {
-			for i = 0; i < l; i++ {
+			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 				if v[i].Sign() {
 					fromdec.B64_127 = ^fromdec.B64_127
@@ -4311,15 +4309,20 @@ func decimal64ToDecimal128Array(
 			}
 		} else {
 			if totype.Scale == fromtype.Scale {
-				for i = 0; i < l; i++ {
-					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
-					if v[i].Sign() {
-						fromdec.B64_127 = ^fromdec.B64_127
+				// Fast path: direct slice write with branchless sign extension.
+				// BCE hints + int index eliminate bounds checks in the inner loop.
+				dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
+				_ = v[length-1]
+				_ = dst[length-1]
+				for i := 0; i < length; i++ {
+					s := int64(v[i]) >> 63
+					dst[i] = types.Decimal128{
+						B0_63:   uint64(v[i]),
+						B64_127: uint64(s),
 					}
-					to.AppendMustValue(fromdec)
 				}
 			} else {
-				for i = 0; i < l; i++ {
+				for i := 0; i < length; i++ {
 					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 					if v[i].Sign() {
 						fromdec.B64_127 = ^fromdec.B64_127
@@ -4336,37 +4339,61 @@ func decimal64ToDecimal128Array(
 		}
 	} else {
 		// with any null value
-		var dft types.Decimal128
-		for i = 0; i < l; i++ {
-			v, null := from.GetValue(i)
-			if null {
-				if err := to.Append(dft, true); err != nil {
-					return err
+		if totype.Width >= fromtype.Width && totype.Scale == fromtype.Scale {
+			// Fast path: direct slice write with branchless sign extension.
+			// Copy null bitmap from source, then convert non-null values.
+			srcVec := from.GetSourceVector()
+			if srcVec.IsConstNull() {
+				rsVec := to.GetResultVector()
+				rsVec.GetNulls().AddRange(0, uint64(length))
+				return nil
+			}
+			rsVec := to.GetResultVector()
+			rsVec.GetNulls().Or(srcVec.GetNulls())
+			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
+			v := vector.MustFixedColWithTypeCheck[types.Decimal64](srcVec)
+			_ = v[length-1]
+			_ = dst[length-1]
+			for i := 0; i < length; i++ {
+				s := int64(v[i]) >> 63
+				dst[i] = types.Decimal128{
+					B0_63:   uint64(v[i]),
+					B64_127: uint64(s),
 				}
-			} else {
-				fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-				if v.Sign() {
-					fromdec.B64_127 = ^fromdec.B64_127
-				}
-				if totype.Width < fromtype.Width {
-					dec := fromdec.Format(fromtype.Scale)
-					result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
-					if err != nil {
-						return err
-					}
-					if err = to.Append(result, false); err != nil {
+			}
+		} else {
+			var dft types.Decimal128
+			for i := 0; i < length; i++ {
+				v, null := from.GetValue(uint64(i))
+				if null {
+					if err := to.Append(dft, true); err != nil {
 						return err
 					}
 				} else {
-					if totype.Scale == fromtype.Scale {
-						to.AppendMustValue(fromdec)
-					} else {
-						result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+					fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+					if v.Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
+					if totype.Width < fromtype.Width {
+						dec := fromdec.Format(fromtype.Scale)
+						result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 						if err != nil {
 							return err
 						}
 						if err = to.Append(result, false); err != nil {
 							return err
+						}
+					} else {
+						if totype.Scale == fromtype.Scale {
+							to.AppendMustValue(fromdec)
+						} else {
+							result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+							if err != nil {
+								return err
+							}
+							if err = to.Append(result, false); err != nil {
+								return err
+							}
 						}
 					}
 				}

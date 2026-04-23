@@ -1214,6 +1214,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, c.compileUnionAll(node, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
 			s.Plan = &plan.Plan{
@@ -1289,6 +1293,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		c.appendMetaTables(node.ObjRef)
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1299,7 +1307,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
+		// Check if any target table is a CCPR shared table (from publication)
 		for _, updateCtx := range node.UpdateCtxList {
+			if c.shouldBlockCCPRReadOnly(updateCtx.TableDef) {
+				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+			}
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2490,6 +2502,9 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
+			if node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+				panic(moerr.NewNYI(c.proc.Ctx, "shuffle DedupJoin with OldColCapture is not supported"))
+			}
 			for i := range shuffleJoins {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
 				op.ShuffleIdx = int32(i)
@@ -2632,10 +2647,18 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		} else {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
+			// OldColCapture (merged main-table scan for REPLACE INTO) keeps
+			// captured vectors in per-worker local state; the parallel finalize
+			// path only merges the matched bitmap, not capturedVecs. Force
+			// single-worker to avoid losing captures from non-merger workers.
+			hasCapture := node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
+				if hasCapture {
+					rs[i].NodeInfo.Mcpu = 1
+				}
 			}
 			c.anal.isFirst = false
 		}
@@ -4251,10 +4274,14 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	for i := range c.cnList {
+		mcpu := max(c.cnList[i].Mcpu, 1)
+		if node.Stats.Dop > 0 {
+			mcpu = min(mcpu, int(node.Stats.Dop))
+		}
 		engNode := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
-			Mcpu:  c.cnList[i].Mcpu,
+			Mcpu:  mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
 		}
@@ -4912,4 +4939,47 @@ func (c *Compile) compileTableClone(
 	s1.setRootOperator(copyOp)
 
 	return []*Scope{s1}, nil
+}
+
+// isTableFromPublication checks if a table is a CCPR shared table (from publication)
+func isTableFromPublication(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, def := range tableDef.Defs {
+		if propDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, prop := range propDef.Properties.Properties {
+				if prop.Key == catalog.PropFromPublication && prop.Value == "true" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.
+// Returns true if the operation should be blocked (table is from publication AND this is NOT a CCPR task transaction).
+func (c *Compile) shouldBlockCCPRReadOnly(tableDef *plan.TableDef) bool {
+	if !isTableFromPublication(tableDef) {
+		return false
+	}
+	// If this is a CCPR task transaction with a valid task ID, allow the operation
+	if c.isCCPRTaskTransaction() {
+		return false
+	}
+	return true
+}
+
+// isCCPRTaskTransaction checks if the current transaction is a CCPR task transaction.
+// Returns true if the transaction has a valid CCPR task ID.
+func (c *Compile) isCCPRTaskTransaction() bool {
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if ws := txnOp.GetWorkspace(); ws != nil {
+			if ws.GetCCPRTaskID() != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

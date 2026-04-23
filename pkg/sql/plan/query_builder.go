@@ -697,6 +697,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				increaseRefCnt(expr, 1, colRefCnt)
 			}
+
+			// OldColCaptureList: build_placeholder points to the build-side
+			// (right child) NULL column whose slot will receive the captured
+			// probe value; probe_source points to the probe-side (left child)
+			// column to capture. Both must survive refcount pruning.
+			for _, cap := range node.DedupJoinCtx.OldColCaptureList {
+				colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]++
+				colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]++
+			}
 		}
 
 		leftID := node.Children[0]
@@ -742,6 +751,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapInfo.srcExprIdx = idx
 				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i := range node.DedupJoinCtx.OldColCaptureList {
+				cap := &node.DedupJoinCtx.OldColCaptureList[i]
+				colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]--
+				if err := builder.remapSingleColRef(&cap.BuildPlaceholder, internalMap, &remapInfo); err != nil {
+					return nil, err
+				}
+				colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]--
+				if err := builder.remapSingleColRef(&cap.ProbeSource, internalMap, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
