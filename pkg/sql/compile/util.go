@@ -31,6 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func escapeSQLStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
 // nil-safe fallback to executor.DefaultResolveVariable (populated from
 // gSysVarsDefs by pkg/frontend's init). When proc has a session-bound
@@ -327,7 +332,18 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
+						fmt.Fprintf(buffer, "'%s', ", indexDef.IndexTableName)
+					} else {
+						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+					}
+
+					// 16. index vec_included_columns
+					includedColumns, err := catalog.MarshalIncludeColumnsValue(indexDef.IncludedColumns)
+					if err != nil {
+						return "", err
+					}
+					if includedColumns != "" {
+						fmt.Fprintf(buffer, "'%s')", escapeSQLStringLiteral(includedColumns))
 					} else {
 						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 					}
@@ -390,6 +406,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
 					// 15. index vec_index_table
+					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+
+					// 16. index vec_included_columns
 					fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 				}
 			}
