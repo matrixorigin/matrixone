@@ -926,7 +926,16 @@ func (s *stubEngineChangesHandle) Close() error {
 }
 
 func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	rowIDs := make([]types.Rowid, len(rows))
+	for i := range rows {
+		rowIDs[i] = buildHashDiffRowID(t, i)
+	}
+	return buildHashDiffDataBatchWithRowIDs(t, mp, rowIDs, rows)
+}
+
+func buildHashDiffDataBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []types.Rowid, rows [][]any) *batch.Batch {
 	t.Helper()
+	require.Len(t, rowIDs, len(rows))
 
 	bat := batch.NewWithSize(5)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
@@ -938,7 +947,7 @@ func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.
 
 	for rowIdx, row := range rows {
 		require.Len(t, row, 4)
-		require.NoError(t, appendTestVectorValue(bat.Vecs[0], buildHashDiffRowID(t, rowIdx), mp))
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], rowIDs[rowIdx], mp))
 		for i, val := range row {
 			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
@@ -948,7 +957,16 @@ func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.
 }
 
 func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	rowIDs := make([]types.Rowid, len(rows))
+	for i := range rows {
+		rowIDs[i] = buildHashDiffRowID(t, i)
+	}
+	return buildHashDiffTombstoneBatchWithRowIDs(t, mp, rowIDs, rows)
+}
+
+func buildHashDiffTombstoneBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []types.Rowid, rows [][]any) *batch.Batch {
 	t.Helper()
+	require.Len(t, rowIDs, len(rows))
 
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
@@ -958,7 +976,7 @@ func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 
 	for rowIdx, row := range rows {
 		require.Len(t, row, 2)
-		require.NoError(t, appendTestVectorValue(bat.Vecs[0], buildHashDiffRowID(t, rowIdx), mp))
+		require.NoError(t, appendTestVectorValue(bat.Vecs[0], rowIDs[rowIdx], mp))
 		for i, val := range row {
 			require.NoError(t, appendTestVectorValue(bat.Vecs[i+1], val, mp))
 		}
@@ -969,8 +987,9 @@ func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 
 func buildHashDiffRowID(t *testing.T, rowIdx int) types.Rowid {
 	t.Helper()
-	uid, err := types.BuildUuid()
-	require.NoError(t, err)
+	var uid types.Uuid
+	uid[0] = byte(rowIdx + 1)
+	uid[15] = byte(rowIdx + 1)
 	blkID := objectio.NewBlockid(&uid, 0, 1)
 	return types.NewRowid(blkID, uint32(rowIdx))
 }

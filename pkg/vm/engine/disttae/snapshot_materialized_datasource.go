@@ -32,12 +32,13 @@ import (
 )
 
 type materializedSnapshotDataSource struct {
-	ctx       context.Context
-	fs        fileservice.FileService
-	pState    *logtailreplay.PartitionState
-	currentTS types.TS
-	tombstone engine.Tombstoner
-	remote    engine.DataSource
+	ctx        context.Context
+	fs         fileservice.FileService
+	pState     *logtailreplay.PartitionState
+	currentTS  types.TS
+	snapshotTS types.TS
+	tombstone  engine.Tombstoner
+	remote     engine.DataSource
 
 	memPKFilter *readutil.MemPKFilter
 	orderBy     []*plan.OrderBySpec
@@ -68,6 +69,7 @@ func newMaterializedSnapshotDataSource(
 		fs:               fs,
 		pState:           pState,
 		currentTS:        currentTS,
+		snapshotTS:       snapshotTS,
 		tombstone:        tombstone,
 		remote:           remote,
 		deletedRowsCache: make(map[objectio.Blockid]*objectio.Bitmap),
@@ -76,8 +78,9 @@ func newMaterializedSnapshotDataSource(
 
 func (ds *materializedSnapshotDataSource) String() string {
 	return fmt.Sprintf(
-		"MaterializedSnapshotDataSource{current-ts=%s,inmem-batches=%d,inmem-cursor=%d,remote=%v}",
+		"MaterializedSnapshotDataSource{current-ts=%s,snapshot-ts=%s,inmem-batches=%d,inmem-cursor=%d,remote=%v}",
 		ds.currentTS.ToString(),
+		ds.snapshotTS.ToString(),
 		len(ds.inMemBatches),
 		ds.inMemCursor,
 		ds.remote != nil,
@@ -135,7 +138,7 @@ func (ds *materializedSnapshotDataSource) ApplyTombstones(
 	}
 	slices.Sort(rowsOffset)
 	left := ds.tombstone.ApplyInMemTombstones(bid, rowsOffset, nil)
-	return ds.tombstone.ApplyPersistedTombstones(ctx, ds.fs, &ds.currentTS, bid, left, nil)
+	return ds.tombstone.ApplyPersistedTombstones(ctx, ds.fs, &ds.snapshotTS, bid, left, nil)
 }
 
 func (ds *materializedSnapshotDataSource) GetTombstones(
@@ -150,7 +153,7 @@ func (ds *materializedSnapshotDataSource) GetTombstones(
 		return bm, nil
 	}
 	ds.tombstone.ApplyInMemTombstones(bid, nil, &bm)
-	if _, err := ds.tombstone.ApplyPersistedTombstones(ctx, ds.fs, &ds.currentTS, bid, nil, &bm); err != nil {
+	if _, err := ds.tombstone.ApplyPersistedTombstones(ctx, ds.fs, &ds.snapshotTS, bid, nil, &bm); err != nil {
 		bm.Release()
 		return objectio.Bitmap{}, err
 	}
@@ -210,12 +213,12 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	var iter logtailreplay.RowsIter
 	if ds.memPKFilter != nil && ds.memPKFilter.Valid() {
 		iter = ds.pState.NewPrimaryKeyIter(
-			ds.currentTS,
+			ds.snapshotTS,
 			ds.memPKFilter.Op(),
 			ds.memPKFilter.Keys(),
 		)
 	} else {
-		iter = ds.pState.NewRowsIter(ds.currentTS, nil, false)
+		iter = ds.pState.NewRowsIter(ds.snapshotTS, nil, false)
 	}
 	defer iter.Close()
 
@@ -287,7 +290,7 @@ func (ds *materializedSnapshotDataSource) isDeletedByCommittedTombstones(
 		if _, err := ds.tombstone.ApplyPersistedTombstones(
 			ctx,
 			ds.fs,
-			&ds.currentTS,
+			&ds.snapshotTS,
 			bid,
 			nil,
 			&bm,
