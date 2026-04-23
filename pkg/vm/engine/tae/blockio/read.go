@@ -837,6 +837,7 @@ func readBlockData(
 
 	readColumns := func(
 		cols []uint16,
+		typs2 []types.Type,
 		cacheVectors2 containers.Vectors,
 	) (err2 error) {
 		if len(cols) == 0 && phyAddrColumnPos >= 0 {
@@ -846,7 +847,7 @@ func readBlockData(
 		}
 
 		release, err2 = ioutil.LoadColumns(
-			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
+			ctx, cols, typs2, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		if err2 != nil {
 			return
@@ -854,20 +855,20 @@ func readBlockData(
 		return
 	}
 
-	readABlkColumns := func(
+	readColumnsWithCommitTSFilter := func(
 		cols []uint16,
 		cacheVectors2 containers.Vectors,
 	) (
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		// appendable block should be filtered by committs
-		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
-		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
+		// Snapshot readers must filter rows newer than the requested ts no
+		// matter which physical object shape they currently live in.
+		cols = append(cols, objectio.SEQNUM_COMMITTS)
+		typsWithCommitTS := append(slices.Clone(typs), types.T_TS.ToType())
 
-		// no need to add typs, the two columns won't be generated
 		if err2 = readColumns(
-			cols, cacheVectors2,
+			cols, typsWithCommitTS, cacheVectors2,
 		); err2 != nil {
 			return
 		}
@@ -892,11 +893,7 @@ func readBlockData(
 		return
 	}
 
-	if info.IsAppendable() {
-		deleteMask, err = readABlkColumns(idxes, cacheVectors)
-	} else {
-		err = readColumns(idxes, cacheVectors)
-	}
+	deleteMask, err = readColumnsWithCommitTSFilter(idxes, cacheVectors)
 
 	return
 }

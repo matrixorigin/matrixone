@@ -145,6 +145,8 @@ type retBatchList struct {
 	tombVecCnt    int
 	dataTypes     []types.Type
 	tombstoneType types.Type
+	tombRowIDType types.Type
+	tombKeyType   types.Type
 }
 
 type compositeOption struct {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -108,8 +109,8 @@ func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	updateCNTombstoneBatch(bat, types.BuildTS(20, 0), mp)
-	updateCNTombstoneBatch(bat, types.BuildTS(30, 0), mp)
+	require.NoError(t, updateCNTombstoneBatch(bat, types.BuildTS(20, 0), nil, false, mp))
+	require.NoError(t, updateCNTombstoneBatch(bat, types.BuildTS(30, 0), nil, false, mp))
 
 	require.Equal(t, 2, len(bat.Vecs))
 	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
@@ -150,7 +151,7 @@ func TestUpdateCNDataBatch_RemoveTSVector(t *testing.T) {
 
 	// Call updateCNDataBatch
 	newCommitTS := types.BuildTS(100, 0)
-	updateCNDataBatch(bat, newCommitTS, mp)
+	require.NoError(t, updateCNDataBatch(bat, newCommitTS, nil, false, mp))
 
 	// Verify T_TS vector is removed and new commitTS vector is added at the end
 	require.Equal(t, 3, len(bat.Vecs))
@@ -189,7 +190,7 @@ func TestUpdateCNDataBatch_NoTSVector(t *testing.T) {
 
 	// Call updateCNDataBatch
 	newCommitTS := types.BuildTS(100, 0)
-	updateCNDataBatch(bat, newCommitTS, mp)
+	require.NoError(t, updateCNDataBatch(bat, newCommitTS, nil, false, mp))
 
 	// Verify commitTS vector is added at the end
 	require.Equal(t, 3, len(bat.Vecs))
@@ -229,7 +230,7 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat.Vecs[3] = commitTS
 	bat.SetRowCount(1)
 
-	updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), mp)
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
@@ -238,6 +239,43 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	require.Equal(t, types.T_datetime, bat.Vecs[2].GetType().Oid)
 	require.Equal(t, types.T_TS, bat.Vecs[3].GetType().Oid)
 	require.Equal(t, updatedAtVal, vector.MustFixedColNoTypeCheck[types.Datetime](bat.Vecs[2])[0])
+
+	bat.Clean(mp)
+}
+
+func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{"a", "b", objectio.DefaultCommitTS_Attr})
+
+	aVec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(aVec, int32(4), false, mp))
+	require.NoError(t, vector.AppendFixed(aVec, int32(5), false, mp))
+	bat.Vecs[0] = aVec
+
+	bVec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bVec, int32(40), false, mp))
+	require.NoError(t, vector.AppendFixed(bVec, int32(50), false, mp))
+	bat.Vecs[1] = bVec
+
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(200, 0), false, mp))
+	bat.Vecs[2] = tsVec
+	bat.SetRowCount(2)
+
+	blk := types.Blockid{}
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, true, mp))
+
+	require.Equal(t, 4, len(bat.Vecs))
+	require.Equal(t, catalog.Row_ID, bat.Attrs[0])
+	require.Equal(t, types.T_Rowid, bat.Vecs[0].GetType().Oid)
+	require.Equal(t, 1, bat.Vecs[0].Length())
+
+	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])
+	require.Equal(t, types.NewRowid(&blk, 0), rowIDs[0])
 
 	bat.Clean(mp)
 }

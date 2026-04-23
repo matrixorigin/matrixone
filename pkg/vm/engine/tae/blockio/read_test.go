@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
@@ -357,6 +359,70 @@ func TestBuildTopInputRows(t *testing.T) {
 		require.NotNil(t, rows)
 		require.Equal(t, 0, len(rows))
 	})
+}
+
+func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS},
+		-1,
+		false,
+		false,
+		fs,
+	)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	for _, row := range []struct {
+		val int32
+		ts  types.TS
+	}{
+		{val: 11, ts: types.BuildTS(20, 0)},
+		{val: 22, ts: types.BuildTS(10, 0)},
+		{val: 33, ts: types.BuildTS(30, 0)},
+	} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
+	}
+	input.SetRowCount(3)
+
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
+	require.False(t, info.IsAppendable())
+
+	cacheVectors := containers.NewVectors(2)
+	deleteMask, release, err := readBlockData(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_int32.ToType()},
+		-1,
+		&info,
+		nil,
+		types.BuildTS(15, 0),
+		0,
+		cacheVectors,
+		mp,
+		fs,
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	defer release()
+
+	require.Equal(t, 2, deleteMask.Count())
+	require.True(t, deleteMask.Contains(0))
+	require.False(t, deleteMask.Contains(1))
+	require.True(t, deleteMask.Contains(2))
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
