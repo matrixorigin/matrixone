@@ -236,16 +236,5 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if idx.IndexOption.KmeansMaxIteration > 0 {
 		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
 	}
-	if len(idx.IndexOption.IncludeColumns) > 0 {
-		names := make([]string, len(idx.IndexOption.IncludeColumns))
-		for i, col := range idx.IndexOption.IncludeColumns {
-			names[i] = col.ColName()
-		}
-		encoded, err := catalog.MarshalIncludeColumnsValue(names)
-		if err != nil {
-			return nil, err
-		}
-		res[catalog.IndexAlgoParamIncludeColumns] = encoded
-	}
 	return res, nil
 }

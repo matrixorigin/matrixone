@@ -202,6 +202,53 @@ func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
 }
 
+func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		title VARCHAR(20),
+		category INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"title", "category"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_vec` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)")
+}
+
+func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_reserved (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		status INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec_reserved",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"status"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "INCLUDE (`status`)")
+}
+
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,

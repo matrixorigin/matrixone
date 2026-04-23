@@ -29,6 +29,7 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -396,11 +397,14 @@ func ivfIndexEntriesTable(
 		return moerr.NewInternalErrorNoCtx("vector optype not found")
 	}
 
-	var includeCols []string
-	if includeColumns, ok := params[catalog.IndexAlgoParamIncludeColumns]; ok && includeColumns != "" {
-		includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
-		if err != nil {
-			return err
+	includeCols := slices.Clone(indexDef.IncludedColumns)
+	if len(includeCols) == 0 {
+		includeColumns, ok := params[catalog.IndexAlgoParamIncludeColumns]
+		if ok && includeColumns != "" {
+			includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

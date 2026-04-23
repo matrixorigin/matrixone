@@ -428,10 +428,7 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
-		ivfIncludeAffected, err := ivfIndexIncludesColumn(indexInfo, colName)
-		if err != nil {
-			return err
-		}
+		includeAffected := indexIncludesColumn(indexInfo, colName)
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
@@ -461,7 +458,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				}
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				// ivf index
-				if len(indexInfo.Parts) == 0 || ivfIncludeAffected {
+				if len(indexInfo.Parts) == 0 || includeAffected {
 					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
 						return def.IndexName == indexInfo.IndexName
 					})
@@ -473,18 +470,14 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
 			default:
-				// Plugin-registered indexes (vector + fulltext) own
-				// their hidden-table count via HiddenTableTypes(). The
-				// previous shape hardcoded 3 for IVF-FLAT, 2 for HNSW,
-				// 1 for fulltext, and silently omitted CAGRA / IVF-PQ
-				// — which left orphan hidden-table IndexDefs in tbInfo
-				// for those algos when the affected column emptied
-				// Parts. Reading the count from the plugin restores
-				// CAGRA / IVF-PQ coverage and stays correct for any
-				// future algo added under the plugin system.
-				if p, ok := indexplugin.Get(algo); ok && len(indexInfo.Parts) == 0 {
-					n := len(p.Catalog().HiddenTableTypes())
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+n:]...)
+				// Plugin-registered indexes may span multiple hidden IndexDefs;
+				// remove all entries sharing the logical index name when the
+				// key columns are gone or an INCLUDE column is dropped.
+				if _, ok := indexplugin.Get(algo); ok && (len(indexInfo.Parts) == 0 || includeAffected) {
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			}
 		}
