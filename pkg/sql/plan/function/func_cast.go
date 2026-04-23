@@ -5708,16 +5708,26 @@ func jsonToStr(
 			}
 		} else {
 			bj := types.DecodeJson(v)
-			str, err := bj.Unquote()
-			if err != nil {
-				return err
+			var str string
+			if bj.Type == bytejson.TpCodeString {
+				s, err := bj.Unquote()
+				if err != nil {
+					return err
+				}
+				str = s
+			} else {
+				bs, err := bj.MarshalJSON()
+				if err != nil {
+					return err
+				}
+				str = string(bs)
 			}
 			val := []byte(str)
 			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
-			if err = to.AppendBytes(val, false); err != nil {
+			if err := to.AppendBytes(val, false); err != nil {
 				return err
 			}
 		}

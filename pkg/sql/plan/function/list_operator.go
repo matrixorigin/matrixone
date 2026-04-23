@@ -284,6 +284,11 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
+			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
+				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
 			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
 			if t01.Oid != t02.Oid {
