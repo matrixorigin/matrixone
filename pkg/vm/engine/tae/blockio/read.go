@@ -835,18 +835,37 @@ func readBlockData(
 
 	idxes, typs := excludePhyAddrColumn(colIndexes, colTypes, phyAddrColumnPos)
 
+	blockHasCommitTS := func() (bool, error) {
+		if info.IsAppendable() {
+			return true, nil
+		}
+
+		location := info.MetaLocation()
+		meta, err2 := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err2 != nil {
+			return false, err2
+		}
+		dataMeta := meta.MustGetMeta(objectio.SchemaData)
+		blkMeta := dataMeta.GetBlockMeta(uint32(info.MetaLocation().ID()))
+		metaColCnt := blkMeta.GetMetaColumnCount()
+		if metaColCnt == 0 {
+			return false, nil
+		}
+		return blkMeta.ColumnMeta(metaColCnt-1).DataType() == uint8(types.T_TS), nil
+	}
+
 	readColumns := func(
 		cols []uint16,
 		typs2 []types.Type,
 		cacheVectors2 containers.Vectors,
-	) (err2 error) {
+	) (release2 func(), err2 error) {
 		if len(cols) == 0 && phyAddrColumnPos >= 0 {
 			// only read rowid column on non appendable block, return early
-			release = func() {}
+			release2 = func() {}
 			return
 		}
 
-		release, err2 = ioutil.LoadColumns(
+		release2, err2 = ioutil.LoadColumns(
 			ctx, cols, typs2, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		if err2 != nil {
@@ -857,27 +876,56 @@ func readBlockData(
 
 	readColumnsWithCommitTSFilter := func(
 		cols []uint16,
+		typs2 []types.Type,
 		cacheVectors2 containers.Vectors,
 	) (
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		// Snapshot readers must filter rows newer than the requested ts no
-		// matter which physical object shape they currently live in.
-		cols = append(cols, objectio.SEQNUM_COMMITTS)
-		typsWithCommitTS := append(slices.Clone(typs), types.T_TS.ToType())
-
-		if err2 = readColumns(
-			cols, typsWithCommitTS, cacheVectors2,
-		); err2 != nil {
+		dataRelease, err2 := readColumns(cols, typs2, cacheVectors2)
+		if err2 != nil {
 			return
+		}
+
+		hasCommitTS, err2 := blockHasCommitTS()
+		if err2 != nil {
+			if dataRelease != nil {
+				dataRelease()
+			}
+			return
+		}
+		if !hasCommitTS {
+			release = dataRelease
+			deletes = objectio.GetReusableBitmap()
+			return
+		}
+
+		commitTSVectors := containers.NewVectors(1)
+		releaseCommitTS, err2 := readColumns(
+			[]uint16{objectio.SEQNUM_COMMITTS},
+			[]types.Type{types.T_TS.ToType()},
+			commitTSVectors,
+		)
+		if err2 != nil {
+			if dataRelease != nil {
+				dataRelease()
+			}
+			return
+		}
+
+		release = func() {
+			if releaseCommitTS != nil {
+				releaseCommitTS()
+			}
+			if dataRelease != nil {
+				dataRelease()
+			}
 		}
 
 		deletes = objectio.GetReusableBitmap()
 
 		t0 := time.Now()
-		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&commitTSVectors[0])
 		for i := 0; i < len(commits); i++ {
 			if commits[i].GT(&ts) {
 				deletes.Add(uint64(i))
@@ -893,7 +941,7 @@ func readBlockData(
 		return
 	}
 
-	deleteMask, err = readColumnsWithCommitTSFilter(idxes, cacheVectors)
+	deleteMask, err = readColumnsWithCommitTSFilter(idxes, typs, cacheVectors)
 
 	return
 }

@@ -401,7 +401,7 @@ func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {
 	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
 	require.False(t, info.IsAppendable())
 
-	cacheVectors := containers.NewVectors(2)
+	cacheVectors := containers.NewVectors(1)
 	deleteMask, release, err := readBlockData(
 		ctx,
 		[]uint16{0},
@@ -423,6 +423,64 @@ func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {
 	require.True(t, deleteMask.Contains(0))
 	require.False(t, deleteMask.Contains(1))
 	require.True(t, deleteMask.Contains(2))
+
+	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
+	require.Equal(t, []int32{11, 22, 33}, vals)
+}
+
+func TestReadBlockDataNonAppendableWithoutCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0},
+		-1,
+		false,
+		false,
+		fs,
+	)
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	for _, row := range []int32{11, 22, 33} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], row, false, mp))
+	}
+	input.SetRowCount(3)
+
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
+	require.False(t, info.IsAppendable())
+
+	cacheVectors := containers.NewVectors(1)
+	deleteMask, release, err := readBlockData(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_int32.ToType()},
+		-1,
+		&info,
+		nil,
+		types.BuildTS(15, 0),
+		0,
+		cacheVectors,
+		mp,
+		fs,
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	defer release()
+
+	require.Zero(t, deleteMask.Count())
+
+	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
+	require.Equal(t, []int32{11, 22, 33}, vals)
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
