@@ -376,6 +376,9 @@ type Transaction struct {
 	approximateInMemDeleteCnt int
 	// the last snapshot write offset
 	snapshotWriteOffset int
+	// the earliest write offset that Adjust must still consider for the current SQL
+	// after in-place workspace compaction shifts surviving writes to the left.
+	adjustWriteOffset int
 
 	tnStores []DNStore
 	proc     *process.Process
@@ -761,6 +764,12 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	if txn.statementID > 0 {
+		if txn.adjustWriteOffset < int(writeOffset) {
+			writeOffset = uint64(txn.adjustWriteOffset)
+		}
+		if writeOffset > uint64(len(txn.writes)) {
+			writeOffset = uint64(len(txn.writes))
+		}
 		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
 			// expected in descending order
 
