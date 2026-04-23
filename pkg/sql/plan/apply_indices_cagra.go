@@ -151,7 +151,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 	if len(includeCols) > 0 {
-		logutil.Infof("CAGRA pushdown: INCLUDE columns = %v, scan filters = %d",
+		logutil.Debugf("CAGRA pushdown: INCLUDE columns = %v, scan filters = %d",
 			includeCols, len(scanNode.FilterList))
 	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
@@ -160,7 +160,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 	if predsJSON != "" {
-		logutil.Infof("CAGRA pushdown: peeled %d filter(s), %d residual, preds_json = %s",
+		logutil.Debugf("CAGRA pushdown: peeled %d filter(s), %d residual, preds_json = %s",
 			len(peeled), len(residualFilters), predsJSON)
 		scanNode.FilterList = residualFilters
 	}
