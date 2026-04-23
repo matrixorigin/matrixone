@@ -2071,11 +2071,11 @@ func buildHashmapForTable(
 			} else if side == "target" && tblStuff.tarRel != nil {
 				tableName = tblStuff.tarRel.GetTableName()
 			}
-			if err2 = validateLeadingRowID(side, tableName, false, dataBat); err2 != nil {
-				return err2
+			if err = validateLeadingRowID(side, tableName, false, dataBat); err != nil {
+				return
 			}
-			if err2 = validateLeadingRowID(side, tableName, true, tombstoneBat); err2 != nil {
-				return err2
+			if err = validateLeadingRowID(side, tableName, true, tombstoneBat); err != nil {
+				return
 			}
 
 			if dataBat != nil && dataBat.RowCount() > 0 {
