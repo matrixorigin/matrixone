@@ -297,46 +297,46 @@ func (r *recordingTombstoner) SortInMemory() {}
 // only when the read timestamp is >= the row's tombstone commit timestamp.
 // This makes the snapshotTS vs currentTS distinction observable.
 type tsFilteringTombstoner struct {
-tombstones map[int64]types.TS // rowOffset -> tombstone commit ts
+	tombstones map[int64]types.TS // rowOffset -> tombstone commit ts
 }
 
 func (t *tsFilteringTombstoner) Type() engine.TombstoneType { return engine.TombstoneData }
 func (t *tsFilteringTombstoner) HasAnyInMemoryTombstone() bool {
-return false
+	return false
 }
-func (t *tsFilteringTombstoner) HasAnyTombstoneFile() bool         { return true }
-func (t *tsFilteringTombstoner) String() string                    { return "tsFilteringTombstoner" }
-func (t *tsFilteringTombstoner) StringWithPrefix(p string) string  { return p + t.String() }
+func (t *tsFilteringTombstoner) HasAnyTombstoneFile() bool        { return true }
+func (t *tsFilteringTombstoner) String() string                   { return "tsFilteringTombstoner" }
+func (t *tsFilteringTombstoner) StringWithPrefix(p string) string { return p + t.String() }
 func (t *tsFilteringTombstoner) HasBlockTombstone(context.Context, *objectio.Blockid, fileservice.FileService) (bool, error) {
-return true, nil
+	return true, nil
 }
 func (t *tsFilteringTombstoner) MarshalBinaryWithBuffer(*bytes.Buffer) error { return nil }
 func (t *tsFilteringTombstoner) UnmarshalBinary([]byte) error                { return nil }
 func (t *tsFilteringTombstoner) PrefetchTombstones(string, fileservice.FileService, []objectio.Blockid) {
 }
 func (t *tsFilteringTombstoner) ApplyInMemTombstones(_ *types.Blockid, rowsOffset []int64, _ *objectio.Bitmap) []int64 {
-return rowsOffset
+	return rowsOffset
 }
 func (t *tsFilteringTombstoner) ApplyPersistedTombstones(
-_ context.Context,
-_ fileservice.FileService,
-snapshot *types.TS,
-_ *types.Blockid,
-rowsOffset []int64,
-deletedRows *objectio.Bitmap,
+	_ context.Context,
+	_ fileservice.FileService,
+	snapshot *types.TS,
+	_ *types.Blockid,
+	rowsOffset []int64,
+	deletedRows *objectio.Bitmap,
 ) ([]int64, error) {
-left := rowsOffset[:0]
-for _, off := range rowsOffset {
-ts, ok := t.tombstones[off]
-if ok && !ts.GT(snapshot) {
-if deletedRows != nil {
-deletedRows.Add(uint64(off))
-}
-continue
-}
-left = append(left, off)
-}
-return left, nil
+	left := rowsOffset[:0]
+	for _, off := range rowsOffset {
+		ts, ok := t.tombstones[off]
+		if ok && !ts.GT(snapshot) {
+			if deletedRows != nil {
+				deletedRows.Add(uint64(off))
+			}
+			continue
+		}
+		left = append(left, off)
+	}
+	return left, nil
 }
 func (t *tsFilteringTombstoner) Merge(engine.Tombstoner) error { return nil }
 func (t *tsFilteringTombstoner) SortInMemory()                 {}
@@ -345,35 +345,35 @@ func (t *tsFilteringTombstoner) SortInMemory()                 {}
 // that fallback uses snapshotTS (not currentTS) for persisted tombstone visibility.
 // If the production code reverts to currentTS, this test fails.
 func TestMaterializedSnapshotDataSourcePersistedTombstoneFiltersBySnapshotTS(t *testing.T) {
-tomb := &tsFilteringTombstoner{
-tombstones: map[int64]types.TS{
-1: types.BuildTS(25, 0), // tombstoned at 25, after snapshotTS=20
-},
-}
+	tomb := &tsFilteringTombstoner{
+		tombstones: map[int64]types.TS{
+			1: types.BuildTS(25, 0), // tombstoned at 25, after snapshotTS=20
+		},
+	}
 
-source := newMaterializedSnapshotDataSource(
-context.Background(),
-nil,
-nil,
-types.BuildTS(30, 0), // currentTS — would mark row 1 deleted
-types.BuildTS(20, 0), // snapshotTS — would NOT mark row 1 deleted
-nil,
-tomb,
-)
-ds := source.(*materializedSnapshotDataSource)
+	source := newMaterializedSnapshotDataSource(
+		context.Background(),
+		nil,
+		nil,
+		types.BuildTS(30, 0), // currentTS — would mark row 1 deleted
+		types.BuildTS(20, 0), // snapshotTS — would NOT mark row 1 deleted
+		nil,
+		tomb,
+	)
+	ds := source.(*materializedSnapshotDataSource)
 
-rowID := buildTestMaterializedSnapshotRowID(t, 9)
-bid := rowID.BorrowBlockID()
+	rowID := buildTestMaterializedSnapshotRowID(t, 9)
+	bid := rowID.BorrowBlockID()
 
-left, err := ds.ApplyTombstones(context.Background(), bid, []int64{0, 1}, engine.Policy_CheckAll)
-require.NoError(t, err)
-// snapshotTS=20 < tombstone(25), so row 1 must NOT be filtered out.
-// If this test sees [0] only, the production code is reading at currentTS.
-require.Equal(t, []int64{0, 1}, left, "snapshotTS must shield row 1 from a future tombstone at TS=25")
+	left, err := ds.ApplyTombstones(context.Background(), bid, []int64{0, 1}, engine.Policy_CheckAll)
+	require.NoError(t, err)
+	// snapshotTS=20 < tombstone(25), so row 1 must NOT be filtered out.
+	// If this test sees [0] only, the production code is reading at currentTS.
+	require.Equal(t, []int64{0, 1}, left, "snapshotTS must shield row 1 from a future tombstone at TS=25")
 
-bm, err := ds.GetTombstones(context.Background(), bid)
-require.NoError(t, err)
-// Same invariant via GetTombstones path.
-require.Equal(t, 0, bm.Count(), "no row should be in tombstone bitmap at snapshotTS=20")
-bm.Release()
+	bm, err := ds.GetTombstones(context.Background(), bid)
+	require.NoError(t, err)
+	// Same invariant via GetTombstones path.
+	require.Equal(t, 0, bm.Count(), "no row should be in tombstone bitmap at snapshotTS=20")
+	bm.Release()
 }

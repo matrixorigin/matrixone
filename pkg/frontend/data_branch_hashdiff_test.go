@@ -1031,81 +1031,81 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 }
 
 func TestValidateLeadingRowID(t *testing.T) {
-mp := mpool.MustNewZero()
+	mp := mpool.MustNewZero()
 
-makeBatchWithLeadingType := func(t *testing.T, oid types.T) *batch.Batch {
-t.Helper()
-bat := batch.NewWithSize(2)
-bat.SetAttributes([]string{catalog.Row_ID, "id"})
-bat.Vecs[0] = vector.NewVec(oid.ToType())
-bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
-bat.SetRowCount(1)
-return bat
-}
+	makeBatchWithLeadingType := func(t *testing.T, oid types.T) *batch.Batch {
+		t.Helper()
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{catalog.Row_ID, "id"})
+		bat.Vecs[0] = vector.NewVec(oid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+		bat.SetRowCount(1)
+		return bat
+	}
 
-t.Run("nil and empty pass", func(t *testing.T) {
-require.NoError(t, validateLeadingRowID("base", "t", false, nil))
-bat := batch.NewWithSize(0)
-bat.SetRowCount(0)
-require.NoError(t, validateLeadingRowID("base", "t", false, bat))
-})
+	t.Run("nil and empty pass", func(t *testing.T) {
+		require.NoError(t, validateLeadingRowID("base", "t", false, nil))
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(0)
+		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
+	})
 
-t.Run("missing rowid vector", func(t *testing.T) {
-bat := batch.NewWithSize(0)
-bat.SetRowCount(1)
-err := validateLeadingRowID("base", "t", false, bat)
-require.Error(t, err)
-require.Contains(t, err.Error(), "DataBranch-CollectChanges-MissingRowID")
-})
+	t.Run("missing rowid vector", func(t *testing.T) {
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-MissingRowID")
+	})
 
-t.Run("wrong leading type", func(t *testing.T) {
-bat := makeBatchWithLeadingType(t, types.T_int64)
-require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
-err := validateLeadingRowID("base", "t", false, bat)
-require.Error(t, err)
-require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowIDVector")
-})
+	t.Run("wrong leading type", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_int64)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowIDVector")
+	})
 
-t.Run("length mismatch", func(t *testing.T) {
-bat := batch.NewWithSize(2)
-bat.SetAttributes([]string{catalog.Row_ID, "id"})
-bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
-require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
-uid, err := types.BuildUuid()
-require.NoError(t, err)
-blkID := objectio.NewBlockid(&uid, 0, 1)
-require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
-bat.SetRowCount(2)
-err = validateLeadingRowID("base", "t", false, bat)
-require.Error(t, err)
-require.Contains(t, err.Error(), "DataBranch-CollectChanges-RowIDLenMismatch")
-})
+	t.Run("length mismatch", func(t *testing.T) {
+		bat := batch.NewWithSize(2)
+		bat.SetAttributes([]string{catalog.Row_ID, "id"})
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		uid, err := types.BuildUuid()
+		require.NoError(t, err)
+		blkID := objectio.NewBlockid(&uid, 0, 1)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+		bat.SetRowCount(2)
+		err = validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-RowIDLenMismatch")
+	})
 
-t.Run("null rowid", func(t *testing.T) {
-bat := makeBatchWithLeadingType(t, types.T_Rowid)
-require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, true, mp))
-err := validateLeadingRowID("base", "t", false, bat)
-require.Error(t, err)
-require.Contains(t, err.Error(), "DataBranch-CollectChanges-NullRowID")
-})
+	t.Run("null rowid", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, true, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-NullRowID")
+	})
 
-t.Run("empty rowid", func(t *testing.T) {
-bat := makeBatchWithLeadingType(t, types.T_Rowid)
-require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.EmptyRowid, false, mp))
-err := validateLeadingRowID("base", "t", false, bat)
-require.Error(t, err)
-require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowID")
-})
+	t.Run("empty rowid", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.EmptyRowid, false, mp))
+		err := validateLeadingRowID("base", "t", false, bat)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "DataBranch-CollectChanges-InvalidRowID")
+	})
 
-t.Run("valid rowid passes", func(t *testing.T) {
-bat := makeBatchWithLeadingType(t, types.T_Rowid)
-uid, err := types.BuildUuid()
-require.NoError(t, err)
-blkID := objectio.NewBlockid(&uid, 0, 1)
-require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
-require.NoError(t, validateLeadingRowID("base", "t", false, bat))
-})
+	t.Run("valid rowid passes", func(t *testing.T) {
+		bat := makeBatchWithLeadingType(t, types.T_Rowid)
+		uid, err := types.BuildUuid()
+		require.NoError(t, err)
+		blkID := objectio.NewBlockid(&uid, 0, 1)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(blkID, 0), false, mp))
+		require.NoError(t, validateLeadingRowID("base", "t", false, bat))
+	})
 }
