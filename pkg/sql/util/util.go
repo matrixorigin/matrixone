@@ -143,24 +143,13 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 }
 
 func BuildSysStatementInfoFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", getAccountNameFromUserName(acctName))
+	equalAccount := makeStringEqualAst("account", acctName)
 	return equalAccount
 }
 
 func BuildSysMetricFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", getAccountNameFromUserName(acctName))
+	equalAccount := makeStringEqualAst("account", acctName)
 	return equalAccount
-}
-
-func getAccountNameFromUserName(userName string) string {
-	userName = strings.Split(userName, "?")[0]
-	if splitPos := strings.IndexByte(userName, ':'); splitPos != -1 {
-		return userName[:splitPos]
-	}
-	if splitPos := strings.IndexByte(userName, '#'); splitPos != -1 {
-		return userName[:splitPos]
-	}
-	return userName
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:

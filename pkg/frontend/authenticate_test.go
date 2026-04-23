@@ -60,6 +60,8 @@ func TestGetTenantInfo(t *testing.T) {
 			{"u1", "{account sys:u1: -- 0:0:0}", false},
 			{"tenant1:u1", "{account tenant1:u1: -- 0:0:0}", false},
 			{"tenant1:u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"tenant1%3Au1", "{account tenant1:u1: -- 0:0:0}", false},
+			{"tenant1%3Au1%3Ar1", "{account tenant1:u1:r1 -- 0:0:0}", false},
 			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
 			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
 			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
