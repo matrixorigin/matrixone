@@ -3037,6 +3037,62 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 	return indexDefs, tableDefs, nil
 }
 
+// validateIncludeColumns enforces DDL-time rules for INCLUDE columns on GPU
+// vector (CAGRA / IVF-PQ) indexes. The execute-time path in
+// filter_helper_gpu.go validates types lazily, so without this check a bogus
+// CREATE INDEX ... INCLUDE (...) only breaks at the first INSERT. Failing up
+// front gives users a clear, immediate error.
+//
+// Rules:
+//   - each INCLUDE column must exist on the base table
+//   - column type must be one the GPU FilterStore accepts: int32, int64,
+//     float32, float64. VARCHAR is NOT accepted — the executor path expects a
+//     pre-hashed uint64 and the DDL-side hashing pipeline is not wired in
+//     yet, so reject it here until that support lands.
+//   - INCLUDE columns must not duplicate each other or the indexed vector
+//     column. The primary key is allowed — predicates on the pk need it in
+//     filter_host_ even though host_ids also carries it.
+func validateIncludeColumns(ctx CompilerContext,
+	includeCols []*tree.UnresolvedName,
+	colMap map[string]*ColDef,
+	vecColName string) error {
+	if len(includeCols) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(includeCols))
+	for _, uc := range includeCols {
+		name := uc.ColName()
+		origin := uc.ColNameOrigin()
+		if name == "" {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "INCLUDE column name cannot be empty")
+		}
+		if name == vecColName {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' cannot be the indexed vector column", origin)
+		}
+		if _, dup := seen[name]; dup {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"duplicate INCLUDE column '%s'", origin)
+		}
+		seen[name] = struct{}{}
+
+		col, ok := colMap[name]
+		if !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' is not exist", origin)
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+			// supported
+		default:
+			return moerr.NewNotSupportedf(ctx.GetContext(),
+				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
+				origin, types.T(col.Typ.Id).String())
+		}
+	}
+	return nil
+}
+
 func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
@@ -3071,6 +3127,12 @@ func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFPQ indexes are not allowed to use the same column")
 				}
 			}
+		}
+	}
+
+	if indexInfo.IndexOption != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0]); err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -3330,6 +3392,12 @@ func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 			}
 		}
 
+	}
+
+	if indexInfo.IndexOption != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0]); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	indexDefs := make([]*plan.IndexDef, 2)
