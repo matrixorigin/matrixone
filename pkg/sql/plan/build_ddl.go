@@ -114,6 +114,21 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	return "DEFINER"
 }
 
+// overrideViewDefSecurityType replaces the SecurityType in the ViewDef's JSON data.
+func overrideViewDefSecurityType(tableDef *plan.TableDef, securityType string) {
+	if tableDef.ViewSql == nil || tableDef.ViewSql.View == "" {
+		return
+	}
+	var viewData ViewData
+	if err := json.Unmarshal([]byte(tableDef.ViewSql.View), &viewData); err != nil {
+		return
+	}
+	viewData.SecurityType = strings.ToUpper(securityType)
+	if data, err := json.Marshal(viewData); err == nil {
+		tableDef.ViewSql.View = string(data)
+	}
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
@@ -400,6 +415,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// If the DDL explicitly specifies SQL SECURITY, override the session variable
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
 	}
 
 	createView.TableDef.Cols = tableDef.Cols
@@ -3587,6 +3607,16 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// SecurityType priority: AST explicit > old view inherited > session variable (already set by genViewTableDef)
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
+	} else if oldViewDef != nil && oldViewDef.ViewSql != nil {
+		var oldViewData ViewData
+		if e := json.Unmarshal([]byte(oldViewDef.ViewSql.View), &oldViewData); e == nil && oldViewData.SecurityType != "" {
+			overrideViewDefSecurityType(tableDef, oldViewData.SecurityType)
+		}
 	}
 
 	alterView.TableDef.Cols = tableDef.Cols

@@ -505,18 +505,20 @@ func (node *AlterAccount) reset() {
 
 type AlterView struct {
 	statementImpl
-	IfExists bool
-	Name     *TableName
-	ColNames IdentifierList
-	AsSource *Select
+	IfExists     bool
+	Name         *TableName
+	ColNames     IdentifierList
+	AsSource     *Select
+	SecurityType string // "DEFINER", "INVOKER", or "" (not specified)
 }
 
-func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select) *AlterView {
+func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select, securityType string) *AlterView {
 	a := reuse.Alloc[AlterView](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.ColNames = colNames
 	a.AsSource = asSource
+	a.SecurityType = securityType
 	return a
 }
 

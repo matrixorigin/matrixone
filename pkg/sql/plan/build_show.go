@@ -192,7 +192,16 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	}
 
 	// FixMe  We need a better escape function
-	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
+	stmtStr := viewData.Stmt
+	// If the stored Stmt doesn't contain SQL SECURITY clause, splice it in
+	if viewData.SecurityType != "" &&
+		!strings.Contains(strings.ToUpper(stmtStr), "SQL SECURITY") {
+		upper := strings.ToUpper(stmtStr)
+		if idx := strings.Index(upper, "VIEW"); idx > 0 {
+			stmtStr = stmtStr[:idx] + "SQL SECURITY " + viewData.SecurityType + " " + stmtStr[idx:]
+		}
+	}
+	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
 	// logutil.Info(sqlStr)

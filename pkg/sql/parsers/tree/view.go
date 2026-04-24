@@ -14,7 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[CreateView](
@@ -26,20 +30,22 @@ func init() {
 
 type CreateView struct {
 	statementImpl
-	Replace     bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
+	Replace      bool
+	Name         *TableName
+	ColNames     IdentifierList
+	AsSource     *Select
+	IfNotExists  bool
+	SecurityType string // "DEFINER", "INVOKER", or "" (not specified)
 }
 
-func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, securityType string) *CreateView {
 	c := reuse.Alloc[CreateView](nil)
 	c.Replace = replace
 	c.Name = name
 	c.ColNames = colNames
 	c.AsSource = asSource
 	c.IfNotExists = ifNotExists
+	c.SecurityType = securityType
 	return c
 }
 
@@ -52,6 +58,12 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 
 	if node.Replace {
 		ctx.WriteString("or replace ")
+	}
+
+	if node.SecurityType != "" {
+		ctx.WriteString("sql security ")
+		ctx.WriteString(strings.ToLower(node.SecurityType))
+		ctx.WriteByte(' ')
 	}
 
 	ctx.WriteString("view ")

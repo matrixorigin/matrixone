@@ -6652,14 +6652,25 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 
 	//optional predefined privilege : tableAll, ownership
+	//put them into compound entries so they go through view-chain verification
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	for _, p := range predefined {
-		for par := range dedup {
-			e := privilegeEntriesMap[p]
-			e.databaseName = par.databaseName
-			e.tableName = par.tableName
-			entries = append(entries, e)
+		predefinedMultiPrivs := make([]privilegeItem, 0, len(arr))
+		for _, tips := range arr {
+			predefinedMultiPrivs = append(predefinedMultiPrivs, privilegeItem{
+				privilegeTyp:          p,
+				objType:               tips.objType,
+				originViews:           tips.originViews,
+				directView:            tips.directView,
+				scanSnapshot:          tips.scanSnapshot,
+				dbName:                tips.databaseName,
+				tableName:             tips.tableName,
+				isClusterTable:        tips.isClusterTable,
+				clusterTableOperation: tips.clusterTableOperation,
+			})
 		}
+		me := &compoundEntry{predefinedMultiPrivs}
+		entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 	}
 
 	priv.entries = entries
@@ -6762,6 +6773,73 @@ func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry 
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
+// verifyPrivilegeWithRoleInheritance expands the role inheritance chain for startRoleId
+// and checks whether any role in the chain has the given privilege entry.
+// This is used for the DEFINER path where the effective role differs from the session role.
+func verifyPrivilegeWithRoleInheritance(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	startRoleId int64,
+	entry privilegeEntry,
+	enableCache bool,
+) (bool, error) {
+	if startRoleId == moAdminRoleID || startRoleId == accountAdminRoleID {
+		return true, nil
+	}
+	pls, err := getPrivilegeLevelsOfObjectType(ctx, entry.objType)
+	if err != nil {
+		return false, err
+	}
+
+	visited := &btree.Set[int64]{}
+	currentSet := &btree.Set[int64]{}
+	currentSet.Insert(startRoleId)
+	visited.Insert(startRoleId)
+
+	for {
+		for _, rid := range currentSet.Keys() {
+			yes, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, nil, rid, entry, pls, false)
+			if err != nil {
+				return false, err
+			}
+			if yes {
+				return true, nil
+			}
+		}
+
+		nextSet := &btree.Set[int64]{}
+		for _, rid := range currentSet.Keys() {
+			bh.ClearExecResultSet()
+			err := bh.Exec(ctx, getSqlForInheritedRoleIdOfRoleId(rid))
+			if err != nil {
+				return false, err
+			}
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return false, err
+			}
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					grantedId, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return false, err
+					}
+					if !visited.Contains(grantedId) {
+						visited.Insert(grantedId)
+						nextSet.Insert(grantedId)
+					}
+				}
+			}
+		}
+
+		if nextSet.Len() == 0 {
+			return false, nil
+		}
+		currentSet = nextSet
+	}
+}
+
 // with multi-privilege levels exists or not
 func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	ctx context.Context,
@@ -6985,6 +7063,12 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								if viewAllowed {
 									if skipBaseCheck {
 										yes = true
+									} else if checkRoleId != roleId {
+										// DEFINER path: expand role inheritance for the definer's role
+										yes, err = verifyPrivilegeWithRoleInheritance(ctx, bh, ses, checkRoleId, tempEntry, enableCache)
+										if err != nil {
+											return false, err
+										}
 									} else {
 										useCache := enableCache && cache != nil && checkRoleId == roleId
 										cacheToUse := cache

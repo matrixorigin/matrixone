@@ -3414,7 +3414,22 @@ alter_view_stmt:
         var name = $4
         var colNames = $5
         var asSource = $7
-        $$ = tree.NewAlterView(ifExists, name, colNames, asSource)
+        $$ = tree.NewAlterView(ifExists, name, colNames, asSource, "")
+    }
+|   ALTER view_list_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    {
+        var ifExists = $4
+        var name = $5
+        var colNames = $6
+        var asSource = $8
+        secType := ""
+        viewListStr := strings.ToUpper($2)
+        if strings.Contains(viewListStr, "SQL SECURITY INVOKER") {
+            secType = "INVOKER"
+        } else if strings.Contains(viewListStr, "SQL SECURITY DEFINER") {
+            secType = "DEFINER"
+        }
+        $$ = tree.NewAlterView(ifExists, name, colNames, asSource, secType)
     }
 
 alter_table_stmt:
@@ -7013,12 +7028,20 @@ create_view_stmt:
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        secType := ""
+        viewListStr := strings.ToUpper($2)
+        if strings.Contains(viewListStr, "SQL SECURITY INVOKER") {
+            secType = "INVOKER"
+        } else if strings.Contains(viewListStr, "SQL SECURITY DEFINER") {
+            secType = "DEFINER"
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
             ColNames,
             AsSource,
             IfNotExists,
+            secType,
         )
     }
 |   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
@@ -7034,6 +7057,7 @@ create_view_stmt:
             ColNames,
             AsSource,
             IfNotExists,
+            "",
         )
     }
 
@@ -7094,7 +7118,13 @@ algorithm_type_2:
 
 security_opt:
     DEFINER
+    {
+        $$ = "DEFINER"
+    }
 |   INVOKER
+    {
+        $$ = "INVOKER"
+    }
 
 check_type:
     {
