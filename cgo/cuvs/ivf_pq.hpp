@@ -544,7 +544,7 @@ public:
                 }
             }
         } catch (const std::exception& e) {
-            // submit_all_devices only rethrows the first exception it sees; log every
+            // submit_all_devices rethrows the first exception it sees; log every
             // shard's failure here so none are lost.
             size_t free_b = 0, total_b = 0;
             cudaMemGetInfo(&free_b, &total_b);

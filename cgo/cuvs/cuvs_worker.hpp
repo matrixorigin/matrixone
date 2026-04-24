@@ -634,7 +634,27 @@ public:
 
     void submit_all_devices(task_fn_t fn) {
         auto ids = submit_all_devices_no_wait(fn);
-        for (auto id : ids) wait(id).get();
+        std::exception_ptr first_error;
+        int err_count = 0;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            auto res = wait(ids[i]).get();
+            if (!res.error) continue;
+            ++err_count;
+            if (!first_error) first_error = res.error;
+            try { std::rethrow_exception(res.error); }
+            catch (const std::exception& e) {
+                std::cerr << "[submit_all_devices ERROR] rank=" << i
+                          << " what=" << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "[submit_all_devices ERROR] rank=" << i
+                          << " unknown exception" << std::endl;
+            }
+        }
+        if (first_error) {
+            std::cerr << "[submit_all_devices] " << err_count << "/" << ids.size()
+                      << " device tasks failed; rethrowing first" << std::endl;
+            std::rethrow_exception(first_error);
+        }
     }
 
 

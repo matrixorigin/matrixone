@@ -523,6 +523,39 @@ TEST(CuvsWorkerTest, StopFlushesNotCancels) {
     ASSERT_EQ(exec_count.load(), 1);
 }
 
+TEST(CuvsWorkerTest, SubmitAllDevicesErrorHandling) {
+    // Need at least 2 devices to test multiple failures
+    std::vector<int> devices = {0};
+    int n_devices = 0;
+    cudaGetDeviceCount(&n_devices);
+    if (n_devices > 1) {
+        for (int i = 1; i < std::min(n_devices, 4); ++i) {
+            devices.push_back(i);
+        }
+    }
+    
+    uint32_t n_threads = devices.size();
+    cuvs_worker_t worker(n_threads, devices);
+    worker.start();
+
+    // Task that fails on every device
+    auto fail_task = [](raft_handle_wrapper_t& handle) -> std::any {
+        throw std::runtime_error("task failed on rank " + std::to_string(handle.get_rank()));
+    };
+
+    try {
+        worker.submit_all_devices(fail_task);
+        ASSERT_TRUE(false); // Should have thrown
+    } catch (const std::exception& e) {
+        // Should contain rank 0 as it's the first one it waits for
+        ASSERT_TRUE(std::string(e.what()).find("task failed on rank 0") != std::string::npos);
+    } catch (...) {
+        ASSERT_TRUE(false); // Should have thrown std::exception
+    }
+
+    worker.stop();
+}
+
 int main() {
     return RUN_ALL_TESTS();
 }

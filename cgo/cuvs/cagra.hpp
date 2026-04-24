@@ -423,8 +423,8 @@ public:
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
         // Validate build params against effective per-shard row count before
-        // submitting to worker threads. submit_all_devices() does not propagate
-        // exceptions, so validation must happen here in the calling thread.
+        // submitting to worker threads. submit_all_devices() propagates
+        // exceptions, but validation here provides faster feedback and better error messages.
         if (this->dist_mode == DistributionMode_SHARDED) {
             int num_shards = static_cast<int>(this->devices_.size());
             uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
