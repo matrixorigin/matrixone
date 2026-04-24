@@ -189,7 +189,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
 			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
-			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
+			affectedCols = appendAffectedAlterColumnNames(
+				affectedCols,
+				option.OldColumnName.ColName(),
+				option.NewColumn.Name.ColName(),
+			)
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
@@ -276,6 +280,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
+	affectedCols = append(affectedCols, oldColName)
+	if newColName != oldColName {
+		affectedCols = append(affectedCols, newColName)
+	}
+	return affectedCols
 }
 
 var ID atomic.Int64
