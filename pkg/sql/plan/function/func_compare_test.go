@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,4 +138,109 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 		tc.inputs, tc.expect, operatorOpBitShiftLeftInt64Fn)
 	s, info := fcTC.Run()
 	require.True(t, s, info, tc.info)
+}
+
+func TestNullSafeEqualFnTypeMismatch(t *testing.T) {
+	tc := tcTemp{
+		info: "<=> mixed numeric test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{1, 1, 0, 0}, []bool{false, false, true, true}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1, 2, 0, 0}, []bool{false, false, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func TestEqualFnTypeMismatchLargeIntegers(t *testing.T) {
+	tc := tcTemp{
+		info: "= mixed large integer test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{9007199254740993, 9007199254740993}, []bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{9007199254740992, 9007199254740993}, []bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{false, true}, []bool{false, false}),
+	}
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func TestNullSafeEqualFnTypeMismatchLargeIntegers(t *testing.T) {
+	tc := tcTemp{
+		info: "<=> mixed large integer test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{9007199254740993, 9007199254740993}, []bool{false, false}),
+			NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{9007199254740992, 9007199254740993}, []bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{false, true}, []bool{false, false}),
+	}
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func TestEqualFnTypeMismatchDecimalAndFloat(t *testing.T) {
+	tc := tcTemp{
+		info: "= mixed decimal/float test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal64, 10, 1),
+				[]types.Decimal64{1, 2}, []bool{false, false}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{0.1, 0.3}, []bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false}, []bool{false, false}),
+	}
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
+
+func TestCompareFnTypeMismatchSpecialFloats(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	eqTC := tcTemp{
+		info: "= mixed special float test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{1, 1, 1}, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{math.NaN(), math.Inf(1), math.Inf(-1)}, []bool{false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{false, false, false}, []bool{false, false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, eqTC.inputs, eqTC.expect, equalFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, eqTC.info)
+
+	neTC := tcTemp{
+		info:   "!= mixed special float test",
+		inputs: eqTC.inputs,
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, true, true}, []bool{false, false, false}),
+	}
+	fcTC = NewFunctionTestCase(proc, neTC.inputs, neTC.expect, notEqualFn)
+	s, info = fcTC.Run()
+	require.True(t, s, info, neTC.info)
 }

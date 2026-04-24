@@ -2833,6 +2833,16 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
+			if strings.Contains(err.Error(), "can not find table by id") {
+				logutil.Warn(
+					"cannot find the child table when drop table",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
+					zap.Int("child table id", int(childTblId)),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)

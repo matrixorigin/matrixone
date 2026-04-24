@@ -36,4 +36,18 @@ show tables;
 ➤ Tables_in_drop_multi[12,-1,0]  𝄀
 t1
 drop table t1;
+create table p(id int primary key);
+create table c(id int primary key, pid int, foreign key(pid) references p(id));
+show tables;
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
+c  𝄀
+p
+drop table if exists p, c;
+show tables;
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
+create table p(id int primary key);
+create table c(id int primary key, pid int, foreign key(pid) references p(id));
+drop table if exists c, p;
+show tables;
+➤ Tables_in_drop_multi[12,-1,0]  𝄀
 drop database drop_multi;

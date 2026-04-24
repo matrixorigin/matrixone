@@ -29,4 +29,15 @@ drop table t1, no_such_table;
 show tables;
 drop table t1;
 
+create table p(id int primary key);
+create table c(id int primary key, pid int, foreign key(pid) references p(id));
+show tables;
+drop table if exists p, c;
+show tables;
+
+create table p(id int primary key);
+create table c(id int primary key, pid int, foreign key(pid) references p(id));
+drop table if exists c, p;
+show tables;
+
 drop database drop_multi;

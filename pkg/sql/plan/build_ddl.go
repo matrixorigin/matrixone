@@ -3106,7 +3106,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) == 1 {
-		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx)
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3126,8 +3126,25 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
+	dropTargetTblIds := make(map[uint64]struct{}, len(stmt.Names))
 	for _, name := range stmt.Names {
-		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx)
+		dbName := string(name.SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
+		}
+		if dbName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		_, tableDef, err := ctx.Resolve(dbName, string(name.ObjectName), nil)
+		if err != nil {
+			return nil, err
+		}
+		if tableDef != nil {
+			dropTargetTblIds[tableDef.TblId] = struct{}{}
+		}
+	}
+	for _, name := range stmt.Names {
+		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx, dropTargetTblIds)
 		if err != nil {
 			return nil, err
 		}
@@ -3145,7 +3162,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext, dropTargetTblIds map[uint64]struct{}) (*plan.DropTable, error) {
 	dropTable := &plan.DropTable{
 		IfExists: ifExists,
 	}
@@ -3185,7 +3202,7 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 		return nil, err
 	}
 	if enabled && len(tableDef.RefChildTbls) > 0 {
-		if !HasFkSelfReferOnly(tableDef) {
+		if !canDropTableWithTargets(tableDef, dropTargetTblIds) {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
 		}
 	}
@@ -3259,6 +3276,24 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 	dropTable.TableDef = tableDef
 	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
 	return dropTable, nil
+}
+
+func canDropTableWithTargets(tableDef *plan.TableDef, dropTargetTblIds map[uint64]struct{}) bool {
+	if HasFkSelfReferOnly(tableDef) {
+		return true
+	}
+	if len(dropTargetTblIds) == 0 {
+		return false
+	}
+	for _, childTblId := range tableDef.RefChildTbls {
+		if childTblId == tableDef.TblId {
+			continue
+		}
+		if _, ok := dropTargetTblIds[childTblId]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {

@@ -2186,3 +2186,63 @@ func Test_strToArray_DimensionCheck(t *testing.T) {
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc5.info, info))
 }
+
+func TestCastJsonLargeIntegerPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	intResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(1))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"9007199254740993"}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, intResult, proc, 1, nil))
+	gotInt := vector.MustFixedColNoTypeCheck[int64](intResult.GetResultVector())
+	require.Equal(t, int64(9007199254740993), gotInt[0])
+
+	uintResult := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+	defer uintResult.Free()
+	require.NoError(t, uintResult.PreExtendAndReset(1))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"18446744073709551615"}, nil),
+		vector.NewVec(types.T_uint64.ToType()),
+	}, uintResult, proc, 1, nil))
+	gotUint := vector.MustFixedColNoTypeCheck[uint64](uintResult.GetResultVector())
+	require.Equal(t, uint64(18446744073709551615), gotUint[0])
+}
+
+func TestCastJsonIntegerStringOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	intResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(1))
+	err := NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{`"9223372036854775808"`}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, intResult, proc, 1, nil)
+	require.Error(t, err)
+
+	uintResult := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+	defer uintResult.Free()
+	require.NoError(t, uintResult.PreExtendAndReset(1))
+	err = NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{`"18446744073709551616"`}, nil),
+		vector.NewVec(types.T_uint64.ToType()),
+	}, uintResult, proc, 1, nil)
+	require.Error(t, err)
+
+	require.NoError(t, intResult.PreExtendAndReset(1))
+	err = NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"9223372036854775808.0"}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, intResult, proc, 1, nil)
+	require.Error(t, err)
+
+	require.NoError(t, uintResult.PreExtendAndReset(1))
+	err = NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"18446744073709551616.0"}, nil),
+		vector.NewVec(types.T_uint64.ToType()),
+	}, uintResult, proc, 1, nil)
+	require.Error(t, err)
+}

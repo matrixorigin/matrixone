@@ -15,29 +15,49 @@
 package function
 
 import (
+	"math"
+	"math/big"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type numericCompareKind uint8
+
+const (
+	numericCompareFinite numericCompareKind = iota
+	numericCompareNegInf
+	numericComparePosInf
+	numericCompareNaN
+)
+
+type numericCompareValue struct {
+	kind numericCompareKind
+	rat  *big.Rat
+}
+
 // numericCompareWithTypeMismatch handles comparison when two numeric types don't match.
-// It converts both operands to float64 for comparison, which is safe for all numeric types.
+// It compares both operands via exact rational values to avoid precision loss across type boundaries.
 // This is a fallback for cases where plan-stage type casting was not applied correctly.
 func numericCompareWithTypeMismatch(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
 	length int,
-	cmpFn func(float64, float64) bool,
+	cmpFn func(int, bool) bool,
 	selectList *FunctionSelectList,
 ) error {
+	if usesApproximateNumericCompare(parameters[0], parameters[1]) {
+		return numericCompareWithTypeMismatchApprox(parameters, result, proc, length, cmpFn, selectList)
+	}
+
 	rs := vector.MustFunctionResult[bool](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
-	// Get values as float64 from both vectors
-	v1Float64 := getAsFloat64Slice(parameters[0])
-	v2Float64 := getAsFloat64Slice(parameters[1])
+	v1Cmp := getAsCompareValueSlice(parameters[0])
+	v2Cmp := getAsCompareValueSlice(parameters[1])
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 
@@ -48,7 +68,185 @@ func numericCompareWithTypeMismatch(
 		if null1 || null2 {
 			rsVec.GetNulls().AddRange(0, uint64(length))
 		} else {
-			r := cmpFn(v1Float64[0], v2Float64[0])
+			cmp, comparable := compareNumericValues(v1Cmp[0], v2Cmp[0])
+			r := cmpFn(cmp, comparable)
+			for i := 0; i < length; i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		if parameters[0].IsConstNull() {
+			rsVec.GetNulls().AddRange(0, uint64(length))
+			return nil
+		}
+		val1 := v1Cmp[0]
+		nsp2 := parameters[1].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp2.Contains(uint64(i)) {
+				rsVec.GetNulls().Add(uint64(i))
+			} else {
+				cmp, comparable := compareNumericValues(val1, v2Cmp[i])
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		if parameters[1].IsConstNull() {
+			rsVec.GetNulls().AddRange(0, uint64(length))
+			return nil
+		}
+		val2 := v2Cmp[0]
+		nsp1 := parameters[0].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp1.Contains(uint64(i)) {
+				rsVec.GetNulls().Add(uint64(i))
+			} else {
+				cmp, comparable := compareNumericValues(v1Cmp[i], val2)
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	// Neither is constant
+	nsp1 := parameters[0].GetNulls()
+	nsp2 := parameters[1].GetNulls()
+	for i := 0; i < length; i++ {
+		if nsp1.Contains(uint64(i)) || nsp2.Contains(uint64(i)) {
+			rsVec.GetNulls().Add(uint64(i))
+		} else {
+			cmp, comparable := compareNumericValues(v1Cmp[i], v2Cmp[i])
+			rss[i] = cmpFn(cmp, comparable)
+		}
+	}
+	return nil
+}
+
+func numericCompareWithTypeMismatchNullSafe(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	cmpFn func(int, bool) bool,
+	selectList *FunctionSelectList,
+) error {
+	if usesApproximateNumericCompare(parameters[0], parameters[1]) {
+		return numericCompareWithTypeMismatchNullSafeApprox(parameters, result, proc, length, cmpFn, selectList)
+	}
+
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+	rsVec.GetNulls().Reset()
+
+	v1Cmp := getAsCompareValueSlice(parameters[0])
+	v2Cmp := getAsCompareValueSlice(parameters[1])
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+
+	if c1 && c2 {
+		null1 := parameters[0].IsConstNull()
+		null2 := parameters[1].IsConstNull()
+		var r bool
+		if null1 || null2 {
+			r = null1 && null2
+		} else {
+			cmp, comparable := compareNumericValues(v1Cmp[0], v2Cmp[0])
+			r = cmpFn(cmp, comparable)
+		}
+		for i := 0; i < length; i++ {
+			rss[i] = r
+		}
+		return nil
+	}
+
+	if c1 {
+		if parameters[0].IsConstNull() {
+			nsp2 := parameters[1].GetNulls()
+			for i := 0; i < length; i++ {
+				rss[i] = nsp2.Contains(uint64(i))
+			}
+			return nil
+		}
+		val1 := v1Cmp[0]
+		nsp2 := parameters[1].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp2.Contains(uint64(i)) {
+				rss[i] = false
+			} else {
+				cmp, comparable := compareNumericValues(val1, v2Cmp[i])
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		if parameters[1].IsConstNull() {
+			nsp1 := parameters[0].GetNulls()
+			for i := 0; i < length; i++ {
+				rss[i] = nsp1.Contains(uint64(i))
+			}
+			return nil
+		}
+		val2 := v2Cmp[0]
+		nsp1 := parameters[0].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp1.Contains(uint64(i)) {
+				rss[i] = false
+			} else {
+				cmp, comparable := compareNumericValues(v1Cmp[i], val2)
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	nsp1 := parameters[0].GetNulls()
+	nsp2 := parameters[1].GetNulls()
+	for i := 0; i < length; i++ {
+		null1 := nsp1.Contains(uint64(i))
+		null2 := nsp2.Contains(uint64(i))
+		if null1 || null2 {
+			rss[i] = null1 && null2
+		} else {
+			cmp, comparable := compareNumericValues(v1Cmp[i], v2Cmp[i])
+			rss[i] = cmpFn(cmp, comparable)
+		}
+	}
+	return nil
+}
+
+func numericCompareWithTypeMismatchApprox(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	cmpFn func(int, bool) bool,
+	selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+
+	v1Float64 := getAsFloat64Slice(parameters[0])
+	v2Float64 := getAsFloat64Slice(parameters[1])
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+
+	if c1 && c2 {
+		null1 := parameters[0].IsConstNull()
+		null2 := parameters[1].IsConstNull()
+		if null1 || null2 {
+			rsVec.GetNulls().AddRange(0, uint64(length))
+		} else {
+			cmp, comparable := compareApproximateNumericValues(v1Float64[0], v2Float64[0])
+			r := cmpFn(cmp, comparable)
 			for i := 0; i < length; i++ {
 				rss[i] = r
 			}
@@ -67,7 +265,8 @@ func numericCompareWithTypeMismatch(
 			if nsp2.Contains(uint64(i)) {
 				rsVec.GetNulls().Add(uint64(i))
 			} else {
-				rss[i] = cmpFn(val1, v2Float64[i])
+				cmp, comparable := compareApproximateNumericValues(val1, v2Float64[i])
+				rss[i] = cmpFn(cmp, comparable)
 			}
 		}
 		return nil
@@ -84,26 +283,305 @@ func numericCompareWithTypeMismatch(
 			if nsp1.Contains(uint64(i)) {
 				rsVec.GetNulls().Add(uint64(i))
 			} else {
-				rss[i] = cmpFn(v1Float64[i], val2)
+				cmp, comparable := compareApproximateNumericValues(v1Float64[i], val2)
+				rss[i] = cmpFn(cmp, comparable)
 			}
 		}
 		return nil
 	}
 
-	// Neither is constant
 	nsp1 := parameters[0].GetNulls()
 	nsp2 := parameters[1].GetNulls()
 	for i := 0; i < length; i++ {
 		if nsp1.Contains(uint64(i)) || nsp2.Contains(uint64(i)) {
 			rsVec.GetNulls().Add(uint64(i))
 		} else {
-			rss[i] = cmpFn(v1Float64[i], v2Float64[i])
+			cmp, comparable := compareApproximateNumericValues(v1Float64[i], v2Float64[i])
+			rss[i] = cmpFn(cmp, comparable)
 		}
 	}
 	return nil
 }
 
-// getAsFloat64Slice converts a vector to a float64 slice for comparison
+func numericCompareWithTypeMismatchNullSafeApprox(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	cmpFn func(int, bool) bool,
+	selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
+	rsVec.GetNulls().Reset()
+
+	v1Float64 := getAsFloat64Slice(parameters[0])
+	v2Float64 := getAsFloat64Slice(parameters[1])
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+
+	if c1 && c2 {
+		null1 := parameters[0].IsConstNull()
+		null2 := parameters[1].IsConstNull()
+		var r bool
+		if null1 || null2 {
+			r = null1 && null2
+		} else {
+			cmp, comparable := compareApproximateNumericValues(v1Float64[0], v2Float64[0])
+			r = cmpFn(cmp, comparable)
+		}
+		for i := 0; i < length; i++ {
+			rss[i] = r
+		}
+		return nil
+	}
+
+	if c1 {
+		if parameters[0].IsConstNull() {
+			nsp2 := parameters[1].GetNulls()
+			for i := 0; i < length; i++ {
+				rss[i] = nsp2.Contains(uint64(i))
+			}
+			return nil
+		}
+		val1 := v1Float64[0]
+		nsp2 := parameters[1].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp2.Contains(uint64(i)) {
+				rss[i] = false
+			} else {
+				cmp, comparable := compareApproximateNumericValues(val1, v2Float64[i])
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		if parameters[1].IsConstNull() {
+			nsp1 := parameters[0].GetNulls()
+			for i := 0; i < length; i++ {
+				rss[i] = nsp1.Contains(uint64(i))
+			}
+			return nil
+		}
+		val2 := v2Float64[0]
+		nsp1 := parameters[0].GetNulls()
+		for i := 0; i < length; i++ {
+			if nsp1.Contains(uint64(i)) {
+				rss[i] = false
+			} else {
+				cmp, comparable := compareApproximateNumericValues(v1Float64[i], val2)
+				rss[i] = cmpFn(cmp, comparable)
+			}
+		}
+		return nil
+	}
+
+	nsp1 := parameters[0].GetNulls()
+	nsp2 := parameters[1].GetNulls()
+	for i := 0; i < length; i++ {
+		null1 := nsp1.Contains(uint64(i))
+		null2 := nsp2.Contains(uint64(i))
+		if null1 || null2 {
+			rss[i] = null1 && null2
+		} else {
+			cmp, comparable := compareApproximateNumericValues(v1Float64[i], v2Float64[i])
+			rss[i] = cmpFn(cmp, comparable)
+		}
+	}
+	return nil
+}
+
+func compareNumericValues(left, right numericCompareValue) (int, bool) {
+	if left.kind == numericCompareNaN || right.kind == numericCompareNaN {
+		return 0, false
+	}
+	if left.kind == numericComparePosInf {
+		if right.kind == numericComparePosInf {
+			return 0, true
+		}
+		return 1, true
+	}
+	if left.kind == numericCompareNegInf {
+		if right.kind == numericCompareNegInf {
+			return 0, true
+		}
+		return -1, true
+	}
+	if right.kind == numericComparePosInf {
+		return -1, true
+	}
+	if right.kind == numericCompareNegInf {
+		return 1, true
+	}
+	return left.rat.Cmp(right.rat), true
+}
+
+func compareApproximateNumericValues(left, right float64) (int, bool) {
+	if math.IsNaN(left) || math.IsNaN(right) {
+		return 0, false
+	}
+	switch {
+	case left < right:
+		return -1, true
+	case left > right:
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+func getAsCompareValueSlice(v *vector.Vector) []numericCompareValue {
+	t := v.GetType()
+	switch t.Oid {
+	case types.T_int8:
+		cols := vector.MustFixedColNoTypeCheck[int8](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_int16:
+		cols := vector.MustFixedColNoTypeCheck[int16](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_int32:
+		cols := vector.MustFixedColNoTypeCheck[int32](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_int64:
+		cols := vector.MustFixedColNoTypeCheck[int64](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(val)}
+		}
+		return result
+	case types.T_uint8:
+		cols := vector.MustFixedColNoTypeCheck[uint8](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_uint16:
+		cols := vector.MustFixedColNoTypeCheck[uint16](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_uint32:
+		cols := vector.MustFixedColNoTypeCheck[uint32](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt64(int64(val))}
+		}
+		return result
+	case types.T_uint64:
+		cols := vector.MustFixedColNoTypeCheck[uint64](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			bi := new(big.Int).SetUint64(val)
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: new(big.Rat).SetInt(bi)}
+		}
+		return result
+	case types.T_float32:
+		cols := vector.MustFixedColNoTypeCheck[float32](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			f := float64(val)
+			if math.IsNaN(f) {
+				result[i] = numericCompareValue{kind: numericCompareNaN}
+				continue
+			}
+			if math.IsInf(f, 1) {
+				result[i] = numericCompareValue{kind: numericComparePosInf}
+				continue
+			}
+			if math.IsInf(f, -1) {
+				result[i] = numericCompareValue{kind: numericCompareNegInf}
+				continue
+			}
+			r := new(big.Rat).SetFloat64(float64(val))
+			if r == nil {
+				panic("invalid float32 value for numeric comparison")
+			}
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
+		}
+		return result
+	case types.T_float64:
+		cols := vector.MustFixedColNoTypeCheck[float64](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			if math.IsNaN(val) {
+				result[i] = numericCompareValue{kind: numericCompareNaN}
+				continue
+			}
+			if math.IsInf(val, 1) {
+				result[i] = numericCompareValue{kind: numericComparePosInf}
+				continue
+			}
+			if math.IsInf(val, -1) {
+				result[i] = numericCompareValue{kind: numericCompareNegInf}
+				continue
+			}
+			r := new(big.Rat).SetFloat64(val)
+			if r == nil {
+				panic("invalid float64 value for numeric comparison")
+			}
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
+		}
+		return result
+	case types.T_decimal64:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			r, ok := new(big.Rat).SetString(val.Format(t.Scale))
+			if !ok {
+				panic("invalid decimal64 value for numeric comparison")
+			}
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
+		}
+		return result
+	case types.T_decimal128:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
+		result := make([]numericCompareValue, len(cols))
+		for i, val := range cols {
+			r, ok := new(big.Rat).SetString(val.Format(t.Scale))
+			if !ok {
+				panic("invalid decimal128 value for numeric comparison")
+			}
+			result[i] = numericCompareValue{kind: numericCompareFinite, rat: r}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func getAsRatSlice(v *vector.Vector) []*big.Rat {
+	values := getAsCompareValueSlice(v)
+	if values == nil {
+		return nil
+	}
+	result := make([]*big.Rat, len(values))
+	for i, value := range values {
+		if value.kind != numericCompareFinite {
+			return nil
+		}
+		result[i] = value.rat
+	}
+	return result
+}
+
 func getAsFloat64Slice(v *vector.Vector) []float64 {
 	t := v.GetType()
 	switch t.Oid {
@@ -187,7 +665,6 @@ func getAsFloat64Slice(v *vector.Vector) []float64 {
 		}
 		return result
 	default:
-		// For other types, return empty slice (should not happen for numeric comparisons)
 		return nil
 	}
 }
@@ -214,4 +691,12 @@ func isNumericType(t types.T) bool {
 	default:
 		return false
 	}
+}
+
+func usesApproximateNumericCompare(v1, v2 *vector.Vector) bool {
+	return isFloatType(v1.GetType().Oid) || isFloatType(v2.GetType().Oid)
+}
+
+func isFloatType(t types.T) bool {
+	return t == types.T_float32 || t == types.T_float64
 }

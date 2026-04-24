@@ -16,7 +16,6 @@ package function
 
 import (
 	"bytes"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -142,6 +141,12 @@ func opBinaryBytesBytesToFixedNullSafe(
 }
 
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
+		return numericCompareWithTypeMismatchNullSafe(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp == 0
+		}, selectList)
+	}
+
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 
@@ -191,15 +196,6 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 			return a == b
 		}, selectList)
 	case types.T_float32:
-		scale := paramType.Scale
-		if scale > 0 {
-			pow := math.Pow10(int(scale))
-			return opBinaryFixedFixedToFixedNullSafe[float32](parameters, rs, proc, length, func(a, b float32) bool {
-				a = float32(math.Round(float64(a)*pow) / pow)
-				b = float32(math.Round(float64(b)*pow) / pow)
-				return a == b
-			}, selectList)
-		}
 		return opBinaryFixedFixedToFixedNullSafe[float32](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
 		}, selectList)
@@ -263,8 +259,8 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a == b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp == 0
 		}, selectList)
 	}
 
@@ -767,8 +763,8 @@ func valueDec128Compare(
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a > b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp > 0
 		}, selectList)
 	}
 
@@ -884,8 +880,8 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a >= b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp >= 0
 		}, selectList)
 	}
 
@@ -1001,8 +997,8 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a != b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return !comparable || cmp != 0
 		}, selectList)
 	}
 
@@ -1118,8 +1114,8 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a < b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp < 0
 		}, selectList)
 	}
 
@@ -1235,8 +1231,8 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Handle type mismatch for numeric types (fallback when plan-stage casting was not applied)
 	if shouldUseTypeMismatchPath(parameters[0], parameters[1]) {
-		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(a, b float64) bool {
-			return a <= b
+		return numericCompareWithTypeMismatch(parameters, result, proc, length, func(cmp int, comparable bool) bool {
+			return comparable && cmp <= 0
 		}, selectList)
 	}
 

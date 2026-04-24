@@ -6879,11 +6879,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 				if len(dbName) == 0 {
 					dbName = ses.GetDatabaseName()
 				}
-				if isClusterTable(dbName, string(name.ObjectName)) {
-					return true, stats, nil
+				if !isClusterTable(dbName, string(name.ObjectName)) {
+					return false, stats, nil
 				}
 			}
-			return false, stats, nil
+			return true, stats, nil
 		case *tree.AlterTable:
 			dbName := string(st.Table.SchemaName)
 			if len(dbName) == 0 {
