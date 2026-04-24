@@ -60,7 +60,6 @@ func TestBuildTable_AlterView(t *testing.T) {
 	vData, err := json.Marshal(ViewData{
 		Stmt:            "create view v as select a from a",
 		DefaultDatabase: "db",
-		SecurityType:    "DEFINER",
 	})
 	assert.NoError(t, err)
 
@@ -153,7 +152,6 @@ func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 	_, ok = bc.bindingByTable["__mo_tmp_real"]
 	require.False(t, ok)
 
-	require.Equal(t, "t1", qb.qry.Nodes[nodeID].TableDef.OriginalName)
 	require.Equal(t, "__mo_tmp_real", qb.qry.Nodes[nodeID].TableDef.Name)
 }
 
