@@ -222,6 +222,312 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
+// CumeDistReturnType is the return type of CUME_DIST window function.
+func CumeDistReturnType(_ []types.Type) types.Type {
+	return types.T_float64.ToType()
+}
+
+// PercentRankReturnType is the return type of PERCENT_RANK window function.
+func PercentRankReturnType(_ []types.Type) types.Type {
+	return types.T_float64.ToType()
+}
+
+// cumeDistWindowExec is the executor for CUME_DIST window function.
+type cumeDistWindowExec struct {
+	singleAggInfo
+	ret aggResultWithFixedType[float64]
+
+	groups [][]int64
+}
+
+func makeCumeDistExec(mg AggMemoryManager, aggID int64, isDistinct bool) (AggFuncExec, error) {
+	if isDistinct {
+		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
+	}
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: false,
+	}
+	return &cumeDistWindowExec{
+		singleAggInfo: info,
+		ret:           initAggResultWithFixedTypeResult[float64](mg, info.retType, info.emptyNull, 0),
+	}, nil
+}
+
+func (exec *cumeDistWindowExec) GroupGrow(more int) error {
+	exec.groups = append(exec.groups, make([][]int64, more)...)
+	return exec.ret.grows(more)
+}
+
+func (exec *cumeDistWindowExec) PreAllocateGroups(more int) error {
+	return exec.ret.preExtend(more)
+}
+
+func (exec *cumeDistWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
+	return nil
+}
+
+func (exec *cumeDistWindowExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
+func (exec *cumeDistWindowExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, em, err := exec.ret.marshalToBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *cumeDistWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if len(exec.groups) > 0 {
+		exec.groups = make([][]int64, len(groups))
+		for i := range exec.groups {
+			if len(groups[i]) > 0 {
+				exec.groups[i] = types.DecodeSlice[int64](groups[i])
+			}
+		}
+	}
+	return exec.ret.unmarshalFromBytes(result, empties)
+}
+
+func (exec *cumeDistWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *cumeDistWindowExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *cumeDistWindowExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*cumeDistWindowExec)
+	exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+	return nil
+}
+
+func (exec *cumeDistWindowExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*cumeDistWindowExec)
+	for i := range groups {
+		if groups[i] != GroupNotMatched {
+			groupIdx1 := int(groups[i] - 1)
+			groupIdx2 := i + offset
+
+			exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+		}
+	}
+	return nil
+}
+
+func (exec *cumeDistWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	panic("window function do not support the extra information")
+}
+
+func (exec *cumeDistWindowExec) Flush() ([]*vector.Vector, error) {
+	values := exec.ret.values
+
+	idx := 0
+	for _, group := range exec.groups {
+		if len(group) == 0 {
+			continue
+		}
+
+		total := float64(group[len(group)-1] - group[0])
+		for i := 1; i < len(group); i++ {
+			m := int(group[i] - group[i-1])
+			cumeDist := float64(group[i]-group[0]) / total
+
+			for k := idx + m; idx < k; idx++ {
+				x, y := exec.ret.updateNextAccessIdx(idx)
+				values[x][y] = cumeDist
+			}
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
+func (exec *cumeDistWindowExec) Free() {
+	exec.ret.free()
+}
+
+func (exec *cumeDistWindowExec) Size() int64 {
+	var size int64
+	size += exec.ret.Size()
+	for _, group := range exec.groups {
+		size += int64(cap(group)) * int64(types.T_int64.ToType().TypeSize())
+	}
+	size += int64(cap(exec.groups)) * 24
+	return size
+}
+
+// percentRankExec is the executor for PERCENT_RANK window function.
+type percentRankExec struct {
+	singleAggInfo
+	ret    aggResultWithFixedType[float64]
+	groups [][]int64
+}
+
+func makePercentRankExec(mg AggMemoryManager, aggID int64, isDistinct bool) (AggFuncExec, error) {
+	if isDistinct {
+		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
+	}
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: false,
+	}
+	return &percentRankExec{
+		singleAggInfo: info,
+		ret:           initAggResultWithFixedTypeResult[float64](mg, info.retType, info.emptyNull, 0),
+	}, nil
+}
+
+func (exec *percentRankExec) GroupGrow(more int) error {
+	exec.groups = append(exec.groups, make([][]int64, more)...)
+	return exec.ret.grows(more)
+}
+
+func (exec *percentRankExec) PreAllocateGroups(more int) error {
+	return exec.ret.preExtend(more)
+}
+
+func (exec *percentRankExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
+	return nil
+}
+
+func (exec *percentRankExec) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
+func (exec *percentRankExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, em, err := exec.ret.marshalToBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := EncodedAgg{
+		Info:    d,
+		Result:  r,
+		Empties: em,
+		Groups:  nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = types.EncodeSlice[int64](exec.groups[i])
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *percentRankExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if len(exec.groups) > 0 {
+		exec.groups = make([][]int64, len(groups))
+		for i := range exec.groups {
+			if len(groups[i]) > 0 {
+				exec.groups[i] = types.DecodeSlice[int64](groups[i])
+			}
+		}
+	}
+	return exec.ret.unmarshalFromBytes(result, empties)
+}
+
+func (exec *percentRankExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *percentRankExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	panic("implement me")
+}
+
+func (exec *percentRankExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*percentRankExec)
+	exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+	return nil
+}
+
+func (exec *percentRankExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*percentRankExec)
+	for i := range groups {
+		if groups[i] != GroupNotMatched {
+			groupIdx1 := int(groups[i] - 1)
+			groupIdx2 := i + offset
+			exec.groups[groupIdx1] = append(exec.groups[groupIdx1], other.groups[groupIdx2]...)
+		}
+	}
+	return nil
+}
+
+func (exec *percentRankExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	panic("window function do not support the extra information")
+}
+
+func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
+	values := exec.ret.values
+	idx := 0
+	for _, group := range exec.groups {
+		if len(group) == 0 {
+			continue
+		}
+
+		totalRows := group[len(group)-1] - group[0]
+		if totalRows == 1 {
+			x, y := exec.ret.updateNextAccessIdx(idx)
+			values[x][y] = 0
+			idx++
+			continue
+		}
+
+		sn := int64(1)
+		for i := 1; i < len(group); i++ {
+			m := int(group[i] - group[i-1])
+			for k := idx + m; idx < k; idx++ {
+				x, y := exec.ret.updateNextAccessIdx(idx)
+				values[x][y] = float64(sn-1) / float64(totalRows-1)
+			}
+			sn += int64(m)
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
+func (exec *percentRankExec) Free() {
+	exec.ret.free()
+}
+
+func (exec *percentRankExec) Size() int64 {
+	var size int64
+	size += exec.ret.Size()
+	for _, group := range exec.groups {
+		size += int64(cap(group)) * int64(types.T_int64.ToType().TypeSize())
+	}
+	size += int64(cap(exec.groups)) * 24
+	return size
+}
+
 // valueWindowExec is a window function executor for LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 // These functions need to access values from other rows in the window
 //

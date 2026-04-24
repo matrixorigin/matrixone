@@ -502,9 +502,11 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank":       RANK,
-	"row_number": ROW_NUMBER,
-	"dense_rank": DENSE_RANK,
+	"rank":         RANK,
+	"row_number":   ROW_NUMBER,
+	"dense_rank":   DENSE_RANK,
+	"cume_dist":    CUME_DIST,
+	"percent_rank": PERCENT_RANK,
 	// value window functions
 	"lag":         LAG,
 	"lead":        LEAD,

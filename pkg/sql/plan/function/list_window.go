@@ -88,6 +88,50 @@ var supportedWindowInNewFramework = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: CUME_DIST,
+		class:      plan.Function_WIN_ORDER,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    aggexec.CumeDistReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "cume_dist",
+					aggRegister: agg.RegisterCumeDist,
+				},
+			},
+		},
+	},
+	{
+		functionId: PERCENT_RANK,
+		class:      plan.Function_WIN_ORDER,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    aggexec.PercentRankReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "percent_rank",
+					aggRegister: agg.RegisterPercentRank,
+				},
+			},
+		},
+	},
 	// LAG window function
 	{
 		functionId: LAG,
