@@ -546,7 +546,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
 		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			t.Channel = make(chan *dedupjoin.WorkerJoinMsg, maxParallel)
 		}
 		op.Channel = t.Channel
 		op.NumCPU = uint64(maxParallel)
