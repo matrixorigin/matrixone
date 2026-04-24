@@ -414,10 +414,11 @@ const (
 	STARLARK     = 345
 	TRY_STARLARK = 346
 	DAYOFWEEK    = 347
+	ELT          = 348
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 348
+	FUNCTION_END_NUMBER = 349
 )
 
 // functionIdRegister is what function we have registered already.
@@ -678,6 +679,7 @@ var functionIdRegister = map[string]int32{
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
+	"elt":                            ELT,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
