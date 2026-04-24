@@ -213,8 +213,41 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		return 0, err
 	}
 
-	// pushdown limit to Table Function
-	if len(scanNode.FilterList) > 0 {
+	// Peel `distfn(col, vec) <op> K` predicates off the scan FilterList and
+	// re-attach them — rewritten to reference the table function's score
+	// column — on tableFuncNode.FilterList. Node_FUNCTION_SCAN applies them
+	// via compileRestrict (compile.go:1351), so the base table scan no longer
+	// recomputes the distance kernel brute-force after the JOIN.
+	scoreColType := tableFuncNode.TableDef.Cols[1].Typ
+	newScanFilters, peeledDistFilters := builder.peelAndRewriteDistFnFilters(
+		scanNode.FilterList, ivfpqCtx.partPos, ivfpqCtx.origFuncName,
+		ivfpqCtx.vecLitArg, tableFuncTag, scoreColType)
+	scanNode.FilterList = newScanFilters
+	if len(peeledDistFilters) > 0 {
+		logutil.Debugf("IVFPQ pushdown: peeled %d distance predicate(s) onto table function FilterList",
+			len(peeledDistFilters))
+		tableFuncNode.FilterList = append(tableFuncNode.FilterList, peeledDistFilters...)
+	}
+
+	// Rewrite any SELECT-side `origFuncName(ec, vec)` calls in the surrounding
+	// projections to reference the table function's score column directly, so
+	// the user's `... AS dist` does not re-run the distance kernel on every
+	// scanned row.
+	{
+		scanTag := scanNode.BindingTags[0]
+		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+			ivfpqCtx.partPos, ivfpqCtx.origFuncName, ivfpqCtx.vecLitArg,
+			tableFuncTag, scoreColType)
+		if childNode != nil {
+			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
+				ivfpqCtx.partPos, ivfpqCtx.origFuncName, ivfpqCtx.vecLitArg,
+				tableFuncTag, scoreColType)
+		}
+	}
+
+	// pushdown limit to Table Function; over-fetch if residual filters OR a
+	// peeled distance-range bound will prune the result set further.
+	if len(scanNode.FilterList) > 0 || len(peeledDistFilters) > 0 {
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)

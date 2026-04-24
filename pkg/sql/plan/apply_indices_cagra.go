@@ -207,10 +207,42 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return 0, err
 	}
 
+	// Peel `distfn(col, vec) <op> K` predicates off the scan FilterList and
+	// re-attach them — rewritten to reference the table function's score
+	// column — on tableFuncNode.FilterList. Node_FUNCTION_SCAN applies them
+	// via compileRestrict (compile.go:1351), so the base table scan no longer
+	// recomputes the distance kernel brute-force after the JOIN.
+	scoreColType := tableFuncNode.TableDef.Cols[1].Typ
+	newScanFilters, peeledDistFilters := builder.peelAndRewriteDistFnFilters(
+		scanNode.FilterList, cagraCtx.partPos, cagraCtx.origFuncName,
+		cagraCtx.vecLitArg, tableFuncTag, scoreColType)
+	scanNode.FilterList = newScanFilters
+	if len(peeledDistFilters) > 0 {
+		logutil.Debugf("CAGRA pushdown: peeled %d distance predicate(s) onto table function FilterList",
+			len(peeledDistFilters))
+		tableFuncNode.FilterList = append(tableFuncNode.FilterList, peeledDistFilters...)
+	}
+
+	// Rewrite any SELECT-side `origFuncName(ec, vec)` calls in the surrounding
+	// projections to reference the table function's score column directly, so
+	// the user's `... AS dist` does not re-run the distance kernel on every
+	// scanned row.
+	{
+		scanTag := scanNode.BindingTags[0]
+		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+			cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
+			tableFuncTag, scoreColType)
+		if childNode != nil {
+			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
+				cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
+				tableFuncTag, scoreColType)
+		}
+	}
+
 	// pushdown limit to Table Function
-	// When there are filters, over-fetch to get more candidates
-	// This ensures we have enough candidates after filtering
-	if len(scanNode.FilterList) > 0 {
+	// When there are filters or a peeled distance-range bound, over-fetch to
+	// get more candidates so the downstream post-filter still has enough rows.
+	if len(scanNode.FilterList) > 0 || len(peeledDistFilters) > 0 {
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
 		if limitConst := limit.GetLit(); limitConst != nil {
