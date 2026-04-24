@@ -985,7 +985,8 @@ public:
                 return std::any();
             }
         );
-        worker->wait(job_id).get();
+        auto res = worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
     }
 
     void train_quantizer(const float* train_data, uint64_t n_samples) {
@@ -1000,7 +1001,8 @@ public:
                 return std::any();
             }
         );
-        worker->wait(job_id).get();
+        auto res = worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
     }
 
     void train_quantizer_if_needed() {
@@ -1051,7 +1053,8 @@ public:
                     return std::any();
                 }
             );
-            worker->wait(job_id).get();
+            auto res = worker->wait(job_id).get();
+            if (res.error) std::rethrow_exception(res.error);
         }
     }
 

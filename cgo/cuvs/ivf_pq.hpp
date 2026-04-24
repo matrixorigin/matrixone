@@ -1497,7 +1497,8 @@ public:
                 return std::any();
             }
         );
-        this->worker->wait(job_id).get();
+        auto res = this->worker->wait(job_id).get();
+        if (res.error) std::rethrow_exception(res.error);
         if (!this->host_ids.empty()) {
             this->save_ids(filename + ".ids");
         }
