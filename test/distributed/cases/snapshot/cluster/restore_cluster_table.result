@@ -272,7 +272,7 @@ use test02;
 create view v01 as select * from test01.sales;
 show create view v01;
 View    Create View    character_set_client    collation_connection
-v01    create view v01 as select * from test01.sales;    utf8mb4    utf8mb4_general_ci
+v01    create SQL SECURITY DEFINER view v01 as select * from test01.sales;    utf8mb4    utf8mb4_general_ci
 select * from v01;
 id    sale_date    amount
 1    2018-12-25    100.00
@@ -283,7 +283,7 @@ use test03;
 create view v02 as select * from test02.v01;
 show create view v02;
 View    Create View    character_set_client    collation_connection
-v02    create view v02 as select * from test02.v01;    utf8mb4    utf8mb4_general_ci
+v02    create SQL SECURITY DEFINER view v02 as select * from test02.v01;    utf8mb4    utf8mb4_general_ci
 select * from v02;
 id    sale_date    amount
 1    2018-12-25    100.00
