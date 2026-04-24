@@ -299,12 +299,34 @@ public:
     }
 
     void build() override {
-        if (this->is_loaded_) return;
+        const char* mode_str =
+            (this->dist_mode == DistributionMode_REPLICATED) ? "REPLICATED" :
+            (this->dist_mode == DistributionMode_SHARDED)    ? "SHARDED"    : "SINGLE_GPU";
+        std::cerr << "[IVFPQ build] ENTRY mode=" << mode_str
+                  << " count=" << this->count
+                  << " current_offset_=" << this->current_offset_
+                  << " dim=" << this->dimension
+                  << " is_loaded_=" << (this->is_loaded_ ? "true" : "false")
+                  << " index_filename_=" << (this->index_filename_.empty() ? "(none)" : this->index_filename_)
+                  << " data_filename_=" << (this->data_filename_.empty() ? "(none)" : this->data_filename_)
+                  << " flattened_host_dataset.size()=" << this->flattened_host_dataset.size()
+                  << " devices.size()=" << this->devices_.size()
+                  << " n_lists=" << this->build_params.n_lists
+                  << " m=" << this->build_params.m
+                  << " bits=" << this->build_params.bits_per_code
+                  << " kmeans_fraction=" << this->build_params.kmeans_trainset_fraction
+                  << std::endl;
+
+        if (this->is_loaded_) {
+            std::cerr << "[IVFPQ build] already loaded, skipping" << std::endl;
+            return;
+        }
         if (!this->index_filename_.empty()) {
+            std::cerr << "[IVFPQ build] delegating to load(" << this->index_filename_ << ")" << std::endl;
             load(this->index_filename_);
             return;
         }
-        {
+        try {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
             if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
                 uint64_t rows, cols;
@@ -317,10 +339,20 @@ public:
             }
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
+        } catch (const std::exception& e) {
+            std::cerr << "[IVFPQ build ERROR] during host dataset prep: " << e.what()
+                      << " count=" << this->count
+                      << " dim=" << this->dimension
+                      << " flattened_host_dataset.size()=" << this->flattened_host_dataset.size()
+                      << std::endl;
+            throw;
         }
 
         if (this->count == 0) {
             if (this->pending_total_count_ == 0) {
+                std::cerr << "[IVFPQ build] EARLY RETURN count=0 && pending_total_count_=0"
+                          << " -> is_loaded_=true but NO index populated (save_dir will fail)"
+                          << std::endl;
                 this->is_loaded_ = true;
                 return;
             }
@@ -333,36 +365,61 @@ public:
             uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
             uint64_t last_shard_rows = this->count - rows_per_shard * (num_shards - 1);
             uint64_t min_shard_rows = std::min(rows_per_shard, last_shard_rows);
+            std::cerr << "[IVFPQ build] SHARDED plan num_shards=" << num_shards
+                      << " rows_per_shard=" << rows_per_shard
+                      << " last_shard_rows=" << last_shard_rows
+                      << " min_shard_rows=" << min_shard_rows
+                      << " host_bytes_needed=" << ((size_t)this->count * this->dimension * sizeof(T))
+                      << " per_shard_device_bytes=" << ((size_t)rows_per_shard * this->dimension * sizeof(T))
+                      << std::endl;
             validate_build_params(this->build_params, min_shard_rows);
             this->shard_sizes_.assign(num_shards, 0);
         } else {
+            std::cerr << "[IVFPQ build] " << mode_str
+                      << " host_bytes_needed=" << ((size_t)this->count * this->dimension * sizeof(T))
+                      << " per_gpu_device_bytes=" << ((size_t)this->count * this->dimension * sizeof(T))
+                      << std::endl;
             validate_build_params(this->build_params, this->count);
         }
 
-        if (this->dist_mode == DistributionMode_SINGLE_GPU) {
-            uint64_t job_id = this->worker->submit_main(
-                [&](raft_handle_wrapper_t& handle) -> std::any {
+        try {
+            if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                uint64_t job_id = this->worker->submit_main(
+                    [&](raft_handle_wrapper_t& handle) -> std::any {
+                        this->build_internal(handle);
+                        return std::any();
+                    }
+                );
+                auto result_wait = this->worker->wait(job_id).get();
+                if (result_wait.error) std::rethrow_exception(result_wait.error);
+            } else {
+                // Collective build requires participation from all GPUs (REPLICATED or SHARDED)
+                if (this->dist_mode == DistributionMode_SHARDED)
+                    this->shard_sizes_.assign(this->devices_.size(), 0);
+                this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
                     this->build_internal(handle);
                     return std::any();
-                }
-            );
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-        } else {
-            // Collective build requires participation from all GPUs (REPLICATED or SHARDED)
-            if (this->dist_mode == DistributionMode_SHARDED)
-                this->shard_sizes_.assign(this->devices_.size(), 0);
-            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
-                this->build_internal(handle);
-                return std::any();
-            });
+                });
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[IVFPQ build ERROR] during GPU build dispatch mode=" << mode_str
+                      << " count=" << this->count
+                      << " dim=" << this->dimension
+                      << " replicated_indices_.size()=" << this->replicated_indices_.size()
+                      << " index_=" << (index_ ? "set" : "null")
+                      << " what=" << e.what() << std::endl;
+            throw;
         }
 
         this->is_loaded_ = true;
         this->init_deleted_bitset();
         this->flattened_host_dataset.clear();
         this->flattened_host_dataset.shrink_to_fit();
-        // std::cout << "[DEBUG] IVF-PQ build: Build completed successfully" << std::endl;
+        std::cerr << "[IVFPQ build] DONE mode=" << mode_str
+                  << " count=" << this->count
+                  << " replicated_indices_.size()=" << this->replicated_indices_.size()
+                  << " index_=" << (index_ ? "set" : "null")
+                  << std::endl;
     }
 
     static void validate_build_params(const ivf_pq_build_params_t& bp, uint64_t num_rows) {
@@ -374,85 +431,137 @@ public:
     }
 
     void build_internal(raft_handle_wrapper_t& handle) {
-        cuvs::neighbors::ivf_pq::index_params index_params;
-        index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
-        index_params.n_lists = this->build_params.n_lists;
-        index_params.pq_dim = this->build_params.m;
-        index_params.pq_bits = this->build_params.bits_per_code;
-        index_params.kmeans_trainset_fraction = this->build_params.kmeans_trainset_fraction;
+        int dev_id = handle.get_device_id();
+        int rank   = -1;
+        try { rank = handle.get_rank(); } catch (...) {}
+        const char* mode_str =
+            (this->dist_mode == DistributionMode_REPLICATED) ? "REPLICATED" :
+            (this->dist_mode == DistributionMode_SHARDED)    ? "SHARDED"    : "SINGLE_GPU";
 
-        if (this->dist_mode == DistributionMode_REPLICATED) {
-            auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
+        auto log_mem = [&](const char* phase) {
+            size_t free_b = 0, total_b = 0;
+            cudaError_t cerr = cudaMemGetInfo(&free_b, &total_b);
+            std::cerr << "[IVFPQ build_internal] rank=" << rank << " dev=" << dev_id
+                      << " mode=" << mode_str << " phase=" << phase
+                      << " GPU_free_MB=" << (cerr == cudaSuccess ? (free_b >> 20) : 0)
+                      << " GPU_total_MB=" << (cerr == cudaSuccess ? (total_b >> 20) : 0)
+                      << (cerr == cudaSuccess ? "" : " (cudaMemGetInfo failed)")
+                      << std::endl;
+        };
 
-            auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
-            handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
+        try {
+            cuvs::neighbors::ivf_pq::index_params index_params;
+            index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
+            index_params.n_lists = this->build_params.n_lists;
+            index_params.pq_dim = this->build_params.m;
+            index_params.pq_bits = this->build_params.bits_per_code;
+            index_params.kmeans_trainset_fraction = this->build_params.kmeans_trainset_fraction;
 
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+            if (this->dist_mode == DistributionMode_REPLICATED) {
+                auto res = handle.get_raft_resources();
+                log_mem("REPLICATED:before-alloc");
+                auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                log_mem("REPLICATED:after-alloc");
+                raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                raft::resource::sync_stream(*res);
+                log_mem("REPLICATED:before-cuvs-build");
+
+                auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device.view())));
+                log_mem("REPLICATED:after-cuvs-build");
+
+                handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
+
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                }
+                handle.sync();
+            } else if (this->dist_mode == DistributionMode_SHARDED) {
+                auto res = handle.get_raft_resources();
+                int num_shards = this->devices_.size();
+
+                // Round down to a multiple of 32 so every shard offset is word-aligned in
+                // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
+                // The last shard absorbs the remainder and may be slightly larger.
+                uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
+                uint64_t start_row = rank * rows_per_shard;
+                uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->shard_sizes_[rank] = num_rows;
+                }
+
+                std::cerr << "[IVFPQ build_internal] SHARDED rank=" << rank << " dev=" << dev_id
+                          << " start_row=" << start_row << " num_rows=" << num_rows
+                          << " bytes_device=" << ((size_t)num_rows * this->dimension * sizeof(T))
+                          << std::endl;
+                log_mem("SHARDED:before-alloc");
+                auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
+                log_mem("SHARDED:after-alloc");
+                raft::copy(*res, dataset_device.view(),
+                           raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
+                raft::resource::sync_stream(*res);
+                log_mem("SHARDED:before-cuvs-build");
+
+                auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device.view())));
+                log_mem("SHARDED:after-cuvs-build");
+
+                handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
+
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                }
+                handle.sync();
+            } else {
+                // Do all GPU work outside the lock — holding shared_mutex across GPU calls
+                // would block concurrent readers for the entire build duration.
+                auto res = handle.get_raft_resources();
+                log_mem("SINGLE_GPU:before-alloc");
+                auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+                log_mem("SINGLE_GPU:after-alloc");
+                raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+                raft::resource::sync_stream(*res);
+                log_mem("SINGLE_GPU:before-cuvs-build");
+
+                auto new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device.view())));
+                log_mem("SINGLE_GPU:after-cuvs-build");
+
+                using dataset_t = raft::device_matrix<T, int64_t>;
+                auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
+                handle.sync();
+
+                // Assign results under lock
+                {
+                    std::unique_lock<std::shared_mutex> lock(this->mutex_);
+                    index_ = std::move(new_idx);
+                    this->dataset_device_ptr_ = std::move(new_dataset);
+                }
             }
-            handle.sync();
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            auto res = handle.get_raft_resources();
-            int num_shards = this->devices_.size();
-            int rank = handle.get_rank();
-            
-            // Round down to a multiple of 32 so every shard offset is word-aligned in
-            // the deleted bitset, making shard-slice sync cheap (no bit-shifting needed).
-            // The last shard absorbs the remainder and may be slightly larger.
-            uint64_t rows_per_shard = (this->count / num_shards) & ~static_cast<uint64_t>(31);
-            uint64_t start_row = rank * rows_per_shard;
-            uint64_t num_rows = (rank == num_shards - 1) ? (this->count - start_row) : rows_per_shard;
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->shard_sizes_[rank] = num_rows;
-            }
-
-            // std::cout << "[DEBUG] IVF-PQ build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
-
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), 
-                       raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
-            raft::resource::sync_stream(*res);
-
-            auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
-            handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
-
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
-            }
-            handle.sync();
-        } else {
-            // Do all GPU work outside the lock — holding shared_mutex across GPU calls
-            // would block concurrent readers for the entire build duration.
-            auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
-
-            auto new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
-            using dataset_t = raft::device_matrix<T, int64_t>;
-            auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
-            handle.sync();
-
-            // Assign results under lock
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                index_ = std::move(new_idx);
-                this->dataset_device_ptr_ = std::move(new_dataset);
-            }
+        } catch (const std::exception& e) {
+            // submit_all_devices only rethrows the first exception it sees; log every
+            // shard's failure here so none are lost.
+            size_t free_b = 0, total_b = 0;
+            cudaMemGetInfo(&free_b, &total_b);
+            std::cerr << "[IVFPQ build_internal ERROR] rank=" << rank << " dev=" << dev_id
+                      << " mode=" << mode_str
+                      << " count=" << this->count << " dim=" << this->dimension
+                      << " n_lists=" << this->build_params.n_lists
+                      << " m=" << this->build_params.m
+                      << " GPU_free_MB=" << (free_b >> 20)
+                      << " what=" << e.what() << std::endl;
+            throw std::runtime_error(std::string("[IVFPQ build_internal rank=") +
+                                     std::to_string(rank) + " dev=" + std::to_string(dev_id) +
+                                     " mode=" + mode_str + "] " + e.what());
+        } catch (...) {
+            std::cerr << "[IVFPQ build_internal ERROR] rank=" << rank << " dev=" << dev_id
+                      << " mode=" << mode_str << " unknown non-std::exception" << std::endl;
+            throw;
         }
     }
 
@@ -1433,8 +1542,21 @@ public:
 
     // Save all index components to a directory with manifest.json.
     void save_dir(const std::string& dir) const {
-        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty()))
-            throw std::runtime_error("IVF-PQ index not built; cannot save_dir");
+        if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) {
+            const char* mode_str =
+                (this->dist_mode == DistributionMode_REPLICATED) ? "REPLICATED" :
+                (this->dist_mode == DistributionMode_SHARDED)    ? "SHARDED"    : "SINGLE_GPU";
+            std::string msg = "IVF-PQ index not built; cannot save_dir"
+                " [is_loaded_=" + std::string(this->is_loaded_ ? "true" : "false") +
+                ", index_=" + std::string(index_ ? "set" : "null") +
+                ", replicated_indices_.size()=" + std::to_string(this->replicated_indices_.size()) +
+                ", dist_mode=" + mode_str +
+                ", count=" + std::to_string(this->count) +
+                ", current_offset_=" + std::to_string(this->current_offset_) +
+                ", devices.size()=" + std::to_string(this->devices_.size()) + "]";
+            std::cerr << "[IVFPQ save_dir ERROR] " << msg << std::endl;
+            throw std::runtime_error(msg);
+        }
 
         this->ensure_dir(dir);
         auto comp_entries = this->save_common_components(dir);
