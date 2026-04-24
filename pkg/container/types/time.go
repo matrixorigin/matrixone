@@ -424,16 +424,18 @@ func (t Time) ToDatetime(scale int32) Datetime {
 // return type bool means the if the time is valid
 func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	switch its {
-	case MicroSecond:
-		// nums is already in microseconds, no conversion needed
-	case Second:
-		nums *= MicroSecsPerSec
-	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
-	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
+	case MicroSecond, Second, Minute, Hour:
+		var ok bool
+		nums, ok = ScaleIntervalToMicroseconds(nums, its)
+		if !ok {
+			return 0, false
+		}
 	}
-	newTime := t + Time(nums)
+	newValue, ok := safeAddInt64(int64(t), nums)
+	if !ok {
+		return 0, false
+	}
+	newTime := Time(newValue)
 
 	// valid
 	h := newTime.Hour()

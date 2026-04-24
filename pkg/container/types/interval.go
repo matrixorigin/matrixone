@@ -298,10 +298,69 @@ func UnitIsDayOrLarger(it IntervalType) bool {
 func JudgeIntervalNumOverflow(num int64, it IntervalType) error {
 	if it == MicroSecond {
 		return nil
-	} else if num > int64(IntervalNumMAX) {
-		return moerr.NewInvalidArgNoCtx("interval", num)
-	} else if -num > int64(IntervalNumMAX) {
+	} else if num > IntervalNumMAX || num < -IntervalNumMAX {
 		return moerr.NewInvalidArgNoCtx("interval", num)
 	}
 	return nil
+}
+
+func safeMulInt64(a, b int64) (int64, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	if (a == math.MinInt64 && b == -1) || (b == math.MinInt64 && a == -1) {
+		return 0, false
+	}
+
+	result := a * b
+	if result/b != a {
+		return 0, false
+	}
+	return result, true
+}
+
+func safeAddInt64(a, b int64) (int64, bool) {
+	result := a + b
+	if (b > 0 && result < a) || (b < 0 && result > a) {
+		return 0, false
+	}
+	return result, true
+}
+
+// ScaleIntervalToMicroseconds converts single-unit intervals to microseconds.
+// The bool result is false when the interval is unsupported or the conversion overflows int64.
+func ScaleIntervalToMicroseconds(num int64, it IntervalType) (int64, bool) {
+	switch it {
+	case MicroSecond:
+		return num, true
+	case Second:
+		return safeMulInt64(num, MicroSecsPerSec)
+	case Minute:
+		return safeMulInt64(num, MicroSecsPerSec*SecsPerMinute)
+	case Hour:
+		return safeMulInt64(num, MicroSecsPerSec*SecsPerHour)
+	case Day:
+		return safeMulInt64(num, MicroSecsPerSec*SecsPerDay)
+	case Week:
+		return safeMulInt64(num, MicroSecsPerSec*SecsPerWeek)
+	default:
+		return 0, false
+	}
+}
+
+// ScaleIntervalToSeconds converts single-unit intervals to seconds.
+// The bool result is false when the interval is unsupported or the conversion overflows int64.
+func ScaleIntervalToSeconds(num int64, it IntervalType) (int64, bool) {
+	switch it {
+	case Second:
+		return num, true
+	case Minute:
+		return safeMulInt64(num, SecsPerMinute)
+	case Hour:
+		return safeMulInt64(num, SecsPerHour)
+	case Day:
+		return safeMulInt64(num, SecsPerDay)
+	default:
+		return 0, false
+	}
 }

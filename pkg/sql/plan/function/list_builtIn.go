@@ -4259,7 +4259,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -4269,7 +4269,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -4299,7 +4299,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -4422,7 +4422,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub
@@ -4432,7 +4432,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub
@@ -4452,7 +4452,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub

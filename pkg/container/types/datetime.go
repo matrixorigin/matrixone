@@ -43,7 +43,9 @@ const (
 )
 
 var (
-	scaleVal = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
+	scaleVal         = []Datetime{1000000, 100000, 10000, 1000, 100, 10, 1}
+	minDatetimeValue = int64(DatetimeFromClock(MinDatetimeYear, 1, 1, 0, 0, 0, 0))
+	maxDatetimeValue = int64(DatetimeFromClock(MaxDatetimeYear, 12, 31, 23, 59, 59, 999999))
 )
 
 const (
@@ -338,37 +340,18 @@ func (dt Datetime) ToDate() Date {
 // We need to truncate the part after scale position when cast
 // between different scale.
 func (dt Datetime) ToTime(scale int32) Time {
-	// Get today's date (the base date used when converting TIME to DATETIME)
-	todayDate := Today(time.UTC)
-	todayDatetime := todayDate.ToDatetime()
+	ms := int64(dt) % microSecsPerDay
 
-	// Get the date portion of the datetime
-	datePart := dt.ToDate()
-	baseDatetime := datePart.ToDatetime()
-
-	// Calculate time difference from the base date
-	// If the datetime's date is today or tomorrow (within 1 day), use today as base
-	// This preserves times > 24 hours that came from ADDTIME with TIME inputs
-	var timeDiff int64
-	dateDiff := int64(datePart) - int64(todayDate)
-	if dateDiff >= 0 && dateDiff <= 1 {
-		// Date is today or tomorrow, calculate from today's date
-		timeDiff = int64(dt) - int64(todayDatetime)
-	} else {
-		// Date is far from today, use the date portion of the datetime
-		timeDiff = int64(dt) - int64(baseDatetime)
-	}
-
-	// Time type only supports up to 6 digits of microsecond precision
-	// For scale > 6, use scale 6 (full microsecond precision)
+	// Time type only supports up to 6 digits of microsecond precision.
+	// For scale > 6, preserve the stored microseconds and let String2 pad zeros.
 	if scale >= 6 {
-		return Time(timeDiff)
+		return Time(ms)
 	}
 
-	// truncate the time part
+	// truncate the date part
 	scaleValInt := int64(scaleVal[scale])
-	base := timeDiff / scaleValInt
-	if scale < 6 && timeDiff%scaleValInt/int64(scaleVal[scale+1]) >= 5 { // check carry
+	base := ms / scaleValInt
+	if scale < 6 && ms%scaleValInt/int64(scaleVal[scale+1]) >= 5 { // check carry
 		base += 1
 	}
 
@@ -443,15 +426,44 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 	// only in the month year year-month
 	oldDate := dt.ToDate()
 	y, m, d, _ := oldDate.Calendar(true)
-	year := int64(y) + addYear + addMonth/12
-	month := int64(m) + addMonth%12
+	year := int64(y)
+	month := int64(m)
+
+	var ok bool
+	year, ok = safeAddInt64(year, addYear)
+	if !ok {
+		return 0, false
+	}
+	year, ok = safeAddInt64(year, addMonth/12)
+	if !ok {
+		return 0, false
+	}
+	month, ok = safeAddInt64(month, addMonth%12)
+	if !ok {
+		return 0, false
+	}
 	if month <= 0 {
-		year--
-		month += 12
+		year, ok = safeAddInt64(year, -1)
+		if !ok {
+			return 0, false
+		}
+		month, ok = safeAddInt64(month, 12)
+		if !ok {
+			return 0, false
+		}
 	}
 	if month > 12 {
-		year++
-		month -= 12
+		year, ok = safeAddInt64(year, 1)
+		if !ok {
+			return 0, false
+		}
+		month, ok = safeAddInt64(month, -12)
+		if !ok {
+			return 0, false
+		}
+	}
+	if year < MinDatetimeYear || year > MaxDatetimeYear {
+		return 0, false
 	}
 
 	y = int32(year)
@@ -483,28 +495,35 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
-	case Second:
-		nums *= MicroSecsPerSec
-	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
-	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
-	case Day:
-		nums *= MicroSecsPerSec * SecsPerDay
-	case Week:
-		nums *= MicroSecsPerSec * SecsPerWeek
-	case Month:
+	case MicroSecond, Second, Minute, Hour, Day, Week:
+		var ok bool
+		nums, ok = ScaleIntervalToMicroseconds(nums, its)
+		if !ok {
+			return 0, false
+		}
+	case Month, Year_Month:
 		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Quarter:
-		addMonth = 3 * nums
+		var ok bool
+		addMonth, ok = safeMulInt64(nums, 3)
+		if !ok {
+			return 0, false
+		}
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
-	newDate := dt + Datetime(nums)
+	newValue, ok := safeAddInt64(int64(dt), nums)
+	if !ok {
+		return 0, false
+	}
+	if newValue < minDatetimeValue || newValue > maxDatetimeValue {
+		return 0, false
+	}
+	newDate := Datetime(newValue)
 	y, m, d, _ := newDate.ToDate().Calendar(true)
 	if !ValidDatetime(y, m, d) {
 		return 0, false

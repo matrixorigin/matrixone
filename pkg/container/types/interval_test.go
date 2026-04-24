@@ -15,6 +15,7 @@
 package types
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -151,4 +152,10 @@ func TestConv(t *testing.T) {
 
 	_, _, err = NormalizeInterval("123400000000000000000000 0", Year_Month)
 	require.NotEqual(t, err, nil, "YM error")
+}
+
+func TestJudgeIntervalNumOverflowRejectsMinInt64(t *testing.T) {
+	require.Error(t, JudgeIntervalNumOverflow(math.MinInt64, Year))
+	require.Error(t, JudgeIntervalNumOverflow(math.MinInt64, Year_Month))
+	require.NoError(t, JudgeIntervalNumOverflow(math.MinInt64, MicroSecond))
 }

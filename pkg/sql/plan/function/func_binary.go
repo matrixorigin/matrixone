@@ -1119,6 +1119,42 @@ func isDateOverflowMaxError(err error) bool {
 	return err.Error() == dateOverflowMaxError.Error()
 }
 
+var (
+	minDatetimeValue = int64(types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0))
+	maxDatetimeValue = int64(types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999))
+)
+
+func checkedAddInt64(a, b int64) (int64, bool) {
+	result := a + b
+	if (b > 0 && result < a) || (b < 0 && result > a) {
+		return 0, false
+	}
+	return result, true
+}
+
+func checkedNegateInt64(v int64) (int64, bool) {
+	if v == math.MinInt64 {
+		return 0, false
+	}
+	return -v, true
+}
+
+func checkedDatetimeYearAfterFixedInterval(start types.Datetime, diff int64, iTyp types.IntervalType) (int64, bool) {
+	delta, ok := types.ScaleIntervalToMicroseconds(diff, iTyp)
+	if !ok {
+		return 0, false
+	}
+	resultValue, ok := checkedAddInt64(int64(start), delta)
+	if !ok || resultValue < minDatetimeValue || resultValue > maxDatetimeValue {
+		return 0, false
+	}
+	year, _, _, _ := types.Datetime(resultValue).ToDate().Calendar(true)
+	if year < 1 || year > types.MaxDatetimeYear {
+		return 0, false
+	}
+	return int64(year), true
+}
+
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
@@ -1165,41 +1201,9 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
-				// Calculate: year + (quarter*3)/12
-				resultYear = startYear + (diff*3)/12
+				resultYear = startYear + diff/4
 			default:
-				// For other types (Day, Week, etc.), check the actual calculated year
-				// from the failed AddInterval result to determine if year is out of range
-				var nums int64
-				switch iTyp {
-				case types.Day:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
-				case types.Week:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
-				case types.Hour:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
-				case types.Minute:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
-				case types.Second:
-					nums = diff * types.MicroSecsPerSec
-				case types.MicroSecond:
-					nums = diff
-				default:
-					// For unknown interval types, nums remains 0
-					// resultYear will be set to startYear in the else branch below
-				}
-				if nums != 0 {
-					// Check the year from the calculated date
-					calcDate := start.ToDatetime() + types.Datetime(nums)
-					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
-					// Calendar returns (0, 0, 0) for invalid dates (out of range)
-					if calcYear == 0 {
-						return 0, dateOverflowMaxError
-					}
-					resultYear = int64(calcYear)
-				} else {
-					resultYear = startYear
-				}
+				return 0, dateOverflowMaxError
 			}
 			// Check if calculated year is out of valid range
 			// Valid date range is 0001-01-01 to 9999-12-31
@@ -1287,43 +1291,13 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
-				// Calculate: year + (quarter*3)/12
-				resultYear = startYear + (diff*3)/12
+				resultYear = startYear + diff/4
 			default:
-				// For other types (Day, Week, etc.), check the actual calculated year
-				// from the failed AddInterval result to determine if year is out of range
-				// If AddInterval failed, the result datetime might be invalid, but we can
-				// still check the year from Calendar to see if it's out of range
-				// Calculate what the result would be to check the year
-				var nums int64
-				switch iTyp {
-				case types.Day:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
-				case types.Week:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
-				case types.Hour:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
-				case types.Minute:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
-				case types.Second:
-					nums = diff * types.MicroSecsPerSec
-				case types.MicroSecond:
-					nums = diff
-				default:
-					// For other types, nums remains 0, will use startYear in else block
+				year, ok := checkedDatetimeYearAfterFixedInterval(start, diff, iTyp)
+				if !ok {
+					return 0, datetimeOverflowMaxError
 				}
-				if nums != 0 {
-					// Check the year from the calculated date
-					calcDate := start + types.Datetime(nums)
-					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
-					// Calendar returns (0, 0, 0) for invalid dates (out of range)
-					if calcYear == 0 {
-						return 0, datetimeOverflowMaxError
-					}
-					resultYear = int64(calcYear)
-				} else {
-					resultYear = startYear
-				}
+				resultYear = year
 			}
 			// Check if calculated year is out of valid range
 			// Valid date range is 0001-01-01 to 9999-12-31
@@ -1405,39 +1379,13 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
-				// Calculate: year + (quarter*3)/12
-				resultYear = startYear + (diff*3)/12
+				resultYear = startYear + diff/4
 			default:
-				// For other types (Day, Week, etc.), check the actual calculated year
-				// from the failed AddInterval result to determine if year is out of range
-				// If AddInterval failed, the result datetime might be invalid, but we can
-				// still check the year from Calendar to see if it's out of range
-				// Calculate what the result would be to check the year
-				var nums int64
-				switch iTyp {
-				case types.Day:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
-				case types.Week:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
-				case types.Hour:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
-				case types.Minute:
-					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
-				case types.Second:
-					nums = diff * types.MicroSecsPerSec
-				case types.MicroSecond:
-					nums = diff
-				default:
-					// For other types, nums remains 0, will use startYear in else block
+				year, ok := checkedDatetimeYearAfterFixedInterval(start, diff, iTyp)
+				if !ok {
+					return 0, datetimeOverflowMaxError
 				}
-				if nums != 0 {
-					// Check the year from the calculated date
-					calcDate := start + types.Datetime(nums)
-					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
-					resultYear = int64(calcYear)
-				} else {
-					resultYear = startYear
-				}
+				resultYear = year
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
@@ -1514,14 +1462,12 @@ func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 		return num, err
 	}
 	switch iTyp {
-	case types.Second:
-		num = diff * types.MicroSecsPerSec
-	case types.Minute:
-		num = diff * types.SecsPerMinute * types.MicroSecsPerSec
-	case types.Hour:
-		num = diff * types.SecsPerHour * types.MicroSecsPerSec
-	case types.Day:
-		num = diff * types.SecsPerDay * types.MicroSecsPerSec
+	case types.Second, types.Minute, types.Hour, types.Day:
+		var ok bool
+		num, ok = types.ScaleIntervalToMicroseconds(diff, iTyp)
+		if !ok {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "interval", diff)
+		}
 	default:
 		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
@@ -1536,14 +1482,12 @@ func getSecondNum(diff, unit int64, proc *process.Process) (int64, error) {
 		return num, err
 	}
 	switch iTyp {
-	case types.Second:
-		num = diff
-	case types.Minute:
-		num = diff * types.SecsPerMinute
-	case types.Hour:
-		num = diff * types.SecsPerHour
-	case types.Day:
-		num = diff * types.SecsPerDay
+	case types.Second, types.Minute, types.Hour, types.Day:
+		var ok bool
+		num, ok = types.ScaleIntervalToSeconds(diff, iTyp)
+		if !ok {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "interval", diff)
+		}
 	default:
 		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
@@ -3687,7 +3631,11 @@ func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.ToDatetime().AddInterval(-diff, iTyp, types.DateType)
+	negDiff, ok := checkedNegateInt64(diff)
+	if !ok {
+		return 0, dateOverflowMaxError
+	}
+	dt, success := start.ToDatetime().AddInterval(negDiff, iTyp, types.DateType)
 	if success {
 		return dt.ToDate(), nil
 	} else {
@@ -3700,7 +3648,11 @@ func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 	if err != nil {
 		return 0, err
 	}
-	t, success := start.AddInterval(-diff, iTyp)
+	negDiff, ok := checkedNegateInt64(diff)
+	if !ok {
+		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	}
+	t, success := start.AddInterval(negDiff, iTyp)
 	if success {
 		return t, nil
 	} else {
@@ -3718,7 +3670,11 @@ func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 		// MySQL behavior: invalid/overflow interval values return NULL, not error
 		return 0, datetimeOverflowMaxError
 	}
-	dt, success := start.AddInterval(-diff, iTyp, types.DateTimeType)
+	negDiff, ok := checkedNegateInt64(diff)
+	if !ok {
+		return 0, datetimeOverflowMaxError
+	}
+	dt, success := start.AddInterval(negDiff, iTyp, types.DateTimeType)
 	if success {
 		return dt, nil
 	} else {
@@ -3752,7 +3708,11 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
-	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
+	negDiff, ok := checkedNegateInt64(diff)
+	if !ok {
+		return 0, datetimeOverflowMaxError
+	}
+	dt, success := start.AddInterval(negDiff, iTyp, types.DateType)
 	if success {
 		return dt, nil
 	} else {
@@ -3761,7 +3721,7 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 		// - If overflow beyond minimum (-diff < 0, meaning we're subtracting):
 		//   - If year is out of valid range (< 1 or > 9999), throw error
 		//   - Otherwise, return zero datetime '0000-00-00 00:00:00'
-		if -diff > 0 {
+		if diff < 0 {
 			// Maximum overflow: return special error to indicate NULL should be returned
 			return 0, datetimeOverflowMaxError
 		} else {
@@ -3774,9 +3734,13 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 			case types.Month:
 				resultYear = startYear - diff/12
 			case types.Quarter:
-				resultYear = startYear - (diff*3)/12
+				resultYear = startYear - diff/4
 			default:
-				resultYear = startYear
+				year, ok := checkedDatetimeYearAfterFixedInterval(start, negDiff, iTyp)
+				if !ok {
+					return 0, datetimeOverflowMaxError
+				}
+				resultYear = year
 			}
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
 				// MySQL behavior: year out of valid range returns NULL (overflow)
@@ -3798,7 +3762,11 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 		// MySQL behavior: invalid/overflow interval values return NULL, not error
 		return 0, datetimeOverflowMaxError
 	}
-	dt, success := start.ToDatetime(loc).AddInterval(-diff, iTyp, types.DateTimeType)
+	negDiff, ok := checkedNegateInt64(diff)
+	if !ok {
+		return 0, datetimeOverflowMaxError
+	}
+	dt, success := start.ToDatetime(loc).AddInterval(negDiff, iTyp, types.DateTimeType)
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {

@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -539,6 +540,15 @@ func TestDatetime_ToTime(t *testing.T) {
 			scale:    9,
 			expected: "01:01:01.000001000", // String2 now supports scale > 6 with padding
 		},
+		{
+			name: "tomorrow datetime stays time-of-day",
+			datetime: func() Datetime {
+				today := Today(time.UTC)
+				return Date(int64(today)+1).ToDatetime() + Datetime(2*SecsPerHour*MicroSecsPerSec+30*SecsPerMinute*MicroSecsPerSec)
+			}(),
+			scale:    0,
+			expected: "02:30:00",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -561,4 +571,54 @@ func TestDatetime_ToTime(t *testing.T) {
 	// Convert back to TIME - this should not panic
 	resultTime := resultDt.ToTime(9)
 	require.Equal(t, "13:46:15.000000", resultTime.String2(6), "TIME(ADDTIME(...)) should work correctly")
+}
+
+func TestDatetimeAddIntervalOverflowReturnsFalse(t *testing.T) {
+	start, err := ParseDatetime("1970-01-01 00:00:00", 6)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name string
+		diff int64
+		iTyp IntervalType
+	}{
+		{
+			name: "large day interval overflow",
+			diff: 1000000000000,
+			iTyp: Day,
+		},
+		{
+			name: "large negative week interval overflow",
+			diff: -1000000000000,
+			iTyp: Week,
+		},
+		{
+			name: "min int64 year interval overflow",
+			diff: math.MinInt64,
+			iTyp: Year,
+		},
+		{
+			name: "min int64 year-month interval overflow",
+			diff: math.MinInt64,
+			iTyp: Year_Month,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := start.AddInterval(tc.diff, tc.iTyp, DateTimeType)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestDatetimeAddDateTimeOverflowReturnsFalse(t *testing.T) {
+	start, err := ParseDatetime("1970-01-01 00:00:00", 6)
+	require.NoError(t, err)
+
+	_, ok := start.AddDateTime(0, math.MinInt64, DateTimeType)
+	require.False(t, ok)
+
+	_, ok = start.AddDateTime(math.MinInt64, 0, DateTimeType)
+	require.False(t, ok)
 }
