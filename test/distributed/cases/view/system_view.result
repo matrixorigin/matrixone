@@ -1,6 +1,18 @@
 begin;
-select sleep(5);
-sleep(5)
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+wait_for_mo_sessions_ready
+0
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+wait_for_mo_sessions_ready
+0
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+wait_for_mo_sessions_ready
+0
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+wait_for_mo_sessions_ready
+0
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+wait_for_mo_sessions_ready
 0
 select count(*) > 0 from mo_sessions() t;
 count(*) > 0
