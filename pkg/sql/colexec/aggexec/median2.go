@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -580,17 +579,6 @@ func markMedianGroupNotEmpty[T types.FixedSizeTExceptStrType](ret *aggResultWith
 	if len(ret.bsFromEmptyList) > x && ret.bsFromEmptyList[x] != nil {
 		ret.bsFromEmptyList[x][y] = false
 	}
-}
-
-func medianNumericFromState[T numeric](st aggState, idx uint16, info *aggInfo) (float64, error) {
-	vals := make([]T, 0, st.argCnt[idx])
-	if err := st.iter(idx, func(k []byte) error {
-		vals = append(vals, *util.UnsafeFromBytes[T](aggPayloadFromKey(info, k)))
-		return nil
-	}); err != nil {
-		return 0, err
-	}
-	return medianNumericVals(vals), nil
 }
 
 func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {

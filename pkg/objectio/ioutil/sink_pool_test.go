@@ -108,6 +108,8 @@ type mockFileSinker struct {
 	syncErr    error
 	stats      objectio.ObjectStats
 	closed     atomic.Bool
+	syncStart  chan struct{}
+	syncBlock  chan struct{}
 }
 
 func (m *mockFileSinker) Sink(_ context.Context, bat *batch.Batch) error {
@@ -119,6 +121,12 @@ func (m *mockFileSinker) Sink(_ context.Context, bat *batch.Batch) error {
 }
 
 func (m *mockFileSinker) Sync(_ context.Context) (*objectio.ObjectStats, error) {
+	if m.syncStart != nil {
+		close(m.syncStart)
+	}
+	if m.syncBlock != nil {
+		<-m.syncBlock
+	}
 	if m.syncErr != nil {
 		return nil, m.syncErr
 	}
@@ -367,29 +375,44 @@ func TestSinkPool_SyncWorkerSkipsOnError(t *testing.T) {
 	r := &pipelineResult{ctx: ctx, cancel: cancel}
 
 	typs := []types.Type{types.T_int32.ToType()}
+	syncStart := make(chan struct{})
+	syncBlock := make(chan struct{})
+	var factoryCount atomic.Int32
+	factory := func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+		if factoryCount.Add(1) == 1 {
+			return &mockFileSinker{
+				syncErr:   fmt.Errorf("sync error"),
+				syncStart: syncStart,
+				syncBlock: syncBlock,
+			}
+		}
+		return &mockFileSinker{}
+	}
 
 	// Submit 2 jobs: first has sync error, second should be skipped in sync worker
 	bat1 := containers.MockBatch(typs, 10, 0, nil)
 	cnBat1 := containers.ToCNBatch(bat1)
 	err = pool.Submit(&poolSinkJob{
 		data:    []*batch.Batch{cnBat1},
-		factory: mockFactory(nil, fmt.Errorf("sync error")),
+		factory: factory,
 		mp:      mp,
 		fs:      nil,
 		result:  r,
 	})
 	require.NoError(t, err)
+	<-syncStart
 
 	bat2 := containers.MockBatch(typs, 10, 0, nil)
 	cnBat2 := containers.ToCNBatch(bat2)
 	err = pool.Submit(&poolSinkJob{
 		data:    []*batch.Batch{cnBat2},
-		factory: mockFactory(nil, nil),
+		factory: factory,
 		mp:      mp,
 		fs:      nil,
 		result:  r,
 	})
 	require.NoError(t, err)
+	close(syncBlock)
 
 	r.pending.Wait()
 	require.Error(t, r.getError())
