@@ -6022,6 +6022,19 @@ func isLegal(name string, sqls []string) bool {
 	return yes
 }
 
+func isMissingCCPRCatalogError(err error, tableName string) bool {
+	if err == nil {
+		return false
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) &&
+		!moerr.IsMoErrCode(err, moerr.ErrParseError) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, fmt.Sprintf("%s.%s", catalog.MO_CATALOG, tableName)) ||
+		strings.Contains(msg, fmt.Sprintf(`"%s"`, tableName))
+}
+
 // checkCCPRTableBeforeDrop checks if a table can be dropped based on CCPR rules.
 // Returns:
 //   - true if the table can be dropped
@@ -6038,6 +6051,13 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRCatalogError(err, catalog.MO_CCPR_TABLES) {
+			logutil.Info("CCPR: metadata table missing, skip table drop protection",
+				zap.Uint64("tableID", tableID),
+				zap.String("metadataTable", catalog.MO_CCPR_TABLES),
+				zap.Error(err))
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6066,6 +6086,13 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 
 	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRCatalogError(err, catalog.MO_CCPR_LOG) {
+			logutil.Info("CCPR: metadata table missing, skip table drop protection",
+				zap.Uint64("tableID", tableID),
+				zap.String("metadataTable", catalog.MO_CCPR_LOG),
+				zap.Error(err))
+			return true, nil
+		}
 		return false, err
 	}
 	defer taskRes.Close()
@@ -6127,6 +6154,13 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRCatalogError(err, catalog.MO_CCPR_DBS) {
+			logutil.Info("CCPR: metadata table missing, skip database drop protection",
+				zap.Uint64("dbID", dbID),
+				zap.String("metadataTable", catalog.MO_CCPR_DBS),
+				zap.Error(err))
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6155,6 +6189,13 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	taskRes, err := c.runSqlWithResult(checkTaskSql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRCatalogError(err, catalog.MO_CCPR_LOG) {
+			logutil.Info("CCPR: metadata table missing, skip database drop protection",
+				zap.Uint64("dbID", dbID),
+				zap.String("metadataTable", catalog.MO_CCPR_LOG),
+				zap.Error(err))
+			return true, nil
+		}
 		return false, err
 	}
 	defer taskRes.Close()
