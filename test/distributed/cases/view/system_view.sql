@@ -2,9 +2,13 @@
 
 -- @session:id=1{
 begin;
-select sleep(5);
 -- @session}
 
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
+select case when count(*) > 0 then 0 else sleep(1) end as wait_for_mo_sessions_ready from mo_sessions() as t where txn_id != '';
 select count(*) > 0 from mo_sessions() t;
 select count(*) > 0 from mo_sessions() as t where txn_id != '';
 select count(*) > 0  from mo_transactions() t join mo_sessions() s on t.txn_id = s.txn_id;
