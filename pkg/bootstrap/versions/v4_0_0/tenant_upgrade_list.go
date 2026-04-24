@@ -26,6 +26,7 @@ import (
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_mo_indexes_add_included_columns_for_tenant,
 	enablePartitionMetadata,
 	enablePartitionTables,
 	upg_alter_mo_snapshots,
@@ -35,6 +36,8 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_columns_srs_id_from_type,
 	upg_information_schema_statistics,
 }
+
+var upg_mo_indexes_add_included_columns_for_tenant = newMoIndexesAddIncludedColumnsEntry()
 
 var enablePartitionMetadata = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
