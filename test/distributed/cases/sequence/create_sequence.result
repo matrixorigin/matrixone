@@ -388,38 +388,41 @@ lastval()
 28
 begin;
 create sequence seq_18 minvalue 1000;
+internal error: Only CREATE of DDL is supported in transactions
 select nextval('seq_18');
-SQL parser error: table "seq_18" does not exist
+no such table create_sequence.seq_18
 select nextval('seq_18');
 ExpectedEOB
 create sequence seq_18;
-ExpectedEOB
+No database selected
 select nextval('seq_18');
-SQL parser error: table "seq_18" does not exist
+no such table create_sequence.seq_18
 commit;
 select nextval('seq_18'),currval('seq_18');
-SQL parser error: table "seq_18" does not exist
+no such table create_sequence.seq_18
 drop sequence seq_18;
 no such sequence create_sequence.seq_18
 begin;
 create sequence seq_19 minvalue 1000;
+internal error: Only CREATE of DDL is supported in transactions
 select nextval('seq_19');
-SQL parser error: table "seq_19" does not exist
+no such table create_sequence.seq_19
 select nextval('seq_19');
 ExpectedEOB
 create sequence seq_19;
-ExpectedEOB
+No database selected
 rollback;
 select nextval('seq_19');
-SQL parser error: table "seq_19" does not exist
+no such table create_sequence.seq_19
 drop sequence seq_19;
 no such sequence create_sequence.seq_19
 start transaction ;
 create sequence seq_20 increment by -10;
+internal error: Only CREATE of DDL is supported in transactions
 select nextval('seq_20');
-SQL parser error: table "seq_20" does not exist
+no such table create_sequence.seq_20
 rollback;
 select nextval('seq_20');
-SQL parser error: table "seq_20" does not exist
+no such table create_sequence.seq_20
 drop sequence seq_20;
 no such sequence create_sequence.seq_20
