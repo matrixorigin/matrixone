@@ -517,6 +517,8 @@ var functionIdRegister = map[string]int32{
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
+	"aes_decrypt": AES_DECRYPT,
+	"aes_encrypt": AES_ENCRYPT,
 	"endswith":    ENDSWITH,
 	"findinset":   FINDINSET,
 	"find_in_set": FINDINSET,
