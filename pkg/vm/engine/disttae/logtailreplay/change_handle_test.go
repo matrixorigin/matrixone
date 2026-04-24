@@ -2010,3 +2010,140 @@ func TestUpdateCNDataBatch_NilGuard(t *testing.T) {
 		require.Contains(t, err.Error(), "no vectors after stripping commit-ts")
 	})
 }
+
+// TestCDCSchema_NoRowIDWhenRetainRowIDFalse locks the CDC-facing batch shapes:
+// the disttae.NewChangesHandler path leaves retainRowID=false, and every batch
+// mutator must produce output that contains no T_Rowid column. Regressions here
+// would silently break CDC sinks that index columns by position.
+func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
+mp := mpool.MustNewZero()
+defer mpool.DeleteMPool(mp)
+
+assertNoRowID := func(t *testing.T, bat *batch.Batch) {
+t.Helper()
+for i, vec := range bat.Vecs {
+require.NotEqual(t, types.T_Rowid, vec.GetType().Oid,
+"CDC batch must not contain T_Rowid vec at idx=%d attrs=%v", i, bat.Attrs)
+}
+for _, attr := range bat.Attrs {
+require.NotEqual(t, catalog.Row_ID, attr,
+"CDC batch must not contain Row_ID attr; attrs=%v", bat.Attrs)
+}
+}
+
+t.Run("updateTombstoneBatch drops input rowid vec", func(t *testing.T) {
+bat := batch.NewWithSize(3)
+// Simulate a tombstone batch that happens to carry a rowid column.
+ridVec := vector.NewVec(types.T_Rowid.ToType())
+blk := types.Blockid{}
+require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
+pkVec := vector.NewVec(types.T_int64.ToType())
+require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+tsVec := vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
+bat.Vecs[0] = ridVec
+bat.Vecs[1] = pkVec
+bat.Vecs[2] = tsVec
+bat.SetRowCount(1)
+
+require.NoError(t, updateTombstoneBatch(
+bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, false, mp))
+
+require.Equal(t, []string{
+objectio.TombstoneAttr_PK_Attr,
+objectio.DefaultCommitTS_Attr,
+}, bat.Attrs)
+require.Equal(t, 2, len(bat.Vecs))
+assertNoRowID(t, bat)
+bat.Clean(mp)
+})
+
+t.Run("updateDataBatch drops input rowid vec", func(t *testing.T) {
+bat := batch.NewWithSize(4)
+bat.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
+ridVec := vector.NewVec(types.T_Rowid.ToType())
+blk := types.Blockid{}
+require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
+aVec := vector.NewVec(types.T_int32.ToType())
+require.NoError(t, vector.AppendFixed(aVec, int32(1), false, mp))
+bVec := vector.NewVec(types.T_int32.ToType())
+require.NoError(t, vector.AppendFixed(bVec, int32(10), false, mp))
+tsVec := vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp))
+bat.Vecs[0] = ridVec
+bat.Vecs[1] = aVec
+bat.Vecs[2] = bVec
+bat.Vecs[3] = tsVec
+bat.SetRowCount(1)
+
+require.NoError(t, updateDataBatch(
+bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, mp))
+
+assertNoRowID(t, bat)
+// Trailing column must remain commit_ts.
+require.Equal(t, types.T_TS, bat.Vecs[len(bat.Vecs)-1].GetType().Oid)
+require.Equal(t, objectio.DefaultCommitTS_Attr, bat.Attrs[len(bat.Attrs)-1])
+bat.Clean(mp)
+})
+
+t.Run("fillInDeleteBatch produces 2-col layout", func(t *testing.T) {
+// RowEntry.Batch layout expected by fillInDeleteBatch: [Rowid, TS, pk]
+src := batch.NewWithSize(3)
+ridVec := vector.NewVec(types.T_Rowid.ToType())
+blk := types.Blockid{}
+require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
+tsSrc := vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(tsSrc, types.BuildTS(100, 0), false, mp))
+pkVec := vector.NewVec(types.T_int64.ToType())
+require.NoError(t, vector.AppendFixed(pkVec, int64(42), false, mp))
+src.Vecs[0] = ridVec
+src.Vecs[1] = tsSrc
+src.Vecs[2] = pkVec
+src.SetRowCount(1)
+
+entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
+var out *batch.Batch
+fillInDeleteBatch(&out, entry, false, mp)
+require.NotNil(t, out)
+require.Equal(t, []string{
+objectio.TombstoneAttr_PK_Attr,
+objectio.DefaultCommitTS_Attr,
+}, out.Attrs)
+require.Equal(t, 2, len(out.Vecs))
+assertNoRowID(t, out)
+out.Clean(mp)
+src.Clean(mp)
+})
+
+t.Run("fillInInsertBatch omits rowid column", func(t *testing.T) {
+// RowEntry.Batch layout: [Rowid, TS, pk, val]; src.Attrs[2:] = [pk, val]
+src := batch.NewWithSize(4)
+src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "val"})
+ridVec := vector.NewVec(types.T_Rowid.ToType())
+blk := types.Blockid{}
+require.NoError(t, vector.AppendFixed(ridVec, types.NewRowid(&blk, 0), false, mp))
+tsSrc := vector.NewVec(types.T_TS.ToType())
+require.NoError(t, vector.AppendFixed(tsSrc, types.BuildTS(100, 0), false, mp))
+pkVec := vector.NewVec(types.T_int64.ToType())
+require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+valVec := vector.NewVec(types.T_int64.ToType())
+require.NoError(t, vector.AppendFixed(valVec, int64(70), false, mp))
+src.Vecs[0] = ridVec
+src.Vecs[1] = tsSrc
+src.Vecs[2] = pkVec
+src.Vecs[3] = valVec
+src.SetRowCount(1)
+
+entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
+var out *batch.Batch
+fillInInsertBatch(&out, entry, false, mp)
+require.NotNil(t, out)
+require.Equal(t, []string{"pk", "val", objectio.DefaultCommitTS_Attr}, out.Attrs)
+require.Equal(t, 3, len(out.Vecs))
+assertNoRowID(t, out)
+// Trailing column must be commit_ts.
+require.Equal(t, types.T_TS, out.Vecs[len(out.Vecs)-1].GetType().Oid)
+out.Clean(mp)
+src.Clean(mp)
+})
+}
