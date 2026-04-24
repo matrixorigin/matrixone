@@ -3286,7 +3286,7 @@ func canDropTableWithTargets(tableDef *plan.TableDef, dropTargetTblIds map[uint6
 		return false
 	}
 	for _, childTblId := range tableDef.RefChildTbls {
-		if childTblId == tableDef.TblId {
+		if childTblId == 0 {
 			continue
 		}
 		if _, ok := dropTargetTblIds[childTblId]; !ok {

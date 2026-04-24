@@ -6870,20 +6870,15 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	}
 	stats.Add(&delta)
 
+	if st, isDropTable := stmt.(*tree.DropTable); isDropTable && len(st.Names) > 1 {
+		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
+		stats.Add(&delta)
+		return ok, stats, err
+	}
+
 	//double check privilege of drop table
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
 		switch st := stmt.(type) {
-		case *tree.DropTable:
-			for _, name := range st.Names {
-				dbName := string(name.SchemaName)
-				if len(dbName) == 0 {
-					dbName = ses.GetDatabaseName()
-				}
-				if !isClusterTable(dbName, string(name.ObjectName)) {
-					return false, stats, nil
-				}
-			}
-			return true, stats, nil
 		case *tree.AlterTable:
 			dbName := string(st.Table.SchemaName)
 			if len(dbName) == 0 {
@@ -6920,23 +6915,6 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 				return ok, stats, nil
 			}
 			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
-		case *tree.DropTable:
-			for _, name := range st.Names {
-				dbName := string(name.SchemaName)
-				if len(dbName) == 0 {
-					dbName = ses.GetDatabaseName()
-				}
-				if _, inSet := sysDatabases[dbName]; inSet {
-					return ok, stats, nil
-				}
-				tbName := string(name.ObjectName)
-				owned, delta, err := checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-				stats.Add(&delta)
-				if err != nil || !owned {
-					return owned, stats, err
-				}
-			}
-			return true, stats, nil
 		case *tree.CloneTable, *tree.CloneDatabase,
 			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
@@ -6945,6 +6923,56 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		}
 	}
 	return ok, stats, nil
+}
+
+func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tree.DropTable) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil {
+		return true, stats, nil
+	}
+
+	for _, name := range st.Names {
+		dbName := string(name.SchemaName)
+		if len(dbName) == 0 {
+			dbName = ses.GetDatabaseName()
+		}
+		tbName := string(name.ObjectName)
+
+		if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() && isClusterTable(dbName, tbName) {
+			continue
+		}
+
+		targetPriv := determinePrivilegeSetOfStatement(&tree.DropTable{
+			Names: tree.TableNames{name},
+		})
+		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, targetPriv)
+		stats.Add(&delta)
+		if err != nil {
+			return false, stats, err
+		}
+		if ok {
+			continue
+		}
+
+		if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && targetPriv.kind == privilegeKindGeneral {
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return false, stats, nil
+			}
+
+			owned, delta, err := checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, false)
+			stats.Add(&delta)
+			if err != nil {
+				return false, stats, err
+			}
+			if owned {
+				continue
+			}
+		}
+
+		return false, stats, nil
+	}
+	return true, stats, nil
 }
 
 func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, statistic.StatsArray, error) {

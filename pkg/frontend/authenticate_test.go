@@ -3423,6 +3423,270 @@ func Test_determineDropTable(t *testing.T) {
 	})
 }
 
+func Test_multiDropTableOwnerFallback(t *testing.T) {
+	makeName := func(db, tbl string) *tree.TableName {
+		return tree.NewTableName(tree.Identifier(tbl), tree.ObjectNamePrefix{
+			SchemaName:     tree.Identifier(db),
+			ExplicitSchema: true,
+		}, nil)
+	}
+
+	convey.Convey("multi-table drop owner fallback requires ownership on every target", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{
+			Names: tree.TableNames{
+				makeName("db1", "t1"),
+				makeName("db1", "t2"),
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetFromRealUser(true)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "u1",
+			DefaultRole:   "r1",
+			TenantID:      1,
+			UserID:        1,
+			DefaultRoleID: 11,
+		})
+		ownerID := int64(ses.GetTenantInfo().GetDefaultRoleID())
+		roleID := int(ses.GetTenantInfo().GetDefaultRoleID())
+
+		roleIdsInMoRolePrivs := []int{roleID}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := range rowsOfMoRolePrivs {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		roleIdsInMoRoleGrant := []int{roleID}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+		sql2result := makeSql2ExecResult2(1, [][]interface{}{{0, false}}, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				sql, err := getSqlForPrivilege(context.TODO(), int64(roleID), entry, pl)
+				convey.So(err, convey.ShouldBeNil)
+				sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{})
+			}
+		}
+
+		sql := getSqlForGetOwnerOfTable("db1", "t1")
+		sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{ownerID}})
+		sql = getSqlForGetOwnerOfTable("db1", "t2")
+		sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{1}})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("multi-table drop owner fallback succeeds when every target is owned", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{
+			Names: tree.TableNames{
+				makeName("db1", "t1"),
+				makeName("db1", "t2"),
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetFromRealUser(true)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "u1",
+			DefaultRole:   "r1",
+			TenantID:      1,
+			UserID:        1,
+			DefaultRoleID: 11,
+		})
+		ownerID := int64(ses.GetTenantInfo().GetDefaultRoleID())
+		roleID := int(ses.GetTenantInfo().GetDefaultRoleID())
+
+		roleIdsInMoRolePrivs := []int{roleID}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := range rowsOfMoRolePrivs {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		roleIdsInMoRoleGrant := []int{roleID}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+		sql2result := makeSql2ExecResult2(1, [][]interface{}{{0, false}}, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				sql, err := getSqlForPrivilege(context.TODO(), int64(roleID), entry, pl)
+				convey.So(err, convey.ShouldBeNil)
+				sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{})
+			}
+		}
+
+		sql := getSqlForGetOwnerOfTable("db1", "t1")
+		sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{ownerID}})
+		sql = getSqlForGetOwnerOfTable("db1", "t2")
+		sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{ownerID}})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
+
+func Test_multiDropTableMixedDatabaseAuthorization(t *testing.T) {
+	makeName := func(db, tbl string) *tree.TableName {
+		return tree.NewTableName(tree.Identifier(tbl), tree.ObjectNamePrefix{
+			SchemaName:     tree.Identifier(db),
+			ExplicitSchema: true,
+		}, nil)
+	}
+
+	makeTenantSession := func(ctrl *gomock.Controller, stmt *tree.DropTable) (*Session, int64, int) {
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.SetFromRealUser(true)
+		ses.SetTenantInfo(&TenantInfo{
+			Tenant:        "acc1",
+			User:          "u1",
+			DefaultRole:   "r1",
+			TenantID:      1,
+			UserID:        1,
+			DefaultRoleID: 11,
+		})
+		return ses, int64(ses.GetTenantInfo().GetDefaultRoleID()), int(ses.GetTenantInfo().GetDefaultRoleID())
+	}
+
+	makeNoPrivilegeResults := func(priv *privilege, roleID int) map[string]ExecResult {
+		roleIdsInMoRolePrivs := []int{roleID}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := range rowsOfMoRolePrivs {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		roleIdsInMoRoleGrant := []int{roleID}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+		sql2result := makeSql2ExecResult2(1, [][]interface{}{{0, false}}, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				sql, err := getSqlForPrivilege(context.TODO(), int64(roleID), entry, pl)
+				convey.So(err, convey.ShouldBeNil)
+				sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{})
+			}
+		}
+		return sql2result
+	}
+
+	convey.Convey("multi-table drop does not stop at the first database privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{
+			Names: tree.TableNames{
+				makeName("db1", "t1"),
+				makeName("db2", "t2"),
+			},
+		}
+		ses, _, roleID := makeTenantSession(ctrl, stmt)
+		priv := determinePrivilegeSetOfStatement(stmt)
+		sql2result := makeNoPrivilegeResults(priv, roleID)
+
+		for _, dbName := range []string{"db1", "db2"} {
+			targetPriv := determinePrivilegeSetOfStatement(&tree.DropTable{
+				Names: tree.TableNames{makeName(dbName, "t1")},
+			})
+			if dbName == "db2" {
+				targetPriv = determinePrivilegeSetOfStatement(&tree.DropTable{
+					Names: tree.TableNames{makeName(dbName, "t2")},
+				})
+			}
+			for _, entry := range targetPriv.entries {
+				pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+				convey.So(err, convey.ShouldBeNil)
+				for _, pl := range pls {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleID), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if dbName == "db1" {
+						rows = [][]interface{}{{0, true}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql2result[getSqlForGetOwnerOfTable("db2", "t2")] = newMrsForPasswordOfUser([][]interface{}{{99}})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("multi-table drop accepts later targets via ownership fallback", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{
+			Names: tree.TableNames{
+				makeName("db1", "t1"),
+				makeName("db2", "t2"),
+			},
+		}
+		ses, ownerID, roleID := makeTenantSession(ctrl, stmt)
+		priv := determinePrivilegeSetOfStatement(stmt)
+		sql2result := makeNoPrivilegeResults(priv, roleID)
+
+		for _, dbName := range []string{"db1", "db2"} {
+			targetPriv := determinePrivilegeSetOfStatement(&tree.DropTable{
+				Names: tree.TableNames{makeName(dbName, "t1")},
+			})
+			if dbName == "db2" {
+				targetPriv = determinePrivilegeSetOfStatement(&tree.DropTable{
+					Names: tree.TableNames{makeName(dbName, "t2")},
+				})
+			}
+			for _, entry := range targetPriv.entries {
+				pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+				convey.So(err, convey.ShouldBeNil)
+				for _, pl := range pls {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleID), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if dbName == "db1" {
+						rows = [][]interface{}{{0, true}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql2result[getSqlForGetOwnerOfTable("db2", "t2")] = newMrsForPasswordOfUser([][]interface{}{{ownerID}})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement

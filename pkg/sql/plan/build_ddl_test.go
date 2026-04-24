@@ -356,6 +356,18 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCanDropTableWithTargetsIgnoresSelfReferenceSentinel(t *testing.T) {
+	tableDef := &plan.TableDef{
+		TblId:        42,
+		RefChildTbls: []uint64{0, 100},
+	}
+
+	require.True(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{
+		100: {},
+	}))
+	require.False(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{}))
+}
+
 func TestBuildCreateTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqlerrs := []string{
