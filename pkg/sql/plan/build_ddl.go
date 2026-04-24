@@ -74,6 +74,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -96,6 +97,21 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	})
 
 	return &tableDef, nil
+}
+
+func getViewSecurityTypeFromContext(ctx CompilerContext) string {
+	securityType := ""
+	val, err := ctx.ResolveVariable("view_security_type", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			securityType = s
+		}
+	}
+	securityType = strings.TrimSpace(strings.ToUpper(securityType))
+	if securityType == "INVOKER" {
+		return "INVOKER"
+	}
+	return "DEFINER"
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -149,6 +165,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err

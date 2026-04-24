@@ -53,6 +53,7 @@ func TestBuildAlterView(t *testing.T) {
 	vData, err := json.Marshal(ViewData{
 		"create view v as select a from a",
 		"db",
+		"DEFINER",
 	})
 	assert.NoError(t, err)
 
@@ -67,6 +68,7 @@ func TestBuildAlterView(t *testing.T) {
 	vxData, err := json.Marshal(ViewData{
 		"create view vx as select a from v",
 		"db",
+		"DEFINER",
 	})
 	assert.NoError(t, err)
 	store["db.vx"] = arg{&plan.ObjectRef{},
