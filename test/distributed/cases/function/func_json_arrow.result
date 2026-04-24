@@ -1,3 +1,6 @@
+DROP DATABASE IF EXISTS test_json_arrow;
+CREATE DATABASE test_json_arrow;
+USE test_json_arrow;
 SELECT CAST('{"key":"value"}' AS JSON) -> '$.key' AS result1;
 result1
 "value"
@@ -64,3 +67,4 @@ name
 Barney
 Betty
 DROP TABLE jemp;
+DROP DATABASE test_json_arrow;

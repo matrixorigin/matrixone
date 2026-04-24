@@ -1,6 +1,10 @@
 # Issue #23006, #23007: MySQL JSON -> and ->> operators
 # -> equivalent to JSON_EXTRACT; ->> equivalent to JSON_UNQUOTE(JSON_EXTRACT(...))
 
+DROP DATABASE IF EXISTS test_json_arrow;
+CREATE DATABASE test_json_arrow;
+USE test_json_arrow;
+
 -- 3.0-dev does not have json_object/json_array yet, so use JSON literals here.
 SELECT CAST('{"key":"value"}' AS JSON) -> '$.key' AS result1;
 SELECT CAST('{"a":1,"b":2}' AS JSON) -> '$.b' AS result2;
@@ -37,3 +41,4 @@ SELECT c, c -> '$.id' AS id_json, g FROM jemp WHERE (c -> '$.id') > 1 ORDER BY (
 SELECT c ->> '$.name' AS name FROM jemp WHERE g > 2 ORDER BY c ->> '$.name';
 
 DROP TABLE jemp;
+DROP DATABASE test_json_arrow;
