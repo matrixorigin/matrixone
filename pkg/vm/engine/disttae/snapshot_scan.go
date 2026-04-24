@@ -158,6 +158,16 @@ func ScanSnapshotWithCurrentRanges(
 	}
 
 	actualParallelism := normalizeSnapshotScanParallelism(relData, scanParallelism)
+	// Attach tombstones BEFORE splitting: BlockListRelData.DataSlice copies
+	// the parent's tombstones pointer at split time, so shards created from a
+	// relData without tombstones would later read GetTombstones()==nil even if
+	// we attached to the parent afterwards. That would silently skip tombstone
+	// filtering in the parallel snapshot scan and surface deleted rows.
+	if relData != nil && relData.DataCnt() > 0 {
+		if err = relData.AttachTombstones(tombstones); err != nil {
+			return err
+		}
+	}
 	shards := splitSnapshotScanShards(relData, actualParallelism)
 
 	if len(shards) > 1 {
@@ -169,9 +179,6 @@ func ScanSnapshotWithCurrentRanges(
 		}
 		if relData == nil || relData.DataCnt() == 0 {
 			return nil
-		}
-		if err = relData.AttachTombstones(tombstones); err != nil {
-			return err
 		}
 		logutil.Info(
 			"SnapshotScan-Parallel-Start",
