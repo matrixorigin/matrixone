@@ -105,7 +105,7 @@ show column_number from mo_columns;
 26
 show column_number from mo_indexes;
 ➤ Number of columns in mo_indexes[-5,64,0]  𝄀
-15
+16
 show column_number from mo_table_partitions;
 [unknown result because it is related to issue#16438]
 use system_metrics;
