@@ -194,35 +194,6 @@ func (vs *Vectors[T]) Size() int64 {
 	return size
 }
 
-func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessFnFactory func([]T) func(a, b int) bool, k int) T {
-	if len(nums) == 1 {
-		return nums[0]
-	}
-	pivotIndex := len(nums) / 2
-	lows := []T{}
-	highs := []T{}
-	pivots := []T{}
-	lessFn := lessFnFactory(nums)
-	for i, v := range nums {
-		switch {
-		case lessFn(i, pivotIndex):
-			lows = append(lows, v)
-		case lessFn(pivotIndex, i):
-			highs = append(highs, v)
-		default:
-			pivots = append(pivots, v)
-		}
-	}
-	switch {
-	case k < len(lows):
-		return quickSelect[T](lows, lessFnFactory, k)
-	case k < len(lows)+len(pivots):
-		return pivots[0]
-	default:
-		return quickSelect(highs, lessFnFactory, k-len(lows)-len(pivots))
-	}
-}
-
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
 	leftRow := cnt
 	for {
