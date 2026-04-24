@@ -20,7 +20,10 @@ create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary 
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4'),  ('id4', 4, 'bright red null', NULL);
 
 -- sleep and wait for src and src2 finish
-select sleep(20);
+select case when count(*) > 0 then sleep(5) else 0 end as wait_for_async_fulltext_sync from mo_catalog.mo_iscp_log where job_name = 'index_ftidx' and job_state in (1, 2);
+select case when count(*) > 0 then sleep(5) else 0 end as wait_for_async_fulltext_sync from mo_catalog.mo_iscp_log where job_name = 'index_ftidx' and job_state in (1, 2);
+select case when count(*) > 0 then sleep(5) else 0 end as wait_for_async_fulltext_sync from mo_catalog.mo_iscp_log where job_name = 'index_ftidx' and job_state in (1, 2);
+select case when count(*) > 0 then sleep(5) else 0 end as wait_for_async_fulltext_sync from mo_catalog.mo_iscp_log where job_name = 'index_ftidx' and job_state in (1, 2);
 
 -- select src
 select * from src where match(body, title) against('red');

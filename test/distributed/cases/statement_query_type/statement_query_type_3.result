@@ -98,7 +98,13 @@ sleep(1)    col    seq    key    path    index    value    this
 0    UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-select sleep(15);
-sleep(15)
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
+wait_for_statement_query_type_3_ready
+0
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
+wait_for_statement_query_type_3_ready
+0
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
+wait_for_statement_query_type_3_ready
 0
 drop account if exists bvt_query_type;

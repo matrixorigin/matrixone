@@ -84,7 +84,9 @@ create database statement_query_type;
 --
 -- TIPs: DO NOT run this case multiple times in 15s
 --
-select sleep(15);
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
+select case when count(*) >= 59 then 0 else sleep(5) end as wait_for_statement_query_type_3_ready from system.statement_info where account="bvt_query_type" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0;
 
 -- cleanup
 drop account if exists bvt_query_type;
