@@ -379,49 +379,49 @@ func TestMaterializedSnapshotDataSourcePersistedTombstoneFiltersBySnapshotTS(t *
 }
 
 func TestMaterializedSnapshotDataSourceAccessors_NoRemote(t *testing.T) {
-mp := mpool.MustNewZero()
-pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
+	mp := mpool.MustNewZero()
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
 
-src := newMaterializedSnapshotDataSource(
-context.Background(),
-nil,
-pState,
-types.BuildTS(30, 0),
-types.BuildTS(20, 0),
-nil,
-nil,
-).(*materializedSnapshotDataSource)
+	src := newMaterializedSnapshotDataSource(
+		context.Background(),
+		nil,
+		pState,
+		types.BuildTS(30, 0),
+		types.BuildTS(20, 0),
+		nil,
+		nil,
+	).(*materializedSnapshotDataSource)
 
-s := src.String()
-require.Contains(t, s, "MaterializedSnapshotDataSource")
-require.Contains(t, s, "snapshot-ts=")
-require.Contains(t, s, "current-ts=")
+	s := src.String()
+	require.Contains(t, s, "MaterializedSnapshotDataSource")
+	require.Contains(t, s, "snapshot-ts=")
+	require.Contains(t, s, "current-ts=")
 
-require.Nil(t, src.GetOrderBy())
-src.SetOrderBy(nil)
-require.Nil(t, src.GetOrderBy())
-src.SetFilterZM(objectio.ZoneMap{})
+	require.Nil(t, src.GetOrderBy())
+	src.SetOrderBy(nil)
+	require.Nil(t, src.GetOrderBy())
+	src.SetFilterZM(objectio.ZoneMap{})
 }
 
 func TestMaterializedSnapshotDataSourceAccessors_WithRemote(t *testing.T) {
-mp := mpool.MustNewZero()
-pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
+	mp := mpool.MustNewZero()
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
 
-relData := newTestSnapshotRelData(1)
+	relData := newTestSnapshotRelData(1)
 
-src := newMaterializedSnapshotDataSource(
-context.Background(),
-nil,
-pState,
-types.BuildTS(30, 0),
-types.BuildTS(20, 0),
-relData,
-nil,
-).(*materializedSnapshotDataSource)
-require.NotNil(t, src.remote)
+	src := newMaterializedSnapshotDataSource(
+		context.Background(),
+		nil,
+		pState,
+		types.BuildTS(30, 0),
+		types.BuildTS(20, 0),
+		relData,
+		nil,
+	).(*materializedSnapshotDataSource)
+	require.NotNil(t, src.remote)
 
-src.SetOrderBy(nil)
-_ = src.GetOrderBy()
-src.SetFilterZM(objectio.ZoneMap{})
-_ = src.String()
+	src.SetOrderBy(nil)
+	_ = src.GetOrderBy()
+	src.SetFilterZM(objectio.ZoneMap{})
+	_ = src.String()
 }
