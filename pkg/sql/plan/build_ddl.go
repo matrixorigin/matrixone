@@ -3050,12 +3050,18 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 //     pre-hashed uint64 and the DDL-side hashing pipeline is not wired in
 //     yet, so reject it here until that support lands.
 //   - INCLUDE columns must not duplicate each other or the indexed vector
-//     column. The primary key is allowed — predicates on the pk need it in
-//     filter_host_ even though host_ids also carries it.
+//     column.
+//   - INCLUDE must not contain the primary key column. PK predicates are
+//     pushed down automatically via the reserved __mo_pk_host_id virtual
+//     column (pkg/sql/plan/filter_predicate.go), which evaluates against the
+//     index's host_ids array. Listing the PK as an INCLUDE column would
+//     duplicate the PK values in filter_host_ for no benefit — the planner
+//     would route the predicate to host_ids anyway.
 func validateIncludeColumns(ctx CompilerContext,
 	includeCols []*tree.UnresolvedName,
 	colMap map[string]*ColDef,
-	vecColName string) error {
+	vecColName string,
+	pkeyName string) error {
 	if len(includeCols) == 0 {
 		return nil
 	}
@@ -3069,6 +3075,13 @@ func validateIncludeColumns(ctx CompilerContext,
 		if name == vecColName {
 			return moerr.NewInvalidInputf(ctx.GetContext(),
 				"INCLUDE column '%s' cannot be the indexed vector column", origin)
+		}
+		if pkeyName != "" && name == pkeyName {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' must not be the primary key; "+
+					"predicates on the pk are pushed down automatically via the "+
+					"__mo_pk_host_id virtual column, so listing it here only "+
+					"duplicates storage", origin)
 		}
 		if _, dup := seen[name]; dup {
 			return moerr.NewInvalidInputf(ctx.GetContext(),
@@ -3131,7 +3144,7 @@ func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 	}
 
 	if indexInfo.IndexOption != nil {
-		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0]); err != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -3395,7 +3408,7 @@ func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 	}
 
 	if indexInfo.IndexOption != nil {
-		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0]); err != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
 			return nil, nil, err
 		}
 	}

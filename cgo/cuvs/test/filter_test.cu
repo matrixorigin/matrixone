@@ -421,6 +421,161 @@ TEST(EvalFilterBitmapTest, TailBitsZeroedEvenWhenAllMatch) {
 }
 
 // =============================================================================
+// HostIdsView — predicates on the reserved __mo_pk_host_id virtual column.
+// These verify that a PredOp with col_idx == kHostIdColIdx is evaluated
+// against the passed-in host_ids buffer rather than a FilterStore column.
+// The Go planner emits col=-1 which wraps to kHostIdColIdx (0xFFFFFFFFu)
+// via static_cast<uint32_t>(i64) inside parse_one_pred; these tests use
+// the wire form ("col":-1) to exercise that path end-to-end.
+// =============================================================================
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_SentinelWiresMatch) {
+    // Sanity: the Go sentinel -1 lands on the C++ kHostIdColIdx constant.
+    ASSERT_EQ(kHostIdColIdx, static_cast<uint32_t>(-1));
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_EqOnPK) {
+    // host_ids = [10, 20, 30, 40, 50]; filter id = 30 → only row 2 passes.
+    std::vector<int64_t> host_ids{10, 20, 30, 40, 50};
+    FilterStore fs;  // no FilterStore columns needed for a pure-PK predicate
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"=\",\"val\":30}]",
+        /*start_row=*/0, /*num_rows=*/host_ids.size(), hv);
+
+    for (uint64_t i = 0; i < host_ids.size(); ++i) {
+        uint32_t want = (host_ids[i] == 30) ? 1u : 0u;
+        ASSERT_EQ(get_bit(mask, i), want);
+    }
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_InList) {
+    // id IN (20, 50) on host_ids [10,20,30,40,50] → rows 1 and 4.
+    std::vector<int64_t> host_ids{10, 20, 30, 40, 50};
+    FilterStore fs;
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"in\",\"vals\":[20, 50]}]",
+        0, host_ids.size(), hv);
+
+    for (uint64_t i = 0; i < host_ids.size(); ++i) {
+        bool pass = (host_ids[i] == 20) || (host_ids[i] == 50);
+        ASSERT_EQ(get_bit(mask, i), pass ? 1u : 0u);
+    }
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_RangeAndBetween) {
+    // host_ids = [100..139]; id >= 120 AND id < 135 → rows 20..34 (15 rows).
+    constexpr uint64_t N = 40;
+    std::vector<int64_t> host_ids(N);
+    for (uint64_t i = 0; i < N; ++i) host_ids[i] = static_cast<int64_t>(100 + i);
+    FilterStore fs;
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\">=\",\"val\":120},"
+        " {\"col\":-1,\"op\":\"<\",\"val\":135}]",
+        0, N, hv);
+
+    for (uint64_t i = 0; i < N; ++i) {
+        int64_t id = host_ids[i];
+        uint32_t want = (id >= 120 && id < 135) ? 1u : 0u;
+        ASSERT_EQ(get_bit(mask, i), want);
+    }
+
+    // BETWEEN variant: same effective window [120, 134].
+    auto mask_bw = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"between\",\"lo\":120,\"hi\":134}]",
+        0, N, hv);
+    for (uint64_t i = 0; i < N; ++i) {
+        int64_t id = host_ids[i];
+        uint32_t want = (id >= 120 && id <= 134) ? 1u : 0u;
+        ASSERT_EQ(get_bit(mask_bw, i), want);
+    }
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_IsNullNonNull) {
+    // PKs are non-nullable. IS_NULL → no row passes; IS_NOT_NULL → all rows
+    // within the window pass (tail bits past num_rows stay zero).
+    std::vector<int64_t> host_ids{1, 2, 3, 4, 5};
+    FilterStore fs;
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    auto mask_null = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"is_null\"}]", 0, 5, hv);
+    ASSERT_EQ(mask_null.size(), 1u);
+    ASSERT_EQ(mask_null[0], 0u);
+
+    auto mask_nn = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"is_not_null\"}]", 0, 5, hv);
+    ASSERT_EQ(mask_nn.size(), 1u);
+    ASSERT_EQ(mask_nn[0], 0b11111u);  // 5 low bits set, rest zeroed
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_EmptyViewPassesThrough) {
+    // When the index has sequential IDs (host_ids empty), any PK predicate
+    // that sneaks through must behave as "all match" — the planner's
+    // residual filter on the scan is still authoritative.
+    FilterStore fs;
+    HostIdsView hv;  // default-constructed: data=nullptr, count=0
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\"=\",\"val\":42}]",
+        0, /*num_rows=*/10, hv);
+
+    ASSERT_EQ(mask.size(), 1u);
+    // Expect 10 low bits set; high bits zero.
+    ASSERT_EQ(mask[0], (1u << 10) - 1u);
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_AndWithFilterStoreColumn) {
+    // Combine a PK predicate with a FilterStore-column predicate. Mirrors
+    // the common MO case: SELECT ... WHERE id >= 30 AND cat = 2.
+    // FilterStore: cat cycles 0..4 over 40 rows; host_ids[i] = 10 + i.
+    FilterStore fs = make_store_i32_f32(40);
+    std::vector<int64_t> host_ids(40);
+    for (uint64_t i = 0; i < 40; ++i) host_ids[i] = static_cast<int64_t>(10 + i);
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    // id >= 30  AND  cat = 2.  host_ids[i] = 10+i, so id>=30 ⇔ i>=20.
+    // cat = (i % 5), so cat=2 ⇔ i%5==2.
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\">=\",\"val\":30},"
+        " {\"col\":1, \"op\":\"=\", \"val\":2}]",
+        0, 40, hv);
+
+    for (uint64_t i = 0; i < 40; ++i) {
+        bool pass = (i >= 20) && ((i % 5) == 2);
+        ASSERT_EQ(get_bit(mask, i), pass ? 1u : 0u);
+    }
+}
+
+TEST(EvalFilterBitmapTest, HostIdsVirtualColumn_ShardSliceStartRow) {
+    // SHARDED mode passes start_row = shard_offset and num_rows = shard_sz;
+    // host_ids is the GLOBAL pointer, addressed as hv.data[start_row + base + k]
+    // inside eval_pred_word. This test simulates a second shard starting at
+    // row 64 (word-aligned) with 32 rows.
+    constexpr uint64_t GLOBAL_N = 96;
+    std::vector<int64_t> host_ids(GLOBAL_N);
+    for (uint64_t i = 0; i < GLOBAL_N; ++i) host_ids[i] = static_cast<int64_t>(i);
+    FilterStore fs;
+    HostIdsView hv{host_ids.data(), FilterColType::INT64, host_ids.size()};
+
+    // Window [64, 96): filter id >= 80. Local row r corresponds to global
+    // row 64 + r; bit should be 1 when (64 + r) >= 80, i.e. r >= 16.
+    auto mask = eval_filter_bitmap_cpu(fs,
+        "[{\"col\":-1,\"op\":\">=\",\"val\":80}]",
+        /*start_row=*/64, /*num_rows=*/32, hv);
+
+    ASSERT_EQ(mask.size(), 1u);
+    for (uint64_t r = 0; r < 32; ++r) {
+        uint32_t want = (r >= 16) ? 1u : 0u;
+        ASSERT_EQ(get_bit(mask, r), want);
+    }
+}
+
+// =============================================================================
 // Large parallel eval — sanity-check OpenMP path produces same result.
 // =============================================================================
 

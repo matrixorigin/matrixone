@@ -56,6 +56,35 @@ enum class FilterColType : uint8_t {
     UINT64  = 4,  // VARCHAR stored as 64-bit hash
 };
 
+// Reserved synthetic column index — a PredOp with this col_idx references
+// the index's host_ids array (external primary keys) rather than a FilterStore
+// column. Wire form: the Go planner emits "col": -1, which wraps to this
+// value via static_cast<uint32_t>(i64) inside parse_one_pred. The virtual
+// column is known on the Go side as "__mo_pk_host_id" (see
+// pkg/sql/plan/filter_predicate.go). No FilterStore storage is consumed;
+// predicate evaluation reads directly from the index's host_ids buffer.
+static constexpr uint32_t kHostIdColIdx = 0xFFFFFFFFu;
+
+// Passable view of the index's host_ids (external-ID / PK) buffer. Populated
+// by index_base_t::build_search_bitset when host_ids is non-empty and passed
+// into eval_filter_bitmap_cpu so PK predicates (col_idx == kHostIdColIdx) can
+// be evaluated without duplicating PK values into the FilterStore.
+//
+// data is the global pointer (not a per-shard slice); eval_pred_word
+// addresses it exactly like FilterStore columns, i.e. element index =
+// start_row + base + k, where start_row is the shard offset.
+//
+// type selects the typed evaluator. All current index types (CAGRA,
+// IVF_FLAT, IVF_PQ) use IdT=int64_t for external host_ids, so INT64 is the
+// common case. The field is retained (rather than hardcoding INT64) so
+// future index types with differently-typed external IDs plug in without
+// an API change.
+struct HostIdsView {
+    const void*   data  = nullptr;
+    FilterColType type  = FilterColType::INT64;
+    uint64_t      count = 0;
+};
+
 inline uint32_t filter_col_elem_size(FilterColType t) {
     switch (t) {
         case FilterColType::INT32:   return 4;
@@ -723,7 +752,38 @@ inline uint32_t nulls_word(const FilterStore& fs, uint32_t col_idx,
 }
 
 inline uint32_t eval_pred_word(const FilterStore& fs, const PredOp& p,
-                               uint64_t base_row, uint32_t rows_in_word) {
+                               uint64_t base_row, uint32_t rows_in_word,
+                               const HostIdsView& hv) {
+    // Virtual PK column — evaluate against host_ids directly. Primary keys
+    // in MatrixOne are non-nullable, so IS_NULL short-circuits to 0 (no row
+    // matches) and IS_NOT_NULL to tail_mask (every row matches). If the
+    // caller passed an empty view (host_ids not populated, e.g. sequential
+    // IDs), pass-through as "all match" so the planner's residual filter
+    // remains authoritative on the scan side.
+    if (p.col_idx == kHostIdColIdx) {
+        const uint32_t tail_mask = (rows_in_word == 32) ? ~0u
+                                                        : ((1u << rows_in_word) - 1u);
+        if (p.op == PredOpType::IS_NULL)     return 0u;
+        if (p.op == PredOpType::IS_NOT_NULL) return tail_mask;
+        if (hv.data == nullptr || hv.count == 0) return tail_mask;
+        switch (hv.type) {
+            case FilterColType::INT32:
+                return eval_pred_word_typed<int32_t>(
+                    reinterpret_cast<const int32_t*>(hv.data),
+                    base_row, rows_in_word, p);
+            case FilterColType::INT64:
+                return eval_pred_word_typed<int64_t>(
+                    reinterpret_cast<const int64_t*>(hv.data),
+                    base_row, rows_in_word, p);
+            case FilterColType::UINT64:
+                return eval_pred_word_typed<uint64_t>(
+                    reinterpret_cast<const uint64_t*>(hv.data),
+                    base_row, rows_in_word, p);
+            default:
+                return tail_mask;  // FLOAT PK never happens
+        }
+    }
+
     // IS_NULL / IS_NOT_NULL: consult nulls only; skip the data bytes entirely.
     if (p.op == PredOpType::IS_NULL) {
         return nulls_word(fs, p.col_idx, base_row, rows_in_word);
@@ -782,7 +842,8 @@ inline std::vector<uint32_t>
 eval_filter_bitmap_cpu(const FilterStore& fs,
                        const std::vector<PredOp>& preds,
                        uint64_t start_row,
-                       uint64_t num_rows) {
+                       uint64_t num_rows,
+                       HostIdsView hv = {}) {
     uint64_t nwords = (num_rows + 31) / 32;
     std::vector<uint32_t> mask(nwords, 0);
 
@@ -803,7 +864,7 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
         uint64_t base = static_cast<uint64_t>(w) * 32;
         uint32_t bits = 0xFFFFFFFFu;
         for (const auto& p : preds) {
-            bits &= detail::eval_pred_word(fs, p, start_row + base, 32);
+            bits &= detail::eval_pred_word(fs, p, start_row + base, 32, hv);
         }
         mask[w] = bits;
     }
@@ -816,7 +877,7 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
         uint32_t tail = static_cast<uint32_t>(num_rows - base);
         uint32_t bits = 0xFFFFFFFFu;
         for (const auto& p : preds) {
-            bits &= detail::eval_pred_word(fs, p, start_row + base, tail);
+            bits &= detail::eval_pred_word(fs, p, start_row + base, tail, hv);
         }
         mask[full_words] = bits;
     }
@@ -828,9 +889,10 @@ inline std::vector<uint32_t>
 eval_filter_bitmap_cpu(const FilterStore& fs,
                        const std::string& preds_json,
                        uint64_t start_row,
-                       uint64_t num_rows) {
+                       uint64_t num_rows,
+                       HostIdsView hv = {}) {
     auto preds = parse_preds(preds_json);
-    return eval_filter_bitmap_cpu(fs, preds, start_row, num_rows);
+    return eval_filter_bitmap_cpu(fs, preds, start_row, num_rows, hv);
 }
 
 }  // namespace matrixone

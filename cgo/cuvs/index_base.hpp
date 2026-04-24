@@ -509,7 +509,24 @@ public:
         std::vector<uint32_t> host_mask;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            host_mask = eval_filter_bitmap_cpu(this->filter_host_, preds, start_row, shard_sz);
+            // Expose host_ids to the filter evaluator so predicates on the
+            // virtual __mo_pk_host_id column (col_idx == kHostIdColIdx)
+            // compare directly against the PK array without a duplicate
+            // FilterStore column. All current index types use IdT=int64_t
+            // for external host_ids. Empty host_ids (sequential-ID indexes)
+            // leaves hv.data==nullptr — eval_pred_word falls through to
+            // "all match" and the planner's residual filter remains
+            // authoritative.
+            HostIdsView hv;
+            if (!this->host_ids.empty()) {
+                static_assert(std::is_same_v<IdT, int64_t>,
+                    "PK filter path assumes IdT == int64_t; update HostIdsView.type dispatch");
+                hv.data  = this->host_ids.data();
+                hv.count = this->host_ids.size();
+                hv.type  = FilterColType::INT64;
+            }
+            host_mask = eval_filter_bitmap_cpu(
+                this->filter_host_, preds, start_row, shard_sz, hv);
             if (has_del && !this->deleted_bitset_.empty()) {
                 // start_row is 0 (non-SHARDED) or a multiple of 32 (SHARDED),
                 // so start_word is always an integer (see class-level doc).

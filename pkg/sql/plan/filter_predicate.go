@@ -55,6 +55,19 @@ import (
 // value-comparison predicate on a NULL cell evaluates to UNKNOWN and the row
 // is treated as non-matching. Only is_null / is_not_null inspect validity.
 
+// PKHostIdVirtualName is the reserved identifier for predicates routed to
+// the index's host_ids array (external primary keys) on the C++ side,
+// instead of to a FilterStore column. Users must not create a table column
+// with this name and then declare it as an INCLUDE column; the planner would
+// redirect the predicate to host_ids and the FilterStore copy would be
+// unused dead weight.
+const PKHostIdVirtualName = "__mo_pk_host_id"
+
+// pkHostIdSentinelCol is the "col" value emitted in the filter-predicate JSON
+// for predicates on the PK virtual column. Wraps to filter.hpp's
+// kHostIdColIdx (0xFFFFFFFFu) via static_cast<uint32_t>(i64) on the C++ side.
+const pkHostIdSentinelCol = -1
+
 // parseIncludedColumnsFromParams reads the comma-joined "included_columns"
 // entry from an index's algo-params JSON. Returns nil when the key is absent
 // or empty (treated as "no INCLUDE columns declared").
@@ -95,10 +108,17 @@ type filterJSONPred struct {
 }
 
 // buildFilterPredicateJSON walks scanNode.FilterList-style predicates and
-// peels off those that reference only INCLUDE columns. Peeled predicates
-// are serialized into the CAGRA/IVFPQ filter JSON array; unrecognized or
-// mixed-reference predicates stay as residual filters the caller should
-// leave on the TABLE_SCAN.
+// peels off those that reference only INCLUDE columns or the source table's
+// primary key. Peeled predicates are serialized into the CAGRA/IVFPQ filter
+// JSON array; unrecognized or mixed-reference predicates stay as residual
+// filters the caller should leave on the TABLE_SCAN.
+//
+// pkColName is the source table's primary-key column name. Predicates on it
+// are routed to the reserved virtual column __mo_pk_host_id (emitted as
+// "col": pkHostIdSentinelCol), which the C++ side evaluates against the
+// index's host_ids array rather than a duplicated FilterStore column. Pass
+// "" to disable PK pushdown (e.g. for sequential-ID indexes or composite
+// keys, where the column name is an opaque serialized blob).
 //
 // Returns:
 //   - predsJSON:  JSON array (empty "" if nothing peeled)
@@ -108,11 +128,14 @@ func buildFilterPredicateJSON(
 	filters []*plan.Expr,
 	scanNode *plan.Node,
 	includeColumns []string,
+	pkColName string,
 ) (predsJSON string, serialized []*plan.Expr, residual []*plan.Expr, err error) {
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return "", nil, filters, nil
 	}
-	if len(includeColumns) == 0 || len(filters) == 0 {
+	// With no INCLUDE columns and no PK column to route, nothing can be
+	// peeled — short-circuit before allocating the map.
+	if len(filters) == 0 || (len(includeColumns) == 0 && pkColName == "") {
 		return "", nil, filters, nil
 	}
 
@@ -125,7 +148,7 @@ func buildFilterPredicateJSON(
 
 	preds := make([]filterJSONPred, 0, len(filters))
 	for _, expr := range filters {
-		entries, ok, ferr := filterExprToPreds(expr, scanTag, td, colOrd)
+		entries, ok, ferr := filterExprToPreds(expr, scanTag, td, colOrd, pkColName)
 		if ferr != nil {
 			return "", nil, nil, ferr
 		}
@@ -160,7 +183,7 @@ func buildFilterPredicateJSON(
 // C++ side's implicit-AND of the predicate array). ok=false means the
 // expression isn't serializable and must remain a residual filter.
 func filterExprToPreds(
-	expr *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int,
+	expr *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int, pkColName string,
 ) ([]filterJSONPred, bool, error) {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
@@ -169,11 +192,11 @@ func filterExprToPreds(
 	name := strings.ToLower(fn.Func.ObjName)
 
 	if name == "and" && len(fn.Args) == 2 {
-		left, okL, err := filterExprToPreds(fn.Args[0], scanTag, td, colOrd)
+		left, okL, err := filterExprToPreds(fn.Args[0], scanTag, td, colOrd, pkColName)
 		if err != nil {
 			return nil, false, err
 		}
-		right, okR, err := filterExprToPreds(fn.Args[1], scanTag, td, colOrd)
+		right, okR, err := filterExprToPreds(fn.Args[1], scanTag, td, colOrd, pkColName)
 		if err != nil {
 			return nil, false, err
 		}
@@ -184,7 +207,7 @@ func filterExprToPreds(
 	}
 
 	if op, okCmp := filterCmpOpFromFnName(name); okCmp && len(fn.Args) == 2 {
-		ord, lit, flipped, ok := filterExtractColAndLit(fn.Args[0], fn.Args[1], scanTag, td, colOrd)
+		ord, lit, flipped, ok := filterExtractColAndLit(fn.Args[0], fn.Args[1], scanTag, td, colOrd, pkColName)
 		if !ok {
 			return nil, false, nil
 		}
@@ -199,7 +222,7 @@ func filterExprToPreds(
 	}
 
 	if name == "between" && len(fn.Args) == 3 {
-		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd)
+		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd, pkColName)
 		if !ok {
 			return nil, false, nil
 		}
@@ -212,7 +235,7 @@ func filterExprToPreds(
 	}
 
 	if name == "in" && len(fn.Args) >= 2 {
-		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd)
+		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd, pkColName)
 		if !ok {
 			return nil, false, nil
 		}
@@ -232,14 +255,14 @@ func filterExprToPreds(
 	}
 
 	if (name == "isnull" || name == "is_null") && len(fn.Args) == 1 {
-		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd)
+		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd, pkColName)
 		if !ok {
 			return nil, false, nil
 		}
 		return []filterJSONPred{{Col: ord, Op: "is_null"}}, true, nil
 	}
 	if (name == "isnotnull" || name == "is_not_null") && len(fn.Args) == 1 {
-		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd)
+		ord, ok := filterColOrdinal(fn.Args[0], scanTag, td, colOrd, pkColName)
 		if !ok {
 			return nil, false, nil
 		}
@@ -283,10 +306,16 @@ func filterFlipCmpOp(op string) string {
 	return op
 }
 
-// filterColOrdinal returns the INCLUDE-list ordinal (0-based) of the column
-// referenced by `e`, provided `e` is a ColRef into the scan with a name in
-// the covered set.
-func filterColOrdinal(e *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int) (int, bool) {
+// filterColOrdinal returns the ordinal used in the JSON "col" field for the
+// column referenced by `e`, provided `e` is a ColRef into the scan.
+//
+// Resolution order:
+//  1. If pkColName != "" and the column's name matches, return
+//     pkHostIdSentinelCol so the C++ side evaluates against host_ids. The
+//     PK cannot also appear in the INCLUDE list — build_ddl.go's
+//     validateIncludeColumns rejects that at CREATE INDEX time.
+//  2. Otherwise return the 0-based position in the INCLUDE list.
+func filterColOrdinal(e *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int, pkColName string) (int, bool) {
 	col := e.GetCol()
 	if col == nil || col.RelPos != scanTag {
 		return 0, false
@@ -294,7 +323,11 @@ func filterColOrdinal(e *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map
 	if int(col.ColPos) >= len(td.Cols) {
 		return 0, false
 	}
-	ord, ok := colOrd[td.Cols[col.ColPos].Name]
+	name := td.Cols[col.ColPos].Name
+	if pkColName != "" && name == pkColName {
+		return pkHostIdSentinelCol, true
+	}
+	ord, ok := colOrd[name]
 	return ord, ok
 }
 
@@ -302,14 +335,14 @@ func filterColOrdinal(e *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map
 // (col OP lit) and (lit OP col). The returned `flipped` flag tells the
 // caller to invert the operator for the latter.
 func filterExtractColAndLit(
-	a, b *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int,
+	a, b *plan.Expr, scanTag int32, td *plan.TableDef, colOrd map[string]int, pkColName string,
 ) (int, *plan.Literal, bool, bool) {
-	if ord, ok := filterColOrdinal(a, scanTag, td, colOrd); ok {
+	if ord, ok := filterColOrdinal(a, scanTag, td, colOrd, pkColName); ok {
 		if lit := b.GetLit(); lit != nil {
 			return ord, lit, false, true
 		}
 	}
-	if ord, ok := filterColOrdinal(b, scanTag, td, colOrd); ok {
+	if ord, ok := filterColOrdinal(b, scanTag, td, colOrd, pkColName); ok {
 		if lit := a.GetLit(); lit != nil {
 			return ord, lit, true, true
 		}

@@ -150,19 +150,25 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		ivfpqCtx.batchWindow,
 		ivfpqCtx.nProbe)
 
-	// Predicate pushdown on INCLUDE columns: peel filters that reference
-	// only INCLUDE columns into a JSON array passed as the ivfpq_search
-	// 3rd arg. Unserializable/mixed predicates stay on the TABLE_SCAN.
+	// Predicate pushdown on INCLUDE columns and the primary key: peel
+	// filters that reference only INCLUDE columns (or the PK, routed to
+	// host_ids via the __mo_pk_host_id virtual column) into a JSON array
+	// passed as the ivfpq_search 3rd arg. Unserializable/mixed predicates
+	// stay on the TABLE_SCAN.
 	includeCols, err := parseIncludedColumnsFromParams(ivfpqCtx.idxDef.IndexAlgoParams)
 	if err != nil {
 		return nodeID, err
+	}
+	pkColName := ""
+	if scanNode.TableDef.Pkey != nil {
+		pkColName = scanNode.TableDef.Pkey.PkeyColName
 	}
 	if len(includeCols) > 0 {
 		logutil.Debugf("IVFPQ pushdown: INCLUDE columns = %v, scan filters = %d",
 			includeCols, len(scanNode.FilterList))
 	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
-		scanNode.FilterList, scanNode, includeCols)
+		scanNode.FilterList, scanNode, includeCols, pkColName)
 	if err != nil {
 		return nodeID, err
 	}
