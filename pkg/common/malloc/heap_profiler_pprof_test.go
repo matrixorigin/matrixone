@@ -36,6 +36,7 @@ func TestHeapProfilerWriteParsesAsPprof(t *testing.T) {
 
 	p, err := profile.Parse(&buf)
 	require.NoError(t, err)
+	require.NoError(t, p.CheckValid())
 
 	require.NotNil(t, p.PeriodType)
 	require.Equal(t, "space", p.PeriodType.Type)
@@ -52,6 +53,10 @@ func TestHeapProfilerWriteParsesAsPprof(t *testing.T) {
 
 	require.Len(t, p.Mapping, 1)
 	require.True(t, p.Mapping[0].HasFunctions)
+	for _, loc := range p.Location {
+		require.NotNil(t, loc.Mapping)
+		require.Equal(t, p.Mapping[0].ID, loc.Mapping.ID)
+	}
 
 	for _, s := range p.Sample {
 		require.Len(t, s.Value, len(p.SampleType), "sample value length must match SampleType count")
