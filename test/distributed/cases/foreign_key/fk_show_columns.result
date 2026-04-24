@@ -192,7 +192,7 @@ column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -512,7 +512,7 @@ column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
@@ -823,7 +823,7 @@ column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -1121,7 +1121,7 @@ column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
