@@ -21,6 +21,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/pprof/profile"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -283,9 +284,16 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 	prof := &profile.Profile{
 		SampleType:        ptr.SampleTypes(),
 		DefaultSampleType: ptr.DefaultSampleType(),
+		PeriodType: &profile.ValueType{
+			Type: "space",
+			Unit: "bytes",
+		},
+		Period:    512 * 1024,
+		TimeNanos: time.Now().UnixNano(),
 		Mapping: []*profile.Mapping{{
-			ID:   1,
-			File: p.name,
+			ID:           1,
+			File:         p.name,
+			HasFunctions: true,
 		}},
 	}
 
