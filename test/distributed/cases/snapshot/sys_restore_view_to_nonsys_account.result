@@ -18,7 +18,7 @@ drop view if exists v01;
 create view v01 as select * from table01;
 show create view v01;
 View    Create View    character_set_client    collation_connection
-v01    create SQL SECURITY DEFINER view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
+v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database
@@ -31,7 +31,7 @@ drop view if exists v02;
 create view v02 as select col1, col2 from table01;
 show create view v02;
 View    Create View    character_set_client    collation_connection
-v02    create SQL SECURITY DEFINER view v02 as select col1, col2 from table01;    utf8mb4    utf8mb4_general_ci
+v02    create view v02 as select col1, col2 from table01;    utf8mb4    utf8mb4_general_ci
 select * from v02;
 col1    col2
 1    null
@@ -74,7 +74,7 @@ restore account acc01 from snapshot sp100;
 use test;
 show create view v01;
 View    Create View    character_set_client    collation_connection
-v01    create SQL SECURITY DEFINER view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
+v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database
@@ -85,7 +85,7 @@ col1    col2    col3
 2    -1    null
 show create view v02;
 View    Create View    character_set_client    collation_connection
-v02    create SQL SECURITY DEFINER view v02 as select col1, col2 from table01;    utf8mb4    utf8mb4_general_ci
+v02    create view v02 as select col1, col2 from table01;    utf8mb4    utf8mb4_general_ci
 select * from v02;
 col1    col2
 1    null
@@ -134,7 +134,7 @@ drop view if exists v04;
 create view v04 as select avg(sal) from aff01 group by mgr;
 show create view v04;
 View    Create View    character_set_client    collation_connection
-v04    create SQL SECURITY DEFINER view v04 as select avg(sal) from aff01 group by mgr;    utf8mb4    utf8mb4_general_ci
+v04    create view v04 as select avg(sal) from aff01 group by mgr;    utf8mb4    utf8mb4_general_ci
 select * from v04;
 avg(sal)
 800.00000000
@@ -553,7 +553,7 @@ Bob    Physics    Dr. Johnson    2024-01-15
 Charlie    Mathematics    Mr. Smith    2024-02-01
 show create view StudentCoursesView;
 View    Create View    character_set_client    collation_connection
-studentcoursesview    create SQL SECURITY DEFINER view StudentCoursesView as\nselect\ns.Name as StudentName,\nc.Title as CourseTitle,\nc.Teacher,\ne.EnrollmentDate\nfrom\nStudents s\njoin\nEnrollments e on s.StudentID = e.StudentID\njoin\nCourses c on e.CourseID = c.CourseID\norder by\ns.Name, c.Title;    utf8mb4    utf8mb4_general_ci
+studentcoursesview    create view StudentCoursesView as\nselect\ns.Name as StudentName,\nc.Title as CourseTitle,\nc.Teacher,\ne.EnrollmentDate\nfrom\nStudents s\njoin\nEnrollments e on s.StudentID = e.StudentID\njoin\nCourses c on e.CourseID = c.CourseID\norder by\ns.Name, c.Title;    utf8mb4    utf8mb4_general_ci
 drop view StudentCoursesView;
 drop table Enrollments;
 drop table students;

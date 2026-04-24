@@ -127,7 +127,7 @@ id    body    title
 10    null    null
 show create table v01;
 View    Create View    character_set_client    collation_connection
-v01    create SQL SECURITY DEFINER view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
+v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;

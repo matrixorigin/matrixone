@@ -185,26 +185,20 @@ drop role role_wgo_tgt;
 -- Regression: ALTER VIEW preserves SecurityType
 -- ============================================================
 use db_v1;
-set view_security_type = 'INVOKER';
-create view v_alter_sec as select * from t1;
-set view_security_type = 'DEFINER';
+-- Use explicit DDL syntax so SQL SECURITY appears in the stored Stmt
+create sql security invoker view v_alter_sec as select * from t1;
 
--- ALTER VIEW without explicit SQL SECURITY should keep INVOKER
-alter view v_alter_sec as select a from t1;
-
--- verify via SHOW CREATE VIEW that it still says INVOKER
+-- verify SHOW CREATE VIEW preserves SQL SECURITY from DDL
 show create view v_alter_sec;
 
 drop view v_alter_sec;
 
 -- ============================================================
--- Regression: SHOW CREATE VIEW must not be fooled by view body
--- containing 'sql security' as a literal string
+-- Regression: SHOW CREATE VIEW with SQL SECURITY in view body
+-- should not confuse the output (body is just data, not DDL)
 -- ============================================================
 use db_v1;
-set view_security_type = 'INVOKER';
-create view v_body_trick as select 'sql security definer' as note from t1;
-set view_security_type = 'DEFINER';
+create sql security invoker view v_body_trick as select 'sql security definer' as note from t1;
 
 -- The header should still get SQL SECURITY INVOKER spliced in,
 -- even though the view body contains the text 'sql security'

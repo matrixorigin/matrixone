@@ -38,14 +38,14 @@ invalid input: show view 'vvvv' is not a valid view
 create view v1 as select "a";
 show create view v1;
 View    Create View    character_set_client    collation_connection
-v1    create SQL SECURITY DEFINER view v1 as select "a";    utf8mb4    utf8mb4_general_ci
+v1    create view v1 as select "a";    utf8mb4    utf8mb4_general_ci
 create view v2 as select 'a';
 show create view v2;
 View    Create View    character_set_client    collation_connection
-v2    create SQL SECURITY DEFINER view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
+v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
 show create table v2;
 View    Create View    character_set_client    collation_connection
-v2    create SQL SECURITY DEFINER view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
+v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
 drop view v1;
 drop view v2;
 create table tt(a int);
@@ -150,5 +150,5 @@ drop view if exists v01;
 /* cloud_user */create view v01 as select * from table01;
 show create view v01;
 View    Create View    character_set_client    collation_connection
-v01    create SQL SECURITY DEFINER view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
+v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
 drop database if exists test;

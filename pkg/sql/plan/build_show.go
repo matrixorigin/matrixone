@@ -193,50 +193,12 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	// FixMe  We need a better escape function
 	stmtStr := viewData.Stmt
-	// If the DDL header (before VIEW keyword) doesn't contain SQL SECURITY clause, splice it in.
-	// Only check the header to avoid false positives from view body content.
-	// Find the VIEW keyword bounded by whitespace to avoid matching substrings like "viewer".
-	if viewData.SecurityType != "" {
-		upper := strings.ToUpper(stmtStr)
-		viewIdx := findViewKeyword(upper)
-		needSplice := true
-		if viewIdx >= 0 {
-			header := upper[:viewIdx]
-			if strings.Contains(header, "SQL SECURITY") {
-				needSplice = false
-			}
-		}
-		if needSplice && viewIdx > 0 {
-			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + viewData.SecurityType + " " + stmtStr[viewIdx:]
-		}
-	}
 	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
-}
-
-// findViewKeyword finds the position of the VIEW keyword in an uppercased SQL string.
-// It requires VIEW to be bounded by whitespace (space, tab, newline) or string boundaries.
-// Returns -1 if not found.
-func findViewKeyword(upper string) int {
-	for i := 0; i+4 <= len(upper); i++ {
-		if upper[i:i+4] != "VIEW" {
-			continue
-		}
-		// check left boundary: start of string or whitespace
-		if i > 0 && upper[i-1] != ' ' && upper[i-1] != '\t' && upper[i-1] != '\n' && upper[i-1] != '\r' {
-			continue
-		}
-		// check right boundary: end of string or whitespace
-		if i+4 < len(upper) && upper[i+4] != ' ' && upper[i+4] != '\t' && upper[i+4] != '\n' && upper[i+4] != '\r' {
-			continue
-		}
-		return i
-	}
-	return -1
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {

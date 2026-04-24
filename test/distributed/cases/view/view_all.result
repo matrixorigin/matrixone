@@ -103,7 +103,7 @@ table t1 already exists
 create table if not exists t1 (a int,b int);
 show create table t1;
 View    Create View    character_set_client    collation_connection
-t1    create SQL SECURITY DEFINER view t1 as select a from t2;    utf8mb4    utf8mb4_general_ci
+t1    create view t1 as select a from t2;    utf8mb4    utf8mb4_general_ci
 select * from t1;
 a
 drop table t2;
