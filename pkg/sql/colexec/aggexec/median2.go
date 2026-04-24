@@ -15,7 +15,9 @@
 package aggexec
 
 import (
-	"slices"
+	"bytes"
+	"cmp"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,170 +39,547 @@ func MedianReturnType(args []types.Type) types.Type {
 	return types.T_float64.ToType()
 }
 
-type medianExec struct {
-	aggExec
+type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType] struct {
+	singleAggInfo
+	distinctHash distinctHash
+	ret          aggResultWithFixedType[R]
+	groups       []*Vectors[T]
+	argType      types.Type
+	mp           *mpool.MPool
 }
 
-func newMedianExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
-	switch param.Oid {
-	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
-	default:
-		return nil, moerr.NewInternalErrorNoCtx("unsupported type for median()")
+func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType](mp *mpool.MPool, info singleAggInfo, initial R) medianColumnExecSelf[T, R] {
+	self := medianColumnExecSelf[T, R]{
+		singleAggInfo: info,
+		distinctHash:  newDistinctHash(mp),
+		ret:           initAggResultWithFixedTypeResult[R](mp, info.retType, info.emptyNull, initial, false),
+		argType:       info.argType,
+		mp:            mp,
+	}
+	return self
+}
+
+func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
+	return &exec.ret.optSplitResult
+}
+
+func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
 	}
 
-	var exec medianExec
-	exec.mp = mp
-	exec.aggInfo = aggInfo{
-		aggId:      aggID,
-		isDistinct: isDistinct,
-		argTypes:   []types.Type{param},
-		retType:    MedianReturnType([]types.Type{param}),
-		emptyNull:  true,
-		saveArg:    true,
+	oldLength := len(exec.groups)
+	if cap(exec.groups) >= oldLength+more {
+		exec.groups = exec.groups[:oldLength+more]
+	} else {
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 	}
-	return &exec, nil
+	for i := oldLength; i < len(exec.groups); i++ {
+		exec.groups[i] = NewVectors[T](exec.argType)
+	}
+	return exec.ret.grows(more)
 }
 
-func (exec *medianExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
+	if len(exec.groups) == 0 {
+		exec.groups = make([]*Vectors[T], 0, more)
+	} else {
+		oldLength := len(exec.groups)
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
+		exec.groups = exec.groups[:oldLength]
+	}
+	return exec.ret.preExtend(more)
 }
 
-func (exec *medianExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(cnt, flags, buf, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *medianExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	return exec.batchFillArgs(offset, groups, vectors, exec.IsDistinct())
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(chunk, buf, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *medianExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
-}
+func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	if err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult); err != nil {
+		return err
+	}
+	exec.ret.setupT()
+	expectedGroups := 0
+	for _, vec := range exec.ret.resultList {
+		expectedGroups += vec.Length()
+	}
 
-func (exec *medianExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*medianExec)
-	return exec.batchMergeArgs(&other.aggExec, offset, groups, exec.IsDistinct())
-}
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp < 0 || ngrp != int64(expectedGroups) {
+		return moerr.NewInternalErrorNoCtxf("median unmarshal: invalid group count %d, expected %d", ngrp, expectedGroups)
+	}
+	if ngrp != 0 {
+		exec.groups = make([]*Vectors[T], ngrp)
+		for i := range exec.groups {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return err
+			}
+			grp := NewVectors[T](exec.argType)
+			for _, vec := range grp.vecs {
+				vec.Free(mp)
+			}
+			grp.vecs = nil
+			if err = grp.Unmarshal(bs, exec.argType, mp); err != nil {
+				return err
+			}
+			exec.groups[i] = grp
+		}
+	}
+	if exec.IsDistinct() {
+		if err = exec.rebuildDistinctHash(); err != nil {
+			return err
+		}
+	}
 
-func (exec *medianExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	extraCnt, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	for i := int64(0); i < extraCnt; i++ {
+		if _, _, err = types.ReadSizeBytes(reader); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (exec *medianExec) Flush() (_ []*vector.Vector, retErr error) {
-	vecs := make([]*vector.Vector, len(exec.state))
-	defer func() {
-		if retErr != nil {
-			for _, v := range vecs {
-				if v != nil {
-					v.Free(exec.mp)
+func (exec *medianColumnExecSelf[T, R]) rebuildDistinctHash() error {
+	if len(exec.groups) == 0 {
+		return nil
+	}
+	if err := exec.distinctHash.grows(len(exec.groups)); err != nil {
+		return err
+	}
+	for groupIdx, group := range exec.groups {
+		for _, vec := range group.vecs {
+			vals := vector.MustFixedColWithTypeCheck[T](vec)
+			for row := range vals {
+				if _, err := exec.distinctHash.fill(groupIdx, []*vector.Vector{vec}, row); err != nil {
+					return err
 				}
 			}
 		}
-	}()
-	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
-		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
-			return nil, err
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	if vectors[0].IsNull(uint64(row)) {
+		return nil
+	}
+	if vectors[0].IsConst() {
+		row = 0
+	}
+	if exec.IsDistinct() {
+		need, err := exec.distinctHash.fill(groupIndex, vectors, row)
+		if err != nil || !need {
+			return err
 		}
-		for j := 0; j < int(st.length); j++ {
-			if st.argCnt[j] == 0 {
-				vector.AppendNull(vecs[i], exec.mp)
+	}
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+	markMedianGroupNotEmpty(&exec.ret, x, y)
+	value := vector.MustFixedColWithTypeCheck[T](vectors[0])[row]
+	return appendMedianValue(exec.groups[groupIndex], value, exec.mp)
+}
+
+func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if vectors[0].IsConstNull() {
+		return nil
+	}
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors)
+	}
+
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+	if vectors[0].IsConst() {
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
+		return AppendMultiFixed(exec.groups[groupIndex], value, false, vectors[0].Length(), exec.mp)
+	}
+
+	vals := vector.MustFixedColWithTypeCheck[T](vectors[0])
+	mustNotEmpty := false
+	for i := range vals {
+		if vectors[0].IsNull(uint64(i)) {
+			continue
+		}
+		mustNotEmpty = true
+		if err := appendMedianValue(exec.groups[groupIndex], vals[i], exec.mp); err != nil {
+			return err
+		}
+	}
+	if mustNotEmpty {
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors []*vector.Vector) error {
+	x, y := exec.ret.updateNextAccessIdx(groupIndex)
+	if vectors[0].IsConst() {
+		need, err := exec.distinctHash.fill(groupIndex, vectors, 0)
+		if err != nil || !need {
+			return err
+		}
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
+		return appendMedianValue(exec.groups[groupIndex], value, exec.mp)
+	}
+
+	vals := vector.MustFixedColWithTypeCheck[T](vectors[0])
+	mustNotEmpty := false
+	for i := range vals {
+		if vectors[0].IsNull(uint64(i)) {
+			continue
+		}
+		need, err := exec.distinctHash.fill(groupIndex, vectors, i)
+		if err != nil {
+			return err
+		}
+		if !need {
+			continue
+		}
+		mustNotEmpty = true
+		if err = appendMedianValue(exec.groups[groupIndex], vals[i], exec.mp); err != nil {
+			return err
+		}
+	}
+	if mustNotEmpty {
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if vectors[0].IsConstNull() {
+		return nil
+	}
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
+	}
+
+	if vectors[0].IsConst() {
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
+		for _, group := range groups {
+			if group == GroupNotMatched {
 				continue
 			}
-			switch exec.argTypes[0].Oid {
-			case types.T_bit, types.T_uint64:
-				v, err := medianNumericFromState[uint64](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_int8:
-				v, err := medianNumericFromState[int8](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_int16:
-				v, err := medianNumericFromState[int16](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_int32:
-				v, err := medianNumericFromState[int32](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_int64:
-				v, err := medianNumericFromState[int64](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_uint8:
-				v, err := medianNumericFromState[uint8](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_uint16:
-				v, err := medianNumericFromState[uint16](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_uint32:
-				v, err := medianNumericFromState[uint32](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_float32:
-				v, err := medianNumericFromState[float32](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_float64:
-				v, err := medianNumericFromState[float64](st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_decimal64:
-				v, err := medianDecimal64FromState(st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			case types.T_decimal128:
-				v, err := medianDecimal128FromState(st, uint16(j), &exec.aggInfo)
-				if err != nil {
-					return nil, err
-				}
-				vector.AppendFixed(vecs[i], v, false, exec.mp)
-			default:
-				return nil, moerr.NewInternalErrorNoCtx("unsupported type for median()")
+			groupIndex := int(group - 1)
+			x, y := exec.ret.updateNextAccessIdx(groupIndex)
+			markMedianGroupNotEmpty(&exec.ret, x, y)
+			if err := appendMedianValue(exec.groups[groupIndex], value, exec.mp); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	vals := vector.MustFixedColWithTypeCheck[T](vectors[0])
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		row := offset + i
+		if vectors[0].IsNull(uint64(row)) {
+			continue
+		}
+		groupIndex := int(group - 1)
+		x, y := exec.ret.updateNextAccessIdx(groupIndex)
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+		if err := appendMedianValue(exec.groups[groupIndex], vals[row], exec.mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if vectors[0].IsConst() {
+		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
+		for _, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			need, err := exec.distinctHash.fill(int(group-1), vectors, 0)
+			if err != nil {
+				return err
+			}
+			if !need {
+				continue
+			}
+			groupIndex := int(group - 1)
+			x, y := exec.ret.updateNextAccessIdx(groupIndex)
+			markMedianGroupNotEmpty(&exec.ret, x, y)
+			if err = appendMedianValue(exec.groups[groupIndex], value, exec.mp); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	vals := vector.MustFixedColWithTypeCheck[T](vectors[0])
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		row := offset + i
+		if vectors[0].IsNull(uint64(row)) {
+			continue
+		}
+		need, err := exec.distinctHash.fill(int(group-1), vectors, row)
+		if err != nil {
+			return err
+		}
+		if !need {
+			continue
+		}
+		groupIndex := int(group - 1)
+		x, y := exec.ret.updateNextAccessIdx(groupIndex)
+		markMedianGroupNotEmpty(&exec.ret, x, y)
+		if err = appendMedianValue(exec.groups[groupIndex], vals[row], exec.mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) mergeDistinctGroup(other *medianColumnExecSelf[T, R], groupIdx1, groupIdx2 int) error {
+	for _, vec := range other.groups[groupIdx2].vecs {
+		vals := vector.MustFixedColWithTypeCheck[T](vec)
+		for row := range vals {
+			need, err := exec.distinctHash.fill(groupIdx1, []*vector.Vector{vec}, row)
+			if err != nil {
+				return err
+			}
+			if !need {
+				continue
+			}
+			x, y := exec.ret.updateNextAccessIdx(groupIdx1)
+			markMedianGroupNotEmpty(&exec.ret, x, y)
+			if err = appendMedianValue(exec.groups[groupIdx1], vals[row], exec.mp); err != nil {
+				return err
 			}
 		}
 	}
-	return vecs, nil
+	return nil
 }
 
-func (exec *medianExec) Size() int64 {
-	var size int64
-	for _, st := range exec.state {
-		size += int64(len(st.argbuf))
-		size += int64(cap(st.argCnt)) * 4
+func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R], groupIdx1, groupIdx2 int) error {
+	if exec.IsDistinct() {
+		return exec.mergeDistinctGroup(other, groupIdx1, groupIdx2)
 	}
-	return size
+	if other.groups[groupIdx2].Length() == 0 {
+		return nil
+	}
+	x, y := exec.ret.updateNextAccessIdx(groupIdx1)
+	markMedianGroupNotEmpty(&exec.ret, x, y)
+	return exec.groups[groupIdx1].Union(other.groups[groupIdx2], exec.mp)
 }
 
-func (exec *medianExec) Free() {
-	exec.aggExec.Free()
+func (exec *medianColumnExecSelf[T, R]) BatchMerge(next *medianColumnExecSelf[T, R], offset int, groups []uint64) error {
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		if err := exec.Merge(next, int(group)-1, i+offset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) SetExtraInformation(partialResult any, groupIndex int) error {
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) Free() {
+	for _, group := range exec.groups {
+		if group != nil {
+			group.Free(exec.mp)
+		}
+	}
+	exec.groups = nil
+	exec.ret.free()
+	exec.distinctHash.free()
+}
+
+func (exec *medianColumnExecSelf[T, R]) Size() int64 {
+	var size int64
+	for _, group := range exec.groups {
+		if group != nil {
+			size += group.Size()
+		}
+	}
+	size += int64(cap(exec.groups)) * 8
+	return exec.ret.Size() + exec.distinctHash.Size() + size
+}
+
+type medianColumnNumericExec[T numeric] struct {
+	medianColumnExecSelf[T, float64]
+}
+
+func newMedianColumnNumericExec[T numeric](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &medianColumnNumericExec[T]{
+		medianColumnExecSelf: newMedianColumnExecSelf[T, float64](mp, info, 0),
+	}
+}
+
+type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
+	medianColumnExecSelf[T, types.Decimal128]
+}
+
+func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &medianColumnDecimalExec[T]{
+		medianColumnExecSelf: newMedianColumnExecSelf[T, types.Decimal128](mp, info, types.Decimal128{}),
+	}
+}
+
+func newMedianExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argType:   param,
+		retType:   MedianReturnType([]types.Type{param}),
+		emptyNull: true,
+	}
+
+	switch param.Oid {
+	case types.T_bit:
+		return newMedianColumnNumericExec[uint64](mp, info), nil
+	case types.T_int8:
+		return newMedianColumnNumericExec[int8](mp, info), nil
+	case types.T_int16:
+		return newMedianColumnNumericExec[int16](mp, info), nil
+	case types.T_int32:
+		return newMedianColumnNumericExec[int32](mp, info), nil
+	case types.T_int64:
+		return newMedianColumnNumericExec[int64](mp, info), nil
+	case types.T_uint8:
+		return newMedianColumnNumericExec[uint8](mp, info), nil
+	case types.T_uint16:
+		return newMedianColumnNumericExec[uint16](mp, info), nil
+	case types.T_uint32:
+		return newMedianColumnNumericExec[uint32](mp, info), nil
+	case types.T_uint64:
+		return newMedianColumnNumericExec[uint64](mp, info), nil
+	case types.T_float32:
+		return newMedianColumnNumericExec[float32](mp, info), nil
+	case types.T_float64:
+		return newMedianColumnNumericExec[float64](mp, info), nil
+	case types.T_decimal64:
+		return newMedianColumnDecimalExec[types.Decimal64](mp, info), nil
+	case types.T_decimal128:
+		return newMedianColumnDecimalExec[types.Decimal128](mp, info), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("unsupported type for median()")
+	}
+}
+
+func (exec *medianColumnNumericExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*medianColumnNumericExec[T])
+	return exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2)
+}
+
+func (exec *medianColumnNumericExec[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*medianColumnNumericExec[T])
+	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
+}
+
+func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
+	vs := exec.ret.values
+	groups := len(exec.groups)
+	lim := exec.ret.getChunkSize()
+	for i, x := 0, 0; i < groups; i += lim {
+		n := groups - i
+		if n > lim {
+			n = lim
+		}
+		s := i
+		for j := 0; j < n; j++ {
+			rows := exec.groups[s].Length()
+			if rows == 0 {
+				s++
+				continue
+			}
+			markMedianGroupNotEmpty(&exec.ret, x, j)
+			v, err := MedianNumeric(exec.groups[s])
+			if err != nil {
+				return nil, err
+			}
+			vs[x][j] = v
+			s++
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
+func (exec *medianColumnDecimalExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*medianColumnDecimalExec[T])
+	return exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2)
+}
+
+func (exec *medianColumnDecimalExec[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*medianColumnDecimalExec[T])
+	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
+}
+
+func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
+	vs := exec.ret.values
+	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
+	groups := len(exec.groups)
+	lim := exec.ret.getChunkSize()
+	for i, x := 0, 0; i < groups; i += lim {
+		n := groups - i
+		if n > lim {
+			n = lim
+		}
+		s := i
+		for j := 0; j < n; j++ {
+			rows := exec.groups[s].Length()
+			if rows == 0 {
+				s++
+				continue
+			}
+			markMedianGroupNotEmpty(&exec.ret, x, j)
+			var (
+				v   types.Decimal128
+				err error
+			)
+			if argIsDecimal128 {
+				v, err = MedianDecimal128(any(exec.groups[s]).(*Vectors[types.Decimal128]))
+			} else {
+				v, err = MedianDecimal64(any(exec.groups[s]).(*Vectors[types.Decimal64]))
+			}
+			if err != nil {
+				return nil, err
+			}
+			vs[x][j] = v
+			s++
+		}
+	}
+	return exec.ret.flushAll(), nil
+}
+
+func appendMedianValue[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], value T, mp *mpool.MPool) error {
+	vec := vecs.getAppendableVector()
+	return vector.AppendFixed(vec, value, false, mp)
+}
+
+func markMedianGroupNotEmpty[T types.FixedSizeTExceptStrType](ret *aggResultWithFixedType[T], x, y int) {
+	if len(ret.bsFromEmptyList) > x && ret.bsFromEmptyList[x] != nil {
+		ret.bsFromEmptyList[x][y] = false
+	}
 }
 
 func medianNumericFromState[T numeric](st aggState, idx uint16, info *aggInfo) (float64, error) {
@@ -211,18 +590,7 @@ func medianNumericFromState[T numeric](st aggState, idx uint16, info *aggInfo) (
 	}); err != nil {
 		return 0, err
 	}
-	lessFnFactory := func(nums []T) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i] < nums[j]
-		}
-	}
-	rows := len(vals)
-	if rows&1 == 1 {
-		return float64(quickSelect(vals, lessFnFactory, rows>>1)), nil
-	}
-	v1 := quickSelect(vals, lessFnFactory, rows>>1-1)
-	v2 := quickSelect(vals, lessFnFactory, rows>>1)
-	return float64(v1+v2) / 2, nil
+	return medianNumericVals(vals), nil
 }
 
 func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
@@ -233,18 +601,66 @@ func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Dec
 	}); err != nil {
 		return types.Decimal128{}, err
 	}
-	lessFnFactory := func(nums []types.Decimal64) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i].Compare(nums[j]) < 0
-		}
+	return medianDecimal64Vals(vals)
+}
+
+func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
+	vals := make([]types.Decimal128, 0, st.argCnt[idx])
+	if err := st.iter(idx, func(k []byte) error {
+		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKey(info, k)))
+		return nil
+	}); err != nil {
+		return types.Decimal128{}, err
 	}
+	return medianDecimal128Vals(vals)
+}
+
+func MedianNumeric[T numeric](vs *Vectors[T]) (float64, error) {
+	vals := collectMedianValues(vs)
+	return medianNumericVals(vals), nil
+}
+
+func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {
+	vals := collectMedianValues(vs)
+	return medianDecimal64Vals(vals)
+}
+
+func MedianDecimal128(vs *Vectors[types.Decimal128]) (types.Decimal128, error) {
+	vals := collectMedianValues(vs)
+	return medianDecimal128Vals(vals)
+}
+
+func collectMedianValues[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) []T {
+	vals := make([]T, 0, vs.Length())
+	for _, vec := range vs.vecs {
+		vals = append(vals, vector.MustFixedColWithTypeCheck[T](vec)...)
+	}
+	return vals
+}
+
+func medianNumericVals[T numeric](vals []T) float64 {
 	rows := len(vals)
 	if rows&1 == 1 {
-		return FromD64ToD128(quickSelect(vals, lessFnFactory, rows>>1)).Scale(1)
+		return float64(selectKthNumeric(vals, rows>>1))
 	}
+	v1 := selectKthNumeric(vals, rows>>1-1)
+	v2 := selectKthNumeric(vals, rows>>1)
+	return (float64(v1) + float64(v2)) / 2
+}
 
-	v1 := FromD64ToD128(quickSelect(vals, lessFnFactory, rows>>1-1))
-	v2 := FromD64ToD128(quickSelect(vals, lessFnFactory, rows>>1))
+func medianDecimal64Vals(vals []types.Decimal64) (types.Decimal128, error) {
+	rows := len(vals)
+	if rows&1 == 1 {
+		return FromD64ToD128(selectKthFunc(vals, rows>>1, func(a, b types.Decimal64) int {
+			return a.Compare(b)
+		})).Scale(1)
+	}
+	v1 := FromD64ToD128(selectKthFunc(vals, rows>>1-1, func(a, b types.Decimal64) int {
+		return a.Compare(b)
+	}))
+	v2 := FromD64ToD128(selectKthFunc(vals, rows>>1, func(a, b types.Decimal64) int {
+		return a.Compare(b)
+	}))
 	ret, err := v1.Add128(v2)
 	if err != nil {
 		return types.Decimal128{}, err
@@ -261,26 +677,20 @@ func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Dec
 	return ret.Right(1), nil
 }
 
-func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
-	vals := make([]types.Decimal128, 0, st.argCnt[idx])
-	if err := st.iter(idx, func(k []byte) error {
-		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKey(info, k)))
-		return nil
-	}); err != nil {
-		return types.Decimal128{}, err
-	}
-	lessFnFactory := func(nums []types.Decimal128) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i].Compare(nums[j]) < 0
-		}
-	}
+func medianDecimal128Vals(vals []types.Decimal128) (types.Decimal128, error) {
 	rows := len(vals)
 	if rows&1 == 1 {
-		ret := quickSelect(vals, lessFnFactory, rows>>1)
+		ret := selectKthFunc(vals, rows>>1, func(a, b types.Decimal128) int {
+			return a.Compare(b)
+		})
 		return ret.Scale(1)
 	}
-	v1 := quickSelect(vals, lessFnFactory, rows>>1-1)
-	v2 := quickSelect(vals, lessFnFactory, rows>>1)
+	v1 := selectKthFunc(vals, rows>>1-1, func(a, b types.Decimal128) int {
+		return a.Compare(b)
+	})
+	v2 := selectKthFunc(vals, rows>>1, func(a, b types.Decimal128) int {
+		return a.Compare(b)
+	})
 	ret, err := v1.Add128(v2)
 	if err != nil {
 		return types.Decimal128{}, err
@@ -295,4 +705,55 @@ func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.De
 		return types.Decimal128{}, err
 	}
 	return ret.Right(1), nil
+}
+
+func selectKthNumeric[T cmp.Ordered](vals []T, k int) T {
+	return selectKthFunc(vals, k, func(a, b T) int {
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	})
+}
+
+func selectKthFunc[T any](vals []T, k int, compare func(a, b T) int) T {
+	left, right := 0, len(vals)-1
+	for {
+		if left == right {
+			return vals[left]
+		}
+
+		lt, gt := partitionAroundPivot(vals, left, right, (left+right)>>1, compare)
+		switch {
+		case k < lt:
+			right = lt - 1
+		case k > gt:
+			left = gt + 1
+		default:
+			return vals[k]
+		}
+	}
+}
+
+func partitionAroundPivot[T any](vals []T, left, right, pivot int, compare func(a, b T) int) (int, int) {
+	pivotValue := vals[pivot]
+	vals[pivot], vals[right] = vals[right], vals[pivot]
+	lt, i, gt := left, left, right
+	for i <= gt {
+		switch cmp := compare(vals[i], pivotValue); {
+		case cmp < 0:
+			vals[lt], vals[i] = vals[i], vals[lt]
+			lt++
+			i++
+		case cmp > 0:
+			vals[i], vals[gt] = vals[gt], vals[i]
+			gt--
+		default:
+			i++
+		}
+	}
+	return lt, gt
 }
