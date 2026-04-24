@@ -17,6 +17,7 @@ package v4_0_0
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -33,6 +34,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+func findUpgradeEntryIndex(entries []versions.UpgradeEntry, target versions.UpgradeEntry) int {
+	for i, entry := range entries {
+		if entry.Schema == target.Schema &&
+			entry.TableName == target.TableName &&
+			entry.UpgType == target.UpgType &&
+			entry.UpgSql == target.UpgSql {
+			return i
+		}
+	}
+	return -1
+}
+
 func mockTenantUpgrade(t *testing.T) {
 	drop_mo_retention := versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
@@ -48,6 +61,10 @@ func mockTenantUpgrade(t *testing.T) {
 }
 
 func Test_Upgrade(t *testing.T) {
+	originalTenantUpgEntries := append([]versions.UpgradeEntry(nil), tenantUpgEntries...)
+	defer func() {
+		tenantUpgEntries = originalTenantUpgEntries
+	}()
 	mockTenantUpgrade(t)
 
 	sid := ""
@@ -84,6 +101,10 @@ func Test_Upgrade(t *testing.T) {
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
+	originalClusterUpgEntries := append([]versions.UpgradeEntry(nil), clusterUpgEntries...)
+	defer func() {
+		clusterUpgEntries = originalClusterUpgEntries
+	}()
 	clusterUpgEntries = []versions.UpgradeEntry{}
 
 	v := &versionHandle{
@@ -168,4 +189,47 @@ func Test_upg_statistics_view_check_mismatch(t *testing.T) {
 	ok, err := upg_information_schema_statistics.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func Test_upg_mo_indexes_add_included_columns_check(t *testing.T) {
+	stubs := gostub.Stub(&checkMoIndexesIncludedColumns, func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+		return versions.ColumnInfo{IsExits: true}, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_mo_indexes_add_included_columns_for_cluster.CheckFunc(nil, catalog.System_Account)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = upg_mo_indexes_add_included_columns_for_tenant.CheckFunc(nil, 100)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_mo_indexes_add_included_columns_check_error(t *testing.T) {
+	stubs := gostub.Stub(&checkMoIndexesIncludedColumns, func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+		return versions.ColumnInfo{}, moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_mo_indexes_add_included_columns_for_cluster.CheckFunc(nil, catalog.System_Account)
+	assert.Error(t, err)
+	assert.False(t, ok)
+}
+
+func Test_upg_mo_indexes_add_included_columns_ordering(t *testing.T) {
+	clusterEntryIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_indexes_add_included_columns_for_cluster)
+	clusterCreateIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_iscp_log_new)
+	if assert.NotEqual(t, -1, clusterEntryIdx) && assert.NotEqual(t, -1, clusterCreateIdx) {
+		assert.Less(t, clusterEntryIdx, clusterCreateIdx)
+	}
+
+	tenantEntryIdx := findUpgradeEntryIndex(tenantUpgEntries, upg_mo_indexes_add_included_columns_for_tenant)
+	tenantCreateIdx := findUpgradeEntryIndex(tenantUpgEntries, enablePartitionMetadata)
+	if assert.NotEqual(t, -1, tenantEntryIdx) && assert.NotEqual(t, -1, tenantCreateIdx) {
+		assert.Less(t, tenantEntryIdx, tenantCreateIdx)
+	}
+
+	assert.True(t, strings.Contains(upg_mo_indexes_add_included_columns_for_cluster.UpgSql, catalog.IndexIncludedColumns))
+	assert.True(t, strings.Contains(upg_mo_indexes_add_included_columns_for_cluster.UpgSql, "index_table_name"))
 }

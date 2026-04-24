@@ -25,6 +25,7 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_indexes_add_included_columns_for_cluster,
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
 	upg_mo_publication_task,
@@ -44,6 +45,34 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_columns_add_attr_has_generated,
 	upg_mo_columns_add_attr_generated,
 }
+
+var checkMoIndexesIncludedColumns = func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+	return versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexIncludedColumns)
+}
+
+func newMoIndexesAddIncludedColumnsEntry() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_INDEXES,
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql: fmt.Sprintf(
+			"alter table %s.%s add column %s text after %s",
+			catalog.MO_CATALOG,
+			catalog.MO_INDEXES,
+			catalog.IndexIncludedColumns,
+			"index_table_name",
+		),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			info, err := checkMoIndexesIncludedColumns(txn, accountId)
+			if err != nil {
+				return false, err
+			}
+			return info.IsExits, nil
+		},
+	}
+}
+
+var upg_mo_indexes_add_included_columns_for_cluster = newMoIndexesAddIncludedColumnsEntry()
 
 var upg_mo_iscp_log_new = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
