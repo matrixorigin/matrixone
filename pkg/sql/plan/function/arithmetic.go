@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -297,12 +298,12 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return v1 + v2
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return addFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
@@ -1660,4 +1661,20 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 		}
 	}
 	return nil
+}
+
+func addFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	result := v1 + v2
+	if math.IsInf(result, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v + %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func addFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	result := v1 + v2
+	if math.IsInf(float64(result), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v + %v)'", v1, v2)
+	}
+	return result, nil
 }
