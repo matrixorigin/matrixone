@@ -6091,13 +6091,29 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			})
 		} else if p.GetDdl().GetDropTable() != nil {
 			dropTable := p.GetDdl().GetDropTable()
-			appendPt(privilegeTips{
-				typ:                   PrivilegeTypeDropTable,
-				databaseName:          dropTable.GetDatabase(),
-				tableName:             dropTable.GetTable(),
-				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
-				clusterTableOperation: clusterTableDrop,
-			})
+			if len(dropTable.GetTables()) > 0 {
+				for _, entry := range dropTable.GetTables() {
+					isCluster := false
+					if entry.GetClusterTable() != nil {
+						isCluster = entry.GetClusterTable().GetIsClusterTable()
+					}
+					appendPt(privilegeTips{
+						typ:                   PrivilegeTypeDropTable,
+						databaseName:          entry.GetDatabase(),
+						tableName:             entry.GetTable(),
+						isClusterTable:        isCluster,
+						clusterTableOperation: clusterTableDrop,
+					})
+				}
+			} else {
+				appendPt(privilegeTips{
+					typ:                   PrivilegeTypeDropTable,
+					databaseName:          dropTable.GetDatabase(),
+					tableName:             dropTable.GetTable(),
+					isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
+					clusterTableOperation: clusterTableDrop,
+				})
+			}
 		} else if p.GetDdl().GetCreateIndex() != nil {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
@@ -6858,11 +6874,16 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
 		switch st := stmt.(type) {
 		case *tree.DropTable:
-			dbName := string(st.Names[0].SchemaName)
-			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
+			for _, name := range st.Names {
+				dbName := string(name.SchemaName)
+				if len(dbName) == 0 {
+					dbName = ses.GetDatabaseName()
+				}
+				if isClusterTable(dbName, string(name.ObjectName)) {
+					return true, stats, nil
+				}
 			}
-			return isClusterTable(dbName, string(st.Names[0].ObjectName)), stats, nil
+			return false, stats, nil
 		case *tree.AlterTable:
 			dbName := string(st.Table.SchemaName)
 			if len(dbName) == 0 {
@@ -6900,19 +6921,22 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
 		case *tree.DropTable:
-			// get the databasename and tablename
-			if len(st.Names) != 1 {
-				return ok, stats, nil
+			for _, name := range st.Names {
+				dbName := string(name.SchemaName)
+				if len(dbName) == 0 {
+					dbName = ses.GetDatabaseName()
+				}
+				if _, inSet := sysDatabases[dbName]; inSet {
+					return ok, stats, nil
+				}
+				tbName := string(name.ObjectName)
+				owned, delta, err := checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+				stats.Add(&delta)
+				if err != nil || !owned {
+					return owned, stats, err
+				}
 			}
-			dbName := string(st.Names[0].SchemaName)
-			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
-			}
-			if _, inSet := sysDatabases[dbName]; inSet {
-				return ok, stats, nil
-			}
-			tbName := string(st.Names[0].ObjectName)
-			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+			return true, stats, nil
 		case *tree.CloneTable, *tree.CloneDatabase,
 			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
@@ -9379,16 +9403,27 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	case *tree.DropDatabase:
 		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
 	case *tree.DropTable:
-		// get database name
-		var dbName string
-		if len(st.Names[0].SchemaName) == 0 {
-			dbName = ses.GetDatabaseName()
-		} else {
-			dbName = string(st.Names[0].SchemaName)
+		sqls := make([]string, 0, len(st.Names))
+		for _, name := range st.Names {
+			dbName := string(name.SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, string(name.ObjectName), curRole))
 		}
-		// get table name
-		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
+
+		bh := ses.GetShareTxnBackgroundExec(ctx, false)
+		defer bh.Close()
+		for _, sql := range sqls {
+			rp, err := mysql.Parse(tenantCtx, sql, 1)
+			if err != nil {
+				return err
+			}
+			if err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	rp, err := mysql.Parse(tenantCtx, sql, 1)

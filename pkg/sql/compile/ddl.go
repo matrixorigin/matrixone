@@ -2684,9 +2684,28 @@ func (s *Scope) DropTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropTable()
+	if len(qry.GetTables()) > 0 {
+		for _, entry := range qry.GetTables() {
+			sub := plan2.DeepCopyDropTable(entry)
+			if sub == nil {
+				continue
+			}
+			if err := s.dropTableSingle(c, sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return s.dropTableSingle(c, qry)
+}
+
+func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
+	if tblName == "" {
+		return nil
+	}
 	if !isView && qry.TableDef == nil {
 		if qry.IfExists {
 			return nil
