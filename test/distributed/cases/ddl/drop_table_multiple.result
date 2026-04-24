@@ -6,48 +6,48 @@ create table t1(a int);
 create table t2(a int);
 create table t3(a int);
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
-t1  𝄀
-t2  𝄀
+Tables_in_drop_multi
+t1
+t2
 t3
 drop table if exists t1,t2,t3;
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 create table t1(a int);
 create table t2(a int);
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
-t1  𝄀
+Tables_in_drop_multi
+t1
 t2
 drop table if exists drop_multi.t1, t2;
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 create table t1(a int);
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 t1
 drop table if exists t1, t1;
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 create table t1(a int);
 drop table t1, no_such_table;
 no such table drop_multi.no_such_table
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 t1
 drop table t1;
 create table p(id int primary key);
 create table c(id int primary key, pid int, foreign key(pid) references p(id));
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
-c  𝄀
+Tables_in_drop_multi
+c
 p
 drop table if exists p, c;
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 create table p(id int primary key);
 create table c(id int primary key, pid int, foreign key(pid) references p(id));
 drop table if exists c, p;
 show tables;
-➤ Tables_in_drop_multi[12,-1,0]  𝄀
+Tables_in_drop_multi
 drop database drop_multi;
