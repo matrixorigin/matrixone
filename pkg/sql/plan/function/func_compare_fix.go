@@ -567,21 +567,6 @@ func getAsCompareValueSlice(v *vector.Vector) []numericCompareValue {
 	}
 }
 
-func getAsRatSlice(v *vector.Vector) []*big.Rat {
-	values := getAsCompareValueSlice(v)
-	if values == nil {
-		return nil
-	}
-	result := make([]*big.Rat, len(values))
-	for i, value := range values {
-		if value.kind != numericCompareFinite {
-			return nil
-		}
-		result[i] = value.rat
-	}
-	return result
-}
-
 func getAsFloat64Slice(v *vector.Vector) []float64 {
 	t := v.GetType()
 	switch t.Oid {
