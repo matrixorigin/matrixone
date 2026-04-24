@@ -660,16 +660,14 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
 					var err error
-					for i := 1; i < len(leftexpr.Exprs); i++ {
-						if i == 1 {
-							expr1, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
-							if err != nil {
-								return nil, err
-							}
-						}
+					for i := 0; i < len(leftexpr.Exprs); i++ {
 						expr2, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
 						if err != nil {
 							return nil, err
+						}
+						if i == 0 {
+							expr1 = expr2
+							continue
 						}
 						expr1, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
 						if err != nil {

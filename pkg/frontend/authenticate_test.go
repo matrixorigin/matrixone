@@ -3788,6 +3788,58 @@ func Test_singleDropTableFallbacks(t *testing.T) {
 	})
 }
 
+func Test_extractPrivilegeTipsFromPlanDropTableNoopEntries(t *testing.T) {
+	t.Run("single-table no-op drop is skipped", func(t *testing.T) {
+		p := &plan.Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_DROP_TABLE,
+					Definition: &plan.DataDefinition_DropTable{
+						DropTable: &plan.DropTable{
+							Database: "db1",
+							Table:    "",
+						},
+					},
+				},
+			},
+		}
+
+		arr := extractPrivilegeTipsFromPlan(p)
+		require.Len(t, arr, 0)
+	})
+
+	t.Run("multi-table no-op entries are skipped and nil cluster metadata is safe", func(t *testing.T) {
+		p := &plan.Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_DROP_TABLE,
+					Definition: &plan.DataDefinition_DropTable{
+						DropTable: &plan.DropTable{
+							Tables: []*plan.DropTable{
+								{
+									Database: "db1",
+									Table:    "t1",
+								},
+								{
+									Database: "db1",
+									Table:    "",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		arr := extractPrivilegeTipsFromPlan(p)
+		require.Len(t, arr, 1)
+		require.Equal(t, PrivilegeTypeDropTable, arr[0].typ)
+		require.Equal(t, "db1", arr[0].databaseName)
+		require.Equal(t, "t1", arr[0].tableName)
+		require.False(t, arr[0].isClusterTable)
+	})
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement

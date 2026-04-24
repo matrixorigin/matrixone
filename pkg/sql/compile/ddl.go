@@ -2837,7 +2837,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 				logutil.Warn(
 					"cannot find the child table when drop table",
 					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
-					zap.Int("child table id", int(childTblId)),
+					zap.Uint64("child table id", childTblId),
 					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
 					zap.Error(err),
 				)
