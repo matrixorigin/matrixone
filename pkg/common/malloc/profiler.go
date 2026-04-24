@@ -296,6 +296,7 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 			HasFunctions: true,
 		}},
 	}
+	defaultMapping := prof.Mapping[0]
 
 	prof.Sample = append(prof.Sample, &profile.Sample{
 		Location: p.stackOmittedSample.Locations,
@@ -314,7 +315,7 @@ func (p *Profiler[T, P]) Write(w io.Writer) error {
 
 	p.locations.Range(func(k, v any) bool {
 		location := v.(*profile.Location)
-		prof.Location = append(prof.Location, copyLocation(location))
+		prof.Location = append(prof.Location, copyLocation(location, defaultMapping))
 		return true
 	})
 
@@ -332,8 +333,9 @@ func copyFunction(fn *profile.Function) *profile.Function {
 	return &ret
 }
 
-func copyLocation(location *profile.Location) *profile.Location {
+func copyLocation(location *profile.Location, mapping *profile.Mapping) *profile.Location {
 	ret := *location
 	ret.Line = slices.Clone(location.Line)
+	ret.Mapping = mapping
 	return &ret
 }
