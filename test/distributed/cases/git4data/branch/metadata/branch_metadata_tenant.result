@@ -20,11 +20,11 @@ where account_id = @acc_id and reldatabase = 'br_meta_db' and relname = 'branch_
 );
 select table_deleted from mo_catalog.mo_branch_metadata where table_id = @branch_tbl_id;
 table_deleted
-false
+0
 data branch delete table br_meta_db.branch_tbl;
 select table_deleted from mo_catalog.mo_branch_metadata where table_id = @branch_tbl_id;
 table_deleted
-true
+1
 drop snapshot if exists sp_base_tbl;
 drop database if exists br_meta_db;
 drop database if exists src_db;
@@ -48,15 +48,15 @@ select table_deleted from mo_catalog.mo_branch_metadata
 where table_id in (@dst_t1_id, @dst_t2_id)
 order by table_id;
 table_deleted
-false
-false
+0
+0
 data branch delete database dst_db;
 select table_deleted from mo_catalog.mo_branch_metadata
 where table_id in (@dst_t1_id, @dst_t2_id)
 order by table_id;
 table_deleted
-true
-true
+1
+1
 drop database if exists src_db;
 drop database if exists dst_db;
 drop account if exists acc_branch_meta;

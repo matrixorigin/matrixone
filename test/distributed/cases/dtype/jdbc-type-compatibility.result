@@ -2,6 +2,6 @@ create table t1(a BOOL, b bool, c boolean);
 insert into t1 values(true, true, true);
 insert into t1 values(false, false, false);
 select * from t1;
-➤ a[-7,1,0]  ¦  b[-7,1,0]  ¦  c[-7,1,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-0  ¦  0  ¦  0
+a    b    c
+1    1    1
+0    0    0
