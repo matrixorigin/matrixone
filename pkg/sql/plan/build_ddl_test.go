@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -162,6 +163,88 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
+}
+
+func TestBuildShowCreateViewSecurityType(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(context.Background())
+	ctx.dbs["db"] = true
+
+	makePlan := func(stmtSQL, securityType string) *Plan {
+		vData, err := json.Marshal(ViewData{
+			Stmt:            stmtSQL,
+			DefaultDatabase: "db",
+			SecurityType:    securityType,
+		})
+		require.NoError(t, err)
+
+		ctx.tables["v"] = &plan.TableDef{
+			TableType: catalog.SystemViewRel,
+			ViewSql: &plan.ViewDef{
+				View: string(vData),
+			},
+		}
+
+		stmt := tree.NewShowCreateView(tree.NewUnresolvedObjectName("db", "v"))
+		pl, err := buildShowCreateView(stmt, ctx)
+		require.NoError(t, err)
+		return pl
+	}
+
+	pl := makePlan("create view v as select 1", "INVOKER")
+	require.True(t, planStringLiteralsContain(pl, "SQL SECURITY INVOKER"))
+
+	pl = makePlan("create SQL SECURITY DEFINER view v as select 1", "DEFINER")
+	var matched string
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, "SQL SECURITY DEFINER") {
+			matched = lit
+			break
+		}
+	}
+	require.NotEmpty(t, matched)
+	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+}
+
+func planStringLiteralsContain(pl *Plan, want string) bool {
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPlanStringLiterals(pl *Plan) []string {
+	query, ok := pl.Plan.(*plan.Plan_Query)
+	if !ok {
+		return nil
+	}
+	var literals []string
+	for _, node := range query.Query.Nodes {
+		for _, expr := range node.ProjectList {
+			collectExprStringLiterals(expr, &literals)
+		}
+	}
+	return literals
+}
+
+func collectExprStringLiterals(expr *plan.Expr, literals *[]string) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if lit := impl.Lit; lit != nil {
+			if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+				*literals = append(*literals, sval.Sval)
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			collectExprStringLiterals(arg, literals)
+		}
+	}
 }
 
 func TestBuildLockTables(t *testing.T) {

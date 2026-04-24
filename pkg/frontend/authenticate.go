@@ -6938,6 +6938,31 @@ func verifyViewPrivilegeForRole(
 	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
 		return true, nil
 	}
+	for _, objType := range []objectType{objectTypeView, objectTypeTable} {
+		yes, err := verifyViewPrivilegeForRoleWithObjectType(
+			ctx, bh, ses, cache, roleId, privType, dbName, viewName, objType, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func verifyViewPrivilegeForRoleWithObjectType(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	privType PrivilegeType,
+	dbName string,
+	viewName string,
+	objType objectType,
+	enableCache bool,
+) (bool, error) {
 	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	seen := make(map[PrivilegeType]struct{}, len(privTypes))
 	for _, p := range privTypes {
@@ -6946,12 +6971,12 @@ func verifyViewPrivilegeForRole(
 		}
 		seen[p] = struct{}{}
 		entry := privilegeEntriesMap[p]
-		entry.objType = objectTypeView
+		entry.objType = objType
 		entry.databaseName = dbName
 		entry.tableName = viewName
 		entry.privilegeEntryTyp = privilegeEntryTypeGeneral
 		entry.compound = nil
-		pls, err := getPrivilegeLevelsOfObjectType(ctx, objectTypeView)
+		pls, err := getPrivilegeLevelsOfObjectType(ctx, objType)
 		if err != nil {
 			return false, err
 		}
@@ -8168,11 +8193,37 @@ func getRoleSetThatPrivilegeGrantedToWGOScoped(
 		return getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
 	}
 
+	if astObjType == tree.OBJECT_TYPE_VIEW {
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+			ctx, ses, bh, privType, astObjType, objectTypeView, level)
+		if err != nil {
+			return nil, err
+		}
+		legacyRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+			ctx, ses, bh, privType, astObjType, objectTypeTable, level)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, legacyRoleSet)
+		return roleSet, nil
+	}
+
 	objType, err := convertAstObjectTypeToObjectType(ctx, astObjType)
 	if err != nil {
 		return nil, err
 	}
+	return getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(ctx, ses, bh, privType, astObjType, objType, level)
+}
 
+func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	objType objectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
 	// For specific named objects (db.table or table), filter by obj_type + obj_id
 	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
@@ -8185,6 +8236,15 @@ func getRoleSetThatPrivilegeGrantedToWGOScoped(
 
 	// For wildcard levels (*, *.*, db.*), filter by obj_type only
 	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+func mergeRoleSets(dst, src *btree.Set[int64]) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, id := range src.Keys() {
+		dst.Insert(id)
+	}
 }
 
 // getRoleSetThatPrivilegeGrantedToWGOWithObj gets roles with WGO on a specific object.

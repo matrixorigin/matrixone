@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
@@ -526,6 +527,11 @@ func (node *AlterView) Free() { reuse.Free[AlterView](node, nil) }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
+	if node.SecurityType != "" {
+		ctx.WriteString("sql security ")
+		ctx.WriteString(strings.ToLower(node.SecurityType))
+		ctx.WriteByte(' ')
+	}
 
 	ctx.WriteString("view ")
 

@@ -796,10 +796,10 @@ var (
 			input: "alter view v_today (today) as select current_day from t",
 		}, {
 			input:  "ALTER SQL SECURITY INVOKER VIEW v AS SELECT * FROM t",
-			output: "alter view v as select * from t",
+			output: "alter sql security invoker view v as select * from t",
 		}, {
 			input:  "ALTER SQL SECURITY DEFINER VIEW v AS SELECT * FROM t",
-			output: "alter view v as select * from t",
+			output: "alter sql security definer view v as select * from t",
 		}, {
 			input: "explain (analyze true,verbose false) select * from emp",
 		}, {
@@ -3796,14 +3796,15 @@ func TestViewSecurityType(t *testing.T) {
 	cases := []struct {
 		input        string
 		securityType string
+		output       string
 	}{
-		{"CREATE SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER"},
-		{"CREATE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
-		{"CREATE OR REPLACE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
-		{"CREATE VIEW v AS SELECT 1", ""},
-		{"ALTER SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
-		{"ALTER SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER"},
-		{"ALTER VIEW v AS SELECT 1", ""},
+		{"CREATE SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER", "create sql security definer view v as select 1"},
+		{"CREATE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "create sql security invoker view v as select 1"},
+		{"CREATE OR REPLACE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "create or replace sql security invoker view v as select 1"},
+		{"CREATE VIEW v AS SELECT 1", "", "create view v as select 1"},
+		{"ALTER SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "alter sql security invoker view v as select 1"},
+		{"ALTER SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER", "alter sql security definer view v as select 1"},
+		{"ALTER VIEW v AS SELECT 1", "", "alter view v as select 1"},
 	}
 	for _, c := range cases {
 		stmts, err := ParseOne(context.TODO(), c.input, 1)
@@ -3821,6 +3822,10 @@ func TestViewSecurityType(t *testing.T) {
 			}
 		default:
 			t.Fatalf("unexpected stmt type %T for %q", stmts, c.input)
+		}
+
+		if out := tree.String(stmts, dialect.MYSQL); out != c.output {
+			t.Errorf("tree.String(%q) = %q, want %q", c.input, out, c.output)
 		}
 	}
 }
