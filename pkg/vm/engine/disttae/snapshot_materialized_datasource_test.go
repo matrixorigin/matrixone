@@ -377,3 +377,51 @@ func TestMaterializedSnapshotDataSourcePersistedTombstoneFiltersBySnapshotTS(t *
 	require.Equal(t, 0, bm.Count(), "no row should be in tombstone bitmap at snapshotTS=20")
 	bm.Release()
 }
+
+func TestMaterializedSnapshotDataSourceAccessors_NoRemote(t *testing.T) {
+mp := mpool.MustNewZero()
+pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
+
+src := newMaterializedSnapshotDataSource(
+context.Background(),
+nil,
+pState,
+types.BuildTS(30, 0),
+types.BuildTS(20, 0),
+nil,
+nil,
+).(*materializedSnapshotDataSource)
+
+s := src.String()
+require.Contains(t, s, "MaterializedSnapshotDataSource")
+require.Contains(t, s, "snapshot-ts=")
+require.Contains(t, s, "current-ts=")
+
+require.Nil(t, src.GetOrderBy())
+src.SetOrderBy(nil)
+require.Nil(t, src.GetOrderBy())
+src.SetFilterZM(objectio.ZoneMap{})
+}
+
+func TestMaterializedSnapshotDataSourceAccessors_WithRemote(t *testing.T) {
+mp := mpool.MustNewZero()
+pState := newTestMaterializedSnapshotPartitionState(t, mp, nil)
+
+relData := newTestSnapshotRelData(1)
+
+src := newMaterializedSnapshotDataSource(
+context.Background(),
+nil,
+pState,
+types.BuildTS(30, 0),
+types.BuildTS(20, 0),
+relData,
+nil,
+).(*materializedSnapshotDataSource)
+require.NotNil(t, src.remote)
+
+src.SetOrderBy(nil)
+_ = src.GetOrderBy()
+src.SetFilterZM(objectio.ZoneMap{})
+_ = src.String()
+}
