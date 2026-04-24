@@ -214,13 +214,19 @@ func (t *taeScanRef) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("tae_scan('%s')", escaped))
 }
 
-// wrapForGPUExecution wraps a SQL string in a gpu_execution('...') table
-// function call so the DuckDB sidecar routes execution through the Sirius
-// GPU engine. Single quotes in the inner SQL are doubled per SQL standard
+// wrapForGPUExecution wraps a SQL string in a CALL gpu_execution('...')
+// statement so the DuckDB sidecar routes execution through the Sirius GPU
+// engine. Single quotes in the inner SQL are doubled per SQL standard
 // string literal escaping — DuckDB unescapes them when parsing the argument.
+//
+// Note: the older `SELECT * FROM gpu_execution(...)` form conflicts with
+// the upstream Sirius transparent-execution optimizer hook (it tries to
+// compile the outer plan and trips "Unsupported scan function:
+// gpu_execution"). `CALL gpu_execution(...)` is the documented invocation
+// form in upstream Sirius and avoids that interaction.
 func wrapForGPUExecution(sql string) string {
 	escaped := strings.ReplaceAll(sql, "'", "''")
-	return fmt.Sprintf("SELECT * FROM gpu_execution('%s')", escaped)
+	return fmt.Sprintf("CALL gpu_execution('%s')", escaped)
 }
 
 // rewriteTablesForGPU parses the SQL into an AST, walks the tree to find
