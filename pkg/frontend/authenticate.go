@@ -1298,6 +1298,11 @@ const (
 
 	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
 
+	// object-scoped WGO check: filters by obj_type and obj_id in addition to privilege_id
+	checkRoleHasPrivilegeWGOWithObjFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
+
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
 	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
@@ -1861,6 +1866,14 @@ func getSqlForCheckRoleHasPrivilegeWGO(privilegeId int64) string {
 
 func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(privilegeId, allPrivId, ownershipPrivId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipFormat, privilegeId, allPrivId, ownershipPrivId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObj(privilegeId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjFormat, privilegeId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
 }
 
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
@@ -5138,7 +5151,14 @@ func resolveViewChainPrivilegeContext(
 		if !useCache {
 			cacheToUse = nil
 		}
-		viewAllowed, err := verifyViewPrivilegeForRole(ctx, bh, ses, cacheToUse, currentRoleId, privType, viewDb, viewName, useCache)
+		var viewAllowed bool
+		var err error
+		if currentRoleId != roleId {
+			// DEFINER path: expand role inheritance for the switched role
+			viewAllowed, err = verifyViewPrivilegeWithRoleInheritance(ctx, bh, ses, currentRoleId, privType, viewDb, viewName)
+		} else {
+			viewAllowed, err = verifyViewPrivilegeForRole(ctx, bh, ses, cacheToUse, currentRoleId, privType, viewDb, viewName, useCache)
+		}
 		if err != nil {
 			return 0, false, false, err
 		}
@@ -6933,6 +6953,68 @@ func verifyViewPrivilegeForRole(
 	return false, nil
 }
 
+// verifyViewPrivilegeWithRoleInheritance checks view privilege for a role with role inheritance expansion.
+func verifyViewPrivilegeWithRoleInheritance(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	startRoleId int64,
+	privType PrivilegeType,
+	dbName string,
+	viewName string,
+) (bool, error) {
+	if startRoleId == moAdminRoleID || startRoleId == accountAdminRoleID {
+		return true, nil
+	}
+
+	visited := &btree.Set[int64]{}
+	currentSet := &btree.Set[int64]{}
+	currentSet.Insert(startRoleId)
+	visited.Insert(startRoleId)
+
+	for {
+		for _, rid := range currentSet.Keys() {
+			yes, err := verifyViewPrivilegeForRole(ctx, bh, ses, nil, rid, privType, dbName, viewName, false)
+			if err != nil {
+				return false, err
+			}
+			if yes {
+				return true, nil
+			}
+		}
+
+		nextSet := &btree.Set[int64]{}
+		for _, rid := range currentSet.Keys() {
+			bh.ClearExecResultSet()
+			err := bh.Exec(ctx, getSqlForInheritedRoleIdOfRoleId(rid))
+			if err != nil {
+				return false, err
+			}
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return false, err
+			}
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					grantedId, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return false, err
+					}
+					if !visited.Contains(grantedId) {
+						visited.Insert(grantedId)
+						nextSet.Insert(grantedId)
+					}
+				}
+			}
+		}
+
+		if nextSet.Len() == 0 {
+			return false, nil
+		}
+		currentSet = nextSet
+	}
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
 func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, error) {
@@ -7063,8 +7145,9 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								if viewAllowed {
 									if skipBaseCheck {
 										yes = true
-									} else if checkRoleId != roleId {
-										// DEFINER path: expand role inheritance for the definer's role
+									} else if len(viewChain) > 0 {
+										// View path: always expand role inheritance for the effective role,
+										// even if checkRoleId == roleId (definer may rely on inherited privileges)
 										yes, err = verifyPrivilegeWithRoleInheritance(ctx, bh, ses, checkRoleId, tempEntry, enableCache)
 										if err != nil {
 											return false, err
@@ -8055,6 +8138,84 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	return rset, err
 }
 
+// getRoleSetThatPrivilegeGrantedToWGOScoped is like getRoleSetThatPrivilegeGrantedToWGO but
+// for table/view-level privileges with a specific object target, it adds obj_type/obj_id filtering.
+// For *.* level or non-table/view privileges, it falls back to the unscoped version.
+func getRoleSetThatPrivilegeGrantedToWGOScoped(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	scope := privType.Scope()
+	// Only scope table-level privileges on specific named objects (db.table or table)
+	if scope == PrivilegeScopeTable &&
+		(astObjType == tree.OBJECT_TYPE_TABLE || astObjType == tree.OBJECT_TYPE_VIEW) &&
+		(level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
+		privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
+		if err != nil {
+			// If we can't resolve the object, fall back to unscoped check
+			return getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		}
+		_ = privLevel
+		objType, err := convertAstObjectTypeToObjectType(ctx, astObjType)
+		if err != nil {
+			return nil, err
+		}
+		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
+	}
+	return getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+}
+
+// getRoleSetThatPrivilegeGrantedToWGOWithObj gets roles with WGO on a specific object.
+func getRoleSetThatPrivilegeGrantedToWGOWithObj(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	objId int64,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
+	case PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
+	default:
+		// fallback for non-table privileges
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
 // setIsIntersected decides the A is intersecting the B.
 func setIsIntersected(A, B *btree.Set[int64]) bool {
 	if A.Len() > B.Len() {
@@ -8123,7 +8284,8 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 		}
 
 		//call the algorithm 3.
-		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		// For table/view-level privileges with a specific object, use object-scoped WGO check
+		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGOScoped(ctx, ses, bh, privType, gp.ObjType, *gp.Level)
 		if err != nil {
 			return false, stats, err
 		}

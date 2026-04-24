@@ -3609,13 +3609,18 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 
-	// SecurityType priority: AST explicit > old view inherited > session variable (already set by genViewTableDef)
+	// SecurityType priority: AST explicit > old view inherited > default DEFINER for legacy views
 	if stmt.SecurityType != "" {
 		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
 	} else if oldViewDef != nil && oldViewDef.ViewSql != nil {
 		var oldViewData ViewData
-		if e := json.Unmarshal([]byte(oldViewDef.ViewSql.View), &oldViewData); e == nil && oldViewData.SecurityType != "" {
-			overrideViewDefSecurityType(tableDef, oldViewData.SecurityType)
+		if e := json.Unmarshal([]byte(oldViewDef.ViewSql.View), &oldViewData); e == nil {
+			if oldViewData.SecurityType != "" {
+				overrideViewDefSecurityType(tableDef, oldViewData.SecurityType)
+			} else {
+				// Legacy views without security_type field are DEFINER by default
+				overrideViewDefSecurityType(tableDef, "DEFINER")
+			}
 		}
 	}
 

@@ -795,6 +795,12 @@ var (
 		}, {
 			input: "alter view v_today (today) as select current_day from t",
 		}, {
+			input:  "ALTER SQL SECURITY INVOKER VIEW v AS SELECT * FROM t",
+			output: "alter view v as select * from t",
+		}, {
+			input:  "ALTER SQL SECURITY DEFINER VIEW v AS SELECT * FROM t",
+			output: "alter view v as select * from t",
+		}, {
 			input: "explain (analyze true,verbose false) select * from emp",
 		}, {
 			input: "select quarter from ontime limit 1",
@@ -3016,10 +3022,19 @@ var (
 			output: "alter table t1 alter CONSTRAINT not enforce",
 		}, {
 			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
+			output: "create sql security definer view t2 as select * from t1",
 		}, {
 			input:  "create SQL SECURITY INVOKER VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
+			output: "create sql security invoker view t2 as select * from t1",
+		}, {
+			input:  "create or replace SQL SECURITY INVOKER VIEW t2 as select * from t1",
+			output: "create or replace sql security invoker view t2 as select * from t1",
+		}, {
+			input:  "create or replace SQL SECURITY DEFINER VIEW t2 as select * from t1",
+			output: "create or replace sql security definer view t2 as select * from t1",
+		}, {
+			input:  "create or replace VIEW t2 as select * from t1",
+			output: "create or replace view t2 as select * from t1",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
 			output: "create view t2 as select * from t1",
@@ -3068,13 +3083,13 @@ var (
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} backuptype incremental backupts xxxxx-xxxxx`,
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
-			output: "create view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
+			output: "create sql security definer view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
-			output: "create view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
+			output: "create sql security definer view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
-			output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+			output: "create sql security definer view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 		},
 		{
 			input:  "CREATE TABLE `ecbase_push_log` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',`create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间') ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='推送记录表'/*!50500 PARTITION BY RANGE  COLUMNS(create_time)(PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,PARTITION p20240117 VALUES LESS THAN ('2024-01-17 00:00:00') ENGINE = InnoDB,PARTITION p20240118 VALUES LESS THAN ('2024-01-18 00:00:00') ENGINE = InnoDB,PARTITION p20240119 VALUES LESS THAN ('2024-01-19 00:00:00') ENGINE = InnoDB,PARTITION p20240120 VALUES LESS THAN ('2024-01-20 00:00:00') ENGINE = InnoDB,PARTITION p20240121 VALUES LESS THAN ('2024-01-21 00:00:00') ENGINE = InnoDB,PARTITION p20240122 VALUES LESS THAN ('2024-01-22 00:00:00') ENGINE = InnoDB,PARTITION p20240123 VALUES LESS THAN ('2024-01-23 00:00:00') ENGINE = InnoDB,PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;",
@@ -3774,5 +3789,38 @@ func TestLimitByRank(t *testing.T) {
 				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
 			}
 		})
+	}
+}
+
+func TestViewSecurityType(t *testing.T) {
+	cases := []struct {
+		input        string
+		securityType string
+	}{
+		{"CREATE SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER"},
+		{"CREATE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
+		{"CREATE OR REPLACE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
+		{"CREATE VIEW v AS SELECT 1", ""},
+		{"ALTER SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER"},
+		{"ALTER SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER"},
+		{"ALTER VIEW v AS SELECT 1", ""},
+	}
+	for _, c := range cases {
+		stmts, err := ParseOne(context.TODO(), c.input, 1)
+		if err != nil {
+			t.Fatalf("parse %q failed: %v", c.input, err)
+		}
+		switch s := stmts.(type) {
+		case *tree.CreateView:
+			if s.SecurityType != c.securityType {
+				t.Errorf("CreateView %q: SecurityType = %q, want %q", c.input, s.SecurityType, c.securityType)
+			}
+		case *tree.AlterView:
+			if s.SecurityType != c.securityType {
+				t.Errorf("AlterView %q: SecurityType = %q, want %q", c.input, s.SecurityType, c.securityType)
+			}
+		default:
+			t.Fatalf("unexpected stmt type %T for %q", stmts, c.input)
+		}
 	}
 }

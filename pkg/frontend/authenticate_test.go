@@ -1888,7 +1888,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  "db",
+					TabName: "t1",
 				},
 			},
 			{
@@ -1898,7 +1900,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: "t1",
 				},
 			},
 		}
@@ -1917,6 +1920,30 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+
+			// Mock getDatabaseOrTableId for DATABASE_TABLE and TABLE levels
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+				dbName := stmt.Level.DbName
+				tabName := stmt.Level.TabName
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
+				checkSql, _ := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), dbName, tabName)
+				bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+				// Mock scoped WGO queries
+				for _, p := range stmt.Privileges {
+					privType, _ := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
+					scopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 10001)
+					bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+						{ses.GetTenantInfo().GetDefaultRoleID()},
+					})
+				}
+			}
+
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -1927,13 +1954,18 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
-				rows := [][]interface{}{
-					{ses.GetTenantInfo().GetDefaultRoleID()},
+				// For DATABASE_TABLE/TABLE levels, only the scoped WGO query (mocked above) should succeed.
+				// Leave the unscoped query empty so a fallback to the old path would fail.
+				unscopedSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+					bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+				} else {
+					bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+						{ses.GetTenantInfo().GetDefaultRoleID()},
+					})
 				}
-
-				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
@@ -1990,7 +2022,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  "db",
+					TabName: "t1",
 				},
 			},
 			{
@@ -2000,7 +2034,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: "t1",
 				},
 			},
 		}
@@ -2019,6 +2054,28 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+
+			// Mock getDatabaseOrTableId for DATABASE_TABLE and TABLE levels
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+				dbName := stmt.Level.DbName
+				tabName := stmt.Level.TabName
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
+				checkSql, _ := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), dbName, tabName)
+				bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+				// Mock scoped WGO queries (empty = no WGO, to match fail scenario)
+				for _, p := range stmt.Privileges {
+					privType, _ := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
+					scopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 10001)
+					bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+				}
+			}
+
 			var privType PrivilegeType
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)

@@ -60,6 +60,81 @@ revoke select on view db_v1.v1 from role_v1;
 use db_v1;
 select * from v1;
 internal error: do not have privilege to execute the statement
+drop role if exists role_bypass;
+drop user if exists user_bypass;
+create role role_bypass;
+create user user_bypass identified by '111' default role role_bypass;
+grant role_bypass to user_bypass;
+grant connect on account * to role_bypass;
+grant all on table db_v1.t1 to role_bypass;
+use db_v1;
+select * from v1;
+internal error: do not have privilege to execute the statement
+grant ownership on table db_v1.t1 to role_bypass;
+use db_v1;
+select * from v1;
+internal error: do not have privilege to execute the statement
+drop user user_bypass;
+drop role role_bypass;
+drop role if exists role_parent, role_child;
+drop user if exists user_definer_inh, user_definer_reader;
+create role role_parent;
+create role role_child;
+grant role_parent to role_child;
+grant select on table db_v1.t1 to role_parent;
+create user user_definer_inh identified by '111' default role role_child;
+grant role_child to user_definer_inh;
+grant connect on account * to role_child;
+grant create view on database db_v1 to role_child;
+grant show tables on database db_v1 to role_child;
+use db_v1;
+create sql security definer view v_definer_inh as select * from t1;
+create role role_reader;
+create user user_definer_reader identified by '111' default role role_reader;
+grant role_reader to user_definer_reader;
+grant connect on account * to role_reader;
+grant select on view db_v1.v_definer_inh to role_reader;
+use db_v1;
+select * from v_definer_inh;
+a    b
+1    base
+drop user user_definer_inh;
+drop user user_definer_reader;
+drop role role_parent;
+drop role role_child;
+drop role role_reader;
+drop view db_v1.v_definer_inh;
+drop role if exists role_wgo_src, role_wgo_tgt;
+drop user if exists user_wgo;
+create role role_wgo_src;
+create role role_wgo_tgt;
+create user user_wgo identified by '111' default role role_wgo_src;
+grant role_wgo_src to user_wgo;
+grant connect on account * to role_wgo_src;
+grant select on view db_v1.v1 to role_wgo_src with grant option;
+grant select on view db_v1.v1 to role_wgo_tgt;
+grant select on view db_v1.v_on_v to role_wgo_tgt;
+internal error: the grant privilege with grant option command needs the privilege that has the with_grant_option = true
+drop user user_wgo;
+drop role role_wgo_src;
+drop role role_wgo_tgt;
+use db_v1;
+set view_security_type = 'INVOKER';
+create view v_alter_sec as select * from t1;
+set view_security_type = 'DEFINER';
+alter view v_alter_sec as select a from t1;
+show create view v_alter_sec;
+➤ View[12,-1,0]    Create View[12,-1,0]    character_set_client[12,-1,0]    collation_connection[12,-1,0]  𝄀
+v_alter_sec    create SQL SECURITY INVOKER view v_alter_sec as select a from t1    utf8mb4    utf8mb4_general_ci
+drop view v_alter_sec;
+use db_v1;
+set view_security_type = 'INVOKER';
+create view v_body_trick as select 'sql security definer' as note from t1;
+set view_security_type = 'DEFINER';
+show create view v_body_trick;
+➤ View[12,-1,0]    Create View[12,-1,0]    character_set_client[12,-1,0]    collation_connection[12,-1,0]  𝄀
+v_body_trick    create SQL SECURITY INVOKER view v_body_trick as select 'sql security definer' as note from t1    utf8mb4    utf8mb4_general_ci
+drop view v_body_trick;
 drop user user_v1;
 drop user user_no_db;
 drop user user_invoker;

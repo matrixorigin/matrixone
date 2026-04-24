@@ -3408,15 +3408,7 @@ alter_sequence_stmt:
     }
 
 alter_view_stmt:
-    ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
-    {
-        var ifExists = $3
-        var name = $4
-        var colNames = $5
-        var asSource = $7
-        $$ = tree.NewAlterView(ifExists, name, colNames, asSource, "")
-    }
-|   ALTER view_list_opt VIEW exists_opt table_name column_list_opt AS select_stmt
+    ALTER view_list_opt VIEW exists_opt table_name column_list_opt AS select_stmt
     {
         var ifExists = $4
         var name = $5
@@ -7021,15 +7013,15 @@ func_handler:
     }
 
 create_view_stmt:
-    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    CREATE replace_opt view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
-        var Replace bool
-        var Name = $5
-        var ColNames = $6
-        var AsSource = $8
-        var IfNotExists = $4
+        var Replace = $2
+        var Name = $6
+        var ColNames = $7
+        var AsSource = $9
+        var IfNotExists = $5
         secType := ""
-        viewListStr := strings.ToUpper($2)
+        viewListStr := strings.ToUpper($3)
         if strings.Contains(viewListStr, "SQL SECURITY INVOKER") {
             secType = "INVOKER"
         } else if strings.Contains(viewListStr, "SQL SECURITY DEFINER") {
@@ -7042,22 +7034,6 @@ create_view_stmt:
             AsSource,
             IfNotExists,
             secType,
-        )
-    }
-|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
-    {
-        var Replace = $2
-        var Name = $5
-        var ColNames = $6
-        var AsSource = $8
-        var IfNotExists = $4
-        $$ = tree.NewCreateView(
-            Replace,
-            Name,
-            ColNames,
-            AsSource,
-            IfNotExists,
-            "",
         )
     }
 
@@ -7079,13 +7055,12 @@ create_account_stmt:
     }
 
 view_list_opt:
-    view_opt
     {
-        $$ = $1
+        $$ = ""
     }
 |   view_list_opt view_opt
     {
-        $$ = $$ + $2
+        $$ = $1 + $2
     }
 
 view_opt:
