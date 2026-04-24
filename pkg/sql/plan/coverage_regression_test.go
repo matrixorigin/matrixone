@@ -175,6 +175,26 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }
 
+func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T) {
+	affectedCols := appendAffectedAlterColumnNames(nil, "title", "headline")
+	require.Equal(t, []string{"title", "headline"}, affectedCols)
+
+	indexes := []*planpb.IndexDef{
+		{
+			IndexName: "idx_title",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{"title"},
+		},
+		makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "note"}),
+	}
+
+	names, err := collectAffectedIndexNamesForAlter(indexes, affectedCols)
+	require.NoError(t, err)
+	require.Equal(t, []string{"idx_ivf", "idx_title"}, names)
+
+	require.Equal(t, []string{"title"}, appendAffectedAlterColumnNames(nil, "title", "title"))
+}
+
 func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := makeAlterCoverageTableDef()
