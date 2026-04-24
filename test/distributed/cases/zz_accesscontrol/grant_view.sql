@@ -48,6 +48,9 @@ set view_security_type = 'INVOKER';
 create view v_invoker as select * from t1;
 set view_security_type = 'DEFINER';
 
+-- verify SHOW CREATE VIEW shows SQL SECURITY INVOKER even though DDL didn't have it
+show create view v_invoker;
+
 create role role_invoker;
 create user user_invoker identified by '111' default role role_invoker;
 grant role_invoker to user_invoker;

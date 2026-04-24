@@ -193,12 +193,43 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	// FixMe  We need a better escape function
 	stmtStr := viewData.Stmt
+	// MySQL always shows SQL SECURITY in SHOW CREATE VIEW output.
+	// If the stored Stmt doesn't contain it, splice it in before the VIEW keyword.
+	if viewData.SecurityType != "" {
+		upper := strings.ToUpper(stmtStr)
+		viewIdx := findViewKeyword(upper)
+		if viewIdx > 0 {
+			header := upper[:viewIdx]
+			if !strings.Contains(header, "SQL SECURITY") {
+				stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + viewData.SecurityType + " " + stmtStr[viewIdx:]
+			}
+		}
+	}
 	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// findViewKeyword finds the position of the VIEW keyword in an uppercased SQL string.
+// It requires VIEW to be bounded by whitespace (space, tab, newline) or string boundaries.
+// Returns -1 if not found.
+func findViewKeyword(upper string) int {
+	for i := 0; i+4 <= len(upper); i++ {
+		if upper[i:i+4] != "VIEW" {
+			continue
+		}
+		if i > 0 && upper[i-1] != ' ' && upper[i-1] != '\t' && upper[i-1] != '\n' && upper[i-1] != '\r' {
+			continue
+		}
+		if i+4 < len(upper) && upper[i+4] != ' ' && upper[i+4] != '\t' && upper[i+4] != '\n' && upper[i+4] != '\r' {
+			continue
+		}
+		return i
+	}
+	return -1
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {

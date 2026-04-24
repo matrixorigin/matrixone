@@ -333,10 +333,10 @@ Table    Create Table
 a    CREATE TABLE `a` (\n  `a` int DEFAULT NULL,\n  `b` int DEFAULT NULL\n)
 show create table va;
 View    Create View    character_set_client    collation_connection
-va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
+va    create SQL SECURITY DEFINER view va as select a from a;    utf8mb4    utf8mb4_general_ci
 show create view va;
 View    Create View    character_set_client    collation_connection
-va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
+va    create SQL SECURITY DEFINER view va as select a from a;    utf8mb4    utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE

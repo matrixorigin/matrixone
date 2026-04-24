@@ -1958,15 +1958,18 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				// For DATABASE_TABLE/TABLE levels, only the scoped WGO query (mocked above) should succeed.
 				// Leave the unscoped query empty so a fallback to the old path would fail.
 				unscopedSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
-				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
-					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
-					bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
-				} else {
-					bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{
-						{ses.GetTenantInfo().GetDefaultRoleID()},
-					})
+				bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+
+				// Mock obj_type-scoped WGO query for wildcard levels (*, *.*, db.*)
+				objType := objectTypeTable
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					objType = objectTypeView
 				}
-			}
+				objTypeScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType)
+				bh.sql2result[objTypeScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+					{ses.GetTenantInfo().GetDefaultRoleID()},
+				})			}
 
 			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
@@ -2092,16 +2095,40 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
+
+				// Mock unscoped query (empty to ensure new paths are used)
 				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+				bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{})
+
+				// Mock obj_type-scoped WGO query for wildcard levels
+				objType := objectTypeTable
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					objType = objectTypeView
+				}
+				objTypeScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType)
 				if i == 0 {
-					rows = [][]interface{}{}
+					bh.sql2result[objTypeScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 				} else {
-					rows = [][]interface{}{
+					bh.sql2result[objTypeScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
 						{ses.GetTenantInfo().GetDefaultRoleID()},
-					}
+					})
 				}
 
-				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+				// Mock obj-scoped WGO query for DATABASE_TABLE/TABLE levels
+				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+					scopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 10001)
+					if i == 0 {
+						bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+					} else {
+						bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+							{ses.GetTenantInfo().GetDefaultRoleID()},
+						})
+					}
+				}
 			}
 
 			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
