@@ -669,6 +669,7 @@ type service struct {
 		sync.RWMutex
 		holder         taskservice.TaskServiceHolder
 		runner         taskservice.TaskRunner
+		runnerReady    atomic.Bool
 		storageFactory taskservice.TaskStorageFactory
 	}
 

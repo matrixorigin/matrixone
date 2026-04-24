@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,6 +36,7 @@ type Shuffle struct {
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
+	ShuffleExpr        *plan.Expr
 	msgReceiver        *message.MessageReceiver
 	vm.OperatorBase
 }
@@ -77,6 +79,7 @@ type container struct {
 	buf                  *batch.Batch
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool
+	exprExec             colexec.ExpressionExecutor
 }
 
 func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
@@ -111,6 +114,10 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
 	shuffle.ctr.buf = nil
 	shuffle.ctr.shufflePool = nil
+	if shuffle.ctr.exprExec != nil {
+		shuffle.ctr.exprExec.Free()
+		shuffle.ctr.exprExec = nil
+	}
 }
 
 func (shuffle *Shuffle) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

@@ -183,6 +183,7 @@ func newS3Writer(
 		writer.action = actionUpdate
 		writer.flushThreshold = threshold
 		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
+		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
@@ -392,10 +393,6 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 
 			if blockMap[blkid] == nil {
 				blockMap[blkid] = newDeleteBlockData(bat, 1)
-				err := blockMap[blkid].bat.PreExtend(proc.GetMPool(), colexec.DefaultBatchSize)
-				if err != nil {
-					return nil, err
-				}
 
 				tableId := uint64(0)
 				txnID := []byte(nil)

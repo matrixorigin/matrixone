@@ -69,6 +69,7 @@ message Shuffle {
   repeated uint64 shuffle_ranges_uint64 = 6;
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
+  plan.Expr ShuffleExpr = 9;
 }
 
 message Dispatch {
