@@ -431,3 +431,33 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept same int types")
 	}
 }
+
+func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
+	// Test CASE WHEN with NULL value compared to string
+	// This should not error, matching MySQL behavior
+	proc := testutil.NewProcess(t)
+
+	// Test: CASE 1/0 WHEN 'a' THEN 'true' ELSE 'false' END
+	// 1/0 returns NULL, NULL = 'a' should return NULL (false in bool context)
+	// So result should be 'false' (from ELSE clause)
+	tc := tcTemp{
+		info: "CASE NULL WHEN 'a' THEN 'true' ELSE 'false' END",
+		inputs: []FunctionTestInput{
+			// Condition: NULL = 'a' -> false
+			NewFunctionTestInput(types.T_bool.ToType(),
+				[]bool{false}, []bool{false}),
+			// THEN value
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"true"}, []bool{false}),
+			// ELSE value
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"false"}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"false"}, []bool{false}),
+	}
+
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, strCaseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}

@@ -221,7 +221,30 @@ func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// Check result type first, as it may differ from parameter types after type conversion
+	resultType := result.GetResultVector().GetType()
+
+	// If result type is decimal128, use decimal128 handler
+	// This handles cases like decimal64 + float64 where both are converted to decimal128
+	if resultType.Oid == types.T_decimal128 {
+		// If inputs have no nulls, ensure result nulls are cleared after computation.
+		inputHasNull := func(vec *vector.Vector) bool {
+			ns := vec.GetNulls()
+			return ns != nil && !ns.IsEmpty()
+		}
+		noNullInput := !inputHasNull(parameters[0]) && !inputHasNull(parameters[1])
+
+		if err := decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList); err != nil {
+			return err
+		}
+		if noNullInput {
+			result.GetResultVector().GetNulls().Reset()
+		}
+		return nil
+	}
+
 	paramType := parameters[0].GetType()
+
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
@@ -271,7 +294,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList)
 
@@ -344,7 +367,7 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Sub(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128SubArray, selectList)
 
@@ -433,7 +456,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Mul(y, scale1, scale2)
 			return rt, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128MultiArray, selectList)
 
@@ -474,12 +497,12 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Div(y, scale1, scale2)
 			return rt, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_decimal128:
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:
@@ -519,7 +542,7 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 // integerDivSigned handles DIV for signed integer types
-func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if length == 0 {
 		return nil
 	}
@@ -529,6 +552,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 
 	switch paramType.Oid {
 	case types.T_int8:
@@ -538,6 +562,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -550,6 +577,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -562,6 +592,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -574,6 +607,9 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = v1 / v2
@@ -584,7 +620,7 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 // integerDivUnsigned handles DIV for unsigned integer types
-func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if length == 0 {
 		return nil
 	}
@@ -594,6 +630,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 
 	switch paramType.Oid {
 	case types.T_uint8:
@@ -603,6 +640,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -615,6 +655,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -627,6 +670,9 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				rss[i] = int64(v1) / int64(v2)
@@ -639,132 +685,18 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			v1, null1 := p1.GetValue(i)
 			v2, null2 := p2.GetValue(i)
 			if null1 || null2 || v2 == 0 {
+				if v2 == 0 && !null2 && shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsNull.Add(i)
 			} else {
 				quotient := v1 / v2
+				// MySQL 8.0: if DIV result exceeds BIGINT range, error occurs
 				if quotient > math.MaxInt64 {
 					return moerr.NewOutOfRangeNoCtx("BIGINT", "")
 				}
 				rss[i] = int64(quotient)
 			}
-		}
-	}
-	return nil
-}
-
-// decimalIsZero checks if a decimal value is zero
-func decimalIsZero[T types.Decimal64 | types.Decimal128](v T) bool {
-	switch d := any(v).(type) {
-	case types.Decimal64:
-		return d == 0
-	case types.Decimal128:
-		return d.B0_63 == 0 && d.B64_127 == 0
-	default:
-		panic("unsupported decimal type")
-	}
-}
-
-// decimal128ToInt64 converts a Decimal128 to int64, returning error on overflow
-func decimal128ToInt64(v types.Decimal128) (int64, error) {
-	if v.Sign() {
-		if v.B64_127 != ^uint64(0) {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		if v.B0_63 < 0x8000000000000000 {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		negated := v.Minus()
-		return -int64(negated.B0_63), nil
-	}
-
-	if v.B64_127 != 0 {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	return int64(v.B0_63), nil
-}
-
-// decimalIntegerDiv performs integer division for decimal types (DIV operator)
-func decimalIntegerDiv[T types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[int64](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-			continue
-		}
-
-		if decimalIsZero(v2) {
-			rsNull.Add(i)
-			continue
-		}
-
-		var err error
-		switch any(v1).(type) {
-		case types.Decimal128:
-			d1 := any(v1).(types.Decimal128)
-			d2 := any(v2).(types.Decimal128)
-			// For integer DIV: align scales then use truncating integer division.
-			// When scales are equal, raw1/raw2 is the correct truncated integer quotient.
-			if scale1 != scale2 {
-				if scale1 < scale2 {
-					d1, err = d1.Scale(scale2 - scale1)
-				} else {
-					d2, err = d2.Scale(scale1 - scale2)
-				}
-				if err != nil {
-					return err
-				}
-			}
-			// Truncating integer division via decimal128ToInt64 then int64 division
-			n1, convErr := decimal128ToInt64(d1)
-			if convErr != nil {
-				return convErr
-			}
-			n2, convErr := decimal128ToInt64(d2)
-			if convErr != nil {
-				return convErr
-			}
-			rss[i] = n1 / n2
-		case types.Decimal64:
-			d1Val := any(v1).(types.Decimal64)
-			d2Val := any(v2).(types.Decimal64)
-			n1 := int64(d1Val)
-			n2 := int64(d2Val)
-			if scale1 != scale2 {
-				// Align scales by multiplying the smaller-scale value
-				if scale1 < scale2 {
-					for s := scale1; s < scale2; s++ {
-						n1 *= 10
-					}
-				} else {
-					for s := scale2; s < scale1; s++ {
-						n2 *= 10
-					}
-				}
-			}
-			if n2 == 0 {
-				rsNull.Add(i)
-				continue
-			}
-			rss[i] = n1 / n2
-		default:
-			panic("unsupported decimal type")
-		}
-		if err != nil {
-			return err
 		}
 	}
 	return nil
@@ -821,12 +753,12 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Mod(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_decimal128:
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Mod(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	}
 	panic("unreached code")
 }
@@ -896,10 +828,10 @@ func decimal128ScaleArray(v, rs []types.Decimal128, len int, n int32) error {
 
 func decimal128ScaleArrayWithNulls(v, rs []types.Decimal128, len int, n int32, rsnull *nulls.Nulls) error {
 	for i := 0; i < len; i++ {
+		rs[i] = v[i]
 		if rsnull.Contains(uint64(i)) {
 			continue
 		}
-		rs[i] = v[i]
 		err := rs[i].ScaleInplace(n)
 		if err != nil {
 			return err
@@ -1535,6 +1467,128 @@ func decimal128MultiArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32, r
 					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// decimalIntegerDiv performs integer division for decimal types (DIV operator)
+func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	scale1 := p1.GetType().Scale
+	scale2 := p2.GetType().Scale
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+			continue
+		}
+
+		// Check for zero
+		var isZero bool
+		switch any(v2).(type) {
+		case types.Decimal128:
+			d := any(v2).(types.Decimal128)
+			isZero = (d.B0_63 == 0 && d.B64_127 == 0)
+		case types.Decimal64:
+			isZero = (any(v2).(types.Decimal64) == 0)
+		}
+
+		if isZero {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
+			continue
+		}
+
+		// Perform division
+		var divResult types.Decimal128
+		var resultScale int32
+		var err error
+		switch any(v1).(type) {
+		case types.Decimal128:
+			d1 := any(v1).(types.Decimal128)
+			d2 := any(v2).(types.Decimal128)
+			divResult, resultScale, err = d1.Div(d2, scale1, scale2)
+		case types.Decimal64:
+			// Convert Decimal64 to Decimal128
+			d1Val := any(v1).(types.Decimal64)
+			d2Val := any(v2).(types.Decimal64)
+			d1 := types.Decimal128{B0_63: uint64(d1Val), B64_127: 0}
+			// Check sign bit of Decimal64
+			if d1Val.Sign() {
+				d1.B64_127 = ^uint64(0)
+			}
+			d2 := types.Decimal128{B0_63: uint64(d2Val), B64_127: 0}
+			// Check sign bit of Decimal64
+			if d2Val.Sign() {
+				d2.B64_127 = ^uint64(0)
+			}
+			divResult, resultScale, err = d1.Div(d2, scale1, scale2)
+		}
+		if err != nil {
+			return err
+		}
+
+		// Convert to int64 (truncate decimal part)
+		// Scale down to remove all decimal places
+		if resultScale > 0 {
+			divResult, err = divResult.Scale(-resultScale)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Check if result fits in int64 range before extraction
+		// int64 range: -9223372036854775808 to 9223372036854775807
+		// For positive: B64_127 must be 0, B0_63 must be <= MAX_INT64
+		// For negative: B64_127 must be all 1s (sign extension), and B0_63 must represent valid negative int64
+		if divResult.Sign() {
+			// Negative number in two's complement
+			// Upper 64 bits must be all 1s for proper sign extension
+			if divResult.B64_127 != ^uint64(0) {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+			// For negative numbers with B64_127 = all 1s, check B0_63 range
+			// Valid range: 0x8000000000000000 (MIN_INT64) to 0xFFFFFFFFFFFFFFFF (-1)
+			// Any value < 0x8000000000000000 means the number is < MIN_INT64 (overflow)
+			if divResult.B0_63 < 0x8000000000000000 {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+		} else {
+			// Positive number: upper bits should all be 0
+			// and lower 64 bits should not exceed MAX_INT64
+			if divResult.B64_127 != 0 {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+			// Check if value exceeds MAX_INT64
+			// MAX_INT64 = 9223372036854775807 = 0x7FFFFFFFFFFFFFFF
+			if divResult.B0_63 > 0x7FFFFFFFFFFFFFFF {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+		}
+
+		// Extract integer value
+		// Decimal128 stores value as 128-bit two's complement
+		// Check sign bit (bit 127)
+		if divResult.Sign() {
+			// Negative - convert from two's complement
+			// Negate the 128-bit value first, then extract lower 64 bits
+			negated := divResult.Minus()
+			rss[i] = -int64(negated.B0_63)
+		} else {
+			// Positive or zero
+			rss[i] = int64(divResult.B0_63)
 		}
 	}
 	return nil

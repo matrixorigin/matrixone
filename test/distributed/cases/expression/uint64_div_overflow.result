@@ -1,0 +1,29 @@
+DROP DATABASE IF EXISTS test_uint_div;
+CREATE DATABASE test_uint_div;
+USE test_uint_div;
+CREATE TABLE t1 (a BIGINT UNSIGNED, b BIGINT UNSIGNED);
+INSERT INTO t1 VALUES (100, 2), (1000, 10);
+SELECT a, b, a DIV b AS result FROM t1;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  result[-5,64,0]  𝄀
+100  ¦  2  ¦  50  𝄀
+1000  ¦  10  ¦  100
+TRUNCATE t1;
+INSERT INTO t1 VALUES (9223372036854775807, 1);
+SELECT a, b, a DIV b AS result FROM t1;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  result[-5,64,0]  𝄀
+9223372036854775807  ¦  1  ¦  9223372036854775807
+TRUNCATE t1;
+INSERT INTO t1 VALUES (9223372036854775806, 2);
+SELECT a, b, a DIV b AS result FROM t1;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  ¦  result[-5,64,0]  𝄀
+9223372036854775806  ¦  2  ¦  4611686018427387903
+TRUNCATE t1;
+INSERT INTO t1 VALUES (9223372036854775808, 1);
+SELECT a DIV b FROM t1;
+Data truncation: data out of range: data type BIGINT,
+TRUNCATE t1;
+INSERT INTO t1 VALUES (18446744073709551615, 1);
+SELECT a DIV b FROM t1;
+Data truncation: data out of range: data type BIGINT,
+DROP TABLE t1;
+DROP DATABASE test_uint_div;

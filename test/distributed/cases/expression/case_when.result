@@ -1,61 +1,65 @@
 select CASE "b" when "a" then 1 when "b" then 2 END;
-case b when a then 1 when b then 2 end
+➤ case b when a then 1 when b then 2 end[-5,64,0]  𝄀
 2
 select CASE "c" when "a" then 1 when "b" then 2 END;
-case c when a then 1 when b then 2 end
+➤ case c when a then 1 when b then 2 end[-5,64,0]  𝄀
 null
 select CASE "c" when "a" then 1 when "b" then 2 ELSE 3 END;
-case c when a then 1 when b then 2 else 3 end
+➤ case c when a then 1 when b then 2 else 3 end[-5,64,0]  𝄀
 3
 select CASE when 1=0 then "true" else "false" END;
-CASE when 1=0 then "true" else "false" END
+➤ case when 1 = 0 then true else false end[12,-1,0]  𝄀
 false
 select CASE 1 when 1 then "one" WHEN 2 then "two" ELSE "more" END;
-case 1 when 1 then one when 2 then two else more end
+➤ case 1 when 1 then one when 2 then two else more end[12,-1,0]  𝄀
 one
 select CASE 2.0 when 1 then "one" WHEN 2.0 then "two" ELSE "more" END;
-case 2.0 when 1 then one when 2.0 then two else more end
+➤ case 2.0 when 1 then one when 2.0 then two else more end[12,-1,0]  𝄀
 two
 select (CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0;
-(CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0
+➤ (case two when one then 1 when two then 2 end) | 0[-5,64,0]  𝄀
 2
 select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
-(CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0
+➤ (case two when one then 1.00 when two then 2.00 end) + 0.0[3,18,2]  𝄀
 2.00
 select case 1/0 when "a" then "true" else "false" END;
-Data truncation: division by zero
+➤ case 1 / 0 when a then true else false end[12,-1,0]  𝄀
+false
 select case 1/0 when "a" then "true" END;
-Data truncation: division by zero
+➤ case 1 / 0 when a then true end[12,-1,0]  𝄀
+null
 select (case 1/0 when "a" then "true" END) | 0;
-Data truncation: division by zero
+➤ (case 1 / 0 when a then true end) | 0[-5,64,0]  𝄀
+null
 select (case 1/0 when "a" then "true" END) + 0.0;
-Data truncation: division by zero
+➤ (case 1 / 0 when a then true end) + 0.0[8,54,0]  𝄀
+null
 select case when 1>0 then "TRUE" else "FALSE" END;
-case when 1>0 then "TRUE" else "FALSE" END
+➤ case when 1 > 0 then TRUE else FALSE end[12,-1,0]  𝄀
 TRUE
 select case when 1<0 then "TRUE" else "FALSE" END;
-case when 1<0 then "TRUE" else "FALSE" END
+➤ case when 1 < 0 then TRUE else FALSE end[12,-1,0]  𝄀
 FALSE
 SELECT CAST(CASE WHEN 0 THEN '2001-01-01' END AS DATE);
-cast(case when 0 then 2001-01-01 end as date)
+➤ cast(case when 0 then 2001-01-01 end as date)[91,64,0]  𝄀
 null
 SELECT CAST(CASE WHEN 0 THEN DATE'2001-01-01' END AS DATE);
-cast(case when 0 then 2001-01-01 end as date)
+➤ cast(case when 0 then DATE(2001-01-01) end as date)[91,64,0]  𝄀
 null
 select case 1.0 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 1.0 when 0.1 then a when 1.0 then b else c end
+➤ case 1.0 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 b
 select case 0.1 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 0.1 when 0.1 then a when 1.0 then b else c end
+➤ case 0.1 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 a
 select case 1 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 1 when 0.1 then a when 1.0 then b else c end
+➤ case 1 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 b
 select case 1.0 when 0.1 then "a" when 1 then "b" else "c" END;
-case 1.0 when 0.1 then a when 1 then b else c end
+➤ case 1.0 when 0.1 then a when 1 then b else c end[12,-1,0]  𝄀
 b
 select case 1.001 when 0.1 then "a" when 1 then "b" else "c" END;
-case 1.001 when 0.1 then a when 1 then b else c end
+➤ case 1.001 when 0.1 then a when 1 then b else c end[12,-1,0]  𝄀
 c
 drop table if exists t1;
 drop table if exists t2;
@@ -66,38 +70,35 @@ INSERT INTO t2 VALUES
 ('test1','2016-12-13'),('test2','2016-12-14'),('test3','2016-12-15');
 SELECT b, b = '20161213',
 CASE b WHEN '20161213' then 'found' ELSE 'not found' END FROM t2;
-b	b = '20161213'	CASE b WHEN '20161213' then 'found' ELSE 'not found' END
-2016-12-13	1	found
-2016-12-14	0	not found
-2016-12-15	0	not found
+[unknown result because it is related to issue#3254]
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-fcase    count(*)
-2    1
-3    1
-0    2
+➤ fcase[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+0  ¦  2
 select case a when 1 then "one" when 2 then "two" else "nothing" end as fcase, count(*) from t1 group by fcase;
-fcase    count(*)
-one    1
-two    1
-nothing    2
+➤ fcase[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
+one  ¦  1  𝄀
+two  ¦  1  𝄀
+nothing  ¦  2
 drop table if exists t1;
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
 select col,val, case when val="orange" then 1 when upper(val)="LARGE" then 2  else 3 end from t1;
-col    val    case when val = orange then 1 when upper(val) = LARGE then 2 else 3 end
-1    orange    1
-2    large    2
-1    yellow    3
-2    medium    3
-1    green    3
-2    small    3
+➤ col[4,32,0]  ¦  val[12,-1,0]  ¦  case when val = orange then 1 when upper(val) = LARGE then 2 else 3 end[-5,64,0]  𝄀
+1  ¦  orange  ¦  1  𝄀
+2  ¦  large  ¦  2  𝄀
+1  ¦  yellow  ¦  3  𝄀
+2  ¦  medium  ¦  3  𝄀
+1  ¦  green  ¦  3  𝄀
+2  ¦  small  ¦  3
 select max(case col when 1 then val else null end) as color from t1 group by `row`;
-color
-orange
-yellow
+➤ color[12,-1,0]  𝄀
+orange  𝄀
+yellow  𝄀
 green
 drop table if exists t1;
 create table t1(a float, b int default 3);
@@ -105,15 +106,15 @@ insert into t1 (a) values (2), (11), (8);
 select min(a), min(case when 1=1 then a else NULL end),
 min(case when 1!=1 then NULL else a end)
 from t1 where b=3 group by b;
-min(a)	min(case when 1=1 then a else NULL end)	min(case when 1!=1 then NULL else a end)
-2.0	2.0	2.0
+➤ min(a)[7,24,0]  ¦  min(case when 1 = 1 then a else null end)[7,24,0]  ¦  min(case when 1 != 1 then null else a end)[7,24,0]  𝄀
+2.0  ¦  2.0  ¦  2.0
 drop table if exists  t1;
 CREATE TABLE t1 (a INT, b INT);
 INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
 SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 GROUP BY b;
-CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END
-Positive
-Positive
+➤ case when AVG(a) >= 0 then Positive else Negative end[12,-1,0]  𝄀
+Positive  𝄀
+Positive  𝄀
 Positive
 drop table if exists  t1;
 drop table if exists  t1;
@@ -140,42 +141,42 @@ CASE id WHEN 0 THEN 0 ELSE 1 END AS simple,
 CASE WHEN id=0 THEN NULL ELSE 1 END AS cond
 FROM small) AS dt
 ON big.id=dt.dt_id;
-id	dt_id	simple	cond
-1	1	1	1
-2	2	1	1
-3	null	null	null
-4	null	null	null
+➤ id[4,32,0]  ¦  dt_id[4,32,0]  ¦  simple[-5,64,0]  ¦  cond[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null
 drop table if exists small;
 drop table if exists big;
 SELECT 'case+union+test'
 UNION
 SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
+➤ case+union+test[12,-1,0]  𝄀
+nobug  𝄀
 case+union+test
-case+union+test
-nobug
 drop table t1;
 CREATE TABLE t1(a int);
 insert into t1 values(1),(1),(2),(1),(3),(2),(1);
 SELECT 1 FROM t1 WHERE a=1 AND CASE 1 WHEN a THEN 1 ELSE 1 END;
-1
-1
-1
-1
+➤ 1[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 DROP TABLE if exists t1;
 DROP TABLE if exists t1;
 create table t1 (USR_ID int not null, MAX_REQ int not null);
 insert into t1 values (1, 3);
 select count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ from t1 group by MAX_REQ;
-count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ
+➤ count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ[-5,64,0]  𝄀
 1
 select Case When Count(*) < MAX_REQ Then 1 Else 0 End from t1 where t1.USR_ID = 1 group by MAX_REQ;
-Case When Count(*) < MAX_REQ Then 1 Else 0 End
+➤ case when Count(*) < MAX_REQ then 1 else 0 end[-5,64,0]  𝄀
 1
 DROP TABLE if exists t1;
 select case when 1 in (1.0, 2.0, 3.0) then true else false end;
-case when 1 in (1.0, 2.0, 3.0) then true else false end
-true
+➤ case when 1 in (1.0, 2.0, 3.0) then true else false end[-7,1,0]  𝄀
+1
 DROP TABLE if exists t1;
 CREATE TABLE t1 (
 id int NOT NULL AUTO_INCREMENT,
@@ -206,31 +207,31 @@ insert into t1 values
 (19, 7986, '1771-12-06'),
 (20, 7987, '1985-10-06');
 select id, case when id < 5 then 0 when id < 10 then 1 when id < 15 then 2 when true then 3 else -1 end as xxx from t1;
-id    xxx
-1    0
-2    0
-3    0
-4    0
-5    1
-6    1
-7    1
-8    1
-9    1
-10    2
-11    2
-12    2
-13    2
-14    2
-15    3
-16    3
-17    3
-18    3
-19    3
-20    3
+➤ id[4,32,0]  ¦  xxx[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  1  𝄀
+7  ¦  1  𝄀
+8  ¦  1  𝄀
+9  ¦  1  𝄀
+10  ¦  2  𝄀
+11  ¦  2  𝄀
+12  ¦  2  𝄀
+13  ¦  2  𝄀
+14  ¦  2  𝄀
+15  ¦  3  𝄀
+16  ¦  3  𝄀
+17  ¦  3  𝄀
+18  ¦  3  𝄀
+19  ¦  3  𝄀
+20  ¦  3
 DROP TABLE t1;
 create table t1(a varchar(100));
 insert into t1 values ("a");
 select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
-a    case when a = a then 1 when upper(a) = b then 2 end
-a    1
+➤ a[12,-1,0]  ¦  case when a = a then 1 when upper(a) = b then 2 end[-5,64,0]  𝄀
+a  ¦  1
 drop table if exists t1;

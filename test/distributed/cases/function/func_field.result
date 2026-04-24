@@ -1,34 +1,38 @@
 select field('Bb', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
-field(Bb, Aa, Bb, Cc, Dd, Ff)
+➤ field(Bb, Aa, Bb, Cc, Dd, Ff)[-5,64,0]  𝄀
 2
 select field('Gg', 'Aa', 'Bb', 'Cc', 'Dd', 'Ff');
-field(Gg, Aa, Bb, Cc, Dd, Ff)
+➤ field(Gg, Aa, Bb, Cc, Dd, Ff)[-5,64,0]  𝄀
 0
 select field('aa', 'AA', 'BB','Aa', 'aA');
-field(aa, AA, BB, Aa, aA)
+➤ field(aa, AA, BB, Aa, aA)[-5,64,0]  𝄀
 1
 select field(' ', 'a', ' ', '\t', '\n');
-field( , a,  , \t, \n)
+➤ field( , a,  , 	, 
+)[-5,64,0]  𝄀
 2
 select field('', ' ', NULL, '\r', '\n');
-field(,  , null, \r, \n)
+➤ field(,  , null, , 
+)[-5,64,0]  𝄀
 0
 select field('', '', '\r', '\n');
-field(, , \r, \n)
+➤ field(, , , 
+)[-5,64,0]  𝄀
 1
 select field(1, '1', 1, 'true');
-strconv.ParseFloat: parsing "true": invalid syntax
+➤ field(1, 1, 1, true)[-5,64,0]  𝄀
+1
 select field(1, 1, 2, 3-2);
-field(1, 1, 2, 3 - 2)
+➤ field(1, 1, 2, 3 - 2)[-5,64,0]  𝄀
 1
 select field(1, 3-2, 2, 1);
-field(1, 3 - 2, 2, 1)
+➤ field(1, 3 - 2, 2, 1)[-5,64,0]  𝄀
 1
 select field(1, 1.0, 2, 1);
-field(1, 1.0, 2, 1)
+➤ field(1, 1.0, 2, 1)[-5,64,0]  𝄀
 1
 select field(1+1, 1, 2, 3, 1+1);
-field(1 + 1, 1, 2, 3, 1 + 1)
+➤ field(1 + 1, 1, 2, 3, 1 + 1)[-5,64,0]  𝄀
 2
 drop table if exists t;
 create table t(
@@ -38,52 +42,52 @@ d double
 );
 insert into t() values (1, 1.1, 2.2), (2, 3.3, 4.4), (0, 0, 0), (0, null, 0);
 select * from t;
-i    f    d
-1    1.1    2.2
-2    3.3    4.4
-0    0.0    0.0
-0    null    0.0
+➤ i[4,32,0]  ¦  f[7,24,0]  ¦  d[8,54,0]  𝄀
+1  ¦  1.1  ¦  2.2  𝄀
+2  ¦  3.3  ¦  4.4  𝄀
+0  ¦  0.0  ¦  0.0  𝄀
+0  ¦  null  ¦  0.0
 select field(1, i, f, d) from t;
-field(1, i, f, d)
-1
-0
-0
+➤ field(1, i, f, d)[-5,64,0]  𝄀
+1  𝄀
+0  𝄀
+0  𝄀
 0
 select field(i, 0, 1, 2) from t;
-field(i, 0, 1, 2)
-2
-3
-1
+➤ field(i, 0, 1, 2)[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+1  𝄀
 1
 select field(i, f, d, 0, 1, 2) from t;
-field(i, f, d, 0, 1, 2)
-4
-5
-1
+➤ field(i, f, d, 0, 1, 2)[-5,64,0]  𝄀
+4  𝄀
+5  𝄀
+1  𝄀
 2
 select field(null, f, d, 0, 1, 2) from t;
-field(null, f, d, 0, 1, 2)
-0
-0
-0
+➤ field(null, f, d, 0, 1, 2)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 select field('1', f, d, 0, 1, 2) from t;
-field(1, f, d, 0, 1, 2)
-4
-4
-4
+➤ field(1, f, d, 0, 1, 2)[-5,64,0]  𝄀
+4  𝄀
+4  𝄀
+4  𝄀
 4
 select field(3.3, f, d, 0, 1, 2) from t;
-field(3.3, f, d, 0, 1, 2)
-0
-0
-0
+➤ field(3.3, f, d, 0, 1, 2)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 select field(3, f, d, 0, 1, 2) from t;
-field(3, f, d, 0, 1, 2)
-0
-0
-0
+➤ field(3, f, d, 0, 1, 2)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 drop table if exists t;
 create table t(
@@ -92,22 +96,22 @@ str2 char(20)
 );
 insert into t values ('hello','world'), ('jaja','haha'), ('didi','dodo'), ('papa','gaga');
 select field(str1, str2) from t;
-field(str1, str2)
-0
-0
-0
+➤ field(str1, str2)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 select field(str2, str1) from t;
-field(str2, str1)
-0
-0
-0
+➤ field(str2, str1)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 select field(str2, str1, NULL) from t;
-field(str2, str1, null)
-0
-0
-0
+➤ field(str2, str1, null)[-5,64,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
 0
 drop table if exists t;
 create table t(
@@ -119,24 +123,24 @@ str4 varchar(50)
 insert into t values ('&*()&DJHKSY&F', 'JHKHJD21k..fdai', 'kl;ji*(', '86168907()*&*fd');
 insert into t values ('&*()&DJHKSY&F', 'JHKHJD21k..fdaiJHKHJD21k..fdai', 'kl;ji*(', '86168907()*&*fd');
 select field(str1, str2, str3, str4) from t;
-field(str1, str2, str3, str4)
-0
+➤ field(str1, str2, str3, str4)[-5,64,0]  𝄀
+0  𝄀
 0
 select field('1', str1, str2) from t;
-field(1, str1, str2)
-0
+➤ field(1, str1, str2)[-5,64,0]  𝄀
+0  𝄀
 0
 select field('&*()&DJHKSY&F', str1, str2) from t;
-field(&*()&DJHKSY&F, str1, str2)
-1
+➤ field(&*()&DJHKSY&F, str1, str2)[-5,64,0]  𝄀
+1  𝄀
 1
 select field('&*()&DJHKSY&F', str1, str2, str3, str4) from t;
-field(&*()&DJHKSY&F, str1, str2, str3, str4)
-1
+➤ field(&*()&DJHKSY&F, str1, str2, str3, str4)[-5,64,0]  𝄀
+1  𝄀
 1
 select field('', str1, str2, str3, str4) from t;
-field(, str1, str2, str3, str4)
-0
+➤ field(, str1, str2, str3, str4)[-5,64,0]  𝄀
+0  𝄀
 0
 drop table if exists t1;
 drop table if exists t2;
@@ -151,22 +155,22 @@ str2 varchar(50)
 insert into t1 values ('',' '), ('aa', 'Aa'), ('null',null);
 insert into t2 values ('','\r'), ('aa', 'AA'), (null, 'null');
 select field(t1.str1, t2.str1) from t1 join t2 on t1.str1 = t2.str1;
-field(t1.str1, t2.str1)
-1
+➤ field(t1.str1, t2.str1)[-5,64,0]  𝄀
+1  𝄀
 1
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
-field(t1.str2, t2.str2)
-0
+➤ field(t1.str2, t2.str2)[-5,64,0]  𝄀
+0  𝄀
 1
 select field(t1.str1, t2.str1) from t1 left join t2 on t1.str1 = t2.str1;
-field(t1.str1, t2.str1)
-1
-1
+➤ field(t1.str1, t2.str1)[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
 0
 select field(t1.str1, t2.str1) from t1 right join t2 on t1.str1 = t2.str1;
-field(t1.str1, t2.str1)
-1
-1
+➤ field(t1.str1, t2.str1)[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
 0
 drop table if exists t1;
 drop table if exists t2;
@@ -183,18 +187,18 @@ primary key (str1)
 insert into t1 values ('',' '), ('aa', 'Aa'), ('null',NULL);
 insert into t2 values ('','\r'), ('aa', 'AA'), ('null', '');
 select field(t1.str1, t2.str1) from t1 inner join t2 on t1.str1 = t2.str1;
-field(t1.str1, t2.str1)
-1
-1
+➤ field(t1.str1, t2.str1)[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
 1
 select field(null, '');
-field(null, )
+➤ field(null, )[-5,64,0]  𝄀
 0
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
-field(t1.str2, t2.str2)
+➤ field(t1.str2, t2.str2)[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
 0
-0
-1
 drop table if exists t1;
 drop table if exists t2;
 create table t1(
@@ -212,24 +216,24 @@ primary key (i)
 insert into t1 values (9999999, 999.999, 888.888), (0, 0.0, 0.00);
 insert into t2 values (9999999, 999.999, 888.888), (0, 0, 0);
 select field(t1.i, t2.i) from t1 inner join t2 on t1.i = t2.i;
-field(t1.i, t2.i)
-1
+➤ field(t1.i, t2.i)[-5,64,0]  𝄀
+1  𝄀
 1
 select field(t1.d, t2.d) from t1 left join t2 on t1.d = t2.d;
-field(t1.d, t2.d)
-1
+➤ field(t1.d, t2.d)[-5,64,0]  𝄀
+1  𝄀
 1
 select field(t1.f, t2.f) from t1 right join t2 on t1.f = t2.f;
-field(t1.f, t2.f)
-1
+➤ field(t1.f, t2.f)[-5,64,0]  𝄀
+1  𝄀
 1
 select field(t1.f, t2.d) from t1 right join t2 on t1.f = t2.f;
-field(t1.f, t2.d)
-0
+➤ field(t1.f, t2.d)[-5,64,0]  𝄀
+0  𝄀
 1
 select field(t1.i, t2.f) from t1 right join t2 on t1.f = t2.f;
-field(t1.i, t2.f)
-0
+➤ field(t1.i, t2.f)[-5,64,0]  𝄀
+0  𝄀
 1
 drop table if exists t1;
 drop table if exists t2;
@@ -246,15 +250,15 @@ primary key (i)
 insert into t1 values (0.01, 0.001), (0.0, -1), (-0.000000001, 1);
 insert into t2 values (0.01, 0.01), (-1.0, -1), (0.000000001, -1);
 select field(t1.i, t2.i) from t1 inner join t2 on t1.i = t2.i;
-field(t1.i, t2.i)
+➤ field(t1.i, t2.i)[-5,64,0]  𝄀
 1
 select t2.f, t1.f, field(t2.f, t1.f) from t1 right join t2 on t1.i = t2.i;
-f    f    field(t2.f, t1.f)
-0.010    0.001    0
--1.000    null    0
--1.000    null    0
+➤ f[3,6,3]  ¦  f[3,6,3]  ¦  field(t2.f, t1.f)[-5,64,0]  𝄀
+0.010  ¦  0.001  ¦  0  𝄀
+-1.000  ¦  null  ¦  0  𝄀
+-1.000  ¦  null  ¦  0
 select t1.i, t2.f, field(t1.i, t2.f) from t1 left join t2 on t1.i = t2.i;
-i    f    field(t1.i, t2.f)
-0.01    0.010    1
-0.0    null    0
--1.0E-9    null    0
+➤ i[8,54,0]  ¦  f[3,6,3]  ¦  field(t1.i, t2.f)[-5,64,0]  𝄀
+0.01  ¦  0.010  ¦  1  𝄀
+0.0  ¦  null  ¦  0  𝄀
+-1.0E-9  ¦  null  ¦  0

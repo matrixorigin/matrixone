@@ -15,56 +15,125 @@ INSERT INTO test_vector_edge_cases (id, name, score, embedding) VALUES
 SELECT id, name, score FROM test_vector_edge_cases
 ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
 LIMIT 3;
-id	name	score
-4	Vector D	3.5
-1	Vector A	5.0
-3	Vector C	4.0
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[7,24,0]  𝄀
+4  ¦  Vector D  ¦  3.5  𝄀
+1  ¦  Vector A  ¦  5.0  𝄀
+3  ¦  Vector C  ¦  4.0
 SELECT id, name, score FROM test_vector_edge_cases
 WHERE score >= 4.0
 ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
 LIMIT (1+2);
-id	name	score
-1	Vector A	5.0
-3	Vector C	4.0
-2	Vector B	4.5
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[7,24,0]  𝄀
+1  ¦  Vector A  ¦  5.0  𝄀
+3  ¦  Vector C  ¦  4.0  𝄀
+2  ¦  Vector B  ¦  4.5
 SELECT id, name, score FROM test_vector_edge_cases
 WHERE score >= 4.0
 ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
 LIMIT 3;
-id	name	score
-1	Vector A	5.0
-3	Vector C	4.0
-2	Vector B	4.5
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[7,24,0]  𝄀
+1  ¦  Vector A  ¦  5.0  𝄀
+3  ¦  Vector C  ¦  4.0  𝄀
+2  ¦  Vector B  ¦  4.5
 EXPLAIN SELECT id, name, score FROM test_vector_edge_cases
 ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
 LIMIT 3;
-AP QUERY PLAN ON ONE CN(10 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 3
-        ->  Join
-              Join Type: INNER
-              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases
-                    Runtime Filter Probe: test_vector_edge_cases.id
-              ->  Table Function on ivf_search
-                    Limit: 3
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
+                    Runtime Filter Probe: test_vector_edge_cases.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3
 EXPLAIN SELECT id, name, score FROM test_vector_edge_cases
 WHERE score >= 4.0
 ORDER BY l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]')
 LIMIT 3;
-AP QUERY PLAN ON ONE CN(10 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 3
-        ->  Join
-              Join Type: INNER
-              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)
-              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases
-                    Filter Cond: (test_vector_edge_cases.score >= 4)
-              ->  Table Function on ivf_search
-                    Limit: 15
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
+              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
+                    Filter Cond: (test_vector_edge_cases.score >= 4)  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 15
+EXPLAIN WITH t AS (
+SELECT id, name, score,
+l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]') as vec_dist
+FROM test_vector_edge_cases
+)
+SELECT id, name, score
+FROM t
+WHERE vec_dist < 0.8
+ORDER BY vec_dist
+LIMIT 3;
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
+                    Runtime Filter Probe: test_vector_edge_cases.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  DistRange: (-Inf,0.8)
+EXPLAIN WITH t AS (
+SELECT id, name, score,
+l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]') as vec_dist
+FROM test_vector_edge_cases
+)
+SELECT id, name, score
+FROM t
+WHERE vec_dist >= 0.8
+ORDER BY vec_dist
+LIMIT 3;
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
+                    Runtime Filter Probe: test_vector_edge_cases.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  DistRange: [0.8,Inf)
+EXPLAIN WITH t AS (
+SELECT id, name, score,
+l2_distance(embedding, '[0.863103449344635,0.6232981085777283,0.3308980166912079,0.06355834752321243,0.3109823167324066,0.32518333196640015,0.7296061515808105,0.6375574469566345,0.8872127532958984,0.472214937210083,0.11959424614906311,0.7132447957992554,0.7607850432395935,0.5612772107124329,0.7709671854972839,0.49379560351371765]') as vec_dist
+FROM test_vector_edge_cases
+)
+SELECT id, name, score
+FROM t
+WHERE vec_dist <= 1.0 AND vec_dist > 0.4
+ORDER BY vec_dist
+LIMIT 3;
+➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (test_vector_edge_cases.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
+                    Runtime Filter Probe: test_vector_edge_cases.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  DistRange: (0.4,1]
 drop table test_vector_edge_cases;

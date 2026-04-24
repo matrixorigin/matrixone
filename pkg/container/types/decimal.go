@@ -968,7 +968,9 @@ func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		err = y.ScaleInplace(scale - scale2)
 	} else if scale1 < scale2 {
 		scale = scale2
-		err = x.ScaleInplace(scale - scale1)
+		err = (&x).ScaleInplace(scale - scale1)
+	} else {
+		scale = scale1
 	}
 	if err == nil {
 		z, err = x.Add128(y)
@@ -1002,7 +1004,9 @@ func (x Decimal128) Sub(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		err = y.ScaleInplace(scale - scale2)
 	} else if scale1 < scale2 {
 		scale = scale2
-		err = x.ScaleInplace(scale - scale1)
+		err = (&x).ScaleInplace(scale - scale1)
+	} else {
+		scale = scale1
 	}
 	if err == nil {
 		z, err = x.Sub128(y)

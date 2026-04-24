@@ -1,0 +1,174 @@
+DROP TABLE IF EXISTS t_int32;
+DROP TABLE IF EXISTS t_float32;
+DROP TABLE IF EXISTS t_float64;
+DROP TABLE IF EXISTS t_decimal;
+CREATE TABLE t_int32 (
+id INT PRIMARY KEY,
+val INT,
+KEY idx_val (val)
+);
+INSERT INTO t_int32 VALUES (1, 9), (2, 10), (3, 100);
+EXPLAIN SELECT * FROM t_int32 WHERE val = 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_int32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_int32 WHERE val = 9.0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_int32  𝄀
+        Filter Cond: (cast(t_int32.val AS DECIMAL128(38, 1)) = 9.0)
+              -- HINT: Cast expression may prevent index usage
+EXPLAIN SELECT * FROM t_int32 WHERE val = 9.5;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_int32  𝄀
+        Filter Cond: (cast(t_int32.val AS DECIMAL128(38, 1)) = 9.5)
+              -- HINT: Cast expression may prevent index usage
+SELECT * FROM t_int32 WHERE val = 9;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  9
+SELECT * FROM t_int32 WHERE val = 9.0;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  9
+SELECT * FROM t_int32 WHERE val = 9.5;
+➤ id[4,32,0]  ¦  val[4,32,0]
+CREATE TABLE t_float32 (
+id INT PRIMARY KEY,
+val FLOAT,
+KEY idx_val (val)
+);
+INSERT INTO t_float32 VALUES (1, 9.0), (2, 9.5), (3, 10.0);
+EXPLAIN SELECT * FROM t_float32 WHERE val = 9.0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_float32 WHERE val = 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_float32 WHERE val >= 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val >= 9)
+SELECT * FROM t_float32 WHERE val = 9.0;
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0
+SELECT * FROM t_float32 WHERE val = 9;
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0
+SELECT * FROM t_float32 WHERE val >= 9 ORDER BY id;
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0  𝄀
+2  ¦  9.5  𝄀
+3  ¦  10.0
+CREATE TABLE t_float64 (
+id INT PRIMARY KEY,
+val DOUBLE,
+KEY idx_val (val)
+);
+INSERT INTO t_float64 VALUES (1, 9.0), (2, 9.5), (3, 10.0);
+EXPLAIN SELECT * FROM t_float64 WHERE val = 9.0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float64.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_float64 WHERE val = 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float64.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+SELECT * FROM t_float64 WHERE val = 9.0;
+➤ id[4,32,0]  ¦  val[8,54,0]  𝄀
+1  ¦  9.0
+SELECT * FROM t_float64 WHERE val = 9;
+➤ id[4,32,0]  ¦  val[8,54,0]  𝄀
+1  ¦  9.0
+CREATE TABLE t_decimal (
+id INT PRIMARY KEY,
+val DECIMAL(10,2),
+KEY idx_val (val)
+);
+INSERT INTO t_decimal VALUES (1, 9.00), (2, 9.50), (3, 10.00);
+EXPLAIN SELECT * FROM t_decimal WHERE val = 9.0;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_decimal.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+SELECT * FROM t_decimal WHERE val = 9.0;
+➤ id[4,32,0]  ¦  val[3,10,2]  𝄀
+1  ¦  9.00
+SELECT * FROM t_decimal WHERE val = 9.5;
+➤ id[4,32,0]  ¦  val[3,10,2]  𝄀
+2  ¦  9.50
+EXPLAIN SELECT * FROM t_float32 WHERE val < 10;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val < 10)
+EXPLAIN SELECT * FROM t_float32 WHERE val <= 10;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val <= 10)
+EXPLAIN SELECT * FROM t_float32 WHERE val > 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val > 9)
+EXPLAIN SELECT * FROM t_float32 WHERE val >= 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val >= 9)
+EXPLAIN SELECT * FROM t_float32 WHERE val <> 9;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on index_cast_optimization.t_float32  𝄀
+        Filter Cond: (t_float32.val <> 9)
+SELECT COUNT(*) FROM t_float32 WHERE val < 10;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM t_float32 WHERE val <= 10;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SELECT COUNT(*) FROM t_float32 WHERE val > 9;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM t_float32 WHERE val >= 9;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SELECT COUNT(*) FROM t_float32 WHERE val <> 9;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+EXPLAIN SELECT * FROM t_float32 WHERE val = CAST(9.0 AS DECIMAL);
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_float32 WHERE val = 8 + 1;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+EXPLAIN SELECT * FROM t_float32 WHERE val = ABS(-9);
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_float32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+SELECT * FROM t_float32 WHERE val = CAST(9.0 AS DECIMAL);
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0
+SELECT * FROM t_float32 WHERE val = 8 + 1;
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0
+SELECT * FROM t_float32 WHERE val = ABS(-9);
+➤ id[4,32,0]  ¦  val[7,24,0]  𝄀
+1  ¦  9.0
+DROP TABLE t_int32;
+DROP TABLE t_float32;
+DROP TABLE t_float64;
+DROP TABLE t_decimal;
