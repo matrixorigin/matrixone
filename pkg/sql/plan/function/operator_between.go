@@ -73,6 +73,10 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Decimal128) bool {
 			return lhs.Compare(rhs) <= 0
 		})
+	case types.T_decimal256:
+		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Decimal256) bool {
+			return lhs.Compare(rhs) <= 0
+		})
 	case types.T_Rowid:
 		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) bool {
 			return lhs.LE(&rhs)

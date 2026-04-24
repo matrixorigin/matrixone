@@ -27188,8 +27188,8 @@ yydefault:
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				goto ret1
 			}
-			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
-				yylex.Error("For decimal(M), M must between 0 and 38.")
+			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
+				yylex.Error("For decimal(M), M must between 0 and 65.")
 				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
@@ -27203,12 +27203,24 @@ yydefault:
 						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
-			} else {
+			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 38 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:       tree.FloatFamily,
 						FamilyString: yyDollar[1].str,
 						Width:        128,
+						Locale:       &locale,
+						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
+						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
+					},
+				}
+			} else {
+				yyLOCAL = &tree.T{
+					InternalType: tree.InternalType{
+						Family:       tree.FloatFamily,
+						FamilyString: yyDollar[1].str,
+						Width:        256,
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
@@ -27228,8 +27240,8 @@ yydefault:
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				goto ret1
 			}
-			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
-				yylex.Error("For decimal(M), M must between 0 and 38.")
+			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
+				yylex.Error("For decimal(M), M must between 0 and 65.")
 				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
@@ -27243,12 +27255,24 @@ yydefault:
 						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
 					},
 				}
-			} else {
+			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 38 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
 						Family:       tree.FloatFamily,
 						FamilyString: yyDollar[1].str,
 						Width:        128,
+						Locale:       &locale,
+						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
+						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,
+						Scale:        yyDollar[2].lengthScaleOptUnion().Scale,
+					},
+				}
+			} else {
+				yyLOCAL = &tree.T{
+					InternalType: tree.InternalType{
+						Family:       tree.FloatFamily,
+						FamilyString: yyDollar[1].str,
+						Width:        256,
 						Locale:       &locale,
 						Oid:          uint32(defines.MYSQL_TYPE_DECIMAL),
 						DisplayWith:  yyDollar[2].lengthScaleOptUnion().DisplayWith,

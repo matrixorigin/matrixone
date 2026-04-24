@@ -374,8 +374,8 @@ DROP TABLE numeric05;
 
 -- Abnormal:Exception creation table:D or M is out of valid range
 DROP TABLE IF EXISTS numeric06;
-CREATE TABLE numeric06(a numeric(39,10));
-CREATE TABLE numeric06(b numeric(40,39));
+CREATE TABLE numeric06(a numeric(66,10));
+CREATE TABLE numeric06(b numeric(67,39));
 DROP TABLE numeric06;
 
 -- D is not specified:Default D is 0

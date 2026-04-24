@@ -599,6 +599,16 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Decimal256]().operatorIn
+				},
+			},
+			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1140,6 +1150,16 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256, types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Decimal256]().operatorNotIn
+				},
+			},
+			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1583,6 +1603,14 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					// After type conversion, both parameters may be decimal128
 					// Check both parameters to determine result type
+					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+						scale1 := parameters[0].Scale
+						scale2 := parameters[1].Scale
+						if scale1 < scale2 {
+							scale1 = scale2
+						}
+						return types.New(types.T_decimal256, 65, scale1)
+					}
 					if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
 						scale1 := parameters[0].Scale
 						scale2 := parameters[1].Scale
@@ -1650,6 +1678,14 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
+					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+						scale1 := parameters[0].Scale
+						scale2 := parameters[1].Scale
+						if scale1 < scale2 {
+							scale1 = scale2
+						}
+						return types.New(types.T_decimal256, 65, scale1)
+					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
 						scale2 := parameters[1].Scale
@@ -1717,6 +1753,21 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
+					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+						scale := int32(12)
+						scale1 := parameters[0].Scale
+						scale2 := parameters[1].Scale
+						if scale1 > scale {
+							scale = scale1
+						}
+						if scale2 > scale {
+							scale = scale2
+						}
+						if scale1+scale2 < scale {
+							scale = scale1 + scale2
+						}
+						return types.New(types.T_decimal256, 65, scale)
+					}
 					if parameters[0].Oid == types.T_decimal64 || parameters[0].Oid == types.T_decimal128 {
 						scale := int32(12)
 						scale1 := parameters[0].Scale
@@ -1786,6 +1837,17 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
+					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+						scale := int32(12)
+						scale1 := parameters[0].Scale
+						if scale > scale1+6 {
+							scale = scale1 + 6
+						}
+						if scale < scale1 {
+							scale = scale1
+						}
+						return types.New(types.T_decimal256, 65, scale)
+					}
 					if parameters[0].Oid.IsDecimal() {
 						scale := int32(12)
 						scale1 := parameters[0].Scale
@@ -2024,6 +2086,16 @@ var supportedOperators = []FuncNew{
 					return operatorUnaryPlus[types.Decimal128]
 				},
 			},
+			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryPlus[types.Decimal256]
+				},
+			},
 		},
 	},
 
@@ -2114,6 +2186,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorUnaryMinusDecimal128
+				},
+			},
+			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryMinusDecimal256
 				},
 			},
 		},
@@ -2407,6 +2489,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Decimal128]
+				},
+			},
+			{
+				overloadId: 100,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Decimal256]
 				},
 			},
 			{

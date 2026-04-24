@@ -343,7 +343,7 @@ type Decimal interface {
 }
 
 type DecimalWithFormat interface {
-	Decimal64 | Decimal128
+	Decimal64 | Decimal128 | Decimal256
 	Format(scale int32) string
 }
 

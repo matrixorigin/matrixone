@@ -39,7 +39,7 @@ type sortType interface {
 		~[]float32 | ~[]float64 |
 		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
 		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
-		~[]types.Decimal64 | ~[]types.Decimal128 |
+		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
 		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
 		~[][]float32 | ~[][]float64
 }
@@ -58,6 +58,8 @@ func BoolLess(a, b bool) bool { return !a && b }
 func Decimal64Less(a, b types.Decimal64) bool { return a.Lt(b) }
 
 func Decimal128Less(a, b types.Decimal128) bool { return a.Lt(b) }
+
+func Decimal256Less(a, b types.Decimal256) bool { return a.Less(b) }
 
 func UuidLess(a, b types.Uuid) bool {
 	return a.Lt(b)
@@ -247,6 +249,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, decimal128Greater)
 		}
+	case types.T_decimal256:
+		col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+		if !desc {
+			genericSort(col, os, decimal256Less)
+		} else {
+			genericSort(col, os, decimal256Greater)
+		}
 	case types.T_uuid:
 		col := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 		if !desc {
@@ -335,6 +344,14 @@ func decimal128Less(data []types.Decimal128, i, j int64) bool {
 }
 
 func decimal128Greater(data []types.Decimal128, i, j int64) bool {
+	return data[i].Compare(data[j]) > 0
+}
+
+func decimal256Less(data []types.Decimal256, i, j int64) bool {
+	return data[i].Compare(data[j]) < 0
+}
+
+func decimal256Greater(data []types.Decimal256, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
 }
 

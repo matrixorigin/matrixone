@@ -413,7 +413,8 @@ const (
 
 	STARLARK     = 345
 	TRY_STARLARK = 346
-	DAYOFWEEK    = 347
+	DAYOFWEEK = 347
+	TRUNCATE  = 348
 
 	CAST_INDEX_TO_SET_VALUE       = 407
 	CAST_SET_VALUE_TO_INDEX       = 408
@@ -769,4 +770,5 @@ var functionIdRegister = map[string]int32{
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
 	"dayofweek":    DAYOFWEEK,
+	"truncate":     TRUNCATE,
 }

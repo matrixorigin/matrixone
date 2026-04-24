@@ -2,36 +2,36 @@ drop table if exists tbl_int;
 CREATE TABLE tbl_int (col1 INT);
 INSERT INTO tbl_int VALUES (1), (2), (3), (4), (5), (6), (7), (8), (NULL), (NULL);
 SELECT * FROM tbl_int WHERE col1 IS NULL;
-col1
-null
+➤ col1[4,32,0]  𝄀
+null  𝄀
 null
 SELECT * FROM tbl_int WHERE col1 IS NOT NULL;
-col1
-1
-2
-3
-4
-5
-6
-7
+➤ col1[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
 8
 drop table if exists tbl_int;
 drop table if exists tbl_double;
 CREATE TABLE tbl_double (col1 DOUBLE);
 INSERT INTO tbl_double VALUES (-1.1), (0.0), (1.1), (2.2), (3.3), (4.4), (5.5), (6.6), (NULL), (NULL);
 SELECT * FROM tbl_double WHERE col1 IS NULL;
-col1
-null
+➤ col1[8,54,0]  𝄀
+null  𝄀
 null
 SELECT * FROM tbl_double WHERE col1 IS NOT NULL;
-col1
--1.1
-0.0
-1.1
-2.2
-3.3
-4.4
-5.5
+➤ col1[8,54,0]  𝄀
+-1.1  𝄀
+0.0  𝄀
+1.1  𝄀
+2.2  𝄀
+3.3  𝄀
+4.4  𝄀
+5.5  𝄀
 6.6
 drop table if exists tbl_double;
 drop table if exists tbl_datetime;
@@ -42,35 +42,34 @@ INSERT INTO tbl_datetime VALUES
 ("2017-02-01 00:00:00"), ("2018-01-01 00:00:00.999999"),
 ("2018-01-01 00:00:01"), ("3019-01-01 10:10:10.101010"), (NULL), (NULL);
 SELECT * FROM tbl_datetime WHERE col1 IS NULL;
-col1
-null
+➤ col1[93,64,0]  𝄀
+null  𝄀
 null
 SELECT * FROM tbl_datetime WHERE col1 IS NOT NULL;
-col1
-1000-01-01 00:00:01
-9999-12-31 23:59:59.999998000
-2017-01-01 00:00:00
-2017-01-01 00:00:00.000001000
-2017-02-01 00:00:00
-2018-01-01 00:00:00.999999000
-2018-01-01 00:00:01
+➤ col1[93,64,0]  𝄀
+1000-01-01 00:00:01  𝄀
+9999-12-31 23:59:59.999998000  𝄀
+2017-01-01 00:00:00  𝄀
+2017-01-01 00:00:00.000001000  𝄀
+2017-02-01 00:00:00  𝄀
+2018-01-01 00:00:00.999999000  𝄀
+2018-01-01 00:00:01  𝄀
 3019-01-01 10:10:10.101010000
 drop table if exists tbl_datetime;
 drop table if exists tbl_decimal;
 CREATE TABLE tbl_decimal (col1 DECIMAL(65, 30));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 46 near "));";
 drop table if exists tbl_decimal;
 drop table if exists t1;
 create table t1 (id int not null, str char(10));
 insert into t1 values (1, null),(2, null),(3, "foo"),(4, "bar");
 select * from t1 where str is null;
-id	str
-1	null
-2	null
+➤ id[4,32,0]  ¦  str[1,10,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 select * from t1 where str is not null;
-id	str
-3	foo
-4	bar
+➤ id[4,32,0]  ¦  str[1,10,0]  𝄀
+3  ¦  foo  𝄀
+4  ¦  bar
 drop table if exists t1;
 drop table if exists t1;
 drop table if exists t2;
@@ -80,47 +79,47 @@ insert into t1 values ('2001-01-01 1:1:1', '2001-01-01 1:1:1'),
 ('2001-01-01 1:1:1', '2001-01-01 1:1:1');
 insert into t2 values ('2001-01-01 1:1:1'), ('2001-01-01 1:1:1');
 SELECT outr.dt FROM t1 AS outr WHERE outr.dt IN (SELECT innr.dt FROM t2 AS innr WHERE outr.dt IS NULL );
-dt
+➤ dt[93,64,0]
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (id int not null, str char(10), index(str));
 insert into t1 values (1, null), (2, null), (3, "foo"), (4, "bar");
 select * from t1 where str is not null order by id;
-id	str
-3	foo
-4	bar
+➤ id[4,32,0]  ¦  str[1,10,0]  𝄀
+3  ¦  foo  𝄀
+4  ¦  bar
 select * from t1 where str is null;
-id	str
-1	null
-2	null
+➤ id[4,32,0]  ¦  str[1,10,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 drop table if exists t1;
 create table t1 (a int, key (a));
 insert into t1 values (NULL), (0), (1), (2), (3), (4), (5), (6), (7), (8), (9),
 (10), (11), (12), (13), (14), (15), (16), (17), (18), (19);
 select * from t1 where not(a is null);
-a
-0
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
+➤ a[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8  𝄀
+9  𝄀
+10  𝄀
+11  𝄀
+12  𝄀
+13  𝄀
+14  𝄀
+15  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
 19
 select * from t1 where not(a is not null);
-a
+➤ a[4,32,0]  𝄀
 null
 drop table if exists t1;
 drop table if exists t1;
@@ -128,8 +127,8 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1),(NULL);
 UPDATE t1 SET a = 2 WHERE a IS NULL;
 select * from t1;
-a
-1
+➤ a[4,32,0]  𝄀
+1  𝄀
 2
 drop table if exists t1;
 drop table if exists t1;
@@ -140,10 +139,10 @@ create table t2 (a int, b int);
 insert into t1 values (1,1),(2,1),(3,1);
 insert into t2 values (1,1), (3,1);
 select t1.a, t1.b,t2.a, t2.b from t1 left join t2  on t1.a=t2.a where t1.b=1 and t2.b=1 or t2.a is NULL;
-a	b	a	b
-1	1	1	1
-2	1	null	null
-3	1	3	1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  null  ¦  null  𝄀
+3  ¦  1  ¦  3  ¦  1
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -159,19 +158,19 @@ INSERT INTO t1 VALUES (1,1,'a'),(2,2,'b'),(2,3,'c'),(3,4,'E'),(3,5,'C'),(3,6,'D'
 create table t2 (id int, a bigint unsigned not null, c char(10), d int, primary key (a));
 insert into t2 values (1,1,"a",1),(3,4,"A",4),(3,5,"B",5),(3,6,"C",6),(4,7,"D",7);
 select t1.*,t2.* from t1 left join t2 on (t1.a=t2.a) where t2.id is null;
-grp	a	c	id	a	c	d
-2	2	b	null	null	null	null
-2	3	c	null	null	null	null
-null	null		null	null	null	null
+➤ grp[4,32,0]  ¦  a[-5,64,0]  ¦  c[1,10,0]  ¦  id[4,32,0]  ¦  a[-5,64,0]  ¦  c[1,10,0]  ¦  d[4,32,0]  𝄀
+2  ¦  2  ¦  b  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  3  ¦  c  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦    ¦  null  ¦  null  ¦  null  ¦  null
 select t1.*,t2.* from t1 left join t2 on (t1.a=t2.a and t2.id is null);
-grp	a	c	id	a	c	d
-1	1	a	null	null	null	null
-2	2	b	null	null	null	null
-2	3	c	null	null	null	null
-3	4	E	null	null	null	null
-3	5	C	null	null	null	null
-3	6	D	null	null	null	null
-null	null		null	null	null	null
+➤ grp[4,32,0]  ¦  a[-5,64,0]  ¦  c[1,10,0]  ¦  id[4,32,0]  ¦  a[-5,64,0]  ¦  c[1,10,0]  ¦  d[4,32,0]  𝄀
+1  ¦  1  ¦  a  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  2  ¦  b  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  3  ¦  c  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  4  ¦  E  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  5  ¦  C  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  6  ¦  D  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦    ¦  null  ¦  null  ¦  null  ¦  null
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -193,17 +192,17 @@ INSERT INTO t2 VALUES (1,1,'El Gato');
 INSERT INTO t2 VALUES (2,1,'Perrito');
 INSERT INTO t2 VALUES (3,3,'Happy');
 select t1.name, t2.name, t2.id from t1 left join t2 on (t1.id = t2.owner) where t2.id is null;
-name	name	id
-Lilliana Angelovska	null	null
+➤ name[1,60,0]  ¦  name[1,60,0]  ¦  id[5,16,0]  𝄀
+Lilliana Angelovska  ¦  null  ¦  null
 select t1.name, t2.name, t2.id from t1 left join t2 on (t1.id = t2.owner) where t2.name is null;
-name	name	id
-Lilliana Angelovska	null	null
+➤ name[1,60,0]  ¦  name[1,60,0]  ¦  id[5,16,0]  𝄀
+Lilliana Angelovska  ¦  null  ¦  null
 select t1.name, t2.name, t2.id from t2 right join t1 on (t1.id = t2.owner) where t2.id is null;
-name	name	id
-Lilliana Angelovska	null	null
+➤ name[1,60,0]  ¦  name[1,60,0]  ¦  id[5,16,0]  𝄀
+Lilliana Angelovska  ¦  null  ¦  null
 select t1.name, t2.name, t2.id from t2 right join t1 on (t1.id = t2.owner) where t2.name is null;
-name	name	id
-Lilliana Angelovska	null	null
+➤ name[1,60,0]  ¦  name[1,60,0]  ¦  id[5,16,0]  𝄀
+Lilliana Angelovska  ¦  null  ¦  null
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -216,10 +215,10 @@ INSERT INTO t2 VALUES (1,'x');
 INSERT INTO t2 VALUES (2,'y');
 INSERT INTO t2 VALUES (3,'z');
 SELECT t2.id2 FROM t2 LEFT OUTER JOIN t1 ON t1.id2 = t2.id2 WHERE id1 IS NULL;
-id2
+➤ id2[4,32,0]  𝄀
 3
 SELECT t2.id2 FROM t2 NATURAL LEFT OUTER JOIN t1 WHERE id1 IS NULL;
-id2
+➤ id2[4,32,0]  𝄀
 3
 drop table if exists t1;
 drop table if exists t2;
@@ -232,13 +231,13 @@ rep_del tinyint(4)
 INSERT INTO t1 VALUES (1,NULL,NULL);
 INSERT INTO t1 VALUES (2,1,NULL);
 select * from t1 LEFT JOIN t1 t2 ON (t1.id=t2.pid) AND t2.rep_del IS NULL;
-id	pid	rep_del	id	pid	rep_del
-1	null	null	2	1	null
-2	1	null	null	null	null
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  rep_del[-6,8,0]  ¦  id[4,32,0]  ¦  pid[4,32,0]  ¦  rep_del[-6,8,0]  𝄀
+1  ¦  null  ¦  null  ¦  2  ¦  1  ¦  null  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null
 select * from t1 LEFT JOIN t1 t2 ON (t1.id=t2.pid) AND t2.rep_del IS NULL;
-id	pid	rep_del	id	pid	rep_del
-1	null	null	2	1	null
-2	1	null	null	null	null
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  rep_del[-6,8,0]  ¦  id[4,32,0]  ¦  pid[4,32,0]  ¦  rep_del[-6,8,0]  𝄀
+1  ¦  null  ¦  null  ¦  2  ¦  1  ¦  null  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null
 drop table if exists t1;
 drop table if exists t1;
 drop table if exists t2;
@@ -249,25 +248,25 @@ invalid argument parsedate, bad value 1999-05-100
 CREATE TABLE t2 (a DATETIME NOT NULL, b INT);
 INSERT INTO t2 VALUES ('1999-05-10 00:01:01',1), ('1999-05-10 00:00:00',2);
 SELECT * FROM t1 WHERE a IS NULL;
-a	b
+➤ a[91,64,0]  ¦  b[4,32,0]
 SELECT * FROM t2 WHERE a IS NULL;
-a	b
+➤ a[93,64,0]  ¦  b[4,32,0]
 SELECT * FROM t1 LEFT JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
-a	b	a	b
+➤ a[91,64,0]  ¦  b[4,32,0]  ¦  a[91,64,0]  ¦  b[4,32,0]
 SELECT * FROM t2 LEFT JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
-a	b	a	b
-1999-05-10 00:01:01	1	1999-05-10 00:00:00	2
-1999-05-10 00:01:01	1	1999-05-10 00:01:01	1
-1999-05-10 00:00:00	2	1999-05-10 00:00:00	2
-1999-05-10 00:00:00	2	1999-05-10 00:01:01	1
+➤ a[93,64,0]  ¦  b[4,32,0]  ¦  a[93,64,0]  ¦  b[4,32,0]  𝄀
+1999-05-10 00:01:01  ¦  1  ¦  1999-05-10 00:01:01  ¦  1  𝄀
+1999-05-10 00:00:00  ¦  2  ¦  1999-05-10 00:01:01  ¦  1  𝄀
+1999-05-10 00:01:01  ¦  1  ¦  1999-05-10 00:00:00  ¦  2  𝄀
+1999-05-10 00:00:00  ¦  2  ¦  1999-05-10 00:00:00  ¦  2
 SELECT * FROM t1 JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
-a	b	a	b
+➤ a[91,64,0]  ¦  b[4,32,0]  ¦  a[91,64,0]  ¦  b[4,32,0]
 SELECT * FROM t2 JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
-a	b	a	b
-1999-05-10 00:00:00	2	1999-05-10 00:01:01	1
-1999-05-10 00:01:01	1	1999-05-10 00:01:01	1
-1999-05-10 00:00:00	2	1999-05-10 00:00:00	2
-1999-05-10 00:01:01	1	1999-05-10 00:00:00	2
+➤ a[93,64,0]  ¦  b[4,32,0]  ¦  a[93,64,0]  ¦  b[4,32,0]  𝄀
+1999-05-10 00:01:01  ¦  1  ¦  1999-05-10 00:01:01  ¦  1  𝄀
+1999-05-10 00:00:00  ¦  2  ¦  1999-05-10 00:01:01  ¦  1  𝄀
+1999-05-10 00:01:01  ¦  1  ¦  1999-05-10 00:00:00  ¦  2  𝄀
+1999-05-10 00:00:00  ¦  2  ¦  1999-05-10 00:00:00  ¦  2
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -278,10 +277,10 @@ insert into t1 values("2004-12-12 11:22:33");
 insert into t1 values("2004-12-12 10:22:59");
 insert into t1 values(null);
 select count(*) from t1 where YEAR(col1) IS NULL;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from t1 where YEAR(col1) IS not NULL;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 3
 drop table if exists t1;
 drop table if exists t1;
@@ -293,18 +292,18 @@ insert into t1 (id, cur_date) values (1, '2007-04-25 18:30:22');
 insert into t2 (id, cur_date) values (1, '2007-04-25');
 select * from t1
 where id in (select id from t1 as x1 where (t1.cur_date is null));
-id	cur_date
+➤ id[4,32,0]  ¦  cur_date[93,64,0]
 select * from t2
 where id in (select id from t2 as x1 where (t2.cur_date is null));
-id	cur_date
+➤ id[4,32,0]  ¦  cur_date[91,64,0]
 insert into t1 (id, cur_date) values (2, '2007-04-26 18:30:22');
 insert into t2 (id, cur_date) values (2, '2007-04-26');
 select * from t1
 where id in (select id from t1 as x1 where (t1.cur_date is null));
-id	cur_date
+➤ id[4,32,0]  ¦  cur_date[93,64,0]
 select * from t2
 where id in (select id from t2 as x1 where (t2.cur_date is null));
-id	cur_date
+➤ id[4,32,0]  ¦  cur_date[91,64,0]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -323,17 +322,17 @@ PRIMARY KEY  (`topic`)
 ) ;
 INSERT INTO t2 (mot,topic,dt,pseudo) VALUES ('joce','40143','2002-10-22','joce'), ('joce','43506','2002-10-22','joce');
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic is null);
-mot	topic	dt	pseudo
+➤ mot[12,-1,0]  ¦  topic[4,32,0]  ¦  dt[91,64,0]  ¦  pseudo[12,-1,0]
 SELECT * from t2 where topic IN (SELECT SUM(topic) FROM t1);
-mot	topic	dt	pseudo
+[unknown result because it is related to issue#3307]
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic is not null);
-mot	topic	dt	pseudo
-joce	40143	2002-10-22	joce
-joce	43506	2002-10-22	joce
+➤ mot[12,-1,0]  ¦  topic[4,32,0]  ¦  dt[91,64,0]  ¦  pseudo[12,-1,0]  𝄀
+joce  ¦  40143  ¦  2002-10-22  ¦  joce  𝄀
+joce  ¦  43506  ¦  2002-10-22  ¦  joce
 SELECT * from t2 where topic NOT IN (SELECT topic FROM t2 GROUP BY topic HAVING topic is null);
-mot	topic	dt	pseudo
-joce	40143	2002-10-22	joce
-joce	43506	2002-10-22	joce
+➤ mot[12,-1,0]  ¦  topic[4,32,0]  ¦  dt[91,64,0]  ¦  pseudo[12,-1,0]  𝄀
+joce  ¦  40143  ¦  2002-10-22  ¦  joce  𝄀
+joce  ¦  43506  ¦  2002-10-22  ¦  joce
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -343,68 +342,68 @@ INSERT INTO t1 VALUES ('test1');
 INSERT INTO t2 VALUES('test1','2016-12-13'),('test2','2016-12-14'),('test3','2016-12-15'),('test4',NULL),('test5',NULL);
 SELECT b,
 CASE  WHEN b is NULL then 'found' ELSE 'not found' END FROM t2;
-b	CASE  WHEN b is NULL then 'found' ELSE 'not found' END
-2016-12-13	not found
-2016-12-14	not found
-2016-12-15	not found
-null	found
-null	found
+➤ b[91,64,0]  ¦  case when b is null then found else not found end[12,-1,0]  𝄀
+2016-12-13  ¦  not found  𝄀
+2016-12-14  ¦  not found  𝄀
+2016-12-15  ¦  not found  𝄀
+null  ¦  found  𝄀
+null  ¦  found
 SELECT b,
 CASE  WHEN b is not NULL then 'found' ELSE 'not found' END FROM t2;
-b	CASE  WHEN b is not NULL then 'found' ELSE 'not found' END
-2016-12-13	found
-2016-12-14	found
-2016-12-15	found
-null	not found
-null	not found
+➤ b[91,64,0]  ¦  case when b is not null then found else not found end[12,-1,0]  𝄀
+2016-12-13  ¦  found  𝄀
+2016-12-14  ¦  found  𝄀
+2016-12-15  ¦  found  𝄀
+null  ¦  not found  𝄀
+null  ¦  not found
 select (null) is unknown;
-(null)
-true
+➤ (null) is unknown[-7,1,0]  𝄀
+1
 select null is unknown;
-null
-true
+➤ null is unknown[-7,1,0]  𝄀
+1
 select true is unknown;
-true
-false
+➤ true is unknown[-7,1,0]  𝄀
+0
 select false is unknown;
-false
-false
+➤ false is unknown[-7,1,0]  𝄀
+0
 drop table if exists t1;
 CREATE TABLE t1 (a bool);
 insert into t1 values (false), (null), (true), (null);
 select a is unknown from t1 order by a;
-a
-true
-true
-false
-false
+➤ a is unknown[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0  𝄀
+0
 select null is false;
-null
-false
+➤ null is false[-7,1,0]  𝄀
+0
 select null is true;
-null
-false
+➤ null is true[-7,1,0]  𝄀
+0
 select null is not false;
-null
-true
+➤ null is not false[-7,1,0]  𝄀
+1
 select null is not true;
-null
-true
+➤ null is not true[-7,1,0]  𝄀
+1
 select 1 is true;
+➤ 1 is true[-7,1,0]  𝄀
 1
-true
 select 1 is false;
-1
-false
+➤ 1 is false[-7,1,0]  𝄀
+0
 select 1 is not true;
-1
-false
+➤ 1 is not true[-7,1,0]  𝄀
+0
 select 1 is not false;
+➤ 1 is not false[-7,1,0]  𝄀
 1
-true
 select a is true from t1 order by a;
-a
-false
-false
-false
-true
+➤ a is true[-7,1,0]  𝄀
+0  𝄀
+0  𝄀
+0  𝄀
+1

@@ -373,6 +373,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Decimal64](vec)
 	case types.T_decimal128:
 		return appendBytesToFixSized[types.Decimal128](vec)
+	case types.T_decimal256:
+		return appendBytesToFixSized[types.Decimal256](vec)
 	case types.T_uuid:
 		return appendBytesToFixSized[types.Uuid](vec)
 	case types.T_TS:

@@ -113,6 +113,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(decimal128DescCompare, decimal128Copy, nullsLast)
 		}
 		return newCompare(decimal128AscCompare, decimal128Copy, nullsLast)
+	case types.T_decimal256:
+		if desc {
+			return newCompare(types.Decimal256DescCompare, decimal256Copy, nullsLast)
+		}
+		return newCompare(types.Decimal256AscCompare, decimal256Copy, nullsLast)
 	case types.T_TS:
 		if desc {
 			return newCompare(txntsDescCompare, txntsCopy, nullsLast)
@@ -256,6 +261,10 @@ func decimal64Copy(vecDst, vecSrc []types.Decimal64, dst, src int64) {
 }
 
 func decimal128Copy(vecDst, vecSrc []types.Decimal128, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func decimal256Copy(vecDst, vecSrc []types.Decimal256, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

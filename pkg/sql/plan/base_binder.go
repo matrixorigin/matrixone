@@ -2092,7 +2092,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		// Choose decimal64 if value fits, otherwise decimal128
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
-			return nil, err
+			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
 		}
 
 		// Check if value fits in decimal64 (18 digits precision)
@@ -2141,7 +2141,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}, nil
 	case tree.P_float64:
 		originString := astExpr.String()
-		if !typ.IsEmpty() && (typ.Id == int32(types.T_decimal64) || typ.Id == int32(types.T_decimal128)) {
+		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
 		if !strings.Contains(originString, "e") {

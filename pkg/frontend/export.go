@@ -478,6 +478,10 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+			case types.T_decimal256:
+				scale := vec.GetType().Scale
+				val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_uuid:
 				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)

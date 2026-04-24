@@ -472,6 +472,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_decimal256:
+		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vExpected)
+		for i := uint64(0); i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_date:
 		r := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](vExpected)
@@ -819,6 +840,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_decimal256:
+		values := val.([]types.Decimal256)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)

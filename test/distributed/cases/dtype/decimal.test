@@ -374,8 +374,8 @@ DROP TABLE decimal05;
 
 -- Abnormal:Exception creation table:D or M is out of valid range
 DROP TABLE IF EXISTS decimal06;
-CREATE TABLE decimal06(a DECIMAL(39,10));
-CREATE TABLE decimal06(b DECIMAL(40,39));
+CREATE TABLE decimal06(a DECIMAL(66,10));
+CREATE TABLE decimal06(b DECIMAL(67,39));
 DROP TABLE decimal06;
 
 -- D is not specified:Default D is 0
