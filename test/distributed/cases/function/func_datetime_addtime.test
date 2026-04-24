@@ -1,0 +1,9 @@
+-- @suit
+-- @case
+-- @desc:test for ADDTIME
+-- @label:bvt
+
+select cast(addtime('2007-12-31 23:59:59.999999', '1 1:1:1.000002') as char) q1;
+select time(addtime('12:30:45', '01:15:30')) q2;
+select cast(addtime(cast('2024-01-01 00:00:00' as datetime), '24:00:00') as char) q3;
+select addtime(null, '01:00:00') is null q4;

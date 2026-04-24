@@ -1,0 +1,10 @@
+-- @suit
+-- @case
+-- @desc:test for GET_FORMAT
+-- @label:bvt
+
+select get_format(date, 'USA') q1;
+select get_format(time, 'INTERNAL') q2;
+select get_format(datetime, 'ISO') q3;
+select get_format(timestamp, 'JIS') q4;
+select get_format(date, 'BAD') is null q5;

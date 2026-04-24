@@ -397,8 +397,12 @@ var predefinedFunids = map[int]int{
 	STARLARK:     345,
 	TRY_STARLARK: 346,
 	DAYOFWEEK:    347,
+	CURRENT_TIME: 348,
+	TIMESTAMPADD: 349,
+	SUBTIME:      350,
+	GET_FORMAT:   351,
 
-	FUNCTION_END_NUMBER: 348,
+	FUNCTION_END_NUMBER: 352,
 }
 
 func Test_funids(t *testing.T) {
@@ -417,4 +421,13 @@ func Test_funids(t *testing.T) {
 	for _, fid := range functionIdRegister {
 		check(int(fid))
 	}
+}
+
+func TestTimeCompatibilityFunctionNames(t *testing.T) {
+	require.Equal(t, int32(ADDTIME), functionIdRegister["addtime"])
+	require.Equal(t, int32(CURRENT_TIME), functionIdRegister["current_time"])
+	require.Equal(t, int32(CURRENT_TIME), functionIdRegister["curtime"])
+	require.Equal(t, int32(GET_FORMAT), functionIdRegister["get_format"])
+	require.Equal(t, int32(SUBTIME), functionIdRegister["subtime"])
+	require.Equal(t, int32(TIMESTAMPADD), functionIdRegister["timestampadd"])
 }

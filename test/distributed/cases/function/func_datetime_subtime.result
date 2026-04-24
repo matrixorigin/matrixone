@@ -1,0 +1,12 @@
+select cast(subtime('2008-01-02 01:01:01.000001', '1 1:1:1.000002') as char) q1;
+➤ q1[12,-1,0]  𝄀
+2007-12-31 23:59:59.999999
+select time(subtime('12:30:45', '01:15:30')) q2;
+➤ q2[92,64,0]  𝄀
+11:15:15
+select cast(subtime(cast('2024-01-02 00:00:00' as datetime), '24:00:00') as char) q3;
+➤ q3[12,-1,0]  𝄀
+2024-01-01 00:00:00
+select subtime(null, '01:00:00') is null q4;
+➤ q4[12,4,0]  𝄀
+true

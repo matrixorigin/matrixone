@@ -1871,6 +1871,25 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "timestampadd":
+		// MySQL behavior: DATE input + date unit returns DATE, while time units return DATETIME.
+		if len(args) >= 3 && argsType[2].Oid == types.T_date {
+			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
+				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
+					unitStr := strings.ToUpper(sval.Sval)
+					iTyp, err := types.IntervalTypeOf(unitStr)
+					if err == nil {
+						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
+							iTyp == types.Month || iTyp == types.Quarter ||
+							iTyp == types.Year
+						if isDateUnit {
+							returnType = types.T_date.ToType()
+						}
+					}
+				}
+			}
+		}
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]

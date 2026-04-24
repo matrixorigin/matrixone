@@ -1,0 +1,15 @@
+select get_format(date, 'USA') q1;
+➤ q1[12,-1,0]  𝄀
+%m.%d.%Y
+select get_format(time, 'INTERNAL') q2;
+➤ q2[12,-1,0]  𝄀
+%H%i%s
+select get_format(datetime, 'ISO') q3;
+➤ q3[12,-1,0]  𝄀
+%Y-%m-%d %H:%i:%s
+select get_format(timestamp, 'JIS') q4;
+➤ q4[12,-1,0]  𝄀
+null
+select get_format(date, 'BAD') is null q5;
+➤ q5[12,4,0]  𝄀
+true

@@ -1,0 +1,14 @@
+-- @suit
+-- @case
+-- @desc:test for CURTIME and CURRENT_TIME functions
+-- @label:bvt
+
+select curtime() is not null q1;
+select current_time()=curtime() q2;
+select curtime(3) is not null q3;
+select current_time(6) is not null q4;
+
+create table t1 (a int);
+insert into t1 values (1),(2),(3);
+select current_time()=curtime() q from t1;
+drop table t1;

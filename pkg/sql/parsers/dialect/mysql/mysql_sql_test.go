@@ -103,6 +103,62 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.True(t, diffStmt.OutputOpt.Count)
 }
 
+func getFuncExprsFromSelect(t *testing.T, sql string) []*tree.FuncExpr {
+	t.Helper()
+
+	stmt, err := ParseOne(context.TODO(), sql, 1)
+	require.NoError(t, err)
+
+	sel, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+
+	clause, ok := sel.Select.(*tree.SelectClause)
+	require.True(t, ok)
+
+	funcs := make([]*tree.FuncExpr, len(clause.Exprs))
+	for i, selectExpr := range clause.Exprs {
+		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
+		require.Truef(t, ok, "expr %d is %T", i, selectExpr.Expr)
+		funcs[i] = fn
+	}
+	return funcs
+}
+
+func TestCurrentTimeParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select curtime(3), current_time(6)")
+	require.Len(t, funcs, 2)
+	require.Equal(t, "curtime", funcs[0].FuncName.Origin())
+	require.Equal(t, "3", tree.String(funcs[0].Exprs[0], dialect.MYSQL))
+	require.Equal(t, "current_time", funcs[1].FuncName.Origin())
+	require.Equal(t, "6", tree.String(funcs[1].Exprs[0], dialect.MYSQL))
+}
+
+func TestTimestampAddParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select timestampadd(day, 2, '2024-01-01')")
+	require.Len(t, funcs, 1)
+	require.Equal(t, "timestampadd", funcs[0].FuncName.Origin())
+	require.Equal(t, []string{"day", "2", "2024-01-01"}, []string{
+		tree.String(funcs[0].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[1], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[2], dialect.MYSQL),
+	})
+}
+
+func TestGetFormatParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select get_format(date, 'USA'), get_format(timestamp, 'JIS')")
+	require.Len(t, funcs, 2)
+	require.Equal(t, "get_format", funcs[0].FuncName.Origin())
+	require.Equal(t, []string{"DATE", "USA"}, []string{
+		tree.String(funcs[0].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[1], dialect.MYSQL),
+	})
+	require.Equal(t, "get_format", funcs[1].FuncName.Origin())
+	require.Equal(t, []string{"TIMESTAMP", "JIS"}, []string{
+		tree.String(funcs[1].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[1].Exprs[1], dialect.MYSQL),
+	})
+}
+
 var (
 	partitionSQL = struct {
 		input  string
