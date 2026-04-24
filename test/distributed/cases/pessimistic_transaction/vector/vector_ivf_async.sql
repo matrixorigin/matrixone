@@ -25,7 +25,7 @@ select count(*) from ivf3;
 
 create index idx3 using ivfflat on ivf3(b) op_type "vector_l2_ops" LISTS=100 ASYNC;
 
-select sleep(5);
+select case when count(*) > 0 then sleep(5) else 0 end as wait_for_async_ivf3_seed_sync from mo_catalog.mo_iscp_log where job_name = 'index_idx3' and job_state in (1, 2);
 
 load data infile {'filepath'='$resources/vector/sift128_base_10k_2.csv.gz', 'compression'='gzip'} into table ivf3 fields terminated by ':' parallel 'true';
 
@@ -48,7 +48,12 @@ create index idx01 using ivfflat on ivf4(c) op_type "vector_l2_ops" LISTS=1 ASYN
 
 -- end create table
 
-select sleep(60);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
+select case when count(*) > 0 then sleep(10) else 0 end as wait_for_async_ivf_index_sync from mo_catalog.mo_iscp_log where job_name in ('index_idx01', 'index_idx3') and job_state in (1, 2);
 
 
 -- start SELECT
