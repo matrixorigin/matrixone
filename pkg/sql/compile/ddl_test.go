@@ -60,6 +60,59 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	require.Same(t, want, got)
 }
 
+func TestIsMissingCCPRCatalogError(t *testing.T) {
+	ctx := context.Background()
+	testCases := []struct {
+		name      string
+		err       error
+		tableName string
+		want      bool
+	}{
+		{
+			name:      "nil error",
+			err:       nil,
+			tableName: catalog.MO_CCPR_TABLES,
+			want:      false,
+		},
+		{
+			name:      "no such target table",
+			err:       moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_CCPR_TABLES),
+			tableName: catalog.MO_CCPR_TABLES,
+			want:      true,
+		},
+		{
+			name:      "parse error target table",
+			err:       moerr.NewParseErrorNoCtxf("table %q does not exist", catalog.MO_CCPR_LOG),
+			tableName: catalog.MO_CCPR_LOG,
+			want:      true,
+		},
+		{
+			name:      "other table missing",
+			err:       moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, "other_table"),
+			tableName: catalog.MO_CCPR_DBS,
+			want:      false,
+		},
+		{
+			name:      "unrelated parse error",
+			err:       moerr.NewParseErrorNoCtx("syntax error"),
+			tableName: catalog.MO_CCPR_TABLES,
+			want:      false,
+		},
+		{
+			name:      "other error code mentioning table",
+			err:       moerr.NewInternalErrorNoCtx(`table "mo_ccpr_tables" does not exist`),
+			tableName: catalog.MO_CCPR_TABLES,
+			want:      false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isMissingCCPRCatalogError(tc.err, tc.tableName))
+		})
+	}
+}
+
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 	newCompileWithStubEngine := func(t *testing.T, eng *stubEngine, sql string) *Compile {
 		t.Helper()
