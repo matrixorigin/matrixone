@@ -36,6 +36,31 @@ const (
 	End
 )
 
+// WorkerJoinMsg carries per-worker state from non-merger workers to the
+// merger worker at finalize time. Regular DEDUP JOIN only populates matched;
+// the REPLACE INTO merged main-table scan path (OldColCapture) additionally
+// populates captured and capturedVecs.
+//
+// Ownership: once a non-merger worker sends this message on the channel, it
+// must relinquish its references to captured / capturedVecs so that the
+// merger is the sole owner and is responsible for Free'ing capturedVecs.
+type WorkerJoinMsg struct {
+	matched      *bitmap.Bitmap
+	captured     *bitmap.Bitmap
+	capturedVecs []*vector.Vector
+}
+
+// freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
+// called by the merger after it has finished merging captures out of the
+// message (ownership was transferred from the sender).
+func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
+	for _, v := range vecs {
+		if v != nil {
+			v.Free(proc.GetMPool())
+		}
+	}
+}
+
 type evalVector struct {
 	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
@@ -94,7 +119,7 @@ type DedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
-	Channel  chan *bitmap.Bitmap
+	Channel  chan *WorkerJoinMsg
 	NumCPU   uint64
 	IsMerger bool
 
