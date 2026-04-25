@@ -15,7 +15,7 @@ a    b
 1    1
 SHOW CREATE VIEW v0;
 View    Create View    character_set_client    collation_connection
-v0    CREATE VIEW v0 AS SELECT t00.a, t01.a AS b FROM t00 LEFT JOIN t01 USING(a);    utf8mb4    utf8mb4_general_ci
+v0    CREATE SQL SECURITY DEFINER VIEW v0 AS SELECT t00.a, t01.a AS b FROM t00 LEFT JOIN t01 USING(a);    utf8mb4    utf8mb4_general_ci
 ALTER VIEW v0 AS SELECT t00.a FROM t00;
 SELECT t00.a FROM t00;
 a
@@ -27,7 +27,7 @@ a
 2
 SHOW CREATE VIEW v0;
 View    Create View    character_set_client    collation_connection
-v0    CREATE VIEW v0 AS SELECT t00.a FROM t00;    utf8mb4    utf8mb4_general_ci
+v0    CREATE SQL SECURITY DEFINER VIEW v0 AS SELECT t00.a FROM t00;    utf8mb4    utf8mb4_general_ci
 SELECT * FROM t00;
 a
 1

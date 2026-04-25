@@ -40,7 +40,7 @@ create view v_invoker as select * from t1;
 set view_security_type = 'DEFINER';
 show create view v_invoker;
 ➤ View[12,-1,0]    Create View[12,-1,0]    character_set_client[12,-1,0]    collation_connection[12,-1,0]  𝄀
-v_invoker    create SQL SECURITY INVOKER view v_invoker as select * from t1    utf8mb4    utf8mb4_general_ci
+v_invoker    create SQL SECURITY INVOKER view v_invoker as select * from t1;    utf8mb4    utf8mb4_general_ci
 create role role_invoker;
 create user user_invoker identified by '111' default role role_invoker;
 grant role_invoker to user_invoker;
@@ -117,7 +117,7 @@ grant connect on account * to role_wgo_src;
 grant select on view db_v1.v1 to role_wgo_src with grant option;
 grant select on view db_v1.v1 to role_wgo_tgt;
 grant select on view db_v1.v_on_v to role_wgo_tgt;
-internal error: the grant privilege with grant option command needs the privilege that has the with_grant_option = true
+internal error: do not have privilege to execute the statement
 drop user user_wgo;
 drop role role_wgo_src;
 drop role role_wgo_tgt;
@@ -125,13 +125,13 @@ use db_v1;
 create sql security invoker view v_alter_sec as select * from t1;
 show create view v_alter_sec;
 ➤ View[12,-1,0]    Create View[12,-1,0]    character_set_client[12,-1,0]    collation_connection[12,-1,0]  𝄀
-v_alter_sec    create sql security invoker view v_alter_sec as select * from t1    utf8mb4    utf8mb4_general_ci
+v_alter_sec    create sql security invoker view v_alter_sec as select * from t1;    utf8mb4    utf8mb4_general_ci
 drop view v_alter_sec;
 use db_v1;
 create sql security invoker view v_body_trick as select 'sql security definer' as note from t1;
 show create view v_body_trick;
 ➤ View[12,-1,0]    Create View[12,-1,0]    character_set_client[12,-1,0]    collation_connection[12,-1,0]  𝄀
-v_body_trick    create sql security invoker view v_body_trick as select 'sql security definer' as note from t1    utf8mb4    utf8mb4_general_ci
+v_body_trick    create sql security invoker view v_body_trick as select 'sql security definer' as note from t1;    utf8mb4    utf8mb4_general_ci
 drop view v_body_trick;
 drop user user_v1;
 drop user user_no_db;
