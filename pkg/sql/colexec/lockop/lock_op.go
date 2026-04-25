@@ -203,6 +203,9 @@ func performLock(
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
 			return nil
 		}
+		if target.lockTable && proc.GetTxnOperator().HasLockTable(target.tableID) {
+			continue
+		}
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
