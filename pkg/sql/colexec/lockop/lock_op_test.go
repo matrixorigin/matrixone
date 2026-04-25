@@ -534,6 +534,31 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 	)
 }
 
+func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
+	tableID := uint64(10)
+	runLockOpTest(
+		t,
+		func(proc *process.Process) {
+			pkType := types.New(types.T_int32, 0, 0)
+			arg := NewArgumentByEngine(nil)
+			arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			}
+			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
+			arg.LockTable(tableID, false)
+			resetChildren(arg, nil)
+			defer arg.Free(proc, false, nil)
+
+			require.NoError(t, arg.Prepare(proc))
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+		},
+	)
+}
+
 func TestCallLockOpWithConflict(t *testing.T) {
 	tableID := uint64(10)
 	runLockNonBlockingOpTest(
