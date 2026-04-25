@@ -135,6 +135,8 @@ func Test_upg_columns_view_check_error(t *testing.T) {
 	defer stubs.Reset()
 	_, err := upg_information_schema_columns.CheckFunc(nil, 0)
 	assert.Error(t, err)
+	_, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
+	assert.Error(t, err)
 }
 
 func Test_upg_columns_view_check_match(t *testing.T) {
@@ -143,6 +145,9 @@ func Test_upg_columns_view_check_match(t *testing.T) {
 	})
 	defer stubs.Reset()
 	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	ok, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -163,6 +168,9 @@ func Test_upg_columns_view_check_mismatch(t *testing.T) {
 	})
 	defer stubs.Reset()
 	ok, err := upg_information_schema_columns.CheckFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+	ok, err = upg_information_schema_columns_geometry_srid.CheckFunc(nil, 0)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 }

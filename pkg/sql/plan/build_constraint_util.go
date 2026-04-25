@@ -534,6 +534,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if err != nil {
 				return false, nil, nil, err
 			}
+		} else if isGeometryPlanType(&tableDef.Cols[colIdx].Typ) {
+			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
 		} else {
 			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
@@ -1068,13 +1073,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		planType := MakePlan2TypeValue(colType)
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
-		return MakePlan2StringConstExprWithType(string(num)), err
+		expr := MakePlan2StringConstExprWithType(string(num))
+		if colType.Oid == types.T_geometry {
+			return appendCastBeforeExpr(proc.Ctx, expr, MakePlan2TypeValue(colType))
+		}
+		return expr, err
 	case types.T_json:
 		canInsert, num, err := util.SetInsertValueJSON(proc, numVal)
 		if err != nil || !canInsert {
@@ -1216,6 +1225,11 @@ func buildValueScan(
 						}
 					} else if isSetPlanType(&col.Typ) {
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return err
+						}
+					} else if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return err
 						}

@@ -1603,42 +1603,47 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 		case types.Decimal128:
 			d1 := any(v1).(types.Decimal128)
 			d2 := any(v2).(types.Decimal128)
-			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
-			if divErr != nil {
-				return divErr
-			}
-			if resultScale > 0 {
-				divResult, divErr = divResult.Scale(-resultScale)
-				if divErr != nil {
-					return divErr
+			// For integer DIV: align scales then use truncating integer division.
+			if scale1 != scale2 {
+				if scale1 < scale2 {
+					d1, err = d1.Scale(scale2 - scale1)
+				} else {
+					d2, err = d2.Scale(scale1 - scale2)
+				}
+				if err != nil {
+					return err
 				}
 			}
-			rss[i], err = decimal128ToInt64(divResult)
+			n1, convErr := decimal128ToInt64(d1)
+			if convErr != nil {
+				return convErr
+			}
+			n2, convErr := decimal128ToInt64(d2)
+			if convErr != nil {
+				return convErr
+			}
+			rss[i] = n1 / n2
 		case types.Decimal64:
-			// Convert Decimal64 to Decimal128
 			d1Val := any(v1).(types.Decimal64)
 			d2Val := any(v2).(types.Decimal64)
-			d1 := types.Decimal128{B0_63: uint64(d1Val), B64_127: 0}
-			// Check sign bit of Decimal64
-			if d1Val.Sign() {
-				d1.B64_127 = ^uint64(0)
-			}
-			d2 := types.Decimal128{B0_63: uint64(d2Val), B64_127: 0}
-			// Check sign bit of Decimal64
-			if d2Val.Sign() {
-				d2.B64_127 = ^uint64(0)
-			}
-			divResult, resultScale, divErr := d1.Div(d2, scale1, scale2)
-			if divErr != nil {
-				return divErr
-			}
-			if resultScale > 0 {
-				divResult, divErr = divResult.Scale(-resultScale)
-				if divErr != nil {
-					return divErr
+			n1 := int64(d1Val)
+			n2 := int64(d2Val)
+			if scale1 != scale2 {
+				if scale1 < scale2 {
+					for s := scale1; s < scale2; s++ {
+						n1 *= 10
+					}
+				} else {
+					for s := scale2; s < scale1; s++ {
+						n2 *= 10
+					}
 				}
 			}
-			rss[i], err = decimal128ToInt64(divResult)
+			if n2 == 0 {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = n1 / n2
 		case types.Decimal256:
 			d1 := any(v1).(types.Decimal256)
 			d2 := any(v2).(types.Decimal256)

@@ -384,6 +384,7 @@ func TestEncodeDecodeValue(t *testing.T) {
 		{"varchar", T_varchar, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
 		{"blob", T_blob, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
 		{"json", T_json, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
+		{"geometry", T_geometry, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
 		{"text", T_text, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
 		{"binary", T_binary, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
 		{"varbinary", T_varbinary, byteVal, func(v any) any { return append([]byte(nil), v.([]byte)...) }},
@@ -397,7 +398,7 @@ func TestEncodeDecodeValue(t *testing.T) {
 			encoded := EncodeValue(tc.val, tc.typ)
 			decoded := DecodeValue(encoded, tc.typ)
 			switch tc.typ {
-			case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+			case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry:
 				require.Equal(t, tc.cmp(tc.val), decoded)
 			default:
 				require.Equal(t, tc.cmp(tc.val), decoded)

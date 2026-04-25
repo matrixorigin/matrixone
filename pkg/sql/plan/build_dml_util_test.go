@@ -19,6 +19,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -49,4 +52,69 @@ func Test_runSql(t *testing.T) {
 
 	_, err := runSql(compilerContext, "")
 	require.Error(t, err, "internal error: no account id in context")
+}
+
+func Test_buildPostDmlFullTextIndexAsync(t *testing.T) {
+	{
+		//invalid json
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":1}`,
+		}
+
+		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
+		require.NotNil(t, err)
+	}
+
+	{
+
+		// async true
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":"true"}`,
+		}
+
+		err := buildPostDmlFullTextIndex(nil, nil, nil, nil, nil, nil, 0, idxdef, 0, false, false, false)
+		require.Nil(t, err)
+	}
+
+}
+
+func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
+	{
+		//invalid json
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":1}`,
+		}
+
+		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
+		require.NotNil(t, err)
+	}
+
+	{
+
+		// async true
+		idxdef := &plan.IndexDef{
+			IndexAlgoParams: `{"async":"true"}`,
+		}
+
+		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
+		require.Nil(t, err)
+	}
+
+}
+
+func TestMakeInsertValueConstExprGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_geometry.ToType()
+	numVal := tree.NewNumVal("POINT(1 1)", "POINT(1 1)", false, tree.P_char)
+
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), expr.Typ.Id)
+
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "cast", fn.Func.ObjName)
+	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
+	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }

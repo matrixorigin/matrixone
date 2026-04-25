@@ -20,11 +20,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -41,6 +42,11 @@ func ConstructCreateTableSQL(
 
 	var err error
 	var createStr string
+	rewritePairs := make([]struct {
+		display string
+		rewrite string
+	}, 0)
+	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -49,13 +55,13 @@ func ConstructCreateTableSQL(
 		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
 	}
 
-	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
-	} else if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
 		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)
-	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
+	} else if tableDef.IsTemporary {
+		createStr = fmt.Sprintf("CREATE TEMPORARY TABLE %s (", dbTblName)
+	} else {
 		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	}
 
@@ -107,7 +113,6 @@ func ConstructCreateTableSQL(
 		}
 		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
 
-		//-------------------------------------------------------------------------------------------------------------
 		if col.Typ.AutoIncr {
 			buf.WriteString(" NOT NULL AUTO_INCREMENT")
 		} else {
@@ -205,27 +210,58 @@ func ConstructCreateTableSQL(
 				indexStr += ")"
 
 				if indexdef.IndexAlgoParams != "" {
-					paramMap, err := catalog.IndexParamsStringToMap(indexdef.IndexAlgoParams)
-					if err != nil {
-						return "", nil, err
+					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
+					// ignore err != nil --> value not found
+					if err == nil {
+						parser, err := val.StrictString()
+						if err != nil {
+							// value exists but not string type
+							return "", nil, err
+						}
+
+						if len(parser) > 0 {
+							indexStr += " WITH PARSER " + parser
+						}
 					}
-					parser, ok := paramMap["parser"]
-					if ok {
-						indexStr += " WITH PARSER " + parser
+
+					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), "async")
+					// ignore err != nil --> value not found
+					if err == nil {
+						async, err := val.StrictString()
+						if err != nil {
+							// value exists but not string type
+							return "", nil, err
+						}
+
+						if async == "true" {
+							indexStr += " ASYNC"
+						}
 					}
+
 				}
 
 			} else {
-				if indexdef.Unique {
+				rewriteIndexStr := ""
+				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
+					indexStr = "  SPATIAL KEY "
+					rewriteIndexStr = "  KEY "
+				} else if indexdef.Unique {
 					indexStr = "  UNIQUE KEY "
+					rewriteIndexStr = "  UNIQUE KEY "
 				} else {
 					indexStr = "  KEY "
+					rewriteIndexStr = "  KEY "
 				}
 				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					rewriteIndexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
 				indexStr += "("
+				rewriteIndexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
@@ -233,14 +269,17 @@ func ConstructCreateTableSQL(
 					}
 					if i > 0 {
 						indexStr += ","
+						rewriteIndexStr += ","
 					}
 
 					part = colNameToOriginName[part]
 					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(part))
 					i++
 				}
 
 				indexStr += ")"
+				rewriteIndexStr += ")"
 				if indexdef.IndexAlgoParams != "" {
 					var paramList string
 					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
@@ -248,11 +287,28 @@ func ConstructCreateTableSQL(
 						return "", nil, err
 					}
 					indexStr += paramList
+					rewriteIndexStr += paramList
+				}
+				if indexStr != rewriteIndexStr {
+					rewritePairs = append(rewritePairs, struct {
+						display string
+						rewrite string
+					}{display: indexStr, rewrite: rewriteIndexStr})
 				}
 			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
+					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
+					rewritePairs[len(rewritePairs)-1] = struct {
+						display string
+						rewrite string
+					}{
+						display: indexStr,
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+					}
+				}
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -386,6 +442,10 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
+	for _, checkDef := range checkDefs {
+		createStr += ",\n  " + checkDef
+	}
+
 	if rowCount != 0 {
 		createStr += "\n"
 	}
@@ -408,30 +468,32 @@ func ConstructCreateTableSQL(
 		ps := ctx.GetProcess().GetPartitionService()
 		if ps.Enabled() {
 			partitionBy := " partition by "
-			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+
+			txn := ctx.GetProcess().GetTxnOperator()
+			newCtx := ctx.GetContext()
+			if snapshot != nil && snapshot.TS != nil {
+				txn = txn.CloneSnapshotOp(*snapshot.TS)
+
+				if snapshot.Tenant != nil {
+					newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
+				}
+			}
+
+			meta, err := ps.GetPartitionMetadata(newCtx, tableDef.GetTblId(), txn)
 			if err != nil {
 				return "", nil, err
 			}
-			rangeOrList := false
+
+			partitionBy += meta.Description
+
 			switch meta.Method {
-			case partition.PartitionMethod_Hash:
-				partitionBy += "hash"
-			case partition.PartitionMethod_Key:
-				partitionBy += "key"
-			case partition.PartitionMethod_Range:
-				rangeOrList = true
-				partitionBy += "range "
-			case partition.PartitionMethod_List:
-				rangeOrList = true
-				partitionBy += "List "
-			}
-
-			cols := "("
-			cols += meta.Description
-			cols += ")"
-
-			if rangeOrList {
-				partitionBy += "columns" + cols + " ("
+			case partition.PartitionMethod_Hash,
+				partition.PartitionMethod_LinearHash,
+				partition.PartitionMethod_Key,
+				partition.PartitionMethod_LinearKey:
+				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			default:
+				partitionBy += " ("
 				for i, p := range meta.Partitions {
 					if i > 0 {
 						partitionBy += ", "
@@ -439,10 +501,8 @@ func ConstructCreateTableSQL(
 					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
 				}
 				partitionBy += ")"
-			} else {
-				partitionBy += cols
-				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
 			}
+
 			createStr += partitionBy
 		}
 	}
@@ -546,9 +606,229 @@ func ConstructCreateTableSQL(
 	}
 	var stmt tree.Statement
 	if ctx != nil {
-		stmt, err = getRewriteSQLStmt(ctx, createStr)
+		rewriteStr := createStr
+		for _, pair := range rewritePairs {
+			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
+		}
+		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+		return nil
+	}
+
+	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
+	if !ok {
+		return nil
+	}
+
+	segments := splitTopLevelDefs(defsSection)
+	checks := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if isTopLevelCheckDef(segment) {
+			checks = append(checks, segment)
+		}
+	}
+	return checks
+}
+
+func extractCreateTableDefsSection(createSQL string) (string, bool) {
+	start := findTopLevelByte(createSQL, '(')
+	if start == -1 {
+		return "", false
+	}
+
+	end := findMatchingParen(createSQL, start)
+	if end == -1 || end <= start {
+		return "", false
+	}
+	return createSQL[start+1 : end], true
+}
+
+func splitTopLevelDefs(defs string) []string {
+	parts := make([]string, 0, 8)
+	start := 0
+	depth := 0
+	for i := 0; i < len(defs); i++ {
+		switch defs[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(defs, i)
+		case '#':
+			i = skipLineComment(defs, i)
+		case '-':
+			if i+1 < len(defs) && defs[i+1] == '-' {
+				i = skipLineComment(defs, i+1)
+			}
+		case '/':
+			if i+1 < len(defs) && defs[i+1] == '*' {
+				i = skipBlockComment(defs, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, defs[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, defs[start:])
+	return parts
+}
+
+func isTopLevelCheckDef(def string) bool {
+	if def == "" {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(def)
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, "CHECK") {
+		return true
+	}
+	if !strings.HasPrefix(upper, "CONSTRAINT") {
+		return false
+	}
+	return containsKeywordOutsideQuotes(trimmed, "CHECK")
+}
+
+func containsKeywordOutsideQuotes(s string, keyword string) bool {
+	upper := strings.ToUpper(s)
+	for i := 0; i < len(upper); i++ {
+		switch upper[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(upper, i)
+		case '#':
+			i = skipLineComment(upper, i)
+		case '-':
+			if i+1 < len(upper) && upper[i+1] == '-' {
+				i = skipLineComment(upper, i+1)
+			}
+		case '/':
+			if i+1 < len(upper) && upper[i+1] == '*' {
+				i = skipBlockComment(upper, i)
+			}
+		default:
+			if hasKeywordAt(upper, keyword, i) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasKeywordAt(s string, keyword string, pos int) bool {
+	end := pos + len(keyword)
+	if end > len(s) || s[pos:end] != keyword {
+		return false
+	}
+	prevIsIdent := pos > 0 && isIdentChar(s[pos-1])
+	nextIsIdent := end < len(s) && isIdentChar(s[end])
+	return !prevIsIdent && !nextIsIdent
+}
+
+func isIdentChar(ch byte) bool {
+	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+}
+
+func findTopLevelByte(s string, target byte) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		default:
+			if s[i] == target {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func findMatchingParen(s string, start int) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func skipQuoted(s string, start int) int {
+	quote := s[start]
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && quote != '`' {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote && quote != '`' {
+			i++
+			continue
+		}
+		return i
+	}
+	return len(s) - 1
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\n' {
+			return i
+		}
+	}
+	return len(s) - 1
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start + 2; i < len(s); i++ {
+		if s[i-1] == '*' && s[i] == '/' {
+			return i
+		}
+	}
+	return len(s) - 1
 }
 
 // FormatColType Get the formatted description of the column type.
@@ -562,6 +842,12 @@ func FormatColType(colType plan.Type) string {
 	}
 	if isSetPlanType(&colType) {
 		ts = "SET"
+	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+	}
+	if srid, ok := geometrySRIDValue(&colType); ok {
+		ts = fmt.Sprintf("%s SRID %d", ts, srid)
 	}
 
 	suffix := ""

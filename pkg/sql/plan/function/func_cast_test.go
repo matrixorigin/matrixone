@@ -149,7 +149,7 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 				inputs[i] = []byte(s)
 			}
 
-			inputVec := testutil.MakeVarlenaVector(inputs, tt.nulls, types.T_blob.ToType(), mp)
+			inputVec := testutil.MakeVarlenaVector(inputs, tt.nulls, mp)
 			defer inputVec.Free(mp)
 			inputVec.SetIsBin(true)
 
@@ -257,6 +257,77 @@ func Test_CastFromDecimal256(t *testing.T) {
 			require.True(t, succeed, tc.info, info)
 		})
 	}
+}
+
+func Test_CastVarcharToGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "cast varchar to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 1)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(2 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(2 2)"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+
+	require.True(t, IfTypeCastSupported(types.T_varchar, types.T_geometry))
+	require.True(t, IfTypeCastSupported(types.T_geometry, types.T_geometry))
+
+	t.Run("cast null to geometry", func(t *testing.T) {
+		nullVec := vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+		defer nullVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{nullVec, targetType}, result, proc, 1, nil)
+		require.NoError(t, err)
+
+		resultVec := result.GetResultVector()
+		require.Equal(t, types.T_geometry, resultVec.GetType().Oid)
+		require.True(t, resultVec.GetNulls().Contains(0))
+	})
+
+	t.Run("reject internal geometry payload syntax", func(t *testing.T) {
+		inputVec := testutil.MakeVarcharVector([]string{"SRID=4326;POINT(1 1)"}, nil)
+		defer inputVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid geometry type")
+	})
 }
 
 func initCastTestCase() []tcTemp {
@@ -2280,6 +2351,38 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			want:     []string{"short", longString260, "medium length string"},
 			wantErr:  false,
 		},
+		{
+			name:     "VARCHAR to GEOMETRY with valid point",
+			inputs:   []string{"POINT(1 2)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			want:     []string{"POINT(1 2)"},
+			wantErr:  false,
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects invalid payload",
+			inputs:   []string{"INVALID"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects non-finite coordinates",
+			inputs:   []string{"POINT(NaN 1)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects malformed structure",
+			inputs:   []string{"POINT(1"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2303,7 +2406,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2339,6 +2442,31 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+
+	inputVec := testutil.MakeVarcharVector([]string{"LINESTRING(0 0,1 1,2 2,3 3)"}, nil)
+	defer inputVec.Free(mp)
+	inputVec.SetType(types.T_varchar.ToType())
+
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	to := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer to.Free()
+	err := to.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
 
 // Test_strToArray_DimensionCheck tests that strToArray correctly validates

@@ -451,6 +451,7 @@ func init() {
 		"sql_small_result":           SQL_SMALL_RESULT,
 		"sql_buffer_result":          SQL_BUFFER_RESULT,
 		"ssl":                        SSL,
+		"srid":                       SRID,
 		"slave":                      SLAVE,
 		"sliding":                    SLIDING,
 		"start":                      START,

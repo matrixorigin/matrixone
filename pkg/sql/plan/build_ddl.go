@@ -316,6 +316,9 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			if err != nil {
 				return err
 			}
+			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+				return err
+			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
@@ -1019,6 +1022,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+				return err
+			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
@@ -1069,6 +1075,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
 
 					}
+					if isGeometryPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", colNameOrigin))
+					}
 					pks = append(pks, colName)
 				case *tree.AttributeComment:
 					comment = attribute.CMT.String()
@@ -1087,6 +1096,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
+					}
+					if isGeometryPlanType(&colType) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -1169,6 +1181,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if isSetPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", name))
 					}
+					if isGeometryPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", name))
+					}
 				}
 
 				primaryKeys = append(primaryKeys, name)
@@ -1188,6 +1203,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if col, ok := colMap[name]; ok {
 					if isEnumPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+					}
+					if isGeometryPlanType(&col.Typ) && def.KeyType != tree.INDEX_TYPE_RTREE {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", name))
 					}
 				}
 
@@ -1209,6 +1227,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isSetPlanType(&col.Typ) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", name))
+					}
+					if isGeometryPlanType(&col.Typ) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", name))
 					}
 				}
 
@@ -1495,6 +1516,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
 			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+		if isGeometryPlanType(&colMap[str].Typ) {
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", str))
 		}
 	}
 
@@ -1925,6 +1949,9 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
 			}
+			if isGeometryPlanType(&colMap[name].Typ) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
+			}
 
 			indexParts = append(indexParts, name)
 		}
@@ -2031,11 +2058,14 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
+		if err = checkSpatialIndexColumnSupport(ctx, indexInfo, colMap); err != nil {
+			return err
+		}
 
 		var indexDef []*plan.IndexDef
 		var tableDef []*TableDef
 		switch indexInfo.KeyType {
-		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_IVFFLAT:
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
@@ -2053,6 +2083,26 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
+	}
+	return nil
+}
+
+func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
+	if indexInfo.KeyType != tree.INDEX_TYPE_RTREE {
+		return nil
+	}
+	if len(indexInfo.KeyParts) != 1 {
+		return moerr.NewNotSupported(ctx.GetContext(), "SPATIAL INDEX only supports a single GEOMETRY column")
+	}
+
+	name := indexInfo.KeyParts[0].ColName.ColName()
+	nameOrigin := indexInfo.KeyParts[0].ColName.ColNameOrigin()
+	col, ok := colMap[name]
+	if !ok {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
+	}
+	if !isGeometryPlanType(&col.Typ) {
+		return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SPATIAL INDEX can only be created on GEOMETRY column '%s'", nameOrigin))
 	}
 	return nil
 }
@@ -2208,6 +2258,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
+	spatialIndex := indexInfo.KeyType == tree.INDEX_TYPE_RTREE
 
 	// 2. tableDef init
 	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
@@ -2242,6 +2293,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 		if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
+		}
+		if isGeometryPlanType(&colMap[name].Typ) && indexInfo.KeyType != tree.INDEX_TYPE_RTREE {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
 		}
 
 		if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
@@ -2280,13 +2334,17 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 	} else {
 		keyName = catalog.IndexTableIndexColName
+		idxColType := Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		if spatialIndex {
+			idxColType = colMap[indexParts[0]].Typ
+		}
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
+			Typ:  idxColType,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -2316,6 +2374,12 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			},
 		}
 		tableDef.Cols = append(tableDef.Cols, colDef)
+		if spatialIndex {
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{catalog.IndexTablePrimaryColName},
+				PkeyColName: catalog.IndexTablePrimaryColName,
+			}
+		}
 	}
 
 	properties := []*plan.Property{
@@ -3424,6 +3488,20 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+		}
+	case tree.INDEX_CATEGORY_SPATIAL:
+		keyType := tree.INDEX_TYPE_RTREE
+		if stmt.IndexOption != nil && stmt.IndexOption.IType != tree.INDEX_TYPE_INVALID {
+			if stmt.IndexOption.IType != tree.INDEX_TYPE_RTREE {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "SPATIAL INDEX only supports USING RTREE")
+			}
+			keyType = stmt.IndexOption.IType
+		}
+		sIdx = &tree.Index{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+			KeyType:     keyType,
 		}
 	default:
 		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))

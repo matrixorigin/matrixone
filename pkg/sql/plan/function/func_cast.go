@@ -51,7 +51,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 	},
 
 	types.T_bool: {
@@ -295,7 +295,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 	},
 
 	types.T_varchar: {
@@ -312,7 +312,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 		types.T_TS,
 	},
 
@@ -328,7 +328,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 	},
 
 	types.T_varbinary: {
@@ -343,7 +343,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 	},
 
 	types.T_blob: {
@@ -360,7 +360,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
-		types.T_datalink,
+		types.T_datalink, types.T_geometry,
 	},
 
 	types.T_text: {
@@ -378,6 +378,12 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink, types.T_geometry,
+	},
+	types.T_geometry: {
+		types.T_geometry,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
 	},
 	types.T_datalink: {
 		types.T_bit,
@@ -525,7 +531,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_year:
 		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_array_float32, types.T_array_float64:
@@ -647,7 +653,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
@@ -1896,9 +1902,9 @@ func strTypeToOthers(proc *process.Process,
 		}
 		return strToTimestamp(source, rs, zone, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, source, rs, length, toType)
+		return strToStr(ctx, proc, source, rs, length, toType)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5352,6 +5358,7 @@ func strToTimestamp(
 
 func strToStr(
 	ctx context.Context,
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	totype := to.GetType()
@@ -5363,6 +5370,26 @@ func strToStr(
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if err := explicitCastToBinary(toType, v, null, to); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if toType.Oid == types.T_geometry {
+		maxPoints := maxPointsInGeometryLimit(proc)
+		for i = 0; i < l; i++ {
+			v, null := from.GetStrValue(i)
+			if null {
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			wkt := strings.TrimSpace(convertByteSliceToString(v))
+			if err := validateGeometryTextForStorage(wkt, maxPoints); err != nil {
+				return err
+			}
+			if err := to.AppendBytes(encodeGeometryPayload(wkt, 0, false), false); err != nil {
 				return err
 			}
 		}

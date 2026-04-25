@@ -2153,7 +2153,11 @@ func appendPreInsertPlan(
 	for i, col := range tableDef.Cols {
 		colsMap[col.Name] = i
 	}
-	for _, part := range idxDef.Parts {
+	keyParts := idxDef.Parts
+	if isSpatialIndexDef(idxDef) && len(idxDef.Parts) > 0 {
+		keyParts = idxDef.Parts[:1]
+	}
+	for _, part := range keyParts {
 		part = catalog.ResolveAlias(part)
 		if i, ok := colsMap[part]; ok {
 			useColumns = append(useColumns, int32(i))
@@ -2164,7 +2168,7 @@ func appendPreInsertPlan(
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType Type
-	if len(idxDef.Parts) == 1 {
+	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = tableDef.Cols[useColumns[0]].Typ
 	} else {
 		ukType = Type{
@@ -4786,6 +4790,15 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
+
 	//isUpdate := delCtx.updateColLength > 0
 	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
 	if err != nil {
@@ -4816,6 +4829,15 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 // build PostDml FullText Index node
 func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
+
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 	orgPkColPos, _ := getPkPos(tableDef, false)

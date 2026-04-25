@@ -346,11 +346,11 @@ func TestCaseWhenStringComparison(t *testing.T) {
 	proc := testutil.NewProc(t)
 
 	// Create condition vectors: "two" = "one" and "two" = "two"
-	cond1 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
-	val1 := testutil.MakeVarcharVector([]string{"one"}, nil, proc.Mp())
+	cond1 := testutil.MakeVarcharVector([]string{"two"}, nil)
+	val1 := testutil.MakeVarcharVector([]string{"one"}, nil)
 
-	cond2 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
-	val2 := testutil.MakeVarcharVector([]string{"two"}, nil, proc.Mp())
+	cond2 := testutil.MakeVarcharVector([]string{"two"}, nil)
+	val2 := testutil.MakeVarcharVector([]string{"two"}, nil)
 
 	// Test equal function
 	result1 := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())

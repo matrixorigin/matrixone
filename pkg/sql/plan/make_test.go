@@ -69,4 +69,9 @@ func Test_isSameColumnType(t *testing.T) {
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"},
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,c"},
 	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
+		plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=0"},
+	))
 }

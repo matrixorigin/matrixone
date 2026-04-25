@@ -670,7 +670,7 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
 		), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),

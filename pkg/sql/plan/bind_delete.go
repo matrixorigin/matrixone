@@ -178,7 +178,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
 
-			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(idxDef)
+			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
 			pkTyp := idxTableDef.Cols[rightPkPos].Typ
 
 			rightExpr := &plan.Expr{
@@ -194,13 +195,24 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			var leftExpr *plan.Expr
 
 			argsLen := len(idxDef.Parts)
-			if argsLen == 1 {
+			if isSpatialIndexDef(idxDef) {
+				pkPos := colName2Idx[i][tableDef.Pkey.PkeyColName]
 				leftExpr = &plan.Expr{
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: selectNode.BindingTags[0],
-							ColPos: int32(colName2Idx[i][idxDef.Parts[0]]),
+							ColPos: int32(pkPos),
+						},
+					},
+				}
+			} else if !indexTableStoresSerializedKey(idxDef) {
+				leftExpr = &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNode.BindingTags[0],
+							ColPos: int32(colName2Idx[i][indexPrimaryPartName(idxDef)]),
 						},
 					},
 				}
@@ -237,7 +249,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			})
 
 			joinType := plan.Node_INNER
-			if idxDef.Unique {
+			if idxDef.Unique || isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_LEFT
 			}
 

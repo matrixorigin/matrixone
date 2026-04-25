@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type ExportConfig struct {
@@ -438,6 +439,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_geometry:
+				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
+				if err != nil {
+					sendByte(&BatchByte{err: err})
+					bat.Clean(mp)
+					return
+				}
+				value := addEscapeToString([]byte(text), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
@@ -655,7 +665,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			}
 		// Binary/varbinary has mysql_type_varchar.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := oq.mrs.GetValue(oq.ctx, 0, i)
 			if err != nil {
 				return err

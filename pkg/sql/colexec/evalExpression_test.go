@@ -152,6 +152,37 @@ func TestFixedExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr2, proc.Mp().CurrNB())
 }
 
+func TestGeometryLiteralExpressionExecutor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	expr := &plan.Expr{
+		Typ: plan.Type{
+			Id:          int32(types.T_geometry),
+			NotNullable: true,
+		},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Sval{
+					Sval: "POINT(1 1)",
+				},
+			},
+		},
+	}
+
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	emptyBatch := &batch.Batch{}
+	emptyBatch.SetRowCount(3)
+	vec, err := executor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_geometry, vec.GetType().Oid)
+	require.Equal(t, 3, vec.Length())
+	require.Equal(t, "POINT(1 1)", vec.GetStringAt(0))
+}
+
 func TestVarExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

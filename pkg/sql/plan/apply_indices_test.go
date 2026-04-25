@@ -20,6 +20,7 @@ import (
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
@@ -377,4 +378,118 @@ func makeEqFilterExpr(colPos int32) *planpb.Expr {
 			},
 		},
 	}
+}
+
+func makeSpatialConstGeometryExpr() *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_geomfromtext"},
+				Args: []*planpb.Expr{
+					{
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: "POINT(1 1)"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeSpatialColExpr(colPos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{
+				RelPos: 0,
+				ColPos: colPos,
+			},
+		},
+	}
+}
+
+func makeSpatialDistanceExpr(left, right *planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_distance"},
+				Args: []*planpb.Expr{left, right},
+			},
+		},
+	}
+}
+
+func makeComparisonExpr(op string, left, right *planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{left, right},
+			},
+		},
+	}
+}
+
+func makeInt64LiteralExpr(v int64) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: v},
+			},
+		},
+	}
+}
+
+func TestCheckSpatialIndexFilterPredicate(t *testing.T) {
+	filter := &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "st_intersects"},
+				Args: []*planpb.Expr{
+					makeSpatialColExpr(1),
+					makeSpatialConstGeometryExpr(),
+				},
+			},
+		},
+	}
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(1), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceComparison(t *testing.T) {
+	filter := makeComparisonExpr(
+		"<=",
+		makeSpatialDistanceExpr(makeSpatialColExpr(2), makeSpatialConstGeometryExpr()),
+		makeInt64LiteralExpr(0),
+	)
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(2), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceComparisonConstOnLeft(t *testing.T) {
+	filter := makeComparisonExpr(
+		">=",
+		makeInt64LiteralExpr(0),
+		makeSpatialDistanceExpr(makeSpatialColExpr(3), makeSpatialConstGeometryExpr()),
+	)
+
+	col := checkSpatialIndexFilter(filter)
+	require.NotNil(t, col)
+	require.Equal(t, int32(3), col.ColPos)
+}
+
+func TestCheckSpatialIndexFilterDistanceRejectsNonConstGeometryArg(t *testing.T) {
+	filter := makeComparisonExpr(
+		"<=",
+		makeSpatialDistanceExpr(makeSpatialColExpr(1), makeSpatialColExpr(2)),
+		makeInt64LiteralExpr(0),
+	)
+
+	require.Nil(t, checkSpatialIndexFilter(filter))
 }

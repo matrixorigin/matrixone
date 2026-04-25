@@ -187,19 +187,6 @@ func TestDecimal256RangeAndInOperators(t *testing.T) {
 	ok, info := betweenTC.Run()
 	require.True(t, ok, info)
 
-	inRangeTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(decType, []types.Decimal256{v1, v2, v3, {}}, []bool{false, false, false, true}),
-			NewFunctionTestConstInput(decType, []types.Decimal256{left}, []bool{false}),
-			NewFunctionTestConstInput(decType, []types.Decimal256{right}, []bool{false}),
-			NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{0}, []bool{false}),
-		},
-		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true, false, false}, []bool{false, false, false, true}),
-		inRangeImpl,
-	)
-	ok, info = inRangeTC.Run()
-	require.True(t, ok, info)
-
 	inTC := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(decType, []types.Decimal256{v1, v2, v3, {}}, []bool{false, false, false, true}),

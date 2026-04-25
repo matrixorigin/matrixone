@@ -362,7 +362,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 			},
 		}
 	case types.T_varchar, types.T_char,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink, types.T_geometry:
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
@@ -549,7 +549,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				return false, err
 			}
 		case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary, types.T_text,
-			types.T_blob, types.T_datalink, types.T_json:
+			types.T_blob, types.T_datalink, types.T_json, types.T_geometry:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Sval); ok {
 				val := val.Sval
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
