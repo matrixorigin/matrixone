@@ -1796,7 +1796,13 @@ func Decimal128FromDecimal64(x Decimal64, scale int32) Decimal128 {
 	return y
 }
 func Decimal256FromInt64(x int64) Decimal256 {
-	return Decimal256{uint64(x), 0, 0, 0}
+	y := Decimal256{uint64(x), 0, 0, 0}
+	if x < 0 {
+		y.B64_127 = ^y.B64_127
+		y.B128_191 = ^y.B128_191
+		y.B192_255 = ^y.B192_255
+	}
+	return y
 }
 
 func Decimal256FromDecimal128(x Decimal128) Decimal256 {

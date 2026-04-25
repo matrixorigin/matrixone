@@ -150,6 +150,30 @@ func TestDecimal256ToFloat64NegativeScale(t *testing.T) {
 		t.Fatalf("unexpected Decimal256ToFloat64 result: %v", got)
 	}
 }
+
+func TestDecimal256FromInt64SignExtension(t *testing.T) {
+	// positive: high limbs must be zero
+	pos := Decimal256FromInt64(42)
+	if pos.B64_127 != 0 || pos.B128_191 != 0 || pos.B192_255 != 0 {
+		t.Fatalf("positive int64: expected zero high limbs, got %v", pos)
+	}
+	if pos.B0_63 != 42 {
+		t.Fatalf("positive int64: B0_63 expected 42, got %d", pos.B0_63)
+	}
+
+	// negative: high limbs must all be 0xFFFFFFFFFFFFFFFF (sign extension)
+	neg := Decimal256FromInt64(-1)
+	const allOnes = ^uint64(0)
+	if neg.B0_63 != allOnes || neg.B64_127 != allOnes || neg.B128_191 != allOnes || neg.B192_255 != allOnes {
+		t.Fatalf("Decimal256FromInt64(-1): expected all-ones, got %v", neg)
+	}
+
+	// round-trip via Format: -42 with scale=0 should format as "-42"
+	n42 := Decimal256FromInt64(-42)
+	if got := n42.Format(0); got != "-42" {
+		t.Fatalf("Decimal256FromInt64(-42).Format(0) = %q, want \"-42\"", got)
+	}
+}
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x
