@@ -194,15 +194,17 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	// FixMe  We need a better escape function
 	stmtStr := viewData.Stmt
 	// MySQL always shows SQL SECURITY in SHOW CREATE VIEW output.
-	// If the stored Stmt doesn't contain it, splice it in before the VIEW keyword.
-	if viewData.SecurityType != "" {
-		upper := strings.ToUpper(stmtStr)
-		viewIdx := findViewKeyword(upper)
-		if viewIdx > 0 {
-			header := upper[:viewIdx]
-			if !strings.Contains(header, "SQL SECURITY") {
-				stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + viewData.SecurityType + " " + stmtStr[viewIdx:]
-			}
+	// Legacy views may not have persisted security_type, so default to DEFINER.
+	securityType := strings.TrimSpace(strings.ToUpper(viewData.SecurityType))
+	if securityType == "" {
+		securityType = "DEFINER"
+	}
+	upper := strings.ToUpper(stmtStr)
+	viewIdx := findViewKeyword(upper)
+	if viewIdx > 0 {
+		header := upper[:viewIdx]
+		if !strings.Contains(header, "SQL SECURITY") {
+			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
 		}
 	}
 	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")

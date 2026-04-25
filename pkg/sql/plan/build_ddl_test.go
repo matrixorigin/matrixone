@@ -195,6 +195,9 @@ func TestBuildShowCreateViewSecurityType(t *testing.T) {
 	pl := makePlan("create view v as select 1", "INVOKER")
 	require.True(t, planStringLiteralsContain(pl, "SQL SECURITY INVOKER"))
 
+	pl = makePlan("create view v as select 1", "")
+	require.True(t, planStringLiteralsContain(pl, "SQL SECURITY DEFINER"))
+
 	pl = makePlan("create SQL SECURITY DEFINER view v as select 1", "DEFINER")
 	var matched string
 	for _, lit := range collectPlanStringLiterals(pl) {
