@@ -260,6 +260,8 @@ func (v *Vector) setupFromData() {
 			v.col.setFromVector(v)
 		case types.T_enum:
 			v.col.setFromVector(v)
+		case types.T_year:
+			v.col.setFromVector(v)
 		default:
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}

@@ -3307,6 +3307,23 @@ func TestProtoVector(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestProtoVectorYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+
+	err := AppendFixed(vec, types.MoYear(2024), false, mp)
+	require.NoError(t, err)
+
+	vec2, err := VectorToProtoVector(vec)
+	require.NoError(t, err)
+
+	ret, err := ProtoVectorToVector(vec2)
+	require.NoError(t, err)
+	require.Equal(t, []types.MoYear{types.MoYear(2024)}, MustFixedColWithTypeCheck[types.MoYear](ret))
+	ret.Free(mp)
+}
+
 func TestResetWithSameTypeResetsClass(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_varchar.ToType())
