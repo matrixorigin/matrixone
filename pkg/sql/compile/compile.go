@@ -770,8 +770,8 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 	if qry == nil {
 		return true
 	}
-	// For INSERT ... SELECT, pre-run table locking stretches the lock hold window
-	// across the source scan. Keep the same table-lock semantics, but let LockOp
+	// For INSERT statements, pre-run table locking can stretch the target-table
+	// lock hold window. Keep the same table-lock semantics, but let LockOp
 	// acquire it when the first batch reaches the target pipeline.
 	return qry.StmtType != plan.Query_INSERT
 }
