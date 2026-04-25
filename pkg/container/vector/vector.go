@@ -1126,8 +1126,6 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	return err
 }
 
-
-
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
@@ -3509,6 +3507,13 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate b
 }
 
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
+// ShuffleWithBuf reorders v according to sels. buf is a caller-provided scratch
+// buffer that may be grown internally; it is not used by the current implementation
+// but is accepted to match the API used by callers that pre-allocate scratch space.
+func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, _ *[]byte) error {
+	return v.Shuffle(sels, mp)
+}
+
 func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
 	sz := v.typ.TypeSize()
 	olddata := v.data[:v.length*sz]

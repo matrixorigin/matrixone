@@ -105,6 +105,8 @@ func newSingleAggFuncExec1NewVersion(
 		return newAggregatorFromFixedToFixed[types.Decimal64](mg, info, impl)
 	case types.T_decimal128:
 		return newAggregatorFromFixedToFixed[types.Decimal128](mg, info, impl)
+	case types.T_decimal256:
+		return newAggregatorFromFixedToFixed[types.Decimal256](mg, info, impl)
 	case types.T_date:
 		return newAggregatorFromFixedToFixed[types.Date](mg, info, impl)
 	case types.T_datetime:
@@ -201,6 +203,11 @@ func newAggregatorFromFixedToFixed[to types.FixedSizeTExceptStrType](
 
 	case types.T_decimal128:
 		e := &aggregatorFromFixedToFixed[types.Decimal128, to]{}
+		e.init(mg, info, impl)
+		return e
+
+	case types.T_decimal256:
+		e := &aggregatorFromFixedToFixed[types.Decimal256, to]{}
 		e.init(mg, info, impl)
 		return e
 

@@ -163,6 +163,13 @@ func RegisterMax2(id int64) {
 		aggMaxInitResult[types.Decimal128],
 		aggMaxOfDecimal128Fill, aggMaxOfDecimal128Fills, aggMaxOfDecimal128Merge, nil)
 
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal256.ToType(), MaxReturnType, true),
+		nil,
+		nil,
+		aggMaxOfDecimal256Init,
+		aggMaxOfDecimal256Fill, aggMaxOfDecimal256Fills, aggMaxOfDecimal256Merge, nil)
+
 	varlenList := []types.T{types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink, types.T_binary, types.T_varbinary}
 	for _, t := range varlenList {
 		aggexec.RegisterAggFromBytesRetBytes(
@@ -180,12 +187,56 @@ var MaxSupportedTypes = []types.T{
 	types.T_float32, types.T_float64,
 	types.T_date, types.T_datetime,
 	types.T_timestamp, types.T_time, types.T_year,
-	types.T_decimal64, types.T_decimal128,
+	types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	types.T_bool,
 	types.T_bit,
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
+}
+
+// max(decimal256) — min negative value as initial sentinel
+var decimal256MinNegative = types.Decimal256{
+	B0_63:    0,
+	B64_127:  0,
+	B128_191: 0,
+	B192_255: uint64(1) << 63,
+}
+
+func aggMaxOfDecimal256Init(_ types.Type, _ ...types.Type) types.Decimal256 {
+	return decimal256MinNegative
+}
+
+func aggMaxOfDecimal256Fill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal256, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal256], resultSetter aggexec.AggSetter[types.Decimal256]) error {
+	if value.Compare(resultGetter()) > 0 {
+		resultSetter(value)
+	}
+	return nil
+}
+
+func aggMaxOfDecimal256Fills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.Decimal256, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[types.Decimal256], resultSetter aggexec.AggSetter[types.Decimal256]) error {
+	if value.Compare(resultGetter()) > 0 {
+		resultSetter(value)
+	}
+	return nil
+}
+
+func aggMaxOfDecimal256Merge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[types.Decimal256],
+	resultSetter aggexec.AggSetter[types.Decimal256]) error {
+	if r := resultGetter2(); r.Compare(resultGetter1()) > 0 {
+		resultSetter(r)
+	}
+	return nil
 }
 
 func MaxReturnType(typs []types.Type) types.Type {
