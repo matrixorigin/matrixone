@@ -1,140 +1,127 @@
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as rectangle_area;
-➤ rectangle_area[8,54,0]  𝄀
+rectangle_area
 12.0
 select st_area(st_geomfromtext('POLYGON((0 0,4 0,0 3,0 0))')) as triangle_area;
-➤ triangle_area[8,54,0]  𝄀
+triangle_area
 6.0
 select st_area(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))')) as polygon_with_hole_area;
-➤ polygon_with_hole_area[8,54,0]  𝄀
+polygon_with_hole_area
 300.0
 select st_area(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,4 2,4 4,2 4,2 2)))')) as multipolygon_area;
-➤ multipolygon_area[8,54,0]  𝄀
+multipolygon_area
 5.0
 select st_area(st_geomfromtext('MULTIPOLYGON(((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1)),((10 10,12 10,12 12,10 12,10 10)))')) as multipolygon_with_hole_area;
-➤ multipolygon_with_hole_area[8,54,0]  𝄀
+multipolygon_with_hole_area
 19.0
 select st_area(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as srid_area;
-➤ srid_area[8,54,0]  𝄀
+srid_area
 4.0
 select st_area(st_geomfromtext(null)) as null_area;
-➤ null_area[8,54,0]  𝄀
+null_area
 null
 select st_area(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a POLYGON or MULTIPOLYGON", true)
 invalid input: geometry is not a POLYGON or MULTIPOLYGON
 select st_astext(cast('POINT(1 2)' as geometry)) as point_text;
-➤ point_text[12,-1,0]  𝄀
+point_text
 POINT(1 2)
 select st_astext(cast('POLYGON((0 0,1 0,1 1,0 0))' as geometry)) as polygon_text;
-➤ polygon_text[12,-1,0]  𝄀
+polygon_text
 POLYGON((0 0,1 0,1 1,0 0))
 select st_astext(cast(null as geometry)) as null_text;
-➤ null_text[12,-1,0]  𝄀
+null_text
 null
 select st_astext(cast('INVALID' as geometry)) as invalid_geom;
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_astext(cast('POINT(NaN 1)' as geometry)) as invalid_nan_geom;
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_astext(cast('POINT(1' as geometry)) as invalid_struct_geom;
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_geomfromtext('POINT(7 8)', 4326) as direct_geom;
-➤ direct_geom[-2,2147483647,0]  𝄀
+direct_geom
 POINT(7 8)
 select cast('SRID=4326;POINT(9 9)' as geometry) as raw_payload_geom;
--- @regex("invalid geometry type", true)
 invalid input: invalid geometry type
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values ('LINESTRING(0 0,1 1)'), ('POINT(3 4)');
 select st_astext(g) as geom_text from t1 order by 1;
-➤ geom_text[12,-1,0]  𝄀
-LINESTRING(0 0,1 1)  𝄀
+geom_text
+LINESTRING(0 0,1 1)
 POINT(3 4)
 drop table t1;
 drop table if exists t_invalid_geom;
 create table t_invalid_geom(g geometry);
 insert into t_invalid_geom values ('INVALID');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 insert into t_invalid_geom values ('POINT(NaN 1)');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table t_invalid_geom;
 select st_astext(st_boundary(st_geomfromtext('LINESTRING(0 0,2 2,4 2)'))) as open_line_boundary;
-➤ open_line_boundary[12,-1,0]  𝄀
+open_line_boundary
 MULTIPOINT((0 0),(4 2))
 select st_astext(st_boundary(st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)'))) as closed_line_boundary;
-➤ closed_line_boundary[12,-1,0]  𝄀
+closed_line_boundary
 MULTIPOINT()
 select st_astext(st_boundary(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))'))) as polygon_boundary;
-➤ polygon_boundary[12,-1,0]  𝄀
+polygon_boundary
 MULTILINESTRING((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))
 select st_srid(st_boundary(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_boundary;
-➤ srid_boundary[4,32,0]  𝄀
+srid_boundary
 4326
 select st_astext(st_boundary(st_geomfromtext(null))) as null_boundary;
-➤ null_boundary[12,-1,0]  𝄀
+null_boundary
 null
 select st_boundary(st_geomfromtext('POINT(1 2)'));
--- @regex("geometry type is not supported by ST_Boundary", true)
 invalid input: geometry type is not supported by ST_Boundary
 select st_astext(st_centroid(st_geomfromtext('POINT(1 2)'))) as point_centroid;
-➤ point_centroid[12,-1,0]  𝄀
+point_centroid
 POINT(1 2)
 select st_astext(st_centroid(st_geomfromtext('LINESTRING(0 0,2 0,2 2)'))) as line_centroid;
-➤ line_centroid[12,-1,0]  𝄀
+line_centroid
 POINT(1.5 0.5)
 select st_astext(st_centroid(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0),(0 0,2 0,2 2,0 2,0 0))'))) as polygon_hole_centroid;
-➤ polygon_hole_centroid[12,-1,0]  𝄀
+polygon_hole_centroid
 POINT(5.166666666666667 5.166666666666667)
 select st_srid(st_centroid(st_geomfromtext('LINESTRING(0 0,0 4)', 4326))) as srid_centroid;
-➤ srid_centroid[4,32,0]  𝄀
+srid_centroid
 4326
 select st_astext(st_centroid(st_geomfromtext(null))) as null_centroid;
-➤ null_centroid[12,-1,0]  𝄀
+null_centroid
 null
 select st_centroid(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
--- @regex("geometry type is not supported by ST_Centroid", true)
 invalid input: geometry type is not supported by ST_Centroid
 drop table if exists geo_point_ok;
 create table geo_point_ok(g point);
 insert into geo_point_ok values (st_geomfromtext('POINT(1 1)'));
 select st_astext(g) as point_text from geo_point_ok;
-➤ point_text[12,-1,0]  𝄀
+point_text
 POINT(1 1)
 drop table geo_point_ok;
 drop table if exists geo_any_ok;
 create table geo_any_ok(g geometry);
 insert into geo_any_ok values (st_geomfromtext('LINESTRING(0 0,1 1)'));
 select st_astext(g) as geom_text from geo_any_ok;
-➤ geom_text[12,-1,0]  𝄀
+geom_text
 LINESTRING(0 0,1 1)
 drop table geo_any_ok;
 drop table if exists geo_point_bad;
 create table geo_point_bad(g point);
 insert into geo_point_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
--- @regex("cannot store LINESTRING in POINT column", true)
 invalid input: cannot store LINESTRING in POINT column
 drop table geo_point_bad;
 drop table if exists geo_point_nan_bad;
 create table geo_point_nan_bad(g point);
 insert into geo_point_nan_bad values ('POINT(NaN 1)');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table geo_point_nan_bad;
 drop table if exists geo_point_struct_bad;
 create table geo_point_struct_bad(g point);
 insert into geo_point_struct_bad values ('POINT(1');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table geo_point_struct_bad;
 drop table if exists geo_alter_bad;
 create table geo_alter_bad(g point);
 alter table geo_alter_bad modify column g linestring;
--- @regex("currently unsupport change from original geometry subtype POINT to LINESTRING", true)
 not supported: currently unsupport change from original geometry subtype POINT to LINESTRING
 drop table geo_alter_bad;
 drop table if exists geo_alter_add_point_not_null;
@@ -142,17 +129,17 @@ create table geo_alter_add_point_not_null(id int);
 insert into geo_alter_add_point_not_null values (1), (2);
 alter table geo_alter_add_point_not_null add column g point not null;
 select id, st_astext(g) as point_text from geo_alter_add_point_not_null order by id;
-➤ id[4,32,0]  ¦  point_text[12,-1,0]  𝄀
-1  ¦  POINT EMPTY  𝄀
-2  ¦  POINT EMPTY
+id    point_text
+1    POINT EMPTY
+2    POINT EMPTY
 drop table geo_alter_add_point_not_null;
 drop table if exists geo_alter_add_point_srid_not_null;
 create table geo_alter_add_point_srid_not_null(id int);
 insert into geo_alter_add_point_srid_not_null values (1);
 alter table geo_alter_add_point_srid_not_null add column g point not null srid 4326;
 select id, st_astext(g) as point_text, st_srid(g) as point_srid from geo_alter_add_point_srid_not_null;
-➤ id[4,32,0]  ¦  point_text[12,-1,0]  ¦  point_srid[4,32,0]  𝄀
-1  ¦  POINT EMPTY  ¦  4326
+id    point_text    point_srid
+1    POINT EMPTY    4326
 drop table geo_alter_add_point_srid_not_null;
 drop table if exists geo_typed_suite;
 create table geo_typed_suite(
@@ -174,912 +161,902 @@ st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))'),
 st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))')
 );
 select st_astext(l) as linestring_text, st_astext(p) as polygon_text from geo_typed_suite;
-➤ linestring_text[12,-1,0]  ¦  polygon_text[12,-1,0]  𝄀
-LINESTRING(0 0,1 1)  ¦  POLYGON((0 0,4 0,4 4,0 4,0 0))
+linestring_text    polygon_text
+LINESTRING(0 0,1 1)    POLYGON((0 0,4 0,4 4,0 4,0 0))
 select
 st_astext(mp) as multipoint_text,
 st_astext(ml) as multilinestring_text,
 st_astext(mpg) as multipolygon_text,
 st_astext(gc) as geometrycollection_text
 from geo_typed_suite;
-➤ multipoint_text[12,-1,0]  ¦  multilinestring_text[12,-1,0]  ¦  multipolygon_text[12,-1,0]  ¦  geometrycollection_text[12,-1,0]  𝄀
-MULTIPOINT((0 0),(1 1))  ¦  MULTILINESTRING((0 0,1 1),(2 2,3 3))  ¦  MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))  ¦  GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))
+multipoint_text    multilinestring_text    multipolygon_text    geometrycollection_text
+MULTIPOINT((0 0),(1 1))    MULTILINESTRING((0 0,1 1),(2 2,3 3))    MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))    GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,1 1))
 update geo_typed_suite
 set
 l = st_geomfromtext('LINESTRING(1 1,2 2)'),
 gc = st_geomfromtext('GEOMETRYCOLLECTION(POINT(2 2))')
 where id = 1;
 select st_astext(l) as linestring_text, st_astext(gc) as geometrycollection_text from geo_typed_suite;
-➤ linestring_text[12,-1,0]  ¦  geometrycollection_text[12,-1,0]  𝄀
-LINESTRING(1 1,2 2)  ¦  GEOMETRYCOLLECTION(POINT(2 2))
+linestring_text    geometrycollection_text
+LINESTRING(1 1,2 2)    GEOMETRYCOLLECTION(POINT(2 2))
 drop table geo_typed_suite;
 drop table if exists geo_multilinestring_bad;
 create table geo_multilinestring_bad(g multilinestring);
 insert into geo_multilinestring_bad values (st_geomfromtext('LINESTRING(0 0,1 1)'));
--- @regex("cannot store LINESTRING in MULTILINESTRING column", true)
 invalid input: cannot store LINESTRING in MULTILINESTRING column
 drop table geo_multilinestring_bad;
 drop table if exists geo_geometrycollection_bad;
 create table geo_geometrycollection_bad(g geometrycollection);
 insert into geo_geometrycollection_bad values (st_geomfromtext('POINT(0 0)'));
--- @regex("cannot store POINT in GEOMETRYCOLLECTION column", true)
 invalid input: cannot store POINT in GEOMETRYCOLLECTION column
 drop table geo_geometrycollection_bad;
 select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as contains_point_point_same;
-➤ contains_point_point_same[-7,1,0]  𝄀
-1
+contains_point_point_same
+true
 select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as contains_point_point_diff;
-➤ contains_point_point_diff[-7,1,0]  𝄀
-0
+contains_point_point_diff
+false
 select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_point_line;
-➤ contains_point_line[-7,1,0]  𝄀
-0
+contains_point_line
+false
 select st_contains(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as contains_point_polygon;
-➤ contains_point_polygon[-7,1,0]  𝄀
-0
+contains_point_polygon
+false
 select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(1 0)')) as contains_line_point_interior;
-➤ contains_line_point_interior[-7,1,0]  𝄀
-1
+contains_line_point_interior
+true
 select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)')) as contains_line_point_endpoint;
-➤ contains_line_point_endpoint[-7,1,0]  𝄀
-0
+contains_line_point_endpoint
+false
 select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0.5 0,1.5 0)')) as contains_line_line_subset;
-➤ contains_line_line_subset[-7,1,0]  𝄀
-1
+contains_line_line_subset
+true
 select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as contains_line_line_longer;
-➤ contains_line_line_longer[-7,1,0]  𝄀
-0
+contains_line_line_longer
+false
 select st_contains(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as contains_line_polygon;
-➤ contains_line_polygon[-7,1,0]  𝄀
-0
+contains_line_polygon
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as contains_polygon_point_inside;
-➤ contains_polygon_point_inside[-7,1,0]  𝄀
-1
+contains_polygon_point_inside
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(0 1)')) as contains_polygon_point_boundary;
-➤ contains_polygon_point_boundary[-7,1,0]  𝄀
-0
+contains_polygon_point_boundary
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0.5 0.5,1.5 1.5)')) as contains_polygon_line_inside;
-➤ contains_polygon_line_inside[-7,1,0]  𝄀
-1
+contains_polygon_line_inside
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_polygon_line_boundary;
-➤ contains_polygon_line_boundary[-7,1,0]  𝄀
-0
+contains_polygon_line_boundary
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as contains_polygon_polygon_contained;
-➤ contains_polygon_polygon_contained[-7,1,0]  𝄀
-1
+contains_polygon_polygon_contained
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as contains_polygon_polygon_equal;
-➤ contains_polygon_polygon_equal[-7,1,0]  𝄀
-1
+contains_polygon_polygon_equal
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POINT(1 1)', 4326)) as contains_srid;
-➤ contains_srid[-7,1,0]  𝄀
-1
+contains_srid
+true
 select st_contains(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as contains_null;
-➤ contains_null[-7,1,0]  𝄀
+contains_null
 null
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(5 0)')) as contains_multiline_point_interior;
-➤ contains_multiline_point_interior[-7,1,0]  𝄀
-1
+contains_multiline_point_interior
+true
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_multiline_line_union;
-➤ contains_multiline_line_union[-7,1,0]  𝄀
-1
+contains_multiline_line_union
+true
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))')) as contains_multipolygon_multiline;
-➤ contains_multipolygon_multiline[-7,1,0]  𝄀
-1
+contains_multipolygon_multiline
+true
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))')) as contains_multipolygon_multipolygon;
-➤ contains_multipolygon_multipolygon[-7,1,0]  𝄀
-1
+contains_multipolygon_multipolygon
+true
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(0 0)')) as contains_multiline_point_endpoint;
-➤ contains_multiline_point_endpoint[-7,1,0]  𝄀
-0
+contains_multiline_point_endpoint
+false
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as contains_multipolygon_line_boundary;
-➤ contains_multipolygon_line_boundary[-7,1,0]  𝄀
-0
+contains_multipolygon_line_boundary
+false
 select st_contains(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as contains_multipoint_point;
-➤ contains_multipoint_point[-7,1,0]  𝄀
-1
+contains_multipoint_point
+true
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0.5 0),(5 0))')) as contains_multiline_multipoint;
-➤ contains_multiline_multipoint[-7,1,0]  𝄀
-1
+contains_multiline_multipoint
+true
 select st_contains(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))')) as contains_multipolygon_multipoint;
-➤ contains_multipolygon_multipoint[-7,1,0]  𝄀
-1
+contains_multipolygon_multipoint
+true
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(5 0))')) as contains_multiline_multipoint_boundary;
-➤ contains_multiline_multipoint_boundary[-7,1,0]  𝄀
-0
+contains_multiline_multipoint_boundary
+false
 select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as contains_geometrycollection_point;
-➤ contains_geometrycollection_point[-7,1,0]  𝄀
-1
+contains_geometrycollection_point
+true
 select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))')) as contains_geometrycollection_collection;
-➤ contains_geometrycollection_collection[-7,1,0]  𝄀
-1
+contains_geometrycollection_collection
+true
 select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))')) as contains_geometrycollection_collection_gap;
-➤ contains_geometrycollection_collection_gap[-7,1,0]  𝄀
-0
+contains_geometrycollection_collection_gap
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)')) as contains_polygon_hole_point_inside_shell;
-➤ contains_polygon_hole_point_inside_shell[-7,1,0]  𝄀
-1
+contains_polygon_hole_point_inside_shell
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1.5 1.5)')) as contains_polygon_hole_point_inside_hole;
-➤ contains_polygon_hole_point_inside_hole[-7,1,0]  𝄀
-0
+contains_polygon_hole_point_inside_hole
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)')) as contains_polygon_hole_line_inside_shell;
-➤ contains_polygon_hole_line_inside_shell[-7,1,0]  𝄀
-1
+contains_polygon_hole_line_inside_shell
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(-1 1.5,5 1.5)')) as contains_polygon_hole_line_crossing;
-➤ contains_polygon_hole_line_crossing[-7,1,0]  𝄀
-0
+contains_polygon_hole_line_crossing
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1,2 1)')) as contains_polygon_hole_line_boundary;
-➤ contains_polygon_hole_line_boundary[-7,1,0]  𝄀
-0
+contains_polygon_hole_line_boundary
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1.5,2 1.5)')) as contains_polygon_hole_line_hole_chord;
-➤ contains_polygon_hole_line_hole_chord[-7,1,0]  𝄀
-0
+contains_polygon_hole_line_hole_chord
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as contains_polygon_hole_polygon_inside_shell;
-➤ contains_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-1
+contains_polygon_hole_polygon_inside_shell
+true
 select st_contains(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as contains_polygon_hole_polygon_spans_hole;
-➤ contains_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+contains_polygon_hole_polygon_spans_hole
+false
 select st_contains(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as contains_polygon_hole_polygon_equal;
-➤ contains_polygon_hole_polygon_equal[-7,1,0]  𝄀
-1
+contains_polygon_hole_polygon_equal
+true
 select st_coveredby(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as coveredby_point_point_same;
-➤ coveredby_point_point_same[-7,1,0]  𝄀
-1
+coveredby_point_point_same
+true
 select st_coveredby(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(0 0)')) as coveredby_point_point_diff;
-➤ coveredby_point_point_diff[-7,1,0]  𝄀
-0
+coveredby_point_point_diff
+false
 select st_coveredby(st_geomfromtext('POINT(2 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as coveredby_point_line_endpoint;
-➤ coveredby_point_line_endpoint[-7,1,0]  𝄀
-1
+coveredby_point_line_endpoint
+true
 select st_coveredby(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_point_polygon_boundary;
-➤ coveredby_point_polygon_boundary[-7,1,0]  𝄀
-1
+coveredby_point_polygon_boundary
+true
 select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_point_polygon_outside;
-➤ coveredby_point_polygon_outside[-7,1,0]  𝄀
-0
+coveredby_point_polygon_outside
+false
 select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)')) as coveredby_line_point;
-➤ coveredby_line_point[-7,1,0]  𝄀
-0
+coveredby_line_point
+false
 select st_coveredby(st_geomfromtext('LINESTRING(0.5 0,1.5 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as coveredby_line_line_subset;
-➤ coveredby_line_line_subset[-7,1,0]  𝄀
-1
+coveredby_line_line_subset
+true
 select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_line_polygon_boundary;
-➤ coveredby_line_polygon_boundary[-7,1,0]  𝄀
-1
+coveredby_line_polygon_boundary
+true
 select st_coveredby(st_geomfromtext('LINESTRING(-1 1,1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_line_polygon_crossing;
-➤ coveredby_line_polygon_crossing[-7,1,0]  𝄀
-0
+coveredby_line_polygon_crossing
+false
 select st_coveredby(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POINT(0 0)')) as coveredby_polygon_point;
-➤ coveredby_polygon_point[-7,1,0]  𝄀
-0
+coveredby_polygon_point
+false
 select st_coveredby(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as coveredby_polygon_line;
-➤ coveredby_polygon_line[-7,1,0]  𝄀
-0
+coveredby_polygon_line
+false
 select st_coveredby(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_polygon_polygon_contained;
-➤ coveredby_polygon_polygon_contained[-7,1,0]  𝄀
-1
+coveredby_polygon_polygon_contained
+true
 select st_coveredby(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as coveredby_polygon_polygon_equal;
-➤ coveredby_polygon_polygon_equal[-7,1,0]  𝄀
-1
+coveredby_polygon_polygon_equal
+true
 select st_coveredby(st_geomfromtext('POINT(0 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as coveredby_point_polygon_srid;
-➤ coveredby_point_polygon_srid[-7,1,0]  𝄀
-1
+coveredby_point_polygon_srid
+true
 select st_coveredby(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as coveredby_null;
-➤ coveredby_null[-7,1,0]  𝄀
+coveredby_null
 null
 select st_coveredby(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as coveredby_line_multiline_union;
-➤ coveredby_line_multiline_union[-7,1,0]  𝄀
-1
+coveredby_line_multiline_union
+true
 select st_coveredby(st_geomfromtext('POINT(5 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as coveredby_point_multiline;
-➤ coveredby_point_multiline[-7,1,0]  𝄀
-1
+coveredby_point_multiline
+true
 select st_coveredby(st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_multiline_multipolygon;
-➤ coveredby_multiline_multipolygon[-7,1,0]  𝄀
-1
+coveredby_multiline_multipolygon
+true
 select st_coveredby(st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_multipolygon_multipolygon;
-➤ coveredby_multipolygon_multipolygon[-7,1,0]  𝄀
-1
+coveredby_multipolygon_multipolygon
+true
 select st_coveredby(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(2 0,3 0))')) as coveredby_line_multiline_gap;
-➤ coveredby_line_multiline_gap[-7,1,0]  𝄀
-0
+coveredby_line_multiline_gap
+false
 select st_coveredby(st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_polygon_multipolygon_span;
-➤ coveredby_polygon_multipolygon_span[-7,1,0]  𝄀
-0
+coveredby_polygon_multipolygon_span
+false
 select st_coveredby(st_geomfromtext('POINT(1 1)'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as coveredby_point_multipoint;
-➤ coveredby_point_multipoint[-7,1,0]  𝄀
-1
+coveredby_point_multipoint
+true
 select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as coveredby_multipoint_multiline;
-➤ coveredby_multipoint_multiline[-7,1,0]  𝄀
-1
+coveredby_multipoint_multiline
+true
 select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(4.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as coveredby_multipoint_multipolygon;
-➤ coveredby_multipoint_multipolygon[-7,1,0]  𝄀
-1
+coveredby_multipoint_multipolygon
+true
 select st_coveredby(st_geomfromtext('MULTIPOINT((0 0),(3 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as coveredby_multipoint_multiline_gap;
-➤ coveredby_multipoint_multiline_gap[-7,1,0]  𝄀
-0
+coveredby_multipoint_multiline_gap
+false
 select st_coveredby(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_point_geometrycollection;
-➤ coveredby_point_geometrycollection[-7,1,0]  𝄀
-1
+coveredby_point_geometrycollection
+true
 select st_coveredby(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_geometrycollection_geometrycollection;
-➤ coveredby_geometrycollection_geometrycollection[-7,1,0]  𝄀
-1
+coveredby_geometrycollection_geometrycollection
+true
 select st_coveredby(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as coveredby_geometrycollection_geometrycollection_gap;
-➤ coveredby_geometrycollection_geometrycollection_gap[-7,1,0]  𝄀
-0
+coveredby_geometrycollection_geometrycollection_gap
+false
 select st_coveredby(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_shell;
-➤ coveredby_point_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+coveredby_point_polygon_hole_inside_shell
+true
 select st_coveredby(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inside_hole;
-➤ coveredby_point_polygon_hole_inside_hole[-7,1,0]  𝄀
-0
+coveredby_point_polygon_hole_inside_hole
+false
 select st_coveredby(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_point_polygon_hole_inner_boundary;
-➤ coveredby_point_polygon_hole_inner_boundary[-7,1,0]  𝄀
-1
+coveredby_point_polygon_hole_inner_boundary
+true
 select st_coveredby(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_inside_shell;
-➤ coveredby_line_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+coveredby_line_polygon_hole_inside_shell
+true
 select st_coveredby(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_crossing;
-➤ coveredby_line_polygon_hole_crossing[-7,1,0]  𝄀
-0
+coveredby_line_polygon_hole_crossing
+false
 select st_coveredby(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_boundary;
-➤ coveredby_line_polygon_hole_boundary[-7,1,0]  𝄀
-1
+coveredby_line_polygon_hole_boundary
+true
 select st_coveredby(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as coveredby_line_polygon_hole_chord;
-➤ coveredby_line_polygon_hole_chord[-7,1,0]  𝄀
-0
+coveredby_line_polygon_hole_chord
+false
 select st_coveredby(st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as coveredby_polygon_hole_polygon_inside_shell;
-➤ coveredby_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-1
+coveredby_polygon_hole_polygon_inside_shell
+true
 select st_coveredby(st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as coveredby_polygon_hole_polygon_spans_hole;
-➤ coveredby_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+coveredby_polygon_hole_polygon_spans_hole
+false
 select st_coveredby(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as coveredby_polygon_hole_polygon_equal;
-➤ coveredby_polygon_hole_polygon_equal[-7,1,0]  𝄀
-1
+coveredby_polygon_hole_polygon_equal
+true
 select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as covers_point_point_same;
-➤ covers_point_point_same[-7,1,0]  𝄀
-1
+covers_point_point_same
+true
 select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as covers_point_point_diff;
-➤ covers_point_point_diff[-7,1,0]  𝄀
-0
+covers_point_point_diff
+false
 select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as covers_point_line;
-➤ covers_point_line[-7,1,0]  𝄀
-0
+covers_point_line
+false
 select st_covers(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as covers_point_polygon;
-➤ covers_point_polygon[-7,1,0]  𝄀
-0
+covers_point_polygon
+false
 select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(2 0)')) as covers_line_point_endpoint;
-➤ covers_line_point_endpoint[-7,1,0]  𝄀
-1
+covers_line_point_endpoint
+true
 select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0.5 0,1.5 0)')) as covers_line_line_subset;
-➤ covers_line_line_subset[-7,1,0]  𝄀
-1
+covers_line_line_subset
+true
 select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as covers_line_line_longer;
-➤ covers_line_line_longer[-7,1,0]  𝄀
-0
+covers_line_line_longer
+false
 select st_covers(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as covers_line_polygon;
-➤ covers_line_polygon[-7,1,0]  𝄀
-0
+covers_line_polygon
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as covers_polygon_point_inside;
-➤ covers_polygon_point_inside[-7,1,0]  𝄀
-1
+covers_polygon_point_inside
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(0 1)')) as covers_polygon_point_boundary;
-➤ covers_polygon_point_boundary[-7,1,0]  𝄀
-1
+covers_polygon_point_boundary
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as covers_polygon_line_boundary;
-➤ covers_polygon_line_boundary[-7,1,0]  𝄀
-1
+covers_polygon_line_boundary
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(-1 1,1 1)')) as covers_polygon_line_crossing;
-➤ covers_polygon_line_crossing[-7,1,0]  𝄀
-0
+covers_polygon_line_crossing
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))')) as covers_polygon_polygon_contained;
-➤ covers_polygon_polygon_contained[-7,1,0]  𝄀
-1
+covers_polygon_polygon_contained
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as covers_polygon_polygon_equal;
-➤ covers_polygon_polygon_equal[-7,1,0]  𝄀
-1
+covers_polygon_polygon_equal
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('LINESTRING(0 0,2 0)', 4326)) as covers_polygon_line_srid;
-➤ covers_polygon_line_srid[-7,1,0]  𝄀
-1
+covers_polygon_line_srid
+true
 select st_covers(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as covers_null;
-➤ covers_null[-7,1,0]  𝄀
+covers_null
 null
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as covers_multiline_line_union;
-➤ covers_multiline_line_union[-7,1,0]  𝄀
-1
+covers_multiline_line_union
+true
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(5 0)')) as covers_multiline_point;
-➤ covers_multiline_point[-7,1,0]  𝄀
-1
+covers_multiline_point
+true
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))')) as covers_multipolygon_multiline;
-➤ covers_multipolygon_multiline[-7,1,0]  𝄀
-1
+covers_multipolygon_multiline
+true
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))')) as covers_multipolygon_multipolygon;
-➤ covers_multipolygon_multipolygon[-7,1,0]  𝄀
-1
+covers_multipolygon_multipolygon
+true
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,1 0),(2 0,3 0))'), st_geomfromtext('LINESTRING(0 0,3 0)')) as covers_multiline_line_gap;
-➤ covers_multiline_line_gap[-7,1,0]  𝄀
-0
+covers_multiline_line_gap
+false
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))')) as covers_multipolygon_polygon_span;
-➤ covers_multipolygon_polygon_span[-7,1,0]  𝄀
-0
+covers_multipolygon_polygon_span
+false
 select st_covers(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as covers_multipoint_point;
-➤ covers_multipoint_point[-7,1,0]  𝄀
-1
+covers_multipoint_point
+true
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(5 0))')) as covers_multiline_multipoint;
-➤ covers_multiline_multipoint[-7,1,0]  𝄀
-1
+covers_multiline_multipoint
+true
 select st_covers(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOINT((0 0),(4.5 1))')) as covers_multipolygon_multipoint;
-➤ covers_multipolygon_multipoint[-7,1,0]  𝄀
-1
+covers_multipolygon_multipoint
+true
 select st_covers(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(3 0))')) as covers_multiline_multipoint_gap;
-➤ covers_multiline_multipoint_gap[-7,1,0]  𝄀
-0
+covers_multiline_multipoint_gap
+false
 select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as covers_geometrycollection_point;
-➤ covers_geometrycollection_point[-7,1,0]  𝄀
-1
+covers_geometrycollection_point
+true
 select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))')) as covers_geometrycollection_collection;
-➤ covers_geometrycollection_collection[-7,1,0]  𝄀
-1
+covers_geometrycollection_collection
+true
 select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))')) as covers_geometrycollection_collection_gap;
-➤ covers_geometrycollection_collection_gap[-7,1,0]  𝄀
-0
+covers_geometrycollection_collection_gap
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(3 3)')) as covers_polygon_hole_point_inside_shell;
-➤ covers_polygon_hole_point_inside_shell[-7,1,0]  𝄀
-1
+covers_polygon_hole_point_inside_shell
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1.5 1.5)')) as covers_polygon_hole_point_inside_hole;
-➤ covers_polygon_hole_point_inside_hole[-7,1,0]  𝄀
-0
+covers_polygon_hole_point_inside_hole
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('POINT(1 1.5)')) as covers_polygon_hole_point_inner_boundary;
-➤ covers_polygon_hole_point_inner_boundary[-7,1,0]  𝄀
-1
+covers_polygon_hole_point_inner_boundary
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)')) as covers_polygon_hole_line_inside_shell;
-➤ covers_polygon_hole_line_inside_shell[-7,1,0]  𝄀
-1
+covers_polygon_hole_line_inside_shell
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(-1 1.5,5 1.5)')) as covers_polygon_hole_line_crossing;
-➤ covers_polygon_hole_line_crossing[-7,1,0]  𝄀
-0
+covers_polygon_hole_line_crossing
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1,2 1)')) as covers_polygon_hole_line_boundary;
-➤ covers_polygon_hole_line_boundary[-7,1,0]  𝄀
-1
+covers_polygon_hole_line_boundary
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))'), st_geomfromtext('LINESTRING(1 1.5,2 1.5)')) as covers_polygon_hole_line_chord;
-➤ covers_polygon_hole_line_chord[-7,1,0]  𝄀
-0
+covers_polygon_hole_line_chord
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as covers_polygon_hole_polygon_inside_shell;
-➤ covers_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-1
+covers_polygon_hole_polygon_inside_shell
+true
 select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as covers_polygon_hole_polygon_spans_hole;
-➤ covers_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+covers_polygon_hole_polygon_spans_hole
+false
 select st_covers(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as covers_polygon_hole_polygon_equal;
-➤ covers_polygon_hole_polygon_equal[-7,1,0]  𝄀
-1
+covers_polygon_hole_polygon_equal
+true
 select st_crosses(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as crosses_point_point_same;
-➤ crosses_point_point_same[-7,1,0]  𝄀
-0
+crosses_point_point_same
+false
 select st_crosses(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_point_polygon;
-➤ crosses_point_polygon[-7,1,0]  𝄀
-0
+crosses_point_polygon
+false
 select st_crosses(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as crosses_polygon_point;
-➤ crosses_polygon_point[-7,1,0]  𝄀
-0
+crosses_polygon_point
+false
 select st_crosses(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as crosses_polygon_polygon;
-➤ crosses_polygon_polygon[-7,1,0]  𝄀
-0
+crosses_polygon_polygon
+false
 select st_crosses(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as crosses_point_polygon_srid;
-➤ crosses_point_polygon_srid[-7,1,0]  𝄀
-0
+crosses_point_polygon_srid
+false
 select st_crosses(st_geomfromtext('POINT(1 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_point_line_interior;
-➤ crosses_point_line_interior[-7,1,0]  𝄀
-1
+crosses_point_line_interior
+true
 select st_crosses(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_point_line_endpoint;
-➤ crosses_point_line_endpoint[-7,1,0]  𝄀
-0
+crosses_point_line_endpoint
+false
 select st_crosses(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as crosses_line_line;
-➤ crosses_line_line[-7,1,0]  𝄀
-1
+crosses_line_line
+true
 select st_crosses(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,2 2)')) as crosses_line_line_touch;
-➤ crosses_line_line_touch[-7,1,0]  𝄀
-0
+crosses_line_line_touch
+false
 select st_crosses(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(1 0,3 0)')) as crosses_line_line_overlap;
-➤ crosses_line_line_overlap[-7,1,0]  𝄀
-0
+crosses_line_line_overlap
+false
 select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_line_polygon;
-➤ crosses_line_polygon[-7,1,0]  𝄀
-1
+crosses_line_polygon
+true
 select st_crosses(st_geomfromtext('LINESTRING(0.5 1,1.5 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_line_polygon_inside;
-➤ crosses_line_polygon_inside[-7,1,0]  𝄀
-0
+crosses_line_polygon_inside
+false
 select st_crosses(st_geomfromtext('LINESTRING(-1 0,3 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_line_polygon_boundary;
-➤ crosses_line_polygon_boundary[-7,1,0]  𝄀
-0
+crosses_line_polygon_boundary
+false
 select st_crosses(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(-1 1,3 1)')) as crosses_polygon_line;
-➤ crosses_polygon_line[-7,1,0]  𝄀
-1
+crosses_polygon_line
+true
 select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as crosses_srid;
-➤ crosses_srid[-7,1,0]  𝄀
-1
+crosses_srid
+true
 select st_crosses(st_geomfromtext(null), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_null;
-➤ crosses_null[-7,1,0]  𝄀
+crosses_null
 null
 select st_crosses(st_geomfromtext('MULTIPOINT((1 0),(3 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_multipoint_line;
-➤ crosses_multipoint_line[-7,1,0]  𝄀
-1
+crosses_multipoint_line
+true
 select st_crosses(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOINT((1 0),(3 0))')) as crosses_line_multipoint;
-➤ crosses_line_multipoint[-7,1,0]  𝄀
-1
+crosses_line_multipoint
+true
 select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 2),(3 0,4 0))'), st_geomfromtext('MULTILINESTRING((0 2,2 0),(5 0,6 0))')) as crosses_multiline_multiline;
-➤ crosses_multiline_multiline[-7,1,0]  𝄀
-1
+crosses_multiline_multiline
+true
 select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 0,4 0))'), st_geomfromtext('LINESTRING(1 0,3 0)')) as crosses_multiline_line_overlap;
-➤ crosses_multiline_line_overlap[-7,1,0]  𝄀
-0
+crosses_multiline_line_overlap
+false
 select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as crosses_line_multipolygon;
-➤ crosses_line_multipolygon[-7,1,0]  𝄀
-1
+crosses_line_multipolygon
+true
 select st_crosses(st_geomfromtext('MULTILINESTRING((-1 1,3 1),(5 3,6 3))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as crosses_multiline_multipolygon;
-➤ crosses_multiline_multipolygon[-7,1,0]  𝄀
-1
+crosses_multiline_multipolygon
+true
 select st_crosses(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(-1 1,3 1)')) as crosses_multipolygon_line;
-➤ crosses_multipolygon_line[-7,1,0]  𝄀
-1
+crosses_multipolygon_line
+true
 select st_crosses(st_geomfromtext('MULTILINESTRING((0 0,2 2),(3 0,4 0))', 4326), st_geomfromtext('MULTILINESTRING((0 2,2 0),(5 0,6 0))', 4326)) as crosses_multiline_srid;
-➤ crosses_multiline_srid[-7,1,0]  𝄀
-1
+crosses_multiline_srid
+true
 select st_crosses(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_geometrycollection_line;
-➤ crosses_geometrycollection_line[-7,1,0]  𝄀
-1
+crosses_geometrycollection_line
+true
 select st_crosses(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(9 9),POLYGON((0 0,2 0,2 2,0 2,0 0)))')) as crosses_line_geometrycollection;
-➤ crosses_line_geometrycollection[-7,1,0]  𝄀
-1
+crosses_line_geometrycollection
+true
 select st_crosses(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(LINESTRING(0 0,2 0)),POINT(8 8))'), st_geomfromtext('MULTIPOINT((1 0),(3 0))')) as crosses_nested_geometrycollection_multipoint;
-➤ crosses_nested_geometrycollection_multipoint[-7,1,0]  𝄀
-1
+crosses_nested_geometrycollection_multipoint
+true
 select st_crosses(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(8 8))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_geometrycollection_line_endpoint_touch;
-➤ crosses_geometrycollection_line_endpoint_touch[-7,1,0]  𝄀
-0
+crosses_geometrycollection_line_endpoint_touch
+false
 select st_crosses(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_crossing;
-➤ crosses_line_polygon_hole_crossing[-7,1,0]  𝄀
-1
+crosses_line_polygon_hole_crossing
+true
 select st_crosses(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_inside_shell;
-➤ crosses_line_polygon_hole_inside_shell[-7,1,0]  𝄀
-0
+crosses_line_polygon_hole_inside_shell
+false
 select st_crosses(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_boundary;
-➤ crosses_line_polygon_hole_boundary[-7,1,0]  𝄀
-0
+crosses_line_polygon_hole_boundary
+false
 select st_crosses(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as crosses_line_polygon_hole_chord;
-➤ crosses_line_polygon_hole_chord[-7,1,0]  𝄀
-0
+crosses_line_polygon_hole_chord
+false
 select st_dimension(st_geomfromtext('POINT(1 2)')) as point_dimension;
-➤ point_dimension[-5,64,0]  𝄀
+point_dimension
 0
 select st_dimension(st_geomfromtext('LINESTRING(0 0,1 1)')) as linestring_dimension;
-➤ linestring_dimension[-5,64,0]  𝄀
+linestring_dimension
 1
 select st_dimension(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as polygon_dimension;
-➤ polygon_dimension[-5,64,0]  𝄀
+polygon_dimension
 2
 select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))')) as geometrycollection_dimension;
-➤ geometrycollection_dimension[-5,64,0]  𝄀
+geometrycollection_dimension
 1
 select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),POLYGON((0 0,1 0,1 1,0 0)))')) as nested_dimension;
-➤ nested_dimension[-5,64,0]  𝄀
+nested_dimension
 2
 select st_dimension(st_geomfromtext('MULTIPOINT((7 8),(9 10))', 4326)) as srid_dimension;
-➤ srid_dimension[-5,64,0]  𝄀
+srid_dimension
 0
 select st_dimension(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_dimension;
-➤ empty_collection_dimension[-5,64,0]  𝄀
+empty_collection_dimension
 -1
 select st_dimension(st_geomfromtext('MULTIPOINT()')) as empty_multipoint_dimension;
-➤ empty_multipoint_dimension[-5,64,0]  𝄀
+empty_multipoint_dimension
 -1
 select st_dimension(st_geomfromtext(null)) as null_dimension;
-➤ null_dimension[-5,64,0]  𝄀
+null_dimension
 null
 select st_disjoint(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(2 2)')) as disjoint_points;
-➤ disjoint_points[-7,1,0]  𝄀
-1
+disjoint_points
+true
 select st_disjoint(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(1 1)')) as disjoint_same_point;
-➤ disjoint_same_point[-7,1,0]  𝄀
-0
+disjoint_same_point
+false
 select st_disjoint(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as disjoint_point_polygon_boundary;
-➤ disjoint_point_polygon_boundary[-7,1,0]  𝄀
-0
+disjoint_point_polygon_boundary
+false
 select st_disjoint(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as disjoint_cross_lines;
-➤ disjoint_cross_lines[-7,1,0]  𝄀
-0
+disjoint_cross_lines
+false
 select st_disjoint(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((3 3,5 3,5 5,3 5,3 3))')) as disjoint_polygons;
-➤ disjoint_polygons[-7,1,0]  𝄀
-1
+disjoint_polygons
+true
 select st_disjoint(st_geomfromtext('LINESTRING(0 0,2 2)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as disjoint_srid;
-➤ disjoint_srid[-7,1,0]  𝄀
-0
+disjoint_srid
+false
 select st_disjoint(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as disjoint_multipoint_point;
-➤ disjoint_multipoint_point[-7,1,0]  𝄀
-0
+disjoint_multipoint_point
+false
 select st_disjoint(st_geomfromtext('POINT(2 2)'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as disjoint_point_multipoint;
-➤ disjoint_point_multipoint[-7,1,0]  𝄀
-1
+disjoint_point_multipoint
+true
 select st_disjoint(st_geomfromtext('MULTIPOINT((0 1),(3 3))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as disjoint_multipoint_polygon;
-➤ disjoint_multipoint_polygon[-7,1,0]  𝄀
-0
+disjoint_multipoint_polygon
+false
 select st_disjoint(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 1,5 1))'), st_geomfromtext('LINESTRING(1 -1,1 1)')) as disjoint_multiline_line;
-➤ disjoint_multiline_line[-7,1,0]  𝄀
-0
+disjoint_multiline_line
+false
 select st_disjoint(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))'), st_geomfromtext('POINT(4 1)')) as disjoint_multipolygon_point;
-➤ disjoint_multipolygon_point[-7,1,0]  𝄀
-0
+disjoint_multipolygon_point
+false
 select st_disjoint(st_geomfromtext('LINESTRING(4 1,6 1)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))')) as disjoint_line_multipolygon;
-➤ disjoint_line_multipolygon[-7,1,0]  𝄀
-0
+disjoint_line_multipolygon
+false
 select st_disjoint(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))')) as disjoint_multi_true;
-➤ disjoint_multi_true[-7,1,0]  𝄀
-1
+disjoint_multi_true
+true
 select st_disjoint(st_geomfromtext(null), st_geomfromtext('POINT(2 2)')) as disjoint_null;
-➤ disjoint_null[-7,1,0]  𝄀
+disjoint_null
 null
 select st_disjoint(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(1 1)')) as disjoint_geometrycollection_point;
-➤ disjoint_geometrycollection_point[-7,1,0]  𝄀
-1
+disjoint_geometrycollection_point
+true
 select st_disjoint(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as disjoint_point_geometrycollection;
-➤ disjoint_point_geometrycollection[-7,1,0]  𝄀
-0
+disjoint_point_geometrycollection
+false
 select st_disjoint(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(0 0)')) as disjoint_nested_geometrycollection;
-➤ disjoint_nested_geometrycollection[-7,1,0]  𝄀
-0
+disjoint_nested_geometrycollection
+false
 select st_disjoint(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_point_polygon_hole_inside_shell;
-➤ disjoint_point_polygon_hole_inside_shell[-7,1,0]  𝄀
-0
+disjoint_point_polygon_hole_inside_shell
+false
 select st_disjoint(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_point_polygon_hole_inside_hole;
-➤ disjoint_point_polygon_hole_inside_hole[-7,1,0]  𝄀
-1
+disjoint_point_polygon_hole_inside_hole
+true
 select st_disjoint(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_line_polygon_hole_inside_shell;
-➤ disjoint_line_polygon_hole_inside_shell[-7,1,0]  𝄀
-0
+disjoint_line_polygon_hole_inside_shell
+false
 select st_disjoint(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_line_polygon_hole_crossing;
-➤ disjoint_line_polygon_hole_crossing[-7,1,0]  𝄀
-0
+disjoint_line_polygon_hole_crossing
+false
 select st_disjoint(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_line_polygon_hole_boundary;
-➤ disjoint_line_polygon_hole_boundary[-7,1,0]  𝄀
-0
+disjoint_line_polygon_hole_boundary
+false
 select st_disjoint(st_geomfromtext('LINESTRING(1.25 1.5,1.75 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as disjoint_line_polygon_hole_inside_hole;
-➤ disjoint_line_polygon_hole_inside_hole[-7,1,0]  𝄀
-1
+disjoint_line_polygon_hole_inside_hole
+true
 select st_disjoint(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as disjoint_polygon_hole_polygon_inside_shell;
-➤ disjoint_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-0
+disjoint_polygon_hole_polygon_inside_shell
+false
 select st_disjoint(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as disjoint_polygon_hole_polygon_spans_hole;
-➤ disjoint_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+disjoint_polygon_hole_polygon_spans_hole
+false
 select st_disjoint(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as disjoint_polygon_hole_polygon_inside_hole;
-➤ disjoint_polygon_hole_polygon_inside_hole[-7,1,0]  𝄀
-1
+disjoint_polygon_hole_polygon_inside_hole
+true
 select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)')) as d1;
-➤ d1[8,54,0]  𝄀
+d1
 5.0
 select st_distance(st_geomfromtext('POINT(-1 -1)'), st_geomfromtext('POINT(2 3)')) as d2;
-➤ d2[8,54,0]  𝄀
+d2
 5.0
 select st_distance(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as dnull;
-➤ dnull[8,54,0]  𝄀
+dnull
 null
 select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as d3;
-➤ d3[8,54,0]  𝄀
+d3
 1.0
 select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(3 0)')) as d4;
-➤ d4[8,54,0]  𝄀
+d4
 1.0
 select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d5;
-➤ d5[8,54,0]  𝄀
+d5
 0.0
 select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(3 1)')) as d6;
-➤ d6[8,54,0]  𝄀
+d6
 1.0
 select st_distance(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d7;
-➤ d7[8,54,0]  𝄀
+d7
 0.0
 select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(1 -1,1 1)')) as d8;
-➤ d8[8,54,0]  𝄀
+d8
 0.0
 select st_distance(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 1,2 1)')) as d9;
-➤ d9[8,54,0]  𝄀
+d9
 1.0
 select st_distance(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as d10;
-➤ d10[8,54,0]  𝄀
+d10
 0.0
 select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 3,2 3)')) as d11;
-➤ d11[8,54,0]  𝄀
+d11
 1.0
 select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as d12;
-➤ d12[8,54,0]  𝄀
+d12
 0.0
 select st_distance(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((3 0,5 0,5 2,3 2,3 0))')) as d13;
-➤ d13[8,54,0]  𝄀
+d13
 1.0
 select st_distance(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d14;
-➤ d14[8,54,0]  𝄀
+d14
 0.0
 select st_distance(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d15;
-➤ d15[8,54,0]  𝄀
+d15
 0.5
 select st_distance(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d16;
-➤ d16[8,54,0]  𝄀
+d16
 0.0
 select st_distance(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d17;
-➤ d17[8,54,0]  𝄀
+d17
 0.0
 select st_distance(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d18;
-➤ d18[8,54,0]  𝄀
+d18
 0.0
 select st_distance(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d19;
-➤ d19[8,54,0]  𝄀
+d19
 0.0
 select st_distance(st_geomfromtext('LINESTRING(1.25 1.5,1.75 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as d20;
-➤ d20[8,54,0]  𝄀
+d20
 0.25
 select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as d21;
-➤ d21[8,54,0]  𝄀
+d21
 0.0
 select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as d22;
-➤ d22[8,54,0]  𝄀
+d22
 0.0
 select st_distance(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as d23;
-➤ d23[8,54,0]  𝄀
+d23
 0.25
 select st_distance(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('POINT(3 0)')) as d24;
-➤ d24[8,54,0]  𝄀
+d24
 1.0
 select st_distance(st_geomfromtext('POINT(1 1)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as d25;
-➤ d25[8,54,0]  𝄀
+d25
 1.0
 select st_distance(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POINT(5 1)')) as d26;
-➤ d26[8,54,0]  𝄀
+d26
 0.0
 select st_distance(st_geomfromtext('LINESTRING(5 3,6 3)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as d27;
-➤ d27[8,54,0]  𝄀
+d27
 1.0
 select st_distance(st_geomfromtext('MULTILINESTRING((0 0,2 0),(5 0,7 0))'), st_geomfromtext('MULTILINESTRING((3 0,4 0),(8 0,9 0))')) as d28;
-➤ d28[8,54,0]  𝄀
+d28
 1.0
 select st_distance(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 0,7 0,7 2,5 2,5 0)))'), st_geomfromtext('MULTIPOLYGON(((3 0,4 0,4 1,3 1,3 0)),((8 0,9 0,9 1,8 1,8 0)))')) as d29;
-➤ d29[8,54,0]  𝄀
+d29
 1.0
 select st_distance(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POLYGON((5 0,7 0,7 2,5 2,5 0))')) as d30;
-➤ d30[8,54,0]  𝄀
+d30
 0.0
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(3 0))'), st_geomfromtext('POINT(2 0)')) as d31;
-➤ d31[8,54,0]  𝄀
+d31
 1.0
 select st_distance(st_geomfromtext('POINT(2 0)'), st_geomfromtext('MULTIPOINT((0 0),(3 0))')) as d32;
-➤ d32[8,54,0]  𝄀
+d32
 1.0
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(4 0))'), st_geomfromtext('LINESTRING(1 0,3 0)')) as d33;
-➤ d33[8,54,0]  𝄀
+d33
 1.0
 select st_distance(st_geomfromtext('MULTIPOINT((1 1),(5 3))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as d34;
-➤ d34[8,54,0]  𝄀
+d34
 0.0
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTIPOINT((2 0),(8 0))')) as d35;
-➤ d35[8,54,0]  𝄀
+d35
 2.0
 select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)'));
--- @regex("ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs", true)
 invalid input: ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
 select st_astext(st_endpoint(st_geomfromtext('LINESTRING(0 0,3 4)'))) as last_point;
-➤ last_point[12,-1,0]  𝄀
+last_point
 POINT(3 4)
 select st_astext(st_endpoint(st_geomfromtext('LINESTRING(1 2,3 4,5 6)'))) as polyline_last_point;
-➤ polyline_last_point[12,-1,0]  𝄀
+polyline_last_point
 POINT(5 6)
 select st_srid(st_endpoint(st_geomfromtext('LINESTRING(7 8,9 10)', 4326))) as srid_endpoint;
-➤ srid_endpoint[4,32,0]  𝄀
+srid_endpoint
 4326
 select st_astext(st_endpoint(st_geomfromtext(null))) as null_endpoint;
-➤ null_endpoint[12,-1,0]  𝄀
+null_endpoint
 null
 select st_endpoint(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_astext(st_envelope(st_geomfromtext('POINT(1 2)'))) as point_envelope;
-➤ point_envelope[12,-1,0]  𝄀
+point_envelope
 POINT(1 2)
 select st_astext(st_envelope(st_geomfromtext('LINESTRING(0 0,2 3,1 1)'))) as line_envelope;
-➤ line_envelope[12,-1,0]  𝄀
+line_envelope
 POLYGON((0 0,2 0,2 3,0 3,0 0))
 select st_astext(st_envelope(st_geomfromtext('LINESTRING(1 1,1 3,1 2)'))) as vertical_line_envelope;
-➤ vertical_line_envelope[12,-1,0]  𝄀
+vertical_line_envelope
 LINESTRING(1 1,1 3)
 select st_astext(st_envelope(st_geomfromtext('POLYGON((0 0,3 0,2 2,0 1,0 0))'))) as polygon_envelope;
-➤ polygon_envelope[12,-1,0]  𝄀
+polygon_envelope
 POLYGON((0 0,3 0,3 2,0 2,0 0))
 select st_srid(st_envelope(st_geomfromtext('LINESTRING(5 2,5 7,5 4)', 4326))) as srid_envelope;
-➤ srid_envelope[4,32,0]  𝄀
+srid_envelope
 4326
 select st_astext(st_envelope(st_geomfromtext(null))) as null_envelope;
-➤ null_envelope[12,-1,0]  𝄀
+null_envelope
 null
 select st_envelope(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
--- @regex("geometry type is not supported by ST_Envelope", true)
 invalid input: geometry type is not supported by ST_Envelope
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as equals_point_point_same;
-➤ equals_point_point_same[-7,1,0]  𝄀
-1
+equals_point_point_same
+true
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as equals_point_point_diff;
-➤ equals_point_point_diff[-7,1,0]  𝄀
-0
+equals_point_point_diff
+false
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as equals_point_line;
-➤ equals_point_line[-7,1,0]  𝄀
-0
+equals_point_line
+false
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as equals_point_polygon;
-➤ equals_point_polygon[-7,1,0]  𝄀
-0
+equals_point_polygon
+false
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)')) as equals_line_point;
-➤ equals_line_point[-7,1,0]  𝄀
-0
+equals_line_point
+false
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as equals_line_line_same;
-➤ equals_line_line_same[-7,1,0]  𝄀
-1
+equals_line_line_same
+true
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,0 0)')) as equals_line_line_reverse;
-➤ equals_line_line_reverse[-7,1,0]  𝄀
-1
+equals_line_line_reverse
+true
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as equals_line_line_segmented;
-➤ equals_line_line_segmented[-7,1,0]  𝄀
-1
+equals_line_line_segmented
+true
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as equals_line_polygon;
-➤ equals_line_polygon[-7,1,0]  𝄀
-0
+equals_line_polygon
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(0 0)')) as equals_polygon_point;
-➤ equals_polygon_point[-7,1,0]  𝄀
-0
+equals_polygon_point
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as equals_polygon_line;
-➤ equals_polygon_line[-7,1,0]  𝄀
-0
+equals_polygon_line
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((2 0,2 2,0 2,0 0,2 0))')) as equals_polygon_polygon_same;
-➤ equals_polygon_polygon_same[-7,1,0]  𝄀
-1
+equals_polygon_polygon_same
+true
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as equals_polygon_polygon_diff;
-➤ equals_polygon_polygon_diff[-7,1,0]  𝄀
-0
+equals_polygon_polygon_diff
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((2 0,2 2,0 2,0 0,2 0))', 4326)) as equals_polygon_srid;
-➤ equals_polygon_srid[-7,1,0]  𝄀
-1
+equals_polygon_srid
+true
 select st_equals(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as equals_null;
-➤ equals_null[-7,1,0]  𝄀
+equals_null
 null
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((1 1),(0 0))')) as equals_multipoint_same;
-➤ equals_multipoint_same[-7,1,0]  𝄀
-1
+equals_multipoint_same
+true
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((0 0),(2 2))')) as equals_multipoint_diff;
-➤ equals_multipoint_diff[-7,1,0]  𝄀
-0
+equals_multipoint_diff
+false
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTIPOINT((0 0))')) as equals_point_multipoint_cross_type;
-➤ equals_point_multipoint_cross_type[-7,1,0]  𝄀
-0
+equals_point_multipoint_cross_type
+false
 select st_equals(st_geomfromtext('MULTILINESTRING((0 0,2 0))'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as equals_multiline_same;
-➤ equals_multiline_same[-7,1,0]  𝄀
-1
+equals_multiline_same
+true
 select st_equals(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 0,4 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 1,4 1))')) as equals_multiline_diff;
-➤ equals_multiline_diff[-7,1,0]  𝄀
-0
+equals_multiline_diff
+false
 select st_equals(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0))')) as equals_line_multiline_cross_type;
-➤ equals_line_multiline_cross_type[-7,1,0]  𝄀
-0
+equals_line_multiline_cross_type
+false
 select st_equals(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((4 0,6 0,6 2,4 2,4 0)),((0 0,2 0,2 2,0 2,0 0)))')) as equals_multipolygon_same;
-➤ equals_multipolygon_same[-7,1,0]  𝄀
-1
+equals_multipolygon_same
+true
 select st_equals(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 1,6 1,6 3,4 3,4 1)))')) as equals_multipolygon_diff;
-➤ equals_multipolygon_diff[-7,1,0]  𝄀
-0
+equals_multipolygon_diff
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))')) as equals_polygon_multipolygon_cross_type;
-➤ equals_polygon_multipolygon_cross_type[-7,1,0]  𝄀
-0
+equals_polygon_multipolygon_cross_type
+false
 select st_equals(st_geomfromtext('MULTIPOINT((0 0),(1 1))', 4326), st_geomfromtext('MULTIPOINT((1 1),(0 0))', 4326)) as equals_multipoint_srid;
-➤ equals_multipoint_srid[-7,1,0]  𝄀
-1
+equals_multipoint_srid
+true
 select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))')) as equals_geometrycollection_reordered;
-➤ equals_geometrycollection_reordered[-7,1,0]  𝄀
-1
+equals_geometrycollection_reordered
+true
 select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))')) as equals_geometrycollection_diff_member;
-➤ equals_geometrycollection_diff_member[-7,1,0]  𝄀
-0
+equals_geometrycollection_diff_member
+false
 select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)')) as equals_geometrycollection_point_cross_type;
-➤ equals_geometrycollection_point_cross_type[-7,1,0]  𝄀
-0
+equals_geometrycollection_point_cross_type
+false
 select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),GEOMETRYCOLLECTION(POINT(0 0)))')) as equals_nested_geometrycollection_reordered;
-➤ equals_nested_geometrycollection_reordered[-7,1,0]  𝄀
-1
+equals_nested_geometrycollection_reordered
+true
 select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as equals_polygon_hole_polygon_same;
-➤ equals_polygon_hole_polygon_same[-7,1,0]  𝄀
-1
+equals_polygon_hole_polygon_same
+true
 select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0))')) as equals_polygon_hole_polygon_filled;
-➤ equals_polygon_hole_polygon_filled[-7,1,0]  𝄀
-0
+equals_polygon_hole_polygon_filled
+false
 select st_equals(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))')) as equals_polygon_hole_polygon_diff_hole;
-➤ equals_polygon_hole_polygon_diff_hole[-7,1,0]  𝄀
-0
+equals_polygon_hole_polygon_diff_hole
+false
 select st_astext(st_exteriorring(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))'))) as outer_ring;
-➤ outer_ring[12,-1,0]  𝄀
+outer_ring
 LINESTRING(0 0,10 0,10 10,0 10,0 0)
 select st_astext(st_exteriorring(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'))) as polygon_with_hole_outer_ring;
-➤ polygon_with_hole_outer_ring[12,-1,0]  𝄀
+polygon_with_hole_outer_ring
 LINESTRING(0 0,20 0,20 20,0 20,0 0)
 select st_srid(st_exteriorring(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_exteriorring;
-➤ srid_exteriorring[4,32,0]  𝄀
+srid_exteriorring
 4326
 select st_astext(st_exteriorring(st_geomfromtext(null))) as null_exteriorring;
-➤ null_exteriorring[12,-1,0]  𝄀
+null_exteriorring
 null
 select st_exteriorring(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a POLYGON", true)
 invalid input: geometry is not a POLYGON
 select st_astext(st_geometryn(st_geomfromtext('MULTIPOINT((1 2),(3 4))'), 2)) as second_point;
-➤ second_point[12,-1,0]  𝄀
+second_point
 POINT(3 4)
 select st_astext(st_geometryn(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))'), 1)) as first_line;
-➤ first_line[12,-1,0]  𝄀
+first_line
 LINESTRING(0 0,1 1)
 select st_astext(st_geometryn(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))'), 2)) as second_polygon;
-➤ second_polygon[12,-1,0]  𝄀
+second_polygon
 POLYGON((2 2,3 2,3 3,2 2))
 select st_astext(st_geometryn(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))'), 2)) as second_geometry;
-➤ second_geometry[12,-1,0]  𝄀
+second_geometry
 LINESTRING(0 0,1 1)
 select st_astext(st_geometryn(st_geomfromtext(null), 1)) as null_geometry;
-➤ null_geometry[12,-1,0]  𝄀
+null_geometry
 null
 select st_geometrytype(st_geomfromtext('POINT(1 2)')) as point_type;
-➤ point_type[12,-1,0]  𝄀
+point_type
 POINT
 select st_geometrytype(st_geomfromtext('LINESTRING(0 0,1 1)')) as linestring_type;
-➤ linestring_type[12,-1,0]  𝄀
+linestring_type
 LINESTRING
 select st_geometrytype(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as polygon_type;
-➤ polygon_type[12,-1,0]  𝄀
+polygon_type
 POLYGON
 select st_geometrytype(st_geomfromtext(null)) as null_type;
-➤ null_type[12,-1,0]  𝄀
+null_type
 null
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values (st_geomfromtext('MULTIPOINT((1 2),(3 4))')), (st_geomfromtext('POINT(3 4)'));
 select st_geometrytype(g) as geom_type from t1 order by 1;
-➤ geom_type[12,-1,0]  𝄀
-MULTIPOINT  𝄀
+geom_type
+MULTIPOINT
 POINT
 drop table t1;
 select st_astext(st_geomfromtext('POINT(1 2)')) as point_text;
-➤ point_text[12,-1,0]  𝄀
+point_text
 POINT(1 2)
 select st_astext(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as polygon_text;
-➤ polygon_text[12,-1,0]  𝄀
+polygon_text
 POLYGON((0 0,1 0,1 1,0 0))
 select st_astext(st_geomfromtext('POINT EMPTY')) as empty_point_text;
-➤ empty_point_text[12,-1,0]  𝄀
+empty_point_text
 POINT EMPTY
 select st_astext(st_geomfromtext('LINESTRING EMPTY')) as empty_linestring_text;
-➤ empty_linestring_text[12,-1,0]  𝄀
+empty_linestring_text
 LINESTRING EMPTY
 select st_astext(st_geomfromtext(null)) as null_text;
-➤ null_text[12,-1,0]  𝄀
+null_text
 null
 select st_geomfromtext('POINT(NaN 1)');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_geomfromtext('LINESTRING(0 0,Inf 1)');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_geomfromtext('POINT(1');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 select st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 1),)');
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table if exists t1;
 create table t1(g geometry);
 insert into t1 values (st_geomfromtext('LINESTRING(0 0,1 1)')), (st_geomfromtext('POINT(3 4)'));
 select st_astext(g) as geom_text from t1 order by 1;
-➤ geom_text[12,-1,0]  𝄀
-LINESTRING(0 0,1 1)  𝄀
+geom_text
+LINESTRING(0 0,1 1)
 POINT(3 4)
 drop table t1;
 select st_dimension(
@@ -1087,14 +1064,13 @@ st_geomfromtext(
 concat(repeat('GEOMETRYCOLLECTION(', 64), 'POINT(0 0)', repeat(')', 64))
 )
 ) as boundary_dimension;
-➤ boundary_dimension[-5,64,0]  𝄀
+boundary_dimension
 0
 select st_dimension(
 st_geomfromtext(
 concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
 )
 );
--- @regex("geometry collection nesting depth exceeds 64", true)
 invalid input: geometry collection nesting depth exceeds 64
 select st_intersects(
 st_geomfromtext(
@@ -1102,479 +1078,463 @@ concat(repeat('GEOMETRYCOLLECTION(', 64), 'POINT(0 0)', repeat(')', 64))
 ),
 st_geomfromtext('POINT(0 0)')
 ) as boundary_intersects;
-➤ boundary_intersects[-7,1,0]  𝄀
-1
+boundary_intersects
+true
 select st_intersects(
 st_geomfromtext(
 concat(repeat('GEOMETRYCOLLECTION(', 65), 'POINT(0 0)', repeat(')', 65))
 ),
 st_geomfromtext('POINT(0 0)')
 );
--- @regex("geometry collection nesting depth exceeds 64", true)
 invalid input: geometry collection nesting depth exceeds 64
 set session max_points_in_geometry = 3;
 select st_geomfromtext('LINESTRING(0 0,1 1,2 2,3 3)');
--- @regex("max_points_in_geometry=3", true)
 invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
 select cast('LINESTRING(0 0,1 1,2 2,3 3)' as geometry);
--- @regex("max_points_in_geometry=3", true)
 invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
 drop table if exists geo_line_limit;
 create table geo_line_limit(g linestring);
 insert into geo_line_limit values ('LINESTRING(0 0,1 1,2 2,3 3)');
--- @regex("max_points_in_geometry=3", true)
 invalid input: geometry has 4 points, which exceeds max_points_in_geometry=3
 drop table geo_line_limit;
 set session max_points_in_geometry = 65536;
 select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), 1)) as first_hole;
-➤ first_hole[12,-1,0]  𝄀
+first_hole
 LINESTRING(5 5,15 5,15 15,5 15,5 5)
 select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))'), 2)) as second_hole;
-➤ second_hole[12,-1,0]  𝄀
+second_hole
 LINESTRING(15 15,20 15,20 20,15 20,15 15)
 select st_srid(st_interiorringn(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))', 4326), 1)) as srid_interior_ring;
-➤ srid_interior_ring[4,32,0]  𝄀
+srid_interior_ring
 4326
 select st_astext(st_interiorringn(st_geomfromtext(null), 1)) as null_geometry;
-➤ null_geometry[12,-1,0]  𝄀
+null_geometry
 null
 select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), null)) as null_index;
-➤ null_index[12,-1,0]  𝄀
+null_index
 null
 select st_interiorringn(st_geomfromtext('POINT(1 1)'), 1);
--- @regex("geometry is not a POLYGON", true)
 invalid input: geometry is not a POLYGON
 select st_interiorringn(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))'), 2);
--- @regex("ring index out of range", true)
 invalid input: ring index out of range
 select st_intersects(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(1 1)')) as intersects_same_point;
-➤ intersects_same_point[-7,1,0]  𝄀
-1
+intersects_same_point
+true
 select st_intersects(st_geomfromtext('POINT(1 1)'), st_geomfromtext('LINESTRING(0 0,2 2)')) as intersects_point_line;
-➤ intersects_point_line[-7,1,0]  𝄀
-1
+intersects_point_line
+true
 select st_intersects(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as intersects_point_polygon_boundary;
-➤ intersects_point_polygon_boundary[-7,1,0]  𝄀
-1
+intersects_point_polygon_boundary
+true
 select st_intersects(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as intersects_cross_lines;
-➤ intersects_cross_lines[-7,1,0]  𝄀
-1
+intersects_cross_lines
+true
 select st_intersects(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as intersects_line_polygon;
-➤ intersects_line_polygon[-7,1,0]  𝄀
-1
+intersects_line_polygon
+true
 select st_intersects(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((2 1,4 1,4 3,2 3,2 1))')) as intersects_touching_polygons;
-➤ intersects_touching_polygons[-7,1,0]  𝄀
-1
+intersects_touching_polygons
+true
 select st_intersects(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((3 3,5 3,5 5,3 5,3 3))')) as intersects_disjoint_polygons;
-➤ intersects_disjoint_polygons[-7,1,0]  𝄀
-0
+intersects_disjoint_polygons
+false
 select st_intersects(st_geomfromtext('LINESTRING(0 0,2 2)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as intersects_srid;
-➤ intersects_srid[-7,1,0]  𝄀
-1
+intersects_srid
+true
 select st_intersects(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as intersects_multipoint_point;
-➤ intersects_multipoint_point[-7,1,0]  𝄀
-1
+intersects_multipoint_point
+true
 select st_intersects(st_geomfromtext('POINT(2 2)'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as intersects_point_multipoint;
-➤ intersects_point_multipoint[-7,1,0]  𝄀
-0
+intersects_point_multipoint
+false
 select st_intersects(st_geomfromtext('MULTIPOINT((0 1),(3 3))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as intersects_multipoint_polygon;
-➤ intersects_multipoint_polygon[-7,1,0]  𝄀
-1
+intersects_multipoint_polygon
+true
 select st_intersects(st_geomfromtext('MULTILINESTRING((0 0,2 0),(3 1,5 1))'), st_geomfromtext('LINESTRING(1 -1,1 1)')) as intersects_multiline_line;
-➤ intersects_multiline_line[-7,1,0]  𝄀
-1
+intersects_multiline_line
+true
 select st_intersects(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))'), st_geomfromtext('POINT(4 1)')) as intersects_multipolygon_point;
-➤ intersects_multipolygon_point[-7,1,0]  𝄀
-1
+intersects_multipolygon_point
+true
 select st_intersects(st_geomfromtext('LINESTRING(4 1,6 1)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))')) as intersects_line_multipolygon;
-➤ intersects_line_multipolygon[-7,1,0]  𝄀
-1
+intersects_line_multipolygon
+true
 select st_intersects(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))')) as intersects_multi_false;
-➤ intersects_multi_false[-7,1,0]  𝄀
-0
+intersects_multi_false
+false
 select st_intersects(st_geomfromtext(null), st_geomfromtext('POINT(1 1)')) as intersects_null;
-➤ intersects_null[-7,1,0]  𝄀
+intersects_null
 null
 select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as intersects_geometrycollection_point;
-➤ intersects_geometrycollection_point[-7,1,0]  𝄀
-1
+intersects_geometrycollection_point
+true
 select st_intersects(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as intersects_point_geometrycollection;
-➤ intersects_point_geometrycollection[-7,1,0]  𝄀
-1
+intersects_point_geometrycollection
+true
 select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(0 0)')) as intersects_nested_geometrycollection;
-➤ intersects_nested_geometrycollection[-7,1,0]  𝄀
-1
+intersects_nested_geometrycollection
+true
 select st_intersects(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_point_polygon_hole_inside_shell;
-➤ intersects_point_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+intersects_point_polygon_hole_inside_shell
+true
 select st_intersects(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_point_polygon_hole_inside_hole;
-➤ intersects_point_polygon_hole_inside_hole[-7,1,0]  𝄀
-0
+intersects_point_polygon_hole_inside_hole
+false
 select st_intersects(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_line_polygon_hole_inside_shell;
-➤ intersects_line_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+intersects_line_polygon_hole_inside_shell
+true
 select st_intersects(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_line_polygon_hole_crossing;
-➤ intersects_line_polygon_hole_crossing[-7,1,0]  𝄀
-1
+intersects_line_polygon_hole_crossing
+true
 select st_intersects(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_line_polygon_hole_boundary;
-➤ intersects_line_polygon_hole_boundary[-7,1,0]  𝄀
-1
+intersects_line_polygon_hole_boundary
+true
 select st_intersects(st_geomfromtext('LINESTRING(1.25 1.5,1.75 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as intersects_line_polygon_hole_inside_hole;
-➤ intersects_line_polygon_hole_inside_hole[-7,1,0]  𝄀
-0
+intersects_line_polygon_hole_inside_hole
+false
 select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as intersects_polygon_hole_polygon_inside_shell;
-➤ intersects_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-1
+intersects_polygon_hole_polygon_inside_shell
+true
 select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as intersects_polygon_hole_polygon_spans_hole;
-➤ intersects_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-1
+intersects_polygon_hole_polygon_spans_hole
+true
 select st_intersects(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as intersects_polygon_hole_polygon_inside_hole;
-➤ intersects_polygon_hole_polygon_inside_hole[-7,1,0]  𝄀
-0
+intersects_polygon_hole_polygon_inside_hole
+false
 select st_isclosed(st_geomfromtext('LINESTRING(0 0,3 4)')) as open_line;
-➤ open_line[-7,1,0]  𝄀
-0
+open_line
+false
 select st_isclosed(st_geomfromtext('LINESTRING(0 0,3 4,0 0)')) as closed_line;
-➤ closed_line[-7,1,0]  𝄀
-1
+closed_line
+true
 select st_isclosed(st_geomfromtext('LINESTRING(1 1,2 2,1 1)', 4326)) as srid_closed_line;
-➤ srid_closed_line[-7,1,0]  𝄀
-1
+srid_closed_line
+true
 select st_isclosed(st_geomfromtext(null)) as null_line;
-➤ null_line[-7,1,0]  𝄀
+null_line
 null
 select st_isclosed(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_iscollection(st_geomfromtext('POINT(1 2)')) as point_is_collection;
-➤ point_is_collection[-7,1,0]  𝄀
-0
+point_is_collection
+false
 select st_iscollection(st_geomfromtext('MULTIPOINT((1 2),(3 4))')) as multipoint_is_collection;
-➤ multipoint_is_collection[-7,1,0]  𝄀
-1
+multipoint_is_collection
+true
 select st_iscollection(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))')) as multilinestring_is_collection;
-➤ multilinestring_is_collection[-7,1,0]  𝄀
-1
+multilinestring_is_collection
+true
 select st_iscollection(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))')) as geometrycollection_is_collection;
-➤ geometrycollection_is_collection[-7,1,0]  𝄀
-1
+geometrycollection_is_collection
+true
 select st_iscollection(st_geomfromtext('MULTIPOINT((7 8),(9 10))', 4326)) as srid_collection;
-➤ srid_collection[-7,1,0]  𝄀
-1
+srid_collection
+true
 select st_iscollection(st_geomfromtext(null)) as null_collection;
-➤ null_collection[-7,1,0]  𝄀
+null_collection
 null
 select st_isempty(st_geomfromtext('POINT EMPTY')) as empty_point;
-➤ empty_point[-7,1,0]  𝄀
-1
+empty_point
+true
 select st_isempty(st_geomfromtext('POINT(1 2)')) as non_empty_point;
-➤ non_empty_point[-7,1,0]  𝄀
-0
+non_empty_point
+false
 select st_isempty(st_geomfromtext('LINESTRING EMPTY')) as empty_linestring;
-➤ empty_linestring[-7,1,0]  𝄀
-1
+empty_linestring
+true
 select st_isempty(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection;
-➤ empty_collection[-7,1,0]  𝄀
-1
+empty_collection
+true
 select st_isempty(st_geomfromtext(null)) as null_isempty;
-➤ null_isempty[-7,1,0]  𝄀
+null_isempty
 null
 select st_isring(st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as open_simple_line;
-➤ open_simple_line[-7,1,0]  𝄀
-0
+open_simple_line
+false
 select st_isring(st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)')) as closed_simple_line;
-➤ closed_simple_line[-7,1,0]  𝄀
-1
+closed_simple_line
+true
 select st_isring(st_geomfromtext('LINESTRING(0 0,2 2,0 2,2 0)')) as crossing_line;
-➤ crossing_line[-7,1,0]  𝄀
-0
+crossing_line
+false
 select st_isring(st_geomfromtext('LINESTRING(0 0,1 0,0 0)')) as backtracking_line;
-➤ backtracking_line[-7,1,0]  𝄀
-0
+backtracking_line
+false
 select st_isring(st_geomfromtext(null)) as null_ring;
-➤ null_ring[-7,1,0]  𝄀
+null_ring
 null
 select st_isring(st_geomfromtext('POINT(1 2)'));
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_issimple(st_geomfromtext('POINT(1 2)')) as point_simple;
-➤ point_simple[-7,1,0]  𝄀
-1
+point_simple
+true
 select st_issimple(st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as simple_line;
-➤ simple_line[-7,1,0]  𝄀
-1
+simple_line
+true
 select st_issimple(st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)')) as simple_closed_line;
-➤ simple_closed_line[-7,1,0]  𝄀
-1
+simple_closed_line
+true
 select st_issimple(st_geomfromtext('LINESTRING(0 0,2 2,0 2,2 0)')) as crossing_line;
-➤ crossing_line[-7,1,0]  𝄀
-0
+crossing_line
+false
 select st_issimple(st_geomfromtext('LINESTRING(0 0,1 0,0 0)')) as backtracking_line;
-➤ backtracking_line[-7,1,0]  𝄀
-0
+backtracking_line
+false
 select st_issimple(st_geomfromtext(null)) as null_simple;
-➤ null_simple[-7,1,0]  𝄀
+null_simple
 null
 select st_issimple(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))'));
--- @regex("geometry type is not supported by ST_IsSimple", true)
 invalid input: geometry type is not supported by ST_IsSimple
 select st_isvalid(st_geomfromtext('POINT(1 2)')) as point_valid;
-➤ point_valid[-7,1,0]  𝄀
-1
+point_valid
+true
 select st_isvalid(st_geomfromtext('LINESTRING(0 0,1 1)')) as line_valid;
-➤ line_valid[-7,1,0]  𝄀
-1
+line_valid
+true
 select st_isvalid(st_geomfromtext('LINESTRING(0 0,-0.00 0,0.0 0)')) as repeated_line_invalid;
-➤ repeated_line_invalid[-7,1,0]  𝄀
-0
+repeated_line_invalid
+false
 select st_isvalid(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))')) as polygon_valid;
-➤ polygon_valid[-7,1,0]  𝄀
-1
+polygon_valid
+true
 select st_isvalid(st_geomfromtext('POLYGON((0 0,4 4,4 0,0 4,0 0))')) as self_cross_polygon_invalid;
-➤ self_cross_polygon_invalid[-7,1,0]  𝄀
-0
+self_cross_polygon_invalid
+false
 select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))')) as polygon_hole_valid;
-➤ polygon_hole_valid[-7,1,0]  𝄀
-1
+polygon_hole_valid
+true
 select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(0 1,2 1,2 2,0 2,0 1))')) as touching_hole_invalid;
-➤ touching_hole_invalid[-7,1,0]  𝄀
-0
+touching_hole_invalid
+false
 select st_isvalid(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_valid;
-➤ empty_collection_valid[-7,1,0]  𝄀
-1
+empty_collection_valid
+true
 select st_isvalid(st_geomfromtext(null)) as null_isvalid;
-➤ null_isvalid[-7,1,0]  𝄀
+null_isvalid
 null
 select st_isvalid(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
--- @regex("geometry type is not supported by ST_IsValid", true)
 invalid input: geometry type is not supported by ST_IsValid
 select st_length(st_geomfromtext('LINESTRING(0 0,3 4)')) as line_length;
-➤ line_length[8,54,0]  𝄀
+line_length
 5.0
 select st_length(st_geomfromtext('LINESTRING(0 0,3 4,6 4)')) as polyline_length;
-➤ polyline_length[8,54,0]  𝄀
+polyline_length
 8.0
 select st_length(st_geomfromtext('MULTILINESTRING((0 0,3 4),(3 4,6 8))')) as multiline_length;
-➤ multiline_length[8,54,0]  𝄀
+multiline_length
 10.0
 select st_length(st_geomfromtext('LINESTRING(0 0,3 4)', 4326)) as srid_line_length;
-➤ srid_line_length[8,54,0]  𝄀
+srid_line_length
 5.0
 select st_length(st_geomfromtext(null)) as null_length;
-➤ null_length[8,54,0]  𝄀
+null_length
 null
 select st_length(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a LINESTRING or MULTILINESTRING", true)
 invalid input: geometry is not a LINESTRING or MULTILINESTRING
 select st_numgeometries(st_geomfromtext('POINT(1 2)')) as point_count;
-➤ point_count[-5,64,0]  𝄀
+point_count
 1
 select st_numgeometries(st_geomfromtext('MULTIPOINT((1 2),(3 4))')) as multipoint_count;
-➤ multipoint_count[-5,64,0]  𝄀
+multipoint_count
 2
 select st_numgeometries(st_geomfromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))')) as multilinestring_count;
-➤ multilinestring_count[-5,64,0]  𝄀
+multilinestring_count
 2
 select st_numgeometries(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))')) as multipolygon_count;
-➤ multipolygon_count[-5,64,0]  𝄀
+multipolygon_count
 2
 select st_numgeometries(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))')) as collection_count;
-➤ collection_count[-5,64,0]  𝄀
+collection_count
 2
 select st_numgeometries(st_geomfromtext('GEOMETRYCOLLECTION()')) as empty_collection_count;
-➤ empty_collection_count[-5,64,0]  𝄀
+empty_collection_count
 null
 select st_numgeometries(st_geomfromtext('MULTIPOINT()')) as empty_multipoint_count;
-➤ empty_multipoint_count[-5,64,0]  𝄀
+empty_multipoint_count
 null
 select st_numgeometries(st_geomfromtext(null)) as null_count;
-➤ null_count[-5,64,0]  𝄀
+null_count
 null
 select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0))')) as ring_count_simple;
-➤ ring_count_simple[-5,64,0]  𝄀
+ring_count_simple
 0
 select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))')) as ring_count_one_hole;
-➤ ring_count_one_hole[-5,64,0]  𝄀
+ring_count_one_hole
 1
 select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))')) as ring_count_two_holes;
-➤ ring_count_two_holes[-5,64,0]  𝄀
+ring_count_two_holes
 2
 select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))', 4326)) as ring_count_srid;
-➤ ring_count_srid[-5,64,0]  𝄀
+ring_count_srid
 1
 select st_numinteriorrings(st_geomfromtext(null)) as null_ring_count;
-➤ null_ring_count[-5,64,0]  𝄀
+null_ring_count
 null
 select st_numinteriorrings(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a POLYGON", true)
 invalid input: geometry is not a POLYGON
 select st_numpoints(st_geomfromtext('LINESTRING(0 0,3 4)')) as simple_points;
-➤ simple_points[-5,64,0]  𝄀
+simple_points
 2
 select st_numpoints(st_geomfromtext('LINESTRING(1 2,3 4,5 6)')) as three_points;
-➤ three_points[-5,64,0]  𝄀
+three_points
 3
 select st_numpoints(st_geomfromtext('LINESTRING(7 8,9 10)', 4326)) as srid_points;
-➤ srid_points[-5,64,0]  𝄀
+srid_points
 2
 select st_numpoints(st_geomfromtext(null)) as null_points;
-➤ null_points[-5,64,0]  𝄀
+null_points
 null
 select st_numpoints(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(1 1)')) as overlaps_point_point_same;
-➤ overlaps_point_point_same[-7,1,0]  𝄀
-0
+overlaps_point_point_same
+false
 select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as overlaps_point_line;
-➤ overlaps_point_line[-7,1,0]  𝄀
-0
+overlaps_point_line
+false
 select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as overlaps_point_polygon;
-➤ overlaps_point_polygon[-7,1,0]  𝄀
-0
+overlaps_point_polygon
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('POINT(1 1)')) as overlaps_line_point;
-➤ overlaps_line_point[-7,1,0]  𝄀
-0
+overlaps_line_point
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POINT(1 1)')) as overlaps_polygon_point;
-➤ overlaps_polygon_point[-7,1,0]  𝄀
-0
+overlaps_polygon_point
+false
 select st_overlaps(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as overlaps_line_polygon;
-➤ overlaps_line_polygon[-7,1,0]  𝄀
-0
+overlaps_line_polygon
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(-1 1,3 1)')) as overlaps_polygon_line;
-➤ overlaps_polygon_line[-7,1,0]  𝄀
-0
+overlaps_polygon_line
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_line_line_partial;
-➤ overlaps_line_line_partial[-7,1,0]  𝄀
-1
+overlaps_line_line_partial
+true
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(0 0,3 0)')) as overlaps_line_line_equal;
-➤ overlaps_line_line_equal[-7,1,0]  𝄀
-0
+overlaps_line_line_equal
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,4 0)'), st_geomfromtext('LINESTRING(1 0,3 0)')) as overlaps_line_line_contained;
-➤ overlaps_line_line_contained[-7,1,0]  𝄀
-0
+overlaps_line_line_contained
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,4 0)')) as overlaps_line_line_touch;
-➤ overlaps_line_line_touch[-7,1,0]  𝄀
-0
+overlaps_line_line_touch
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as overlaps_line_line_cross;
-➤ overlaps_line_line_cross[-7,1,0]  𝄀
-0
+overlaps_line_line_cross
+false
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,2 0,3 1)'), st_geomfromtext('LINESTRING(1 0,3 0,4 -1)')) as overlaps_line_line_multisegment;
-➤ overlaps_line_line_multisegment[-7,1,0]  𝄀
-1
+overlaps_line_line_multisegment
+true
 select st_overlaps(st_geomfromtext('LINESTRING(3 0,0 0)'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_line_line_reverse;
-➤ overlaps_line_line_reverse[-7,1,0]  𝄀
-1
+overlaps_line_line_reverse
+true
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,3 0)', 4326), st_geomfromtext('LINESTRING(1 0,4 0)', 4326)) as overlaps_srid;
-➤ overlaps_srid[-7,1,0]  𝄀
-1
+overlaps_srid
+true
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as overlaps_polygon_polygon_partial;
-➤ overlaps_polygon_polygon_partial[-7,1,0]  𝄀
-1
+overlaps_polygon_polygon_partial
+true
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((2 0,4 0,4 2,2 2,2 0))')) as overlaps_polygon_polygon_touch;
-➤ overlaps_polygon_polygon_touch[-7,1,0]  𝄀
-0
+overlaps_polygon_polygon_touch
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'), st_geomfromtext('POLYGON((1 1,3 1,3 3,1 3,1 1))')) as overlaps_polygon_polygon_contained;
-➤ overlaps_polygon_polygon_contained[-7,1,0]  𝄀
-0
+overlaps_polygon_polygon_contained
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as overlaps_polygon_polygon_equal;
-➤ overlaps_polygon_polygon_equal[-7,1,0]  𝄀
-0
+overlaps_polygon_polygon_equal
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))', 4326)) as overlaps_polygon_srid;
-➤ overlaps_polygon_srid[-7,1,0]  𝄀
-1
+overlaps_polygon_srid
+true
 select st_overlaps(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as overlaps_point_srid;
-➤ overlaps_point_srid[-7,1,0]  𝄀
-0
+overlaps_point_srid
+false
 select st_overlaps(st_geomfromtext(null), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_null;
-➤ overlaps_null[-7,1,0]  𝄀
+overlaps_null
 null
 select st_overlaps(st_geomfromtext('MULTILINESTRING((0 0,3 0),(4 0,5 0))'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_multiline_line;
-➤ overlaps_multiline_line[-7,1,0]  𝄀
-1
+overlaps_multiline_line
+true
 select st_overlaps(st_geomfromtext('LINESTRING(0 0,5 0)'), st_geomfromtext('MULTILINESTRING((1 0,3 0),(6 0,7 0))')) as overlaps_line_multiline;
-➤ overlaps_line_multiline[-7,1,0]  𝄀
-1
+overlaps_line_multiline
+true
 select st_overlaps(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POLYGON((1 0,5 0,5 2,1 2,1 0))')) as overlaps_multipolygon_polygon;
-➤ overlaps_multipolygon_polygon[-7,1,0]  𝄀
-1
+overlaps_multipolygon_polygon
+true
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((1 1),(2 2))')) as overlaps_multipoint_multipoint_partial;
-➤ overlaps_multipoint_multipoint_partial[-7,1,0]  𝄀
-1
+overlaps_multipoint_multipoint_partial
+true
 select st_overlaps(st_geomfromtext('POINT(1 1)'), st_geomfromtext('MULTIPOINT((1 1),(2 2))')) as overlaps_point_multipoint;
-➤ overlaps_point_multipoint[-7,1,0]  𝄀
-0
+overlaps_point_multipoint
+false
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as overlaps_multipoint_multipoint_equal;
-➤ overlaps_multipoint_multipoint_equal[-7,1,0]  𝄀
-0
+overlaps_multipoint_multipoint_equal
+false
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1),(2 2))'), st_geomfromtext('MULTIPOINT((1 1),(2 2))')) as overlaps_multipoint_multipoint_contained;
-➤ overlaps_multipoint_multipoint_contained[-7,1,0]  𝄀
-0
+overlaps_multipoint_multipoint_contained
+false
 select st_overlaps(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as overlaps_multipoint_polygon;
-➤ overlaps_multipoint_polygon[-7,1,0]  𝄀
-0
+overlaps_multipoint_polygon
+false
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))'), st_geomfromtext('LINESTRING(1 0,4 0)')) as overlaps_geometrycollection_line;
-➤ overlaps_geometrycollection_line[-7,1,0]  𝄀
-1
+overlaps_geometrycollection_line
+true
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))'), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(1 0,4 0),POINT(9 9))')) as overlaps_geometrycollection_geometrycollection;
-➤ overlaps_geometrycollection_geometrycollection[-7,1,0]  𝄀
-1
+overlaps_geometrycollection_geometrycollection
+true
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT((0 0),(1 1))),POINT(8 8))'), st_geomfromtext('MULTIPOINT((1 1),(2 2))')) as overlaps_nested_geometrycollection_multipoint;
-➤ overlaps_nested_geometrycollection_multipoint[-7,1,0]  𝄀
-1
+overlaps_nested_geometrycollection_multipoint
+true
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))'), st_geomfromtext('LINESTRING(0 0,3 0)')) as overlaps_geometrycollection_line_equal;
-➤ overlaps_geometrycollection_line_equal[-7,1,0]  𝄀
-0
+overlaps_geometrycollection_line_equal
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((3 1,5 1,5 5,3 5,3 1))')) as overlaps_polygon_hole_polygon_partial;
-➤ overlaps_polygon_hole_polygon_partial[-7,1,0]  𝄀
-1
+overlaps_polygon_hole_polygon_partial
+true
 select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))')) as overlaps_polygon_hole_polygon_contained;
-➤ overlaps_polygon_hole_polygon_contained[-7,1,0]  𝄀
-0
+overlaps_polygon_hole_polygon_contained
+false
 select st_overlaps(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))')) as overlaps_polygon_hole_polygon_inside_hole;
-➤ overlaps_polygon_hole_polygon_inside_hole[-7,1,0]  𝄀
-0
+overlaps_polygon_hole_polygon_inside_hole
+false
 select st_astext(st_pointn(st_geomfromtext('LINESTRING(0 0,3 4)'), 2)) as second_point;
-➤ second_point[12,-1,0]  𝄀
+second_point
 POINT(3 4)
 select st_astext(st_pointn(st_geomfromtext('LINESTRING(1 2,3 4,5 6)'), 2)) as middle_point;
-➤ middle_point[12,-1,0]  𝄀
+middle_point
 POINT(3 4)
 select st_srid(st_pointn(st_geomfromtext('LINESTRING(7 8,9 10)', 4326), 1)) as srid_pointn;
-➤ srid_pointn[4,32,0]  𝄀
+srid_pointn
 4326
 select st_astext(st_pointn(st_geomfromtext(null), 1)) as null_geometry;
-➤ null_geometry[12,-1,0]  𝄀
+null_geometry
 null
 select st_astext(st_pointn(st_geomfromtext('LINESTRING(0 0,3 4)'), null)) as null_index;
-➤ null_index[12,-1,0]  𝄀
+null_index
 null
 select st_pointn(st_geomfromtext('POINT(1 1)'), 1);
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_pointn(st_geomfromtext('LINESTRING(0 0,3 4)'), 3);
--- @regex("point index out of range", true)
 invalid input: point index out of range
 select st_astext(st_pointonsurface(st_geomfromtext('POINT(1 2)'))) as point_surface;
-➤ point_surface[12,-1,0]  𝄀
+point_surface
 POINT(1 2)
 select st_astext(st_pointonsurface(st_geomfromtext('LINESTRING(0 0,4 0,4 2)'))) as line_surface;
-➤ line_surface[12,-1,0]  𝄀
+line_surface
 POINT(3 0)
 select st_astext(st_pointonsurface(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as polygon_surface;
-➤ polygon_surface[12,-1,0]  𝄀
+polygon_surface
 POINT(2 2)
 select st_astext(st_pointonsurface(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'))) as polygon_hole_surface;
-➤ polygon_hole_surface[12,-1,0]  𝄀
+polygon_hole_surface
 POINT(3 1)
 select st_srid(st_pointonsurface(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_surface;
-➤ srid_surface[4,32,0]  𝄀
+srid_surface
 4326
 select st_astext(st_pointonsurface(st_geomfromtext(null))) as null_surface;
-➤ null_surface[12,-1,0]  𝄀
+null_surface
 null
 select st_pointonsurface(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
--- @regex("geometry type is not supported by ST_PointOnSurface", true)
 invalid input: geometry type is not supported by ST_PointOnSurface
 drop table if exists t1;
 create table t1(
@@ -1587,19 +1547,19 @@ insert into t1 values
 (2, st_geomfromtext('POINT(3 4)'), st_geomfromtext('POINT(20 20)', 4326)),
 (3, null, null);
 select id, g, p from t1 order by id;
-➤ id[4,32,0]  ¦  g[-2,2147483647,0]  ¦  p[-2,2147483647,0]  𝄀
-1  ¦  LINESTRING(0 0,1 1)  ¦  POINT(10 10)  𝄀
-2  ¦  POINT(3 4)  ¦  POINT(20 20)  𝄀
-3  ¦  null  ¦  null
+id    g    p
+1    LINESTRING(0 0,1 1)    POINT(10 10)
+2    POINT(3 4)    POINT(20 20)
+3    null    null
 select g from t1 order by id;
-➤ g[-2,2147483647,0]  𝄀
-LINESTRING(0 0,1 1)  𝄀
-POINT(3 4)  𝄀
+g
+LINESTRING(0 0,1 1)
+POINT(3 4)
 null
 select p from t1 order by id;
-➤ p[-2,2147483647,0]  𝄀
-POINT(10 10)  𝄀
-POINT(20 20)  𝄀
+p
+POINT(10 10)
+POINT(20 20)
 null
 drop table t1;
 drop table if exists spatial_idx_t1;
@@ -1609,17 +1569,12 @@ g point not null
 );
 create spatial index idx_g on spatial_idx_t1(g);
 show create table spatial_idx_t1;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
-  `id` int NOT NULL,
-  `g` point NOT NULL,
-  PRIMARY KEY (`id`),
-  SPATIAL KEY `idx_g` (`g`)
-)
+Table    Create Table
+spatial_idx_t1    CREATE TABLE `spatial_idx_t1` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)
 show index from spatial_idx_t1;
-➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-spatial_idx_t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-spatial_idx_t1  ¦  1  ¦  idx_g  ¦  1  ¦  g  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  rtree  ¦    ¦    ¦    ¦  YES  ¦  g
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+spatial_idx_t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+spatial_idx_t1    1    idx_g    1    g    A    0    NULL    NULL        rtree                YES    g
 select name, type, algo, column_name
 from mo_catalog.mo_indexes
 where name = 'idx_g'
@@ -1630,23 +1585,19 @@ where reldatabase = database()
 and relname = 'spatial_idx_t1'
 )
 order by column_name;
-➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
-idx_g  ¦  SPATIAL  ¦  rtree  ¦  __mo_alias_id  𝄀
-idx_g  ¦  SPATIAL  ¦  rtree  ¦  g
+name    type    algo    column_name
+idx_g    SPATIAL    rtree    __mo_alias_id
+idx_g    SPATIAL    rtree    g
 insert into spatial_idx_t1 values
 (1, st_geomfromtext('POINT(1 1)')),
 (2, st_geomfromtext('POINT(1 1)'));
 select count(*) as row_count from spatial_idx_t1;
-➤ row_count[-5,64,0]  𝄀
+row_count
 2
 drop index idx_g on spatial_idx_t1;
 show create table spatial_idx_t1;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-spatial_idx_t1  ¦  CREATE TABLE `spatial_idx_t1` (
-  `id` int NOT NULL,
-  `g` point NOT NULL,
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+spatial_idx_t1    CREATE TABLE `spatial_idx_t1` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`)\n)
 drop table spatial_idx_t1;
 drop table if exists spatial_idx_path;
 create table spatial_idx_path(
@@ -1659,61 +1610,27 @@ insert into spatial_idx_path values
 (1, st_geomfromtext('POINT(1 1)'), 10),
 (2, st_geomfromtext('POINT(2 2)'), 20),
 (3, st_geomfromtext('POINT(5 5)'), 30);
-explain select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Index Table Scan on spatial_idx_path.idx_g  𝄀
-        Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
-explain select payload from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Join  𝄀
-        Join Type: INDEX  𝄀
-        Join Cond: (spatial_idx_path.id = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on func_geometry.spatial_idx_path [ForceOneCN]  𝄀
-              Filter Cond: st_intersects(spatial_idx_path.g, 'POINT(1 1)')  𝄀
-              Runtime Filter Probe: spatial_idx_path.id  𝄀
-        ->  Index Table Scan on spatial_idx_path.idx_g [ForceOneCN]  𝄀
-              Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
-explain select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Index Table Scan on spatial_idx_path.idx_g  𝄀
-        Filter Cond: (st_distance(__mo_index_idx_col, 'POINT(1 1)') <= 0)
-explain select payload from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Join  𝄀
-        Join Type: INDEX  𝄀
-        Join Cond: (spatial_idx_path.id = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on func_geometry.spatial_idx_path [ForceOneCN]  𝄀
-              Filter Cond: (st_distance(spatial_idx_path.g, 'POINT(1 1)') <= 0)  𝄀
-              Runtime Filter Probe: spatial_idx_path.id  𝄀
-        ->  Index Table Scan on spatial_idx_path.idx_g [ForceOneCN]  𝄀
-              Filter Cond: (st_distance(__mo_index_idx_col, 'POINT(1 1)') <= 0)
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 1
 select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0 order by id;
-➤ id[4,32,0]  𝄀
+id
 1
 update spatial_idx_path set g = st_geomfromtext('POINT(3 3)') where id = 2;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(2 2)')) order by id;
-➤ id[4,32,0]
+id
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 2
 replace into spatial_idx_path values (2, st_geomfromtext('POINT(4 4)'), 40);
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
-➤ id[4,32,0]
+id
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(4 4)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 2
 delete from spatial_idx_path where id = 1;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]
+id
 drop table spatial_idx_path;
 drop table if exists spatial_idx_nonpoint;
 create table spatial_idx_nonpoint(
@@ -1726,41 +1643,24 @@ insert into spatial_idx_nonpoint values
 (1, st_geomfromtext('LINESTRING(10 10,12 12)'), 10),
 (2, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), 20),
 (3, st_geomfromtext('MULTIPOINT((5 5),(6 6))'), 30);
-explain select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('LINESTRING(10 10,12 12)'));
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Index Table Scan on spatial_idx_nonpoint.idx_g  𝄀
-        Filter Cond: st_intersects(__mo_index_idx_col, 'LINESTRING(10 10,12 12)')
-explain select payload from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)'));
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Join  𝄀
-        Join Type: INDEX  𝄀
-        Join Cond: (spatial_idx_nonpoint.id = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on func_geometry.spatial_idx_nonpoint [ForceOneCN]  𝄀
-              Filter Cond: st_contains(spatial_idx_nonpoint.g, 'POINT(1 1)')  𝄀
-              Runtime Filter Probe: spatial_idx_nonpoint.id  𝄀
-        ->  Index Table Scan on spatial_idx_nonpoint.idx_g [ForceOneCN]  𝄀
-              Filter Cond: st_contains(__mo_index_idx_col, 'POINT(1 1)')
 select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('LINESTRING(10 10,12 12)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 1
 select id from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 2
 select id from spatial_idx_nonpoint where st_distance(g, st_geomfromtext('POINT(5 5)')) <= 0 order by id;
-➤ id[4,32,0]  𝄀
+id
 3
 update spatial_idx_nonpoint
 set g = st_geomfromtext('GEOMETRYCOLLECTION(POINT(7 7),LINESTRING(7 7,8 8))')
 where id = 3;
 select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('POINT(7 7)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 3
 delete from spatial_idx_nonpoint where id = 2;
 select id from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]
+id
 drop table spatial_idx_nonpoint;
 drop table if exists spatial_idx_t2;
 create table spatial_idx_t2(
@@ -1768,7 +1668,6 @@ id int primary key,
 a int
 );
 create spatial index idx_a on spatial_idx_t2(a);
--- @regex("SPATIAL INDEX can only be created on GEOMETRY column", true)
 not supported: SPATIAL INDEX can only be created on GEOMETRY column 'a'
 drop table spatial_idx_t2;
 drop table if exists spatial_idx_multi;
@@ -1778,7 +1677,6 @@ g1 point,
 g2 point
 );
 create spatial index idx_g on spatial_idx_multi(g1, g2);
--- @regex("SPATIAL INDEX only supports a single GEOMETRY column", true)
 not supported: SPATIAL INDEX only supports a single GEOMETRY column
 drop table spatial_idx_multi;
 drop table if exists spatial_idx_nullable;
@@ -1789,314 +1687,302 @@ payload int
 );
 create spatial index idx_g on spatial_idx_nullable(g);
 show create table spatial_idx_nullable;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-spatial_idx_nullable  ¦  CREATE TABLE `spatial_idx_nullable` (
-  `id` int NOT NULL,
-  `g` geometry DEFAULT NULL,
-  `payload` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  SPATIAL KEY `idx_g` (`g`)
-)
+Table    Create Table
+spatial_idx_nullable    CREATE TABLE `spatial_idx_nullable` (\n  `id` int NOT NULL,\n  `g` geometry DEFAULT NULL,\n  `payload` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)
 insert into spatial_idx_nullable values
 (1, null, 10),
 (2, st_geomfromtext('POINT(1 1)'), 20),
 (3, st_geomfromtext('POINT(2 2)'), 30);
-explain select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(1 1)'));
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
-  ->  Index Table Scan on spatial_idx_nullable.idx_g  𝄀
-        Filter Cond: st_intersects(__mo_index_idx_col, 'POINT(1 1)')
 select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 2
 update spatial_idx_nullable set g = st_geomfromtext('POINT(3 3)') where id = 1;
 select id, st_astext(g) from spatial_idx_nullable order by id;
-➤ id[4,32,0]  ¦  st_astext(g)[12,-1,0]  𝄀
-1  ¦  POINT(3 3)  𝄀
-2  ¦  POINT(1 1)  𝄀
-3  ¦  POINT(2 2)
+id    st_astext(g)
+1    POINT(3 3)
+2    POINT(1 1)
+3    POINT(2 2)
 select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(3 3)')) order by id;
-➤ id[4,32,0]  𝄀
+id
 1
 update spatial_idx_nullable set g = null where id = 2;
 select id, st_astext(g) from spatial_idx_nullable order by id;
-➤ id[4,32,0]  ¦  st_astext(g)[12,-1,0]  𝄀
-1  ¦  POINT(3 3)  𝄀
-2  ¦  null  𝄀
-3  ¦  POINT(2 2)
+id    st_astext(g)
+1    POINT(3 3)
+2    null
+3    POINT(2 2)
 select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
-➤ id[4,32,0]
+id
 delete from spatial_idx_nullable where id = 2;
 select count(*) from spatial_idx_nullable;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 2
 drop table spatial_idx_nullable;
 select st_astext(st_startpoint(st_geomfromtext('LINESTRING(0 0,3 4)'))) as first_point;
-➤ first_point[12,-1,0]  𝄀
+first_point
 POINT(0 0)
 select st_astext(st_startpoint(st_geomfromtext('LINESTRING(1 2,3 4,5 6)'))) as polyline_first_point;
-➤ polyline_first_point[12,-1,0]  𝄀
+polyline_first_point
 POINT(1 2)
 select st_srid(st_startpoint(st_geomfromtext('LINESTRING(7 8,9 10)', 4326))) as srid_startpoint;
-➤ srid_startpoint[4,32,0]  𝄀
+srid_startpoint
 4326
 select st_astext(st_startpoint(st_geomfromtext(null))) as null_startpoint;
-➤ null_startpoint[12,-1,0]  𝄀
+null_startpoint
 null
 select st_startpoint(st_geomfromtext('POINT(1 1)'));
--- @regex("geometry is not a LINESTRING", true)
 invalid input: geometry is not a LINESTRING
 select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as touches_point_point_same;
-➤ touches_point_point_same[-7,1,0]  𝄀
-0
+touches_point_point_same
+false
 select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)')) as touches_point_point_diff;
-➤ touches_point_point_diff[-7,1,0]  𝄀
-0
+touches_point_point_diff
+false
 select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_point_line_endpoint;
-➤ touches_point_line_endpoint[-7,1,0]  𝄀
-1
+touches_point_line_endpoint
+true
 select st_touches(st_geomfromtext('POINT(1 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_point_line_interior;
-➤ touches_point_line_interior[-7,1,0]  𝄀
-0
+touches_point_line_interior
+false
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as touches_point_polygon_boundary;
-➤ touches_point_polygon_boundary[-7,1,0]  𝄀
-1
+touches_point_polygon_boundary
+true
 select st_touches(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as touches_point_polygon_interior;
-➤ touches_point_polygon_interior[-7,1,0]  𝄀
-0
+touches_point_polygon_interior
+false
 select st_touches(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(2 0)')) as touches_line_point_endpoint;
-➤ touches_line_point_endpoint[-7,1,0]  𝄀
-1
+touches_line_point_endpoint
+true
 select st_touches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,1 1,0 0)')) as touches_closed_line;
-➤ touches_closed_line[-7,1,0]  𝄀
-0
+touches_closed_line
+false
 select st_touches(st_geomfromtext('POINT(0 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as touches_srid;
-➤ touches_srid[-7,1,0]  𝄀
-1
+touches_srid
+true
 select st_touches(st_geomfromtext('LINESTRING(-1 0,3 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as touches_line_polygon_boundary;
-➤ touches_line_polygon_boundary[-7,1,0]  𝄀
-1
+touches_line_polygon_boundary
+true
 select st_touches(st_geomfromtext('LINESTRING(-1 1,3 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as touches_line_polygon_cross;
-➤ touches_line_polygon_cross[-7,1,0]  𝄀
-0
+touches_line_polygon_cross
+false
 select st_touches(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('LINESTRING(2 2,3 2)')) as touches_polygon_line_endpoint;
-➤ touches_polygon_line_endpoint[-7,1,0]  𝄀
-1
+touches_polygon_line_endpoint
+true
 select st_touches(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('LINESTRING(2 0,2 2)')) as touches_line_line_endpoint;
-➤ touches_line_line_endpoint[-7,1,0]  𝄀
-1
+touches_line_line_endpoint
+true
 select st_touches(st_geomfromtext('LINESTRING(0 0,2 2)'), st_geomfromtext('LINESTRING(0 2,2 0)')) as touches_line_line_cross;
-➤ touches_line_line_cross[-7,1,0]  𝄀
-0
+touches_line_line_cross
+false
 select st_touches(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((2 0,4 0,4 2,2 2,2 0))')) as touches_polygon_polygon_edge;
-➤ touches_polygon_polygon_edge[-7,1,0]  𝄀
-1
+touches_polygon_polygon_edge
+true
 select st_touches(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((1 0,3 0,3 2,1 2,1 0))')) as touches_polygon_polygon_overlap;
-➤ touches_polygon_polygon_overlap[-7,1,0]  𝄀
-0
+touches_polygon_polygon_overlap
+false
 select st_touches(st_geomfromtext(null), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_null;
-➤ touches_null[-7,1,0]  𝄀
+touches_null
 null
 select st_touches(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 0)', 4326)) as touches_point_point_srid;
-➤ touches_point_point_srid[-7,1,0]  𝄀
-0
+touches_point_point_srid
+false
 select st_touches(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('LINESTRING(2 0,2 2)')) as touches_multiline_line;
-➤ touches_multiline_line[-7,1,0]  𝄀
-1
+touches_multiline_line
+true
 select st_touches(st_geomfromtext('LINESTRING(1 0,3 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(3 0,4 0))')) as touches_line_multiline;
-➤ touches_line_multiline[-7,1,0]  𝄀
-1
+touches_line_multiline
+true
 select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('POINT(2 1)')) as touches_multipolygon_point;
-➤ touches_multipolygon_point[-7,1,0]  𝄀
-1
+touches_multipolygon_point
+true
 select st_touches(st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))'), st_geomfromtext('LINESTRING(2 2,3 2)')) as touches_multipolygon_line;
-➤ touches_multipolygon_line[-7,1,0]  𝄀
-1
+touches_multipolygon_line
+true
 select st_touches(st_geomfromtext('MULTIPOINT((0 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line;
-➤ touches_multipoint_line[-7,1,0]  𝄀
-1
+touches_multipoint_line
+true
 select st_touches(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOINT((0 0),(3 3))')) as touches_line_multipoint;
-➤ touches_line_multipoint[-7,1,0]  𝄀
-1
+touches_line_multipoint
+true
 select st_touches(st_geomfromtext('MULTIPOINT((2 1),(7 7))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as touches_multipoint_multipolygon;
-➤ touches_multipoint_multipolygon[-7,1,0]  𝄀
-1
+touches_multipoint_multipolygon
+true
 select st_touches(st_geomfromtext('MULTIPOINT((1 0),(3 3))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as touches_multipoint_line_interior;
-➤ touches_multipoint_line_interior[-7,1,0]  𝄀
-0
+touches_multipoint_line_interior
+false
 select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(2 0)')) as touches_geometrycollection_point;
-➤ touches_geometrycollection_point[-7,1,0]  𝄀
-1
+touches_geometrycollection_point
+true
 select st_touches(st_geomfromtext('POINT(4 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as touches_point_geometrycollection;
-➤ touches_point_geometrycollection[-7,1,0]  𝄀
-1
+touches_point_geometrycollection
+true
 select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(2 0)')) as touches_nested_geometrycollection_point;
-➤ touches_nested_geometrycollection_point[-7,1,0]  𝄀
-1
+touches_nested_geometrycollection_point
+true
 select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as touches_geometrycollection_point_interior;
-➤ touches_geometrycollection_point_interior[-7,1,0]  𝄀
-0
+touches_geometrycollection_point_interior
+false
 select st_touches(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_outer_boundary;
-➤ touches_point_polygon_hole_outer_boundary[-7,1,0]  𝄀
-1
+touches_point_polygon_hole_outer_boundary
+true
 select st_touches(st_geomfromtext('POINT(1 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inner_boundary;
-➤ touches_point_polygon_hole_inner_boundary[-7,1,0]  𝄀
-1
+touches_point_polygon_hole_inner_boundary
+true
 select st_touches(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_point_polygon_hole_inside_shell;
-➤ touches_point_polygon_hole_inside_shell[-7,1,0]  𝄀
-0
+touches_point_polygon_hole_inside_shell
+false
 select st_touches(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_boundary;
-➤ touches_line_polygon_hole_boundary[-7,1,0]  𝄀
-1
+touches_line_polygon_hole_boundary
+true
 select st_touches(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_chord;
-➤ touches_line_polygon_hole_chord[-7,1,0]  𝄀
-1
+touches_line_polygon_hole_chord
+true
 select st_touches(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as touches_line_polygon_hole_crossing;
-➤ touches_line_polygon_hole_crossing[-7,1,0]  𝄀
-0
+touches_line_polygon_hole_crossing
+false
 select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((2 2.5,3 2.5,3 3.5,2 3.5,2 2.5))')) as touches_polygon_hole_polygon_boundary;
-➤ touches_polygon_hole_polygon_boundary[-7,1,0]  𝄀
-1
+touches_polygon_hole_polygon_boundary
+true
 select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))')) as touches_polygon_hole_polygon_spans_hole;
-➤ touches_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+touches_polygon_hole_polygon_spans_hole
+false
 select st_touches(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as touches_polygon_hole_polygon_equal;
-➤ touches_polygon_hole_polygon_equal[-7,1,0]  𝄀
-0
+touches_polygon_hole_polygon_equal
+false
 select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as within_point_point_same;
-➤ within_point_point_same[-7,1,0]  𝄀
-1
+within_point_point_same
+true
 select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(0 0)')) as within_point_point_diff;
-➤ within_point_point_diff[-7,1,0]  𝄀
-0
+within_point_point_diff
+false
 select st_within(st_geomfromtext('POINT(1 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_point_line_interior;
-➤ within_point_line_interior[-7,1,0]  𝄀
-1
+within_point_line_interior
+true
 select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_point_line_endpoint;
-➤ within_point_line_endpoint[-7,1,0]  𝄀
-0
+within_point_line_endpoint
+false
 select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_point_polygon_inside;
-➤ within_point_polygon_inside[-7,1,0]  𝄀
-1
+within_point_polygon_inside
+true
 select st_within(st_geomfromtext('POINT(0 1)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_point_polygon_boundary;
-➤ within_point_polygon_boundary[-7,1,0]  𝄀
-0
+within_point_polygon_boundary
+false
 select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POINT(0 0)')) as within_line_point;
-➤ within_line_point[-7,1,0]  𝄀
-0
+within_line_point
+false
 select st_within(st_geomfromtext('LINESTRING(0.5 0,1.5 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_line_line_subset;
-➤ within_line_line_subset[-7,1,0]  𝄀
-1
+within_line_line_subset
+true
 select st_within(st_geomfromtext('LINESTRING(0 0,3 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_line_line_longer;
-➤ within_line_line_longer[-7,1,0]  𝄀
-0
+within_line_line_longer
+false
 select st_within(st_geomfromtext('LINESTRING(0.5 0.5,1.5 1.5)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_line_polygon_inside;
-➤ within_line_polygon_inside[-7,1,0]  𝄀
-1
+within_line_polygon_inside
+true
 select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_line_polygon_boundary;
-➤ within_line_polygon_boundary[-7,1,0]  𝄀
-0
+within_line_polygon_boundary
+false
 select st_within(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POINT(0 0)')) as within_polygon_point;
-➤ within_polygon_point[-7,1,0]  𝄀
-0
+within_polygon_point
+false
 select st_within(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as within_polygon_line;
-➤ within_polygon_line[-7,1,0]  𝄀
-0
+within_polygon_line
+false
 select st_within(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_polygon_polygon_contained;
-➤ within_polygon_polygon_contained[-7,1,0]  𝄀
-1
+within_polygon_polygon_contained
+true
 select st_within(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_polygon_polygon_equal;
-➤ within_polygon_polygon_equal[-7,1,0]  𝄀
-1
+within_polygon_polygon_equal
+true
 select st_within(st_geomfromtext('POINT(1 1)', 4326), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326)) as within_srid;
-➤ within_srid[-7,1,0]  𝄀
-1
+within_srid
+true
 select st_within(st_geomfromtext(null), st_geomfromtext('POINT(0 0)')) as within_null;
-➤ within_null[-7,1,0]  𝄀
+within_null
 null
 select st_within(st_geomfromtext('POINT(5 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_point_multiline_interior;
-➤ within_point_multiline_interior[-7,1,0]  𝄀
-1
+within_point_multiline_interior
+true
 select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as within_line_multiline_union;
-➤ within_line_multiline_union[-7,1,0]  𝄀
-1
+within_line_multiline_union
+true
 select st_within(st_geomfromtext('MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multiline_multipolygon;
-➤ within_multiline_multipolygon[-7,1,0]  𝄀
-1
+within_multiline_multipolygon
+true
 select st_within(st_geomfromtext('MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multipolygon_multipolygon;
-➤ within_multipolygon_multipolygon[-7,1,0]  𝄀
-1
+within_multipolygon_multipolygon
+true
 select st_within(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_point_multiline_endpoint;
-➤ within_point_multiline_endpoint[-7,1,0]  𝄀
-0
+within_point_multiline_endpoint
+false
 select st_within(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_line_multipolygon_boundary;
-➤ within_line_multipolygon_boundary[-7,1,0]  𝄀
-0
+within_line_multipolygon_boundary
+false
 select st_within(st_geomfromtext('POINT(1 1)'), st_geomfromtext('MULTIPOINT((0 0),(1 1))')) as within_point_multipoint;
-➤ within_point_multipoint[-7,1,0]  𝄀
-1
+within_point_multipoint
+true
 select st_within(st_geomfromtext('MULTIPOINT((0.5 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_multipoint_multiline;
-➤ within_multipoint_multiline[-7,1,0]  𝄀
-1
+within_multipoint_multiline
+true
 select st_within(st_geomfromtext('MULTIPOINT((0.5 0.5),(4.5 1))'), st_geomfromtext('MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))')) as within_multipoint_multipolygon;
-➤ within_multipoint_multipolygon[-7,1,0]  𝄀
-1
+within_multipoint_multipolygon
+true
 select st_within(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_multipoint_multiline_boundary;
-➤ within_multipoint_multiline_boundary[-7,1,0]  𝄀
-0
+within_multipoint_multiline_boundary
+false
 select st_within(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as within_point_geometrycollection;
-➤ within_point_geometrycollection[-7,1,0]  𝄀
-1
+within_point_geometrycollection
+true
 select st_within(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as within_geometrycollection_geometrycollection;
-➤ within_geometrycollection_geometrycollection[-7,1,0]  𝄀
-1
+within_geometrycollection_geometrycollection
+true
 select st_within(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as within_geometrycollection_geometrycollection_gap;
-➤ within_geometrycollection_geometrycollection_gap[-7,1,0]  𝄀
-0
+within_geometrycollection_geometrycollection_gap
+false
 select st_within(st_geomfromtext('POINT(3 3)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_shell;
-➤ within_point_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+within_point_polygon_hole_inside_shell
+true
 select st_within(st_geomfromtext('POINT(1.5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_point_polygon_hole_inside_hole;
-➤ within_point_polygon_hole_inside_hole[-7,1,0]  𝄀
-0
+within_point_polygon_hole_inside_hole
+false
 select st_within(st_geomfromtext('LINESTRING(2.5 2.5,3.5 3.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_line_polygon_hole_inside_shell;
-➤ within_line_polygon_hole_inside_shell[-7,1,0]  𝄀
-1
+within_line_polygon_hole_inside_shell
+true
 select st_within(st_geomfromtext('LINESTRING(-1 1.5,5 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_line_polygon_hole_crossing;
-➤ within_line_polygon_hole_crossing[-7,1,0]  𝄀
-0
+within_line_polygon_hole_crossing
+false
 select st_within(st_geomfromtext('LINESTRING(1 1,2 1)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_line_polygon_hole_boundary;
-➤ within_line_polygon_hole_boundary[-7,1,0]  𝄀
-0
+within_line_polygon_hole_boundary
+false
 select st_within(st_geomfromtext('LINESTRING(1 1.5,2 1.5)'), st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))')) as within_line_polygon_hole_chord;
-➤ within_line_polygon_hole_chord[-7,1,0]  𝄀
-0
+within_line_polygon_hole_chord
+false
 select st_within(st_geomfromtext('POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as within_polygon_hole_polygon_inside_shell;
-➤ within_polygon_hole_polygon_inside_shell[-7,1,0]  𝄀
-1
+within_polygon_hole_polygon_inside_shell
+true
 select st_within(st_geomfromtext('POLYGON((1 1,5 1,5 5,1 5,1 1))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as within_polygon_hole_polygon_spans_hole;
-➤ within_polygon_hole_polygon_spans_hole[-7,1,0]  𝄀
-0
+within_polygon_hole_polygon_spans_hole
+false
 select st_within(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))'), st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))')) as within_polygon_hole_polygon_equal;
-➤ within_polygon_hole_polygon_equal[-7,1,0]  𝄀
-1
+within_polygon_hole_polygon_equal
+true
 select st_x(st_geomfromtext('POINT(1 2)')) as point_x;
-➤ point_x[8,54,0]  𝄀
+point_x
 1.0
 select st_y(st_geomfromtext('POINT(1 2)')) as point_y;
-➤ point_y[8,54,0]  𝄀
+point_y
 2.0
 select st_x(st_geomfromtext('POINT(-3.5 4.25)')) as point_x_neg;
-➤ point_x_neg[8,54,0]  𝄀
+point_x_neg
 -3.5
 select st_y(st_geomfromtext('POINT(-3.5 4.25)')) as point_y_neg;
-➤ point_y_neg[8,54,0]  𝄀
+point_y_neg
 4.25
 select st_x(st_geomfromtext(null)) as null_x;
-➤ null_x[8,54,0]  𝄀
+null_x
 null
 select st_y(st_geomfromtext(null)) as null_y;
-➤ null_y[8,54,0]  𝄀
+null_y
 null
 create database if not exists geo_srid_db;
 use geo_srid_db;
@@ -2106,27 +1992,23 @@ id int primary key,
 location point not null srid 4326
 );
 show create table geo_srid_show;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-geo_srid_show  ¦  CREATE TABLE `geo_srid_show` (
-  `id` int NOT NULL,
-  `location` point srid 4326 NOT NULL,
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+geo_srid_show    CREATE TABLE `geo_srid_show` (\n  `id` int NOT NULL,\n  `location` point srid 4326 NOT NULL,\n  PRIMARY KEY (`id`)\n)
 desc geo_srid_show;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-location  ¦  POINT SRID 4326  ¦  NO  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null        
+location    POINT SRID 4326    NO        null        
 show columns from geo_srid_show;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-location  ¦  POINT SRID 4326  ¦  NO  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null        
+location    POINT SRID 4326    NO        null        
 select data_type, column_type, srs_id
 from information_schema.columns
 where table_schema = database()
 and table_name = 'geo_srid_show'
 and column_name = 'location';
-➤ data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  srs_id[-5,64,0]  𝄀
-POINT  ¦  POINT SRID 4326  ¦  4326
+data_type    column_type    srs_id
+POINT    POINT SRID 4326    4326
 drop table geo_srid_show;
 drop table if exists geo_srid_show_any;
 create table geo_srid_show_any (
@@ -2137,83 +2019,64 @@ from information_schema.columns
 where table_schema = database()
 and table_name = 'geo_srid_show_any'
 and column_name = 'g';
-➤ data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  srs_id[-5,64,0]  𝄀
-GEOMETRY  ¦  GEOMETRY SRID 0  ¦  0
+data_type    column_type    srs_id
+GEOMETRY    GEOMETRY SRID 0    0
 drop table geo_srid_show_any;
 drop table if exists geo_srid_value_ok;
 create table geo_srid_value_ok(g point not null srid 4326);
 insert into geo_srid_value_ok values (st_geomfromtext('POINT(1 1)', 4326));
 select st_astext(g) as point_text, st_srid(g) as point_srid from geo_srid_value_ok;
-➤ point_text[12,-1,0]  ¦  point_srid[4,32,0]  𝄀
-POINT(1 1)  ¦  4326
+point_text    point_srid
+POINT(1 1)    4326
 select st_astext(st_geomfromtext('POINT EMPTY', 4326)) as empty_point_text, st_srid(st_geomfromtext('POINT EMPTY', 4326)) as empty_point_srid;
-➤ empty_point_text[12,-1,0]  ¦  empty_point_srid[4,32,0]  𝄀
-POINT EMPTY  ¦  4326
+empty_point_text    empty_point_srid
+POINT EMPTY    4326
 select st_geomfromtext('POINT(1 1)', 5000000000);
--- @regex("SRID should be between 0 and 4294967295", true)
 invalid input: SRID should be between 0 and 4294967295
 select st_geomfromtext('POINT(Inf 1)', 4326);
--- @regex("invalid geometry payload", true)
 invalid input: invalid geometry payload
 drop table geo_srid_value_ok;
 drop table if exists geo_srid_value_bad;
 create table geo_srid_value_bad(g point not null srid 4326);
 insert into geo_srid_value_bad values (st_geomfromtext('POINT(1 1)', 0));
--- @regex("The SRID of the geometry does not match the SRID of the column", true)
 invalid input: The SRID of the geometry does not match the SRID of the column 'POINT'. The SRID of the geometry is 0, but the SRID of the column is 4326. Consider changing the SRID of the geometry or the SRID property of the column.
 drop table geo_srid_value_bad;
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(3 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_CONTAINS given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_within(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_WITHIN given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_intersects(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))', 4326), st_geomfromtext('POINT(1 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_INTERSECTS given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_disjoint(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(1 1)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_DISJOINT given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_touches(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(2 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_TOUCHES given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_crosses(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))', 4326), st_geomfromtext('LINESTRING(0 0,2 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_CROSSES given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_overlaps(st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))', 4326), st_geomfromtext('LINESTRING(1 0,4 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_OVERLAPS given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_equals(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_EQUALS given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_covers(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 4326), st_geomfromtext('POINT(3 0)', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_COVERS given two geometries of different srids: 4326 and 3857, which should have been identical.
 select st_coveredby(st_geomfromtext('POINT(3 0)', 4326), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))', 3857));
--- @regex("different srids", true)
 invalid input: Binary geometry function ST_COVEREDBY given two geometries of different srids: 4326 and 3857, which should have been identical.
 create table geo_srid_attr_bad(a int srid 4326);
--- @regex("SRID is only supported for GEOMETRY columns", true)
 invalid input: SRID is only supported for GEOMETRY columns
 drop table if exists geo_srid_attr_alter_bad;
 create table geo_srid_attr_alter_bad(id int primary key, a int);
 alter table geo_srid_attr_alter_bad add column b int srid 4326;
--- @regex("SRID is only supported for GEOMETRY columns", true)
 invalid input: SRID is only supported for GEOMETRY columns
 alter table geo_srid_attr_alter_bad modify column a int srid 4326;
--- @regex("SRID is only supported for GEOMETRY columns", true)
 invalid input: SRID is only supported for GEOMETRY columns
 drop table geo_srid_attr_alter_bad;
 drop table if exists geo_srid_alter_bad;
 create table geo_srid_alter_bad(g point not null srid 4326);
 alter table geo_srid_alter_bad modify column g point not null srid 0;
--- @regex("currently unsupport change from original geometry SRID 4326 to 0", true)
 not supported: currently unsupport change from original geometry SRID 4326 to 0
 drop table geo_srid_alter_bad;
 drop database geo_srid_db;

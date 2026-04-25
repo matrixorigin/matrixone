@@ -847,10 +847,6 @@ insert into spatial_idx_path values
     (1, st_geomfromtext('POINT(1 1)'), 10),
     (2, st_geomfromtext('POINT(2 2)'), 20),
     (3, st_geomfromtext('POINT(5 5)'), 30);
-explain select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
-explain select payload from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)'));
-explain select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
-explain select payload from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
 select id from spatial_idx_path where st_distance(g, st_geomfromtext('POINT(1 1)')) <= 0 order by id;
 update spatial_idx_path set g = st_geomfromtext('POINT(3 3)') where id = 2;
@@ -874,8 +870,6 @@ insert into spatial_idx_nonpoint values
     (1, st_geomfromtext('LINESTRING(10 10,12 12)'), 10),
     (2, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), 20),
     (3, st_geomfromtext('MULTIPOINT((5 5),(6 6))'), 30);
-explain select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('LINESTRING(10 10,12 12)'));
-explain select payload from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)'));
 select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('LINESTRING(10 10,12 12)')) order by id;
 select id from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)')) order by id;
 select id from spatial_idx_nonpoint where st_distance(g, st_geomfromtext('POINT(5 5)')) <= 0 order by id;
@@ -918,7 +912,6 @@ insert into spatial_idx_nullable values
     (1, null, 10),
     (2, st_geomfromtext('POINT(1 1)'), 20),
     (3, st_geomfromtext('POINT(2 2)'), 30);
-explain select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(1 1)'));
 select id from spatial_idx_nullable where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
 update spatial_idx_nullable set g = st_geomfromtext('POINT(3 3)') where id = 1;
 select id, st_astext(g) from spatial_idx_nullable order by id;

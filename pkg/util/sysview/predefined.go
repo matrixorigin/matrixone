@@ -195,7 +195,7 @@ var (
 		"case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
 		"'select,insert,update,references' as `PRIVILEGES`,"+
 		"mc.att_comment as COLUMN_COMMENT,"+
-		"cast(case when mc.attr_has_generated = 1 then ifnull(cast(mo_show_visible_bin(mc.attr_generated, 5) as varchar(500)), '') else '' end as varchar(500)) as GENERATION_EXPRESSION,"+
+		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"(case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' and upper(mc.attr_enum) like '%%SRID=%%' "+
 		" then cast(split_part(upper(mc.attr_enum), 'SRID=', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
