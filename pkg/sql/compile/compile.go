@@ -763,6 +763,7 @@ func (c *Compile) lockTable() error {
 }
 
 func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
+	target.LockTableAtTheEnd = false
 	if !target.LockTable {
 		return false
 	}
@@ -771,9 +772,14 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 		return true
 	}
 	// For INSERT statements, pre-run table locking can stretch the target-table
-	// lock hold window. Keep the same table-lock semantics, but let LockOp
-	// acquire it when the first batch reaches the target pipeline.
-	return qry.StmtType != plan.Query_INSERT
+	// lock hold window. Keep the same table-lock semantics by letting LockOp
+	// acquire it when the first batch reaches the target pipeline and by
+	// falling back to EOF-time table locking if the child produces no rows.
+	if qry.StmtType == plan.Query_INSERT {
+		target.LockTableAtTheEnd = true
+		return false
+	}
+	return true
 }
 
 // func (c *Compile) compileAttachedScope(attachedPlan *plan.Plan) ([]*Scope, error) {
