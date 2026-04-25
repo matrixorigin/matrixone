@@ -30,6 +30,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -204,6 +205,43 @@ func TestBuildShowCreateViewSecurityType(t *testing.T) {
 	}
 	require.NotEmpty(t, matched)
 	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+}
+
+func TestOverrideViewDefSecurityTypeNoOpCases(t *testing.T) {
+	tableDef := &plan.TableDef{}
+	overrideViewDefSecurityType(tableDef, "invoker")
+	require.Nil(t, tableDef.ViewSql)
+
+	tableDef = &plan.TableDef{
+		ViewSql: &plan.ViewDef{View: "not-json"},
+	}
+	overrideViewDefSecurityType(tableDef, "invoker")
+	require.Equal(t, "not-json", tableDef.ViewSql.View)
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            "create view v as select 1",
+		DefaultDatabase: "db",
+	})
+	require.NoError(t, err)
+
+	tableDef = &plan.TableDef{
+		ViewSql: &plan.ViewDef{View: string(viewData)},
+	}
+	overrideViewDefSecurityType(tableDef, "invoker")
+
+	var got ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.ViewSql.View), &got))
+	require.Equal(t, "INVOKER", got.SecurityType)
+}
+
+func TestFormatViewKeyWithSnapshot(t *testing.T) {
+	require.Equal(t, "db.v", FormatViewKeyWithSnapshot("db.v", nil))
+	require.Equal(t, "db.v", FormatViewKeyWithSnapshot("db.v", &Snapshot{}))
+
+	snapshot := &Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	require.Equal(t, "db.v@ts=42", FormatViewKeyWithSnapshot("db.v", snapshot))
 }
 
 func planStringLiteralsContain(pl *Plan, want string) bool {

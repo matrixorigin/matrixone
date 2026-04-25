@@ -9270,6 +9270,36 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedFallsBackToLegacyViewRecords(t
 	require.True(t, roleSet.Contains(roleID))
 }
 
+func TestPrivilegeCacheGetPrivilegeSetForView(t *testing.T) {
+	cache := &privilegeCache{}
+
+	starSet := cache.getPrivilegeSet(objectTypeView, privilegeLevelStarStar, "", "")
+	require.NotNil(t, starSet)
+	starSet.Insert(PrivilegeTypeSelect)
+	require.True(t, cache.storeForView[privilegeLevelStarStar].Contains(PrivilegeTypeSelect))
+
+	dbSet := cache.getPrivilegeSet(objectTypeView, privilegeLevelDatabaseStar, "db", "")
+	require.NotNil(t, dbSet)
+	dbSet.Insert(PrivilegeTypeInsert)
+	dbSet2 := cache.getPrivilegeSet(objectTypeView, privilegeLevelDatabaseStar, "db", "")
+	require.Same(t, dbSet, dbSet2)
+	require.True(t, dbSet2.Contains(PrivilegeTypeInsert))
+
+	viewSet := cache.getPrivilegeSet(objectTypeView, privilegeLevelDatabaseTable, "db", "v")
+	require.NotNil(t, viewSet)
+	viewSet.Insert(PrivilegeTypeUpdate)
+	viewSet2 := cache.getPrivilegeSet(objectTypeView, privilegeLevelDatabaseTable, "db", "v")
+	require.Same(t, viewSet, viewSet2)
+	require.True(t, viewSet2.Contains(PrivilegeTypeUpdate))
+
+	tableLevelViewSet := cache.getPrivilegeSet(objectTypeView, privilegeLevelTable, "db", "v2")
+	require.NotNil(t, tableLevelViewSet)
+	tableLevelViewSet.Insert(PrivilegeTypeDelete)
+	require.True(t, tableLevelViewSet.Contains(PrivilegeTypeDelete))
+
+	require.Nil(t, cache.getPrivilegeSet(objectTypeView, privilegeLevelDatabase, "db", "v"))
+}
+
 func TestDoAlterDatabaseConfig(t *testing.T) {
 	convey.Convey("doAlterDatabaseConfig success", t, func() {
 		ctrl := gomock.NewController(t)

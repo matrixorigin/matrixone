@@ -15,12 +15,21 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/stretchr/testify/require"
 )
+
+func TestFindViewKeywordRequiresBoundaries(t *testing.T) {
+	require.Equal(t, -1, findViewKeyword("PREVIEW V"))
+	require.Equal(t, -1, findViewKeyword("CREATE VIEWER V"))
+	require.Equal(t, strings.Index("CREATE VIEW V", "VIEW"), findViewKeyword("CREATE VIEW V"))
+	require.Equal(t, strings.Index("CREATE\tVIEW\nV", "VIEW"), findViewKeyword("CREATE\tVIEW\nV"))
+}
 
 func Test_buildTestShowCreateTable(t *testing.T) {
 	tests := []struct {
