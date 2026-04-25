@@ -3872,4 +3872,3 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 		})
 	}
 }
-

@@ -330,6 +330,113 @@ func Test_CastVarcharToGeometry(t *testing.T) {
 	})
 }
 
+func Test_CastJSONToNumeric(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	t.Run("json number to int64", func(t *testing.T) {
+		inputVec := testutil.MakeJsonVector([]string{"123"}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil))
+
+		values := vector.MustFixedColNoTypeCheck[int64](result.GetResultVector())
+		require.Equal(t, []int64{123}, values)
+	})
+
+	t.Run("json float to float64", func(t *testing.T) {
+		inputVec := testutil.MakeJsonVector([]string{"123.5"}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil))
+
+		values := vector.MustFixedColNoTypeCheck[float64](result.GetResultVector())
+		require.Equal(t, []float64{123.5}, values)
+	})
+
+	t.Run("json number to decimal64", func(t *testing.T) {
+		decimalType := types.New(types.T_decimal64, 10, 0)
+		inputVec := testutil.MakeJsonVector([]string{"123"}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(decimalType, 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(decimalType, mp).(*vector.FunctionResult[types.Decimal64])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil))
+
+		values := vector.MustFixedColNoTypeCheck[types.Decimal64](result.GetResultVector())
+		require.Len(t, values, 1)
+		require.Equal(t, "123", values[0].Format(0))
+	})
+
+	t.Run("json number to decimal128", func(t *testing.T) {
+		decimalType := types.New(types.T_decimal128, 20, 0)
+		inputVec := testutil.MakeJsonVector([]string{"123"}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(decimalType, 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(decimalType, mp).(*vector.FunctionResult[types.Decimal128])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil))
+
+		values := vector.MustFixedColNoTypeCheck[types.Decimal128](result.GetResultVector())
+		require.Len(t, values, 1)
+		require.Equal(t, "123", values[0].Format(0))
+	})
+
+	t.Run("json null to int64 null", func(t *testing.T) {
+		inputVec := testutil.MakeJsonVector([]string{"null"}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil))
+		require.True(t, result.GetResultVector().GetNulls().Contains(0))
+	})
+
+	t.Run("json object to int64 returns error", func(t *testing.T) {
+		inputVec := testutil.MakeJsonVector([]string{`{"a":1}`}, nil)
+		defer inputVec.Free(mp)
+
+		targetType := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+		defer targetType.Free(mp)
+
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+		defer result.Free()
+
+		require.NoError(t, result.PreExtendAndReset(1))
+		err := NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+		require.Error(t, err)
+	})
+}
+
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
 

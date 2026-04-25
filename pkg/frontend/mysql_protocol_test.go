@@ -3789,7 +3789,7 @@ func makeKases() []kase {
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
 				}
-			bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, vecData)
 			case defines.MYSQL_TYPE_GEOMETRY:
 				vec := vector.NewVec(types.T_geometry.ToType())
 				vecData := make([][]byte, 0, len(mrs.Data))

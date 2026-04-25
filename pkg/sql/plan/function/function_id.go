@@ -413,10 +413,10 @@ const (
 
 	STARLARK     = 345
 	TRY_STARLARK = 346
-	DAYOFWEEK = 347
-	TRUNCATE  = 348
-	QUOTE     = 349
-	SOUNDEX   = 350
+	DAYOFWEEK    = 347
+	TRUNCATE     = 348
+	QUOTE        = 349
+	SOUNDEX      = 350
 
 	CAST_INDEX_TO_SET_VALUE       = 407
 	CAST_SET_VALUE_TO_INDEX       = 408
@@ -464,7 +464,6 @@ const (
 	ST_EQUALS                = 449
 	ST_COVERS                = 450
 	ST_COVEREDBY             = 451
-
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -855,8 +854,8 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
-	"dayofweek": DAYOFWEEK,
-	"truncate":  TRUNCATE,
-	"quote":     QUOTE,
-	"soundex":   SOUNDEX,
+	"dayofweek":    DAYOFWEEK,
+	"truncate":     TRUNCATE,
+	"quote":        QUOTE,
+	"soundex":      SOUNDEX,
 }
