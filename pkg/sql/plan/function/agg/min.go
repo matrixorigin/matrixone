@@ -129,6 +129,13 @@ func RegisterMin2(id int64) {
 		aggMinFill[types.Time], aggMinFills[types.Time], aggMinMerge[types.Time], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), MinReturnType, true),
+		nil,
+		nil,
+		aggMinInitResult[types.MoYear],
+		aggMinFill[types.MoYear], aggMinFills[types.MoYear], aggMinMerge[types.MoYear], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MinReturnType, true),
 		nil,
 		nil,

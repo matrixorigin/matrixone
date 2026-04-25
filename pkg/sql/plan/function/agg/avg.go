@@ -46,6 +46,11 @@ func RegisterAvg2(id int64) {
 		aggAvgFill[int64], aggAvgFills[int64], aggAvgMerge[int64], aggAvgFlush)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), AvgReturnType, true),
+		nil, generateAggAvgContext, aggAvgInitResult,
+		aggAvgFill[types.MoYear], aggAvgFills[types.MoYear], aggAvgMerge[types.MoYear], aggAvgFlush)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), AvgReturnType, true),
 		nil, generateAggAvgContext, aggAvgInitResult,
 		aggAvgFill[uint8], aggAvgFills[uint8], aggAvgMerge[uint8], aggAvgFlush)

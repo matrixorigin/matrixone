@@ -129,6 +129,13 @@ func RegisterMax2(id int64) {
 		aggMaxFill[types.Time], aggMaxFills[types.Time], aggMaxMerge[types.Time], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), MaxReturnType, true),
+		nil,
+		nil,
+		aggMaxInitResult[types.MoYear],
+		aggMaxFill[types.MoYear], aggMaxFills[types.MoYear], aggMaxMerge[types.MoYear], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, true),
 		nil,
 		nil,

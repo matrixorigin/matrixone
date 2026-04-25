@@ -57,6 +57,13 @@ func RegisterSum2(id int64) {
 		aggSumFill[int64, int64], aggSumFills[int64, int64], aggSumMerge[int64, int64], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), SumReturnType, true),
+		nil,
+		nil,
+		aggSumInitResult[int64],
+		aggSumFill[types.MoYear, int64], aggSumFills[types.MoYear, int64], aggSumMerge[types.MoYear, int64], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), SumReturnType, true),
 		nil,
 		nil,

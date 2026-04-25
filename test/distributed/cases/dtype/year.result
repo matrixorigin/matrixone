@@ -262,72 +262,8 @@ id    y
 2    1901-01-01
 40    2000-01-01
 select min(y), max(y) from t_year where y is not null and y > 0;
-internal error: no implementation for aggID 597000454144 with argType YEAR: 
-
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.makeSingleAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:191
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.MakeAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:165
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).generateAggExec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:338
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).generateInitialResult1WithoutGroupBy
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:229
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).consumeBatchToGetFinalResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:254
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).callToGetFinalResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:222
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:162
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/projection/projection.go:62
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/output/output.go:55
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:198
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:490
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:276
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:395
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:378
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:521
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile2.go:259
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2998
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2851
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2816
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2760
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2635
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2615
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:3241
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:3325
+min(y)    max(y)
+1901-01-01    2155-01-01
 select count(y) from t_year;
 count(y)
 20
@@ -456,72 +392,8 @@ y    y / 4
 2021-01-01    505.25
 2022-01-01    505.5
 select max(y) - min(y) as year_diff from t_year_arith;
-internal error: no implementation for aggID 588410519552 with argType YEAR: 
-
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.makeSingleAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:191
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.MakeAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:165
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*GroupResultNoneBlock).getResultBatch
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/execctx.go:354
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).initCtxToGetIntermediateResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:420
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).callToGetIntermediateResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:374
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:164
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup.(*MergeGroup).getInputBatch
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/mergegroup/exec.go:119
-github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup.(*MergeGroup).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/mergegroup/exec.go:71
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/projection/projection.go:62
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/output/output.go:55
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:198
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:490
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:276
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:395
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:378
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:521
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile2.go:259
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2998
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2851
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2816
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2760
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2635
+year_diff
+2
 drop table t_year_arith;
 drop table if exists t_year_group;
 create table t_year_group (id int, y year, category varchar(10));
@@ -549,72 +421,8 @@ drop table if exists t_year_sub;
 create table t_year_sub (id int, y year);
 insert into t_year_sub values (1, 2020), (2, 2021), (3, 2022), (4, 2023);
 select * from t_year_sub where y = (select max(y) from t_year_sub);
-internal error: no implementation for aggID 588410519552 with argType YEAR: 
-
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.makeSingleAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:191
-github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec.MakeAgg
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/aggexec/types.go:165
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*GroupResultNoneBlock).getResultBatch
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/execctx.go:354
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).initCtxToGetIntermediateResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:420
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).callToGetIntermediateResult
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:374
-github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/group/exec.go:164
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup.(*MergeGroup).getInputBatch
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/mergegroup/exec.go:119
-github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup.(*MergeGroup).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/mergegroup/exec.go:71
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:525
-github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild.(*container).collectBuildBatches
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/hashbuild/build.go:104
-github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild.(*container).build
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/hashbuild/build.go:126
-github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild.(*HashBuild).Call
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/colexec/hashbuild/build.go:66
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/types.go:514
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/vm/pipeline/pipeline.go:59
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:198
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:490
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:276
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:271
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/scope.go:395
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:378
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile.go:521
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/sql/compile/compile2.go:259
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2998
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2851
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2816
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2760
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/Users/LoveYY/Develop/matrixorigin/24184/pkg/frontend/mysql_cmd_executor.go:2635
+id    y
+4    2023-01-01
 select * from t_year_sub where y in (select y from t_year_sub where y > 2021) order by id;
 id    y
 3    2022-01-01
@@ -1488,4 +1296,3 @@ select * from t_year_temp order by y;
 drop table t_year_temp;
 
 drop table if exists t_year;
-
