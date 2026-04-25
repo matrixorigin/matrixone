@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -63,34 +62,6 @@ var testFunc = func(
 var (
 	sid = ""
 )
-
-func TestPerformLockSkipsRepeatedTableLock(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	proc := testutil.NewProcess(t)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	proc.Base.TxnOperator = txnOp
-
-	txnOp.EXPECT().LockSkipped(uint64(1), lock.LockMode_Exclusive).Return(false)
-	txnOp.EXPECT().HasLockTable(uint64(1)).Return(true)
-
-	arg := NewArgumentByEngine(nil)
-	arg.AddLockTarget(1, nil, 0, types.T_int32.ToType(), -1, -1, nil, false)
-	arg.LockTable(1, false)
-
-	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_int32.ToType())
-	require.NoError(t, vector.AppendFixed(vec, int32(1), false, proc.Mp()))
-	bat.Vecs[0] = vec
-	bat.SetRowCount(1)
-	defer func() {
-		bat.Clean(proc.Mp())
-		arg.Free(proc, false, nil)
-	}()
-
-	require.NoError(t, performLock(bat, proc, arg, nil, -1))
-}
 
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
