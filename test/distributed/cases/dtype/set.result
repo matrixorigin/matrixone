@@ -4,23 +4,19 @@ id int primary key,
 colors set('red', 'green', 'blue')
 );
 show create table set01;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-set01  ¦  CREATE TABLE `set01` (
-  `id` int NOT NULL,
-  `colors` set('red','green','blue') DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+set01    CREATE TABLE `set01` (\n  `id` int NOT NULL,\n  `colors` set('red','green','blue') DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 desc set01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-colors  ¦  SET('red','green','blue')  ¦  YES  ¦    ¦  null  ¦    ¦  
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null        
+colors    SET('red','green','blue')    YES        null        
 select table_name, column_name, data_type, column_type, is_nullable
 from information_schema.columns
 where table_name = 'set01' and column_name not like '__mo%'
 order by column_name;
-➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-set01  ¦  colors  ¦  SET  ¦  SET('red','green','blue')  ¦  YES  𝄀
-set01  ¦  id  ¦  INT  ¦  INT(32)  ¦  NO
+table_name    column_name    data_type    column_type    is_nullable
+set01    colors    SET    SET('red','green','blue')    YES
+set01    id    INT    INT(32)    NO
 insert into set01 values
 (1, 'red'),
 (2, 'blue,red'),
@@ -28,22 +24,22 @@ insert into set01 values
 (4, ''),
 (5, null);
 select * from set01 order by id;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-1  ¦  red  𝄀
-2  ¦  red,blue  𝄀
-3  ¦  red,green  𝄀
-4  ¦    𝄀
-5  ¦  null
+id    colors
+1    red
+2    red,blue
+3    red,green
+4    
+5    null
 select * from set01 where colors = 'red,green' order by id;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-3  ¦  red,green
+id    colors
+3    red,green
 select * from set01 order by colors;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-5  ¦  null  𝄀
-4  ¦    𝄀
-1  ¦  red  𝄀
-3  ¦  red,green  𝄀
-2  ¦  red,blue
+id    colors
+5    null
+4    
+1    red
+3    red,green
+2    red,blue
 drop table if exists set_idx;
 create table set_idx (
 id int primary key,
@@ -51,17 +47,12 @@ colors set('red', 'green', 'blue'),
 key idx_colors (colors)
 );
 show create table set_idx;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-set_idx  ¦  CREATE TABLE `set_idx` (
-  `id` int NOT NULL,
-  `colors` set('red','green','blue') DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `idx_colors` (`colors`)
-)
+Table    Create Table
+set_idx    CREATE TABLE `set_idx` (\n  `id` int NOT NULL,\n  `colors` set('red','green','blue') DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_colors` (`colors`)\n)
 insert into set_idx values (1, 'red'), (2, 'red,green');
 select * from set_idx where colors = 'red,green' order by id;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-2  ¦  red,green
+id    colors
+2    red,green
 drop table set_idx;
 drop table if exists set_load;
 create table set_load (
@@ -73,34 +64,32 @@ into table set_load
 fields terminated by ','
 optionally enclosed by '"';
 select * from set_load order by id;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-6  ¦  red,blue  𝄀
-7  ¦  red,green
+id    colors
+6    red,blue
+7    red,green
 drop table set_load;
 update set01 set colors = 'green,red' where id = 1;
 update set01 set colors = 5 where id = 4;
 select * from set01 order by id;
-➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
-1  ¦  red,green  𝄀
-2  ¦  red,blue  𝄀
-3  ¦  red,green  𝄀
-4  ¦  red,blue  𝄀
-5  ¦  null
+id    colors
+1    red,green
+2    red,blue
+3    red,green
+4    red,blue
+5    null
 insert into set01 values (6, 'yellow');
 internal error: convert to MySQL set failed: item yellow is not in set [red,green,blue]
 drop table if exists set02;
 create table set02 as select colors from set01;
 show create table set02;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-set02  ¦  CREATE TABLE `set02` (
-  `colors` set('red','green','blue') DEFAULT NULL
-)
+Table    Create Table
+set02    CREATE TABLE `set02` (\n  `colors` set('red','green','blue') DEFAULT NULL\n)
 select * from set02 order by colors;
-➤ colors[12,-1,0]  𝄀
-null  𝄀
-red,green  𝄀
-red,green  𝄀
-red,blue  𝄀
+colors
+null
+red,green
+red,green
+red,blue
 red,blue
 drop table set02;
 drop table if exists set03;
@@ -111,16 +100,12 @@ tags set('x', 'y') not null default 'x'
 insert into set03 values (1, default);
 insert into set03 values (2, 3);
 show create table set03;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-set03  ¦  CREATE TABLE `set03` (
-  `id` int NOT NULL,
-  `tags` set('x','y') NOT NULL DEFAULT 'x',
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+set03    CREATE TABLE `set03` (\n  `id` int NOT NULL,\n  `tags` set('x','y') NOT NULL DEFAULT 'x',\n  PRIMARY KEY (`id`)\n)
 select * from set03 order by id;
-➤ id[4,32,0]  ¦  tags[12,-1,0]  𝄀
-1  ¦  x  𝄀
-2  ¦  x,y
+id    tags
+1    x
+2    x,y
 drop table set03;
 drop table if exists set_modify;
 create table set_modify (id int primary key, tags set('a','b','c'));
@@ -134,28 +119,28 @@ insert into set_modify2 values (1, 'a,b'), (2, 'a');
 alter table set_modify2 modify column tags set('a','b','c');
 insert into set_modify2 values (3, 'a,c');
 select * from set_modify2 order by id;
-➤ id[4,32,0]  ¦  tags[12,-1,0]  𝄀
-1  ¦  a,b  𝄀
-2  ¦  a  𝄀
-3  ¦  a,c
+id    tags
+1    a,b
+2    a
+3    a,c
 drop table set_modify2;
 select distinct colors from set01 order by colors;
-➤ colors[12,-1,0]  𝄀
-null  𝄀
-red,green  𝄀
+colors
+null
+red,green
 red,blue
 select distinct concat('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', colors)
 from set01
 order by concat('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', colors);
-➤ concat(xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, colors)[12,-1,0]  𝄀
-null  𝄀
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxred,blue  𝄀
+concat(xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, colors)
+null
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxred,blue
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxred,green
 select colors, count(*) as cnt from set01 group by colors order by colors;
-➤ colors[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-null  ¦  1  𝄀
-red,blue  ¦  2  𝄀
-red,green  ¦  2
+colors    cnt
+null    1
+red,blue    2
+red,green    2
 drop table if exists set_load_err;
 create table set_load_err (id int primary key, colors set('red','green','blue'));
 load data infile '$resources/load_data/set_bad.csv'
@@ -164,6 +149,6 @@ fields terminated by ','
 optionally enclosed by '"';
 internal error: convert to MySQL set failed: item red,yellow is not in set [red,green,blue]
 select * from set_load_err;
-➤ id[4,32,0]  ¦  colors[12,-1,0]
+id    colors
 drop table set_load_err;
 drop table set01;

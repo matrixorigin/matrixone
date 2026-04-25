@@ -397,10 +397,11 @@ var predefinedFunids = map[int]int{
 	STARLARK:     345,
 	TRY_STARLARK: 346,
 
-	DAYOFWEEK: 347,
-	TRUNCATE:  348,
-	QUOTE:     349,
-	SOUNDEX:   350,
+	DAYOFWEEK:       347,
+	TRUNCATE:        348,
+	QUOTE:           349,
+	SOUNDEX:         350,
+	NULL_SAFE_EQUAL: 406,
 
 	CAST_INDEX_TO_SET_VALUE:       407,
 	CAST_SET_VALUE_TO_INDEX:       408,

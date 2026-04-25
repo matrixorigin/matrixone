@@ -52,6 +52,7 @@ show full columns from r_test;
 show variables where value = 'MatrixOne';
 show grants;
 show grants for 'admin'@'localhost';
+-- @separator:table
 SHOW CREATE TABLE information_schema.columns;
 show index from r_test;
 show node list;
@@ -110,6 +111,7 @@ show columns from r_test;
 show full columns from r_test;
 show variables where value = 'MatrixOne';
 show grants for 'hnadmin'@'localhost';
+-- @separator:table
 SHOW CREATE TABLE information_schema.columns;
 show index from r_test;
 show node list;

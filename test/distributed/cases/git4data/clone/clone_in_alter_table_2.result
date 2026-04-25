@@ -18,22 +18,14 @@ DELETE FROM `stress_alter_table` WHERE delete_flag = 0;
 INSERT INTO `stress_alter_table` (`md5_id`,`b`,`delete_flag`) VALUES (1,'this is a one',0);
 ALTER TABLE `stress_alter_table` MODIFY COLUMN delete_flag INT DEFAULT 0;
 select mo_ctl('dn','checkpoint','');
-➤ mo_ctl(dn, checkpoint, )[12,-1,0]  𝄀
-{
-  "method": "Checkpoint",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
+mo_ctl(dn, checkpoint, )
+{\n  "method": "Checkpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 SELECT COUNT(*) FROM `stress_alter_table`;
-➤ COUNT(*)[-5,64,0]  𝄀
+COUNT(*)
 1
 UPDATE `stress_alter_table` SET delete_flag = 1 WHERE md5_id = '1';
 SELECT COUNT(*) FROM `stress_alter_table`;
-➤ COUNT(*)[-5,64,0]  𝄀
+COUNT(*)
 1
 drop table stress_alter_table;
 create table t1 (id bigint primary key, delete_flag int, a int, body varchar(10), title text, FULLTEXT (title, body), key(delete_flag));
@@ -70,9 +62,9 @@ SET @sql = CONCAT(
 );
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
-➤ index_key[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-FULLTEXT:body  ¦  3  𝄀
-MULTIPLE:delete_flag  ¦  1
+index_key    cnt
+FULLTEXT:body    3
+MULTIPLE:delete_flag    1
 DEALLOCATE PREPARE stmt;
 drop table t1;
 create table t2 (id int primary key, a int, b int, c int, key(a), key(b));
@@ -109,9 +101,9 @@ SET @sql = CONCAT(
 );
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
-➤ index_key[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-MULTIPLE:a  ¦  1  𝄀
-MULTIPLE:b  ¦  1
+index_key    cnt
+MULTIPLE:a    1
+MULTIPLE:b    1
 DEALLOCATE PREPARE stmt;
 drop table t2;
 create table t3 (
@@ -154,13 +146,12 @@ SET @sql = CONCAT(
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 index_table_name    cnt
-__mo_index_secondary_019b0be5-95fd-7791-afd3-507749cef99c    7
-__mo_index_secondary_019b0be5-95fd-7776-9a98-70ab95462275    3
-__mo_index_secondary_019b0be5-95fd-77bc-a462-f9ff422590ec    1
-__mo_index_secondary_019b0be5-95fd-77b4-9add-05fb884cd701    1
-__mo_index_secondary_019b0be5-95fd-77ac-89bd-7e681c4689d8    1
-__mo_index_secondary_019b0be5-95fd-77a5-bc19-7b0dd32ae669    1
-__mo_index_secondary_019b0be5-95fd-7789-927c-8fbad1739d08    1
+__mo_index_secondary_019dc4bc-ee0d-735b-bbcf-139a64655cd2    7
+__mo_index_secondary_019dc4bc-ee0d-739d-9fb3-748a2a909f7d    1
+__mo_index_secondary_019dc4bc-ee0d-7386-87ec-315bceef24fc    1
+__mo_index_secondary_019dc4bc-ee0d-737e-af92-f1d0929e9d62    1
+__mo_index_secondary_019dc4bc-ee0d-7372-8903-22ce7e914251    1
+__mo_index_secondary_019dc4bc-ee0d-734b-ae5d-d0fba568e241    1
 DEALLOCATE PREPARE stmt;
 drop table t3;
 SET experimental_fulltext_index = 0;

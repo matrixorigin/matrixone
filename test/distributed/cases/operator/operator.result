@@ -24,107 +24,107 @@ insert into t2 values ( 'Computer', 2,2000, 1200),
 ( 'Calculator', 2, 2000,75),
 ( 'Phone', 3, 2003,10);
 select userID,spID,score from t1 where userID=spID and userID<>score;
-➤ userID[-5,64,0]  ¦  spID[5,16,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  5
+userID    spID    score
+1    1    5
 select userID,spID,score from t1 where userID=spID and userID!=score;
-➤ userID[-5,64,0]  ¦  spID[5,16,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  5
+userID    spID    score
+1    1    5
 select userID,spID,score from t1 where userID between spID and score;
-➤ userID[-5,64,0]  ¦  spID[5,16,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5  𝄀
-6  ¦  4  ¦  10  𝄀
-11  ¦  5  ¦  99
+userID    spID    score
+1    1    1
+2    2    2
+3    3    3
+1    1    5
+6    4    10
+11    5    99
 select userID,spID,score from t1 where userID not between spID and score;
-➤ userID[-5,64,0]  ¦  spID[5,16,0]  ¦  score[4,32,0]  𝄀
-1  ¦  2  ¦  4
+userID    spID    score
+1    2    4
 select * from t1 where userID between 3 and 6;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-3  ¦  3  ¦  3  𝄀
-4  ¦  6  ¦  10
+spid    userid    score
+3    3    3
+4    6    10
 select userID,spID,score from t1 where spID>=userID*score;
-➤ userID[-5,64,0]  ¦  spID[5,16,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1
+userID    spID    score
+1    1    1
 select userID,score,spID from t1 where userID<=score/spID;
-➤ userID[-5,64,0]  ¦  score[4,32,0]  ¦  spID[5,16,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-1  ¦  4  ¦  2  𝄀
-1  ¦  5  ¦  1  𝄀
-11  ¦  99  ¦  5
+userID    score    spID
+1    1    1
+1    4    2
+1    5    1
+11    99    5
 select spID,userID,score from t1 where spID>(userID-1);
-➤ spID[5,16,0]  ¦  userID[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-2  ¦  1  ¦  4  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5
+spID    userID    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 select spID,userID,score from t1 where score<(spID*userID+1);
-➤ spID[5,16,0]  ¦  userID[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-3  ¦  3  ¦  3  𝄀
-4  ¦  6  ¦  10
+spID    userID    score
+1    1    1
+2    2    2
+3    3    3
+4    6    10
 select userID, AVG(score) from t1 WHERE spID=2 group by userID order by userID;
-➤ userID[-5,64,0]  ¦  AVG(score)[8,54,0]  𝄀
-1  ¦  4.0  𝄀
-2  ¦  2.0
+userID    AVG(score)
+1    4.0
+2    2.0
 select product, SUM(profit) from t2 where year>1999 group by product order by product desc;
-➤ product[12,-1,0]  ¦  SUM(profit)[-5,64,0]  𝄀
-TV  ¦  350  𝄀
-Phone  ¦  10  𝄀
-Computer  ¦  4200  𝄀
-Calculator  ¦  225
+product    SUM(profit)
+TV    350
+Phone    10
+Computer    4200
+Calculator    225
 select product, SUM(profit),AVG(profit) from t2 where product!='TV' group by product order by product asc;
-➤ product[12,-1,0]  ¦  SUM(profit)[-5,64,0]  ¦  AVG(profit)[8,54,0]  𝄀
-Calculator  ¦  275  ¦  68.75  𝄀
-Computer  ¦  6900  ¦  1380.0  𝄀
-Phone  ¦  10  ¦  10.0
+product    SUM(profit)    AVG(profit)
+Calculator    275    68.75
+Computer    6900    1380.0
+Phone    10    10.0
 select product, SUM(profit),AVG(profit) from t2 where product<>'TV' group by product order by product asc;
-➤ product[12,-1,0]  ¦  SUM(profit)[-5,64,0]  ¦  AVG(profit)[8,54,0]  𝄀
-Calculator  ¦  275  ¦  68.75  𝄀
-Computer  ¦  6900  ¦  1380.0  𝄀
-Phone  ¦  10  ¦  10.0
+product    SUM(profit)    AVG(profit)
+Calculator    275    68.75
+Computer    6900    1380.0
+Phone    10    10.0
 select product, SUM(profit),AVG(profit) from t2 where product='Phone' group by product order by product asc;
-➤ product[12,-1,0]  ¦  SUM(profit)[-5,64,0]  ¦  AVG(profit)[8,54,0]  𝄀
-Phone  ¦  10  ¦  10.0
+product    SUM(profit)    AVG(profit)
+Phone    10    10.0
 select product, SUM(profit) from t2 where year>1999 and year<=2002 group by product order by product desc;
-➤ product[12,-1,0]  ¦  SUM(profit)[-5,64,0]  𝄀
-TV  ¦  350  𝄀
-Computer  ¦  4200  𝄀
-Calculator  ¦  225
+product    SUM(profit)
+TV    350
+Computer    4200
+Calculator    225
 select * from t1 where 2<10;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-2  ¦  1  ¦  4  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5  𝄀
-4  ¦  6  ¦  10  𝄀
-5  ¦  11  ¦  99
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
+4    6    10
+5    11    99
 select userID, userID DIV 2 as user_div, userID%2 as user_percent, userID MOD 2 as user_mod from t1 WHERE userID > 3;
-➤ userID[-5,64,0]  ¦  user_div[-5,64,0]  ¦  user_percent[-5,64,0]  ¦  user_mod[-5,64,0]  𝄀
-6  ¦  3  ¦  0  ¦  0  𝄀
-11  ¦  5  ¦  1  ¦  1
+userID    user_div    user_percent    user_mod
+6    3    0    0
+11    5    1    1
 select * from t1 where userID-2>2 && (userID+spID)/3<>0 && score MOD 2 > 0;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-5  ¦  11  ¦  99
+spid    userid    score
+5    11    99
 select * from t1 where spID >2 && userID < 6 && score != 1;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-3  ¦  3  ¦  3
+spid    userid    score
+3    3    3
 drop table if exists t2;
 create table t2(c1 int, c2 int);
 insert into t2 values (-3, 2);
 insert into t2 values (1, 2);
 select -c1 from t2;
-➤ -c1[4,32,0]  𝄀
-3  𝄀
+-c1
+3
 -1
 select c1, c2 from t2 order by -c1 desc;
-➤ c1[4,32,0]  ¦  c2[4,32,0]  𝄀
--3  ¦  2  𝄀
-1  ¦  2
+c1    c2
+-3    2
+1    2
 drop table if exists t3;
 create table t3 (c1 varchar(80));
 insert into t3 values ("a"),
@@ -135,59 +135,59 @@ insert into t3 values ("a"),
 ("C:\Program Files(x86)"),
 ("C:\\Program Files(x86)");
 select * from t3;
-➤ c1[12,-1,0]  𝄀
-a  𝄀
-abc  𝄀
-abcd  𝄀
-hello  𝄀
-test  𝄀
-C:Program Files(x86)  𝄀
+c1
+a
+abc
+abcd
+hello
+test
+C:Program Files(x86)
 C:\Program Files(x86)
 create database if not exists likedb;
 create database if not exists dblike;
 show databases like 'like%';
-➤ Database[12,-1,0]  𝄀
+Database
 likedb
 show databases like "%like%";
-➤ Database[12,-1,0]  𝄀
-dblike  𝄀
+Database
+dblike
 likedb
 show databases like "%aa%";
-➤ Database[12,-1,0]
+Database
 drop database likedb;
 drop database dblike;
 SELECT * FROM t1 where t1.userID<6 OR NOT t1.userID;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-2  ¦  1  ¦  4  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 SELECT * FROM t1 where NOT t1.userID OR t1.userID<6;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-2  ¦  1  ¦  4  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 SELECT * FROM t1 where NOT t1.userID || t1.userID<6;
-➤ spid[5,16,0]  ¦  userid[-5,64,0]  ¦  score[4,32,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  2  ¦  2  𝄀
-2  ¦  1  ¦  4  𝄀
-3  ¦  3  ¦  3  𝄀
-1  ¦  1  ¦  5
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values (0),(1),(NULL);
 select * from t1;
-➤ a[4,32,0]  𝄀
-0  𝄀
-1  𝄀
+a
+0
+1
 null
 select * from t1 where not a between 2 and 3;
-➤ a[4,32,0]  𝄀
-0  𝄀
+a
+0
 1
 drop table if exists t3;
 CREATE TABLE t3(
@@ -203,18 +203,18 @@ INSERT INTO t3 VALUES (3359360,0,0,'Mustermann Masterfrau');
 INSERT INTO t3 VALUES (3359361,406,3359361,'Mastermann Masterfrau');
 INSERT INTO t3 VALUES (3359362,406,3359362,'Mustermann MusterFrau');
 select username from t3 where username like 'Ma%';
-➤ username[12,-1,0]  𝄀
+username
 Mastermann Masterfrau
 select username from t3 where username like '%Frau';
-➤ username[12,-1,0]  𝄀
+username
 Mustermann MusterFrau
 select username from t3 where username like '%Mast%';
-➤ username[12,-1,0]  𝄀
-Mustermann Masterfrau  𝄀
+username
+Mustermann Masterfrau
 Mastermann Masterfrau
 select username from t3 where username like '%a_t%';
-➤ username[12,-1,0]  𝄀
-Mustermann Masterfrau  𝄀
+username
+Mustermann Masterfrau
 Mastermann Masterfrau
 drop table if exists t2;
 create table t2(a int,b varchar(5),c float, d date, e datetime);
@@ -223,133 +223,133 @@ insert into t2 values(2,'b',2.001,'2022-02-09','2022-02-09 12:00:00');
 insert into t2 values(1,'c',3.001,'2022-02-10','2022-02-10 12:00:00');
 insert into t2 values(4,'d',4.001,'2022-02-11','2022-02-11 12:00:00');
 select * from t2 where a in (2,4);
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-2  ¦  b  ¦  2.001  ¦  2022-02-09  ¦  2022-02-09 12:00:00  𝄀
-4  ¦  d  ¦  4.001  ¦  2022-02-11  ¦  2022-02-11 12:00:00
+a    b    c    d    e
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
+4    d    4.001    2022-02-11    2022-02-11 12:00:00
 select * from t2 where a not in (2,4);
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-1  ¦  a  ¦  1.001  ¦  2022-02-08  ¦  2022-02-08 12:00:00  𝄀
-1  ¦  c  ¦  3.001  ¦  2022-02-10  ¦  2022-02-10 12:00:00
+a    b    c    d    e
+1    a    1.001    2022-02-08    2022-02-08 12:00:00
+1    c    3.001    2022-02-10    2022-02-10 12:00:00
 select * from t2 where c in (2.001,2.002);
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-2  ¦  b  ¦  2.001  ¦  2022-02-09  ¦  2022-02-09 12:00:00
+a    b    c    d    e
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
 select * from t2 where b not in ('e',"f");
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-1  ¦  a  ¦  1.001  ¦  2022-02-08  ¦  2022-02-08 12:00:00  𝄀
-2  ¦  b  ¦  2.001  ¦  2022-02-09  ¦  2022-02-09 12:00:00  𝄀
-1  ¦  c  ¦  3.001  ¦  2022-02-10  ¦  2022-02-10 12:00:00  𝄀
-4  ¦  d  ¦  4.001  ¦  2022-02-11  ¦  2022-02-11 12:00:00
+a    b    c    d    e
+1    a    1.001    2022-02-08    2022-02-08 12:00:00
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
+1    c    3.001    2022-02-10    2022-02-10 12:00:00
+4    d    4.001    2022-02-11    2022-02-11 12:00:00
 select sum(a),c from t2 where a in (1,2) and d in ('2022-02-10','2022-02-11') group by c order by c;
-➤ sum(a)[-5,64,0]  ¦  c[7,24,0]  𝄀
-1  ¦  3.001
+sum(a)    c
+1    3.001
 select * from t2 where d in ('20220208','2022-02-09');
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-1  ¦  a  ¦  1.001  ¦  2022-02-08  ¦  2022-02-08 12:00:00  𝄀
-2  ¦  b  ¦  2.001  ¦  2022-02-09  ¦  2022-02-09 12:00:00
+a    b    c    d    e
+1    a    1.001    2022-02-08    2022-02-08 12:00:00
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
 select * from t2 where e not in ('2022-02-09 12:00:00') and a in (4,5);
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-4  ¦  d  ¦  4.001  ¦  2022-02-11  ¦  2022-02-11 12:00:00
+a    b    c    d    e
+4    d    4.001    2022-02-11    2022-02-11 12:00:00
 select sum(a) as suma,e from t2 where e not in ('2022-02-09 12:00:00') and a in (4,5) group by e order by suma;
-➤ suma[-5,64,0]  ¦  e[93,64,0]  𝄀
-4  ¦  2022-02-11 12:00:00
+suma    e
+4    2022-02-11 12:00:00
 select * from t2 where c in (2.001,3);
-➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[7,24,0]  ¦  d[91,64,0]  ¦  e[93,64,0]  𝄀
-2  ¦  b  ¦  2.001  ¦  2022-02-09  ¦  2022-02-09 12:00:00
+a    b    c    d    e
+2    b    2.001    2022-02-09    2022-02-09 12:00:00
 drop table if exists t1;
 create table t1(a int, b int unsigned);
 insert into t1 values (-1, 1), (-5, 5);
 select 1 & 2;
-➤ 1 & 2[-5,64,0]  𝄀
+1 & 2
 0
 select -1 & 2;
-➤ -1 & 2[-5,64,0]  𝄀
+-1 & 2
 2
 select null & 2;
-➤ null & 2[-5,64,0]  𝄀
+null & 2
 null
 select a & 2, b & 2 from t1;
-➤ a & 2[-5,64,0]  ¦  b & 2[-5,64,0]  𝄀
-2  ¦  0  𝄀
-2  ¦  0
+a & 2    b & 2
+2    0
+2    0
 select 1 | 2;
-➤ 1 | 2[-5,64,0]  𝄀
+1 | 2
 3
 select -1 | 2;
-➤ -1 | 2[-5,64,0]  𝄀
+-1 | 2
 -1
 select null | 2;
-➤ null | 2[-5,64,0]  𝄀
+null | 2
 null
 select a | 2, b | 2 from t1;
-➤ a | 2[-5,64,0]  ¦  b | 2[-5,64,0]  𝄀
--1  ¦  3  𝄀
--5  ¦  7
+a | 2    b | 2
+-1    3
+-5    7
 select 1 ^ 2;
-➤ 1 ^ 2[-5,64,0]  𝄀
+1 ^ 2
 3
 select -1 ^ 2;
-➤ -1 ^ 2[-5,64,0]  𝄀
+-1 ^ 2
 -3
 select null ^ 2;
-➤ null ^ 2[-5,64,0]  𝄀
+null ^ 2
 null
 select a ^ 2, b ^ 2 from t1;
-➤ a ^ 2[-5,64,0]  ¦  b ^ 2[-5,64,0]  𝄀
--3  ¦  3  𝄀
--7  ¦  7
+a ^ 2    b ^ 2
+-3    3
+-7    7
 select 1 << 2;
-➤ 1 << 2[-5,64,0]  𝄀
+1 << 2
 4
 select -1 << 2;
-➤ -1 << 2[-5,64,0]  𝄀
+-1 << 2
 -4
 select null << 2;
-➤ null << 2[-5,64,0]  𝄀
+null << 2
 null
 select a << 2, b << 2 from t1;
-➤ a << 2[-5,64,0]  ¦  b << 2[-5,64,0]  𝄀
--4  ¦  4  𝄀
--20  ¦  20
+a << 2    b << 2
+-4    4
+-20    20
 delete from t1;
 insert into t1 values (-5, 1024);
 select 1024 >> 2;
-➤ 1024 >> 2[-5,64,0]  𝄀
+1024 >> 2
 256
 select -5 >> 2;
-➤ -5 >> 2[-5,64,0]  𝄀
+-5 >> 2
 -2
 select null >> 2;
-➤ null >> 2[-5,64,0]  𝄀
+null >> 2
 null
 select a >> 2, b >> 2 from t1;
-➤ a >> 2[-5,64,0]  ¦  b >> 2[-5,64,0]  𝄀
--2  ¦  256
+a >> 2    b >> 2
+-2    256
 delete from t1;
 insert into t1 values (-5, 5);
 select ~5;
-➤ ~5[-5,64,0]  𝄀
+~5
 18446744073709551610
 select ~-5;
-➤ ~ (-5)[-5,64,0]  𝄀
+~ (-5)
 4
 select ~null;
-➤ ~null[-5,64,0]  𝄀
+~null
 null
 select ~a, ~b from t1;
-➤ ~a[-5,64,0]  ¦  ~b[-5,64,0]  𝄀
-4  ¦  18446744073709551610
+~a    ~b
+4    18446744073709551610
 select 2 << -2;
-➤ 2 << -2[-5,64,0]  𝄀
+2 << -2
 0
 select 2 >> -2;
-➤ 2 >> -2[-5,64,0]  𝄀
+2 >> -2
 0
 drop table if exists t1;
 create table t1 (a tinyint);
 insert into t1 values (2);
 select a << 20 from t1;
-➤ a << 20[-5,64,0]  𝄀
+a << 20
 2097152
 select !true;
-➤ !true[-7,1,0]  𝄀
-0
+!true
+false

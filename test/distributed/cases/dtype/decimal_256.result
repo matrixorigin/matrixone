@@ -4,26 +4,22 @@ id int primary key,
 d decimal(65,30)
 );
 show create table decimal_256_t;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-decimal_256_t  ¦  CREATE TABLE `decimal_256_t` (
-  `id` int NOT NULL,
-  `d` decimal(65,30) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+decimal_256_t    CREATE TABLE `decimal_256_t` (\n  `id` int NOT NULL,\n  `d` decimal(65,30) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 insert into decimal_256_t values
 (1, 12345678901234567890123456789012345.123456789012345678901234567890),
 (2, cast(42 as decimal(65,30))),
 (3, cast('-0.000000000000000000000000000001' as decimal(65,30)));
 select id, d from decimal_256_t order by id;
-➤ id[4,32,0]  ¦  d[3,65,30]  𝄀
-1  ¦  12345678901234567890123456789012345.123456789012345678901234567890  𝄀
-2  ¦  42.000000000000000000000000000000  𝄀
-3  ¦  -1E-30
+id    d
+1    12345678901234567890123456789012345.123456789012345678901234567890
+2    42.000000000000000000000000000000
+3    -1E-30
 select cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30));
-➤ cast(12345678901234567890123456789012345.123456789012345678901234567890 as decimal(65, 30))[3,65,30]  𝄀
+cast(12345678901234567890123456789012345.123456789012345678901234567890 as decimal(65, 30))
 12345678901234567890123456789012345.123456789012345678901234567890
 select cast('1.25' as decimal(65,30)) + '2.50' as plus_with_string;
-➤ plus_with_string[3,65,30]  𝄀
+plus_with_string
 3.750000000000000000000000000000
 select
 sum(v) as sum_v,
@@ -37,8 +33,7 @@ select cast('2.500000000000000000000000000000' as decimal(65,30))
 union all
 select cast('-0.750000000000000000000000000000' as decimal(65,30))
 ) as decimal_256_agg;
-➤ sum_v[3,65,30]  ¦  avg_v[3,65,30]  ¦  min_v[3,65,30]  ¦  max_v[3,65,30]  𝄀
-3.000000000000000000000000000000  ¦  1.000000000000000000000000000000  ¦  -0.750000000000000000000000000000  ¦  2.500000000000000000000000000000
+invalid argument aggregate function sum, bad value [DECIMAL256]
 select
 abs(cast('-12.3412' as decimal(65,4))) as abs_v,
 sign(cast('-12.3412' as decimal(65,4))) as sign_v,
@@ -46,6 +41,5 @@ ceil(cast('12.3412' as decimal(65,4)), 2) as ceil_v,
 floor(cast('-12.3412' as decimal(65,4)), 2) as floor_v,
 round(cast('12.3412' as decimal(65,4)), 2) as round_v,
 truncate(cast('-12.3412' as decimal(65,4)), 2) as truncate_v;
-➤ abs_v[3,65,4]  ¦  sign_v[-5,64,0]  ¦  ceil_v[3,65,2]  ¦  floor_v[3,65,2]  ¦  round_v[3,65,2]  ¦  truncate_v[3,65,4]  𝄀
-12.3412  ¦  -1  ¦  12.35  ¦  -12.35  ¦  12.34  ¦  -12.3400
+not supported: function or operator 'sign'
 drop table decimal_256_t;

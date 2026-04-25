@@ -411,12 +411,13 @@ const (
 	TS_TO_TIME = 343
 	STRCMP     = 344
 
-	STARLARK     = 345
-	TRY_STARLARK = 346
-	DAYOFWEEK    = 347
-	TRUNCATE     = 348
-	QUOTE        = 349
-	SOUNDEX      = 350
+	STARLARK        = 345
+	TRY_STARLARK    = 346
+	DAYOFWEEK       = 347
+	TRUNCATE        = 348
+	QUOTE           = 349
+	SOUNDEX         = 350
+	NULL_SAFE_EQUAL = 406
 
 	CAST_INDEX_TO_SET_VALUE       = 407
 	CAST_SET_VALUE_TO_INDEX       = 408
@@ -474,6 +475,7 @@ const (
 var functionIdRegister = map[string]int32{
 	// operators
 	"=":              EQUAL,
+	"<=>":            NULL_SAFE_EQUAL,
 	">":              GREAT_THAN,
 	">=":             GREAT_EQUAL,
 	"<":              LESS_THAN,

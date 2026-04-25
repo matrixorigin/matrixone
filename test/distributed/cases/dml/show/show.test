@@ -290,6 +290,6 @@ drop database test;
 drop database if exists test;
 create database test;
 use test;
+-- @separator:table
 SHOW CREATE TABLE information_schema.columns;
 drop database test;
-

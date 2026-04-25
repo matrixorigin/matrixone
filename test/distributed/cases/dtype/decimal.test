@@ -752,32 +752,39 @@ INSERT INTO decimal_opt_test VALUES
 
 -- Test 1: Trailing zeros - should use index (constant can be truncated)
 -- 99.990000000 has trailing zeros, can be truncated to 99.99
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
 SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
 
 -- Test 2: No trailing zeros - should NOT use index (requires table scan)
 -- 99.991234567 has non-zero trailing digits, cannot match any row
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 
 -- Test 3: Exact scale match - should use index
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
 SELECT * FROM decimal_opt_test WHERE price = 99.99;
 
 -- Test 4: Integer with trailing zeros - should use index
 -- 100.000000000 can be truncated to 100
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 
 -- Test 5: BETWEEN with trailing zeros - should use index
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 
 -- Test 6: IN list with trailing zeros - should use index
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
 SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
 
 -- Test 7: Higher precision column with lower precision constant - should use index
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 
@@ -807,6 +814,7 @@ SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
 SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
 
 -- Test 13: Optimizer hint test - precision mismatch should show hint
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 
 -- Test 14: Early false detection - should return empty result immediately
@@ -824,6 +832,7 @@ SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.990000000;
 -- Test 17: Negative values with trailing zeros
 INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
 -- @regex("Index Table Scan.*idx_price",true)
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 
@@ -885,11 +894,13 @@ INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
 -- price is DECIMAL(10,2), constant 99.991234567 has non-zero trailing digits
 -- Any DECIMAL(10,2) value can never equal 99.991234567, so <> is always true
 -- @regex("Filter Cond: true",true)
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.991234567;
 SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.991234567;
 
 -- Test 26: <> with trailing zeros - normal comparison (not always true)
 -- @regex("price.*<>.*99.99",true)
+-- @separator:table
 EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.990000000;
 SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.990000000;
 

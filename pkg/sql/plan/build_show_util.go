@@ -483,17 +483,27 @@ func ConstructCreateTableSQL(
 			if err != nil {
 				return "", nil, err
 			}
-
-			partitionBy += meta.Description
-
+			rangeOrList := false
 			switch meta.Method {
-			case partition.PartitionMethod_Hash,
-				partition.PartitionMethod_LinearHash,
-				partition.PartitionMethod_Key,
-				partition.PartitionMethod_LinearKey:
-				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
-			default:
-				partitionBy += " ("
+			case partition.PartitionMethod_Hash:
+				partitionBy += "hash"
+			case partition.PartitionMethod_LinearHash:
+				partitionBy += "linear hash"
+			case partition.PartitionMethod_Key:
+				partitionBy += "key"
+			case partition.PartitionMethod_LinearKey:
+				partitionBy += "linear key"
+			case partition.PartitionMethod_Range:
+				rangeOrList = true
+				partitionBy += "range "
+			case partition.PartitionMethod_List:
+				rangeOrList = true
+				partitionBy += "List "
+			}
+
+			cols := "(" + meta.Description + ")"
+			if rangeOrList {
+				partitionBy += "columns" + cols + " ("
 				for i, p := range meta.Partitions {
 					if i > 0 {
 						partitionBy += ", "
@@ -501,6 +511,9 @@ func ConstructCreateTableSQL(
 					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
 				}
 				partitionBy += ")"
+			} else {
+				partitionBy += cols
+				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
 			}
 
 			createStr += partitionBy
