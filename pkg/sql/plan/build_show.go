@@ -203,7 +203,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	viewIdx := findViewKeyword(upper)
 	if viewIdx > 0 {
 		header := upper[:viewIdx]
-		if !strings.Contains(header, "SQL SECURITY") {
+		if !hasSQLSecurityClause(header) {
 			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
 		}
 	}
@@ -220,41 +220,68 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 // Returns -1 if not found.
 func findViewKeyword(upper string) int {
 	for i := 0; i < len(upper); {
-		switch upper[i] {
+		token, start, next, ok := nextSQLToken(upper, i)
+		if !ok {
+			return -1
+		}
+		if token == "VIEW" {
+			return start
+		}
+		i = next
+	}
+	return -1
+}
+
+func hasSQLSecurityClause(upper string) bool {
+	lastTokenWasSQL := false
+	for i := 0; i < len(upper); {
+		token, _, next, ok := nextSQLToken(upper, i)
+		if !ok {
+			return false
+		}
+		if lastTokenWasSQL && token == "SECURITY" {
+			return true
+		}
+		lastTokenWasSQL = token == "SQL"
+		i = next
+	}
+	return false
+}
+
+func nextSQLToken(s string, start int) (token string, tokenStart int, next int, ok bool) {
+	for i := start; i < len(s); {
+		switch s[i] {
 		case ' ', '\t', '\n', '\r':
 			i++
 			continue
 		case '/':
-			if i+1 < len(upper) && upper[i+1] == '*' {
-				i = skipBlockComment(upper, i+2)
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i+2)
 				continue
 			}
 		case '-':
-			if startsDashComment(upper, i) {
-				i = skipLineComment(upper, i+2)
+			if startsDashComment(s, i) {
+				i = skipLineComment(s, i+2)
 				continue
 			}
 		case '#':
-			i = skipLineComment(upper, i+1)
+			i = skipLineComment(s, i+1)
 			continue
 		case '\'', '"', '`':
-			i = skipQuotedSegment(upper, i, upper[i])
+			i = skipQuotedSegment(s, i, s[i])
 			continue
 		}
 
-		if isSQLIdentChar(upper[i]) {
-			start := i
-			for i < len(upper) && isSQLIdentChar(upper[i]) {
+		if isSQLIdentChar(s[i]) {
+			begin := i
+			for i < len(s) && isSQLIdentChar(s[i]) {
 				i++
 			}
-			if upper[start:i] == "VIEW" {
-				return start
-			}
-			continue
+			return s[begin:i], begin, i, true
 		}
 		i++
 	}
-	return -1
+	return "", -1, len(s), false
 }
 
 func skipBlockComment(s string, start int) int {

@@ -34,6 +34,13 @@ func TestFindViewKeywordRequiresBoundaries(t *testing.T) {
 	require.Equal(t, strings.LastIndex("CREATE # VIEW\nVIEW V", "VIEW"), findViewKeyword("CREATE # VIEW\nVIEW V"))
 }
 
+func TestHasSQLSecurityClauseIgnoresComments(t *testing.T) {
+	require.True(t, hasSQLSecurityClause("CREATE SQL SECURITY DEFINER "))
+	require.False(t, hasSQLSecurityClause("CREATE /* SQL SECURITY INVOKER */ "))
+	require.False(t, hasSQLSecurityClause("CREATE -- SQL SECURITY DEFINER\n"))
+	require.False(t, hasSQLSecurityClause("CREATE # SQL SECURITY DEFINER\n"))
+}
+
 func Test_buildTestShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string

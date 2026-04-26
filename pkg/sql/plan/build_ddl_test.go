@@ -208,6 +208,18 @@ func TestBuildShowCreateViewSecurityType(t *testing.T) {
 	}
 	require.NotEmpty(t, matched)
 	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+
+	pl = makePlan("create /* SQL SECURITY INVOKER */ view v as select 1", "")
+	matched = ""
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, "SQL SECURITY DEFINER") {
+			matched = lit
+			break
+		}
+	}
+	require.NotEmpty(t, matched)
+	require.Contains(t, matched, "create /* SQL SECURITY INVOKER */ SQL SECURITY DEFINER view v as select 1")
+	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
 }
 
 func TestOverrideViewDefSecurityTypeNoOpCases(t *testing.T) {
