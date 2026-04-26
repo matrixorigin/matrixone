@@ -199,7 +199,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+		case defines.MYSQL_TYPE_YEAR:
+			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 38 {
+				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			}
 			if n.InternalType.DisplayWith > 16 {
 				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}
@@ -218,6 +223,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_GEOMETRY:
+			return plan.Type{Id: int32(types.T_geometry)}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
@@ -235,6 +242,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			}
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+		case defines.MYSQL_TYPE_SET:
+			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}

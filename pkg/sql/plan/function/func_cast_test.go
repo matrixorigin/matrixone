@@ -2112,6 +2112,109 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 	}
 }
 
+func Test_strToDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	inputVec := testutil.MakeVarcharVector(
+		[]string{"123456789012345678901234567890.1234", "", "1e+06"},
+		[]uint64{1},
+	)
+	defer inputVec.Free(mp)
+
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	resultType := types.New(types.T_decimal256, 65, 4)
+	to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[types.Decimal256])
+	defer to.Free()
+
+	require.NoError(t, to.PreExtendAndReset(3))
+	require.NoError(t, strToDecimal256(from, to, 3, nil))
+
+	resultVec := to.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(1))
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](resultVec)
+	require.Equal(t, "123456789012345678901234567890.1234", values[0].Format(4))
+	require.Equal(t, "1000000.0000", values[2].Format(4))
+}
+
+func TestYearCastHelpers(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	inputVec := testutil.MakeVarcharVector([]string{"69", "1901", "2156"}, nil)
+	defer inputVec.Free(mp)
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	to := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer to.Free()
+
+	require.NoError(t, to.PreExtendAndReset(3))
+	require.NoError(t, strToYear(ctx, from, to, 3, nil))
+
+	yearVec := to.GetResultVector()
+	years := vector.MustFixedColNoTypeCheck[types.MoYear](yearVec)
+	require.Equal(t, types.MoYear(2069), years[0])
+	require.Equal(t, types.MoYear(1901), years[1])
+	require.True(t, yearVec.GetNulls().Contains(2))
+
+	strResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer strResult.Free()
+	require.NoError(t, strResult.PreExtendAndReset(3))
+	require.NoError(t, yearToStr(ctx, vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec), strResult, 3, types.T_varchar.ToType()))
+	strParam := vector.GenerateFunctionStrParameter(strResult.GetResultVector())
+	got, null := strParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, "2069", string(got))
+}
+
+func TestYearToOthersCoversSupportedNumericMatrix(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(yearVec, []types.MoYear{0}, nil, mp))
+	from := vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec)
+
+	targets := []types.Type{
+		types.T_int8.ToType(),
+		types.T_int16.ToType(),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint8.ToType(),
+		types.T_uint16.ToType(),
+		types.T_uint32.ToType(),
+		types.T_uint64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_blob.ToType(),
+		types.T_text.ToType(),
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+	}
+
+	for _, target := range targets {
+		t.Run(target.Oid.String(), func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(target, mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, yearToOthers(ctx, from, target, result, 1, nil))
+			require.False(t, result.GetResultVector().IsNull(0))
+		})
+	}
+}
+
+func TestScalarNullToDecimal256(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	resultType := types.New(types.T_decimal256, 65, 4)
+	result := vector.NewFunctionResultWrapper(resultType, mp)
+	defer result.Free()
+
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, scalarNullToOthers(ctx, resultType, result, 1, nil))
+	require.True(t, result.GetResultVector().IsNull(0))
+}
+
 // Test_strToArray_DimensionCheck tests that strToArray correctly validates
 // vector dimension against the target type's width (vecf32(N) / vecf64(N)).
 // This is the regression test for https://github.com/matrixorigin/matrixone/issues/23872

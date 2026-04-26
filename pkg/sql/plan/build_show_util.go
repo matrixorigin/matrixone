@@ -560,10 +560,21 @@ func FormatColType(colType plan.Type) string {
 	if typ.Oid.IsDecimal() {
 		ts = "DECIMAL"
 	}
+	if isSetPlanType(&colType) {
+		ts = "SET"
+	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+	}
 
 	suffix := ""
 	switch types.T(colType.Id) {
-	case types.T_enum: //types.T_set:
+	case types.T_enum:
+		fallthrough
+	case types.T_uint64:
+		if !isEnumOrSetPlanType(&colType) {
+			break
+		}
 		elements := strings.Split(colType.GetEnumvalues(), ",")
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))

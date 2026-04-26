@@ -75,6 +75,48 @@ func TestParse128(t *testing.T) {
 		panic("Decimal128Parse wrong")
 	}
 }
+
+func TestParse128ScientificNotationWithPlusSign(t *testing.T) {
+	x, err := ParseDecimal128("1.23456789e+06", 20, 2)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal128 scientific notation with plus sign: %v", err)
+	}
+	expected := Decimal128{B0_63: 123456789, B64_127: 0}
+	if x != expected {
+		t.Fatalf("ParseDecimal128('1.23456789e+06', 20, 2) = %v, expected %v", x, expected)
+	}
+}
+
+func TestParseDecimal256(t *testing.T) {
+	x, err := ParseDecimal256("123456789012345678901234567890.123456789012345678901234567890", 65, 30)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256: %v", err)
+	}
+	if got := x.Format(30); got != "123456789012345678901234567890.123456789012345678901234567890" {
+		t.Fatalf("Decimal256 Format(30) = %s", got)
+	}
+}
+
+func TestParseDecimal256ScientificNotationWithPlusSign(t *testing.T) {
+	x, err := ParseDecimal256("1.23456789e+06", 65, 2)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256 scientific notation with plus sign: %v", err)
+	}
+	if got := x.Format(2); got != "1234567.89" {
+		t.Fatalf("Decimal256 scientific notation Format(2) = %s", got)
+	}
+}
+
+func TestParseDecimal256FromByte(t *testing.T) {
+	x, err := ParseDecimal256FromByte("\x01\x00", 65, 0)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256 from bytes: %v", err)
+	}
+	if got := x.Format(0); got != "256" {
+		t.Fatalf("Decimal256 from bytes Format(0) = %s", got)
+	}
+}
+
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x

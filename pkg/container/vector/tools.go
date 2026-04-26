@@ -240,9 +240,13 @@ func (v *Vector) setupFromData() {
 			v.col.setFromVector(v)
 		case types.T_decimal128:
 			v.col.setFromVector(v)
+		case types.T_decimal256:
+			v.col.setFromVector(v)
 		case types.T_uuid:
 			v.col.setFromVector(v)
 		case types.T_date:
+			v.col.setFromVector(v)
+		case types.T_year:
 			v.col.setFromVector(v)
 		case types.T_time:
 			v.col.setFromVector(v)

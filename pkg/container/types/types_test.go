@@ -138,6 +138,11 @@ func TestT_ToType(t *testing.T) {
 	require.Equal(t, int32(MaxBitLen), T_bit.ToType().Width)
 }
 
+func TestMySQLCompatibilityTypeProperties(t *testing.T) {
+	require.Equal(t, uint8(1), CharsetType(T_geometry))
+	require.True(t, T_year.IsDateRelate())
+}
+
 func TestT_String(t *testing.T) {
 	require.Equal(t, "TINYINT", T_int8.String())
 	require.Equal(t, "SMALLINT", T_int16.String())
