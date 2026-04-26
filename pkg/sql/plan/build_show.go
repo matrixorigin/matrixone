@@ -219,43 +219,54 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 // It skips comments and quoted segments so VIEW inside them is ignored.
 // Returns -1 if not found.
 func findViewKeyword(upper string) int {
-	for i := 0; i < len(upper); {
-		token, start, next, ok := nextSQLToken(upper, i)
-		if !ok {
-			return -1
-		}
+	viewIdx := -1
+	scanSQLTokens(upper, func(token string, start int) bool {
 		if token == "VIEW" {
-			return start
+			viewIdx = start
+			return false
 		}
-		i = next
-	}
-	return -1
+		return true
+	})
+	return viewIdx
 }
 
 func hasSQLSecurityClause(upper string) bool {
 	lastTokenWasSQL := false
-	for i := 0; i < len(upper); {
-		token, _, next, ok := nextSQLToken(upper, i)
-		if !ok {
+	hasClause := false
+	scanSQLTokens(upper, func(token string, _ int) bool {
+		if lastTokenWasSQL && token == "SECURITY" {
+			hasClause = true
 			return false
 		}
-		if lastTokenWasSQL && token == "SECURITY" {
-			return true
-		}
 		lastTokenWasSQL = token == "SQL"
-		i = next
-	}
-	return false
+		return true
+	})
+	return hasClause
 }
 
-func nextSQLToken(s string, start int) (token string, tokenStart int, next int, ok bool) {
-	for i := start; i < len(s); {
+func scanSQLTokens(s string, yield func(token string, start int) bool) {
+	inVersionedComment := false
+	for i := 0; i < len(s); {
+		if inVersionedComment && i+1 < len(s) && s[i] == '*' && s[i+1] == '/' {
+			inVersionedComment = false
+			i += 2
+			continue
+		}
+
 		switch s[i] {
 		case ' ', '\t', '\n', '\r':
 			i++
 			continue
 		case '/':
 			if i+1 < len(s) && s[i+1] == '*' {
+				if i+2 < len(s) && s[i+2] == '!' {
+					inVersionedComment = true
+					i += 3
+					for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+						i++
+					}
+					continue
+				}
 				i = skipBlockComment(s, i+2)
 				continue
 			}
@@ -277,11 +288,13 @@ func nextSQLToken(s string, start int) (token string, tokenStart int, next int, 
 			for i < len(s) && isSQLIdentChar(s[i]) {
 				i++
 			}
-			return s[begin:i], begin, i, true
+			if !yield(s[begin:i], begin) {
+				return
+			}
+			continue
 		}
 		i++
 	}
-	return "", -1, len(s), false
 }
 
 func skipBlockComment(s string, start int) int {

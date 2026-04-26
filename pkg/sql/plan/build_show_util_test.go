@@ -32,6 +32,8 @@ func TestFindViewKeywordRequiresBoundaries(t *testing.T) {
 	require.Equal(t, strings.LastIndex("CREATE /* VIEW */ VIEW V", "VIEW"), findViewKeyword("CREATE /* VIEW */ VIEW V"))
 	require.Equal(t, strings.LastIndex("CREATE -- VIEW\nVIEW V", "VIEW"), findViewKeyword("CREATE -- VIEW\nVIEW V"))
 	require.Equal(t, strings.LastIndex("CREATE # VIEW\nVIEW V", "VIEW"), findViewKeyword("CREATE # VIEW\nVIEW V"))
+	require.Equal(t, strings.Index("/*!50001 CREATE DEFINER = `ROOT`@`%` VIEW V AS SELECT 1 */", "VIEW"),
+		findViewKeyword("/*!50001 CREATE DEFINER = `ROOT`@`%` VIEW V AS SELECT 1 */"))
 }
 
 func TestHasSQLSecurityClauseIgnoresComments(t *testing.T) {
@@ -39,6 +41,7 @@ func TestHasSQLSecurityClauseIgnoresComments(t *testing.T) {
 	require.False(t, hasSQLSecurityClause("CREATE /* SQL SECURITY INVOKER */ "))
 	require.False(t, hasSQLSecurityClause("CREATE -- SQL SECURITY DEFINER\n"))
 	require.False(t, hasSQLSecurityClause("CREATE # SQL SECURITY DEFINER\n"))
+	require.True(t, hasSQLSecurityClause("/*!50001 CREATE DEFINER = `ROOT`@`%` SQL SECURITY DEFINER VIEW V AS SELECT 1 */"))
 }
 
 func Test_buildTestShowCreateTable(t *testing.T) {
