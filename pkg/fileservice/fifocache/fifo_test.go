@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -215,15 +216,13 @@ func TestPostEvictRunsOutsideQueueLock(t *testing.T) {
 func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
 	slowDuration := 200 * time.Millisecond
 	evictStarted := make(chan struct{})
+	var evictStartedOnce sync.Once
 	cache := New(
 		fscache.ConstCapacity(2),
 		ShardInt[int],
 		nil, nil,
 		func(_ context.Context, _ int, _ int, _ int64) {
-			select {
-			case evictStarted <- struct{}{}:
-			default:
-			}
+			evictStartedOnce.Do(func() { close(evictStarted) })
 			time.Sleep(slowDuration)
 		},
 	)
@@ -232,7 +231,11 @@ func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
 	cache.Set(ctx, 2, 2, 1)
 	// Trigger slow eviction in background
 	go cache.Set(ctx, 3, 3, 1) // evicts key=1, postEvict sleeps 200ms
-	<-evictStarted
+	select {
+	case <-evictStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for postEvict to start")
+	}
 	// queueLock should be released now; used() only needs RLock.
 	start := time.Now()
 	_ = cache.used()
