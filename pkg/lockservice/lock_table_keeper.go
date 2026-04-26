@@ -114,23 +114,24 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
+	allBinds := binds[:0]
 	binds = binds[:0]
 	futures = futures[:0]
 
 	k.groupTables.iter(func(_ uint64, v lockTable) bool {
 		bind := v.getBind()
 		if bind.ServiceID != k.serviceID {
-			binds = append(binds, bind)
+			allBinds = append(allBinds, bind)
 		}
 		return true
 	})
-	if len(binds) == 0 {
+	if len(allBinds) == 0 {
 		return futures[:0], binds[:0]
 	}
 
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoKeepRemoteLock)
 	defer cancel()
-	for _, bind := range binds {
+	for _, bind := range allBinds {
 		req := acquireRequest()
 		defer releaseRequest(req)
 

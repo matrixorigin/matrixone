@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"hash/crc64"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -986,7 +988,22 @@ func getUUIDFromServiceIdentifier(id string) string {
 }
 
 func getRemoteLockBindKey(remoteService string, bind pb.LockTable) string {
-	return remoteService + "/" + bind.DebugString()
+	var b strings.Builder
+	b.Grow(len(remoteService) + len(bind.ServiceID) + 64)
+	b.WriteString(remoteService)
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(uint64(bind.Group), 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.Table, 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.OriginTable, 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(uint64(bind.Sharding), 10))
+	b.WriteByte('/')
+	b.WriteString(bind.ServiceID)
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.Version, 10))
+	return b.String()
 }
 
 func ShardingByRow(row []byte) uint64 {

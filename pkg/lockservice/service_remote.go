@@ -258,7 +258,9 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, "")
+	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
+	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
+	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
 	txn.Lock()
 	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
