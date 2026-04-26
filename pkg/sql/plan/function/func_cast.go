@@ -46,9 +46,9 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_array_float32, types.T_array_float64,
 		types.T_datalink,
 	},
@@ -4386,7 +4386,11 @@ func yearToInteger[T constraints.Integer](ctx context.Context,
 			}
 			continue
 		}
-		if err := to.Append(T(v), false); err != nil {
+		r := int16(v)
+		if err := overflowForNumericToNumeric[int16, T](ctx, []int16{r}, nil); err != nil {
+			return err
+		}
+		if err := to.Append(T(r), false); err != nil {
 			return err
 		}
 	}
@@ -4416,6 +4420,8 @@ func yearToStr(ctx context.Context,
 	from vector.FunctionParameterWrapper[types.MoYear],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
 ) error {
+	totype := to.GetType()
+	destLen := int(totype.Width)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4424,7 +4430,18 @@ func yearToStr(ctx context.Context,
 			}
 			continue
 		}
-		if err := to.AppendBytes([]byte(v.String()), false); err != nil {
+		value := []byte(v.String())
+		if toType.Oid == types.T_binary && toType.Scale == -1 {
+			if err := explicitCastToBinary(toType, value, false, to); err != nil {
+				return err
+			}
+			continue
+		}
+		if toType.Oid != types.T_text && destLen != 0 && utf8.RuneCount(value) > destLen {
+			return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+				"Src length %v is larger than Dest length %v", len(value), destLen))
+		}
+		if err := to.AppendBytes(value, false); err != nil {
 			return err
 		}
 	}

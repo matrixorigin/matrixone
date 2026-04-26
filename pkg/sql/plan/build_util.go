@@ -224,7 +224,11 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_GEOMETRY:
-			return plan.Type{Id: int32(types.T_geometry)}, nil
+			typ := plan.Type{Id: int32(types.T_geometry)}
+			if subtype := normalizeGeometrySubtype(n.InternalType.FamilyString); subtype != "" {
+				typ.Enumvalues = subtype
+			}
+			return typ, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:

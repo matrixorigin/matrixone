@@ -27188,8 +27188,8 @@ yydefault:
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				goto ret1
 			}
-			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
-				yylex.Error("For decimal(M), M must between 0 and 38.")
+			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
+				yylex.Error("For decimal(M), M must between 0 and 65.")
 				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
@@ -27228,8 +27228,8 @@ yydefault:
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
 				goto ret1
 			}
-			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
-				yylex.Error("For decimal(M), M must between 0 and 38.")
+			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 65 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
+				yylex.Error("For decimal(M), M must between 0 and 65.")
 				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{

@@ -41,13 +41,7 @@ func ParseMoYear(s string) (MoYear, error) {
 			return 0, nil
 		}
 		if s[0] == '0' {
-			if v >= 1 && v <= 69 {
-				return MoYear(2000 + v), nil
-			}
-			if v >= 70 && v <= 99 {
-				return MoYear(1900 + v), nil
-			}
-			return 0, moerr.NewInvalidInputNoCtxf("year value out of range: %s", s)
+			return 0, moerr.NewInvalidInputNoCtxf("invalid year value: %s", s)
 		}
 		return ParseMoYearFromInt(v)
 	}

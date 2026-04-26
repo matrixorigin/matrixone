@@ -48,6 +48,8 @@ func TestParseMoYear(t *testing.T) {
 		{"two digit zero", "0", 2000, false},
 		{"two digit low", "69", 2069, false},
 		{"two digit high", "70", 1970, false},
+		{"four digit leading zero low", "0001", 0, true},
+		{"four digit leading zero high", "0069", 0, true},
 		{"empty string", "", 0, true},
 		{"invalid string", "abc", 0, true},
 		{"below range", "1900", 0, true},

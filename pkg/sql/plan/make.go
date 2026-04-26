@@ -557,6 +557,12 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 
 func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
+	if isSetPlanType(&targetType) {
+		expr, err = funcCastForSetType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -630,6 +636,61 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, err
 		}
 	}
+	return expr, nil
+}
+
+func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isSetPlanType(&targetType) {
+		return expr, nil
+	}
+
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return expr, nil
+	}
+
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		bits, err := types.ParseSet(targetType.Enumvalues, value.Sval)
+		if err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U64Val:
+		if _, err := types.ParseSetValue(targetType.Enumvalues, value.U64Val); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(value.U64Val)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U8Val:
+		bits := uint64(value.U8Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U16Val:
+		bits := uint64(value.U16Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U32Val:
+		bits := uint64(value.U32Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	}
+
 	return expr, nil
 }
 

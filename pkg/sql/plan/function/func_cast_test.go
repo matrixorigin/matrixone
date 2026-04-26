@@ -2203,6 +2203,57 @@ func TestYearToOthersCoversSupportedNumericMatrix(t *testing.T) {
 	}
 }
 
+func TestYearToIntegerRejectsOverflow(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(yearVec, []types.MoYear{2024}, nil, mp))
+	from := vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec)
+
+	int8Result := vector.NewFunctionResultWrapper(types.T_int8.ToType(), mp).(*vector.FunctionResult[int8])
+	defer int8Result.Free()
+	require.NoError(t, int8Result.PreExtendAndReset(1))
+	require.Error(t, yearToOthers(ctx, from, types.T_int8.ToType(), int8Result, 1, nil))
+
+	uint8Result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), mp).(*vector.FunctionResult[uint8])
+	defer uint8Result.Free()
+	require.NoError(t, uint8Result.PreExtendAndReset(1))
+	require.Error(t, yearToOthers(ctx, from, types.T_uint8.ToType(), uint8Result, 1, nil))
+
+	int16Result := vector.NewFunctionResultWrapper(types.T_int16.ToType(), mp).(*vector.FunctionResult[int16])
+	defer int16Result.Free()
+	require.NoError(t, int16Result.PreExtendAndReset(1))
+	require.NoError(t, yearToOthers(ctx, from, types.T_int16.ToType(), int16Result, 1, nil))
+}
+
+func TestYearToStringRespectsTargetWidthAndBinaryPadding(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(yearVec, []types.MoYear{2024}, nil, mp))
+	from := vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec)
+
+	charType := types.New(types.T_char, 2, 0)
+	charResult := vector.NewFunctionResultWrapper(charType, mp).(*vector.FunctionResult[types.Varlena])
+	defer charResult.Free()
+	require.NoError(t, charResult.PreExtendAndReset(1))
+	require.Error(t, yearToOthers(ctx, from, charType, charResult, 1, nil))
+
+	binaryType := types.New(types.T_binary, 6, -1)
+	binaryResult := vector.NewFunctionResultWrapper(binaryType, mp).(*vector.FunctionResult[types.Varlena])
+	defer binaryResult.Free()
+	require.NoError(t, binaryResult.PreExtendAndReset(1))
+	require.NoError(t, yearToOthers(ctx, from, binaryType, binaryResult, 1, nil))
+	binaryParam := vector.GenerateFunctionStrParameter(binaryResult.GetResultVector())
+	got, null := binaryParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, []byte{'2', '0', '2', '4', 0, 0}, got)
+}
+
 func TestScalarNullToDecimal256(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
@@ -2213,6 +2264,16 @@ func TestScalarNullToDecimal256(t *testing.T) {
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, scalarNullToOthers(ctx, resultType, result, 1, nil))
 	require.True(t, result.GetResultVector().IsNull(0))
+}
+
+func TestAnyCastMatrixIncludesYearAndDecimal256(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "cast", []types.Type{types.T_any.ToType(), types.T_year.ToType()})
+	require.NoError(t, err)
+
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+	_, err = GetFunctionByName(ctx, "cast", []types.Type{types.T_any.ToType(), decimal256Type})
+	require.NoError(t, err)
 }
 
 // Test_strToArray_DimensionCheck tests that strToArray correctly validates

@@ -142,6 +142,11 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.Nil(t, diffStmt.OutputOpt)
 }
 
+func TestDecimalPrecisionUpTo65(t *testing.T) {
+	_, err := ParseOne(context.TODO(), "create table t (a decimal(65,30), b numeric(39,0))", 1)
+	require.NoError(t, err)
+}
+
 var (
 	partitionSQL = struct {
 		input  string

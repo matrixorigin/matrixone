@@ -47,3 +47,12 @@ func geometrySubtypeName(typ *plan.Type) string {
 	}
 	return strings.ToUpper(subtype)
 }
+
+func normalizeGeometrySubtype(subtype string) string {
+	switch strings.ToUpper(strings.TrimSpace(subtype)) {
+	case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
+		return strings.ToUpper(strings.TrimSpace(subtype))
+	default:
+		return ""
+	}
+}

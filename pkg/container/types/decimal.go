@@ -1694,12 +1694,15 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
-	if x[0] == '-' {
+	for i < len(x) && x[i] == ' ' {
 		i++
-		signx = true
+	}
+	if i < len(x) && (x[i] == '-' || x[i] == '+') {
+		signx = x[i] == '-'
+		i++
 	}
 	for i < len(x) {
-		if x[i] == ' ' || x[i] == '+' {
+		if x[i] == ' ' {
 			i++
 			continue
 		}
@@ -1742,18 +1745,17 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+					return
+				}
 				floatflag = true
 				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
 				continue
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
@@ -1831,12 +1833,15 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
-	if x[0] == '-' {
+	for i < len(x) && x[i] == ' ' {
 		i++
-		signx = true
+	}
+	if i < len(x) && (x[i] == '-' || x[i] == '+') {
+		signx = x[i] == '-'
+		i++
 	}
 	for i < len(x) {
-		if x[i] == ' ' || x[i] == '+' {
+		if x[i] == ' ' {
 			i++
 			continue
 		}
@@ -1880,18 +1885,17 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+					return
+				}
 				floatflag = true
 				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
 				continue
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)

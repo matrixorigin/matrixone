@@ -87,6 +87,15 @@ func TestParse128ScientificNotationWithPlusSign(t *testing.T) {
 	}
 }
 
+func TestParse128RejectsMisplacedPlusSign(t *testing.T) {
+	if _, err := ParseDecimal128("1+2", 20, 0); err == nil {
+		t.Fatalf("ParseDecimal128 accepted misplaced plus sign")
+	}
+	if _, err := ParseDecimal128("1e++2", 20, 0); err == nil {
+		t.Fatalf("ParseDecimal128 accepted duplicate exponent plus sign")
+	}
+}
+
 func TestParseDecimal256(t *testing.T) {
 	x, err := ParseDecimal256("123456789012345678901234567890.123456789012345678901234567890", 65, 30)
 	if err != nil {
@@ -104,6 +113,15 @@ func TestParseDecimal256ScientificNotationWithPlusSign(t *testing.T) {
 	}
 	if got := x.Format(2); got != "1234567.89" {
 		t.Fatalf("Decimal256 scientific notation Format(2) = %s", got)
+	}
+}
+
+func TestParseDecimal256RejectsMisplacedPlusSign(t *testing.T) {
+	if _, err := ParseDecimal256("1+2", 65, 0); err == nil {
+		t.Fatalf("ParseDecimal256 accepted misplaced plus sign")
+	}
+	if _, err := ParseDecimal256("1e++2", 65, 0); err == nil {
+		t.Fatalf("ParseDecimal256 accepted duplicate exponent plus sign")
 	}
 }
 

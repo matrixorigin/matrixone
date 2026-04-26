@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func Test_replaceFuncId(t *testing.T) {
@@ -100,6 +101,15 @@ func TestGetTypeFromAstMySQLCompatibilityTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), geometryType.Id)
 	require.Equal(t, "GEOMETRY", FormatColType(geometryType))
+
+	pointType, err := getTypeFromAst(ctx, &tree.T{InternalType: tree.InternalType{
+		Oid:          uint32(defines.MYSQL_TYPE_GEOMETRY),
+		FamilyString: "point",
+	}})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_geometry), pointType.Id)
+	require.Equal(t, "POINT", pointType.Enumvalues)
+	require.Equal(t, "POINT", FormatColType(pointType))
 }
 
 func TestMakePlan2DecimalExprWithTypeUsesDecimal256(t *testing.T) {
@@ -108,4 +118,31 @@ func TestMakePlan2DecimalExprWithTypeUsesDecimal256(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
 	require.Equal(t, int32(65), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
+}
+
+func TestSetDefaultAndOnUpdateUseSetMembers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
+
+	defaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: tree.NewNumVal("read,write", "read,write", false, tree.P_char)},
+		},
+	)
+	defaultValue, err := buildDefaultExpr(defaultCol, setType, proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), defaultValue.Expr.GetLit().GetU64Val())
+
+	onUpdateCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeOnUpdate{Expr: tree.NewNumVal("write", "write", false, tree.P_char)},
+		},
+	)
+	onUpdate, err := buildOnUpdate(onUpdateCol, setType, proc)
+	require.NoError(t, err)
+	require.NotNil(t, onUpdate.Expr)
 }
