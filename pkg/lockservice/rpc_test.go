@@ -33,6 +33,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testClientSession struct {
+	ctx         context.Context
+	writeCtx    context.Context
+	writeErr    error
+	writeCalled bool
+	asyncCalled bool
+}
+
+func (s *testClientSession) Close() error { return nil }
+
+func (s *testClientSession) SessionCtx() context.Context { return s.ctx }
+
+func (s *testClientSession) Write(ctx context.Context, response morpc.Message) error {
+	s.writeCtx = ctx
+	s.writeCalled = true
+	return s.writeErr
+}
+
+func (s *testClientSession) AsyncWrite(response morpc.Message) error {
+	s.asyncCalled = true
+	return nil
+}
+
+func (s *testClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
+	return nil, nil
+}
+
+func (s *testClientSession) DeleteCache(cacheID uint64) {}
+
+func (s *testClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error) { return nil, nil }
+
+func (s *testClientSession) RemoteAddress() string { return "" }
+
+func TestWriteResponseWithDeadlineUsesSyncWrite(t *testing.T) {
+	resp := acquireResponse()
+	defer releaseResponse(resp)
+
+	cs := &testClientSession{ctx: context.Background()}
+	err := writeResponseWithDeadline(getLogger(""), nil, resp, nil, cs, time.Second)
+	require.NoError(t, err)
+	require.True(t, cs.writeCalled)
+	require.False(t, cs.asyncCalled)
+	_, ok := cs.writeCtx.Deadline()
+	require.True(t, ok)
+}
+
 func TestRPCSend(t *testing.T) {
 	runRPCTests(
 		t,

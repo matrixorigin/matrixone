@@ -208,6 +208,109 @@ func TestUnlockOrphanTxnWithServiceRestart(t *testing.T) {
 	)
 }
 
+func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
+	remoteLockTimeout := time.Millisecond * 200
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			anchorTxn := []byte("anchor")
+			holderTxn := []byte("holder")
+			waiterTxn := []byte("waiter")
+			table1 := uint64(1)
+			row1 := []byte{1}
+			row2 := []byte{2}
+
+			mustAddTestLock(t, ctx, l1, table1, anchorTxn, [][]byte{row2}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
+			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(holderTxn, false, ""))
+
+			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
+				return id == table1
+			})
+
+			doneC := make(chan struct{})
+			go func() {
+				defer close(doneC)
+				mustAddTestLock(t, ctx, l1, table1, waiterTxn, [][]byte{row1}, pb.Granularity_Row)
+			}()
+
+			select {
+			case <-doneC:
+			case <-ctx.Done():
+				require.FailNow(t, "waiter txn still blocked after bind heartbeat timeout")
+			}
+
+			require.Eventually(t, func() bool {
+				return l1.activeTxnHolder.getActiveTxn(holderTxn, false, "") == nil
+			}, time.Second*3, time.Millisecond*50)
+			require.NoError(t, l1.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, anchorTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+		},
+	)
+}
+
+func TestKeepRemoteLockRefreshesAllRemoteBinds(t *testing.T) {
+	remoteLockTimeout := time.Millisecond * 200
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			anchor1 := []byte("anchor1")
+			anchor2 := []byte("anchor2")
+			holder1 := []byte("holder1")
+			holder2 := []byte("holder2")
+			row1 := []byte{1}
+			row2 := []byte{2}
+			table1 := uint64(1)
+			table2 := uint64(2)
+
+			mustAddTestLock(t, ctx, l1, table1, anchor1, [][]byte{row2}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l1, table2, anchor2, [][]byte{row2}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, table1, holder1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, table2, holder2, [][]byte{row1}, pb.Granularity_Row)
+
+			bind1 := l1.tableGroups.get(0, table1).getBind()
+			bind2 := l1.tableGroups.get(0, table2).getBind()
+
+			require.Eventually(t, func() bool {
+				return l1.activeTxnHolder.hasRemoteLockBind(l2.serviceID, bind1, remoteLockTimeout) &&
+					l1.activeTxnHolder.hasRemoteLockBind(l2.serviceID, bind2, remoteLockTimeout)
+			}, time.Second*3, time.Millisecond*50)
+
+			time.Sleep(remoteLockTimeout * 2)
+
+			require.True(t, l1.activeTxnHolder.hasRemoteLockBind(l2.serviceID, bind1, remoteLockTimeout))
+			require.True(t, l1.activeTxnHolder.hasRemoteLockBind(l2.serviceID, bind2, remoteLockTimeout))
+
+			require.NoError(t, l2.Unlock(ctx, holder1, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, holder2, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, anchor1, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, anchor2, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+		},
+	)
+}
+
 func TestGetTimeoutRemoveTxn(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",

@@ -94,7 +94,6 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 	timer := time.NewTimer(k.keepRemoteLockInterval)
 	defer timer.Stop()
 
-	services := make(map[string]pb.LockTable)
 	var futures []*morpc.Future
 	var binds []pb.LockTable
 	for {
@@ -105,7 +104,6 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 			futures, binds = k.doKeepRemoteLock(
 				ctx,
 				futures,
-				services,
 				binds)
 			timer.Reset(k.keepRemoteLockInterval)
 		}
@@ -115,28 +113,24 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
-	services map[string]pb.LockTable,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
-	for k := range services {
-		delete(services, k)
-	}
 	binds = binds[:0]
 	futures = futures[:0]
 
 	k.groupTables.iter(func(_ uint64, v lockTable) bool {
 		bind := v.getBind()
 		if bind.ServiceID != k.serviceID {
-			services[bind.ServiceID] = bind
+			binds = append(binds, bind)
 		}
 		return true
 	})
-	if len(services) == 0 {
+	if len(binds) == 0 {
 		return futures[:0], binds[:0]
 	}
 
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoKeepRemoteLock)
 	defer cancel()
-	for _, bind := range services {
+	for _, bind := range binds {
 		req := acquireRequest()
 		defer releaseRequest(req)
 

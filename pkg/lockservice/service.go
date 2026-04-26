@@ -114,7 +114,7 @@ func NewLockService(
 	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
-	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock, s.logger)
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.cfg.RemoteLockTimeout.Duration, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
@@ -652,6 +652,8 @@ type activeTxnHolder interface {
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	keepRemoteActiveTxn(remoteService string)
+	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
+	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
@@ -670,6 +672,8 @@ type mapBasedTxnHolder struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
+		// remoteLockBinds records the last heartbeat seen for a specific remote service + bind.
+		remoteLockBinds map[string]time.Time
 		// head(oldest) -> tail (newest)
 		dequeue           list.Deque[remote]
 		activeTxns        map[string]*activeTxn
@@ -695,6 +699,7 @@ func newMapBasedTxnHandler(
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
 	h.mu.remoteServices = make(map[string]*list.Element[remote])
+	h.mu.remoteLockBinds = make(map[string]time.Time)
 	h.mu.dequeue = list.New[remote]()
 	return h
 }
@@ -795,6 +800,28 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 	}
 }
 
+func (h *mapBasedTxnHolder) keepRemoteLockBindActive(remoteService string, bind pb.LockTable) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.mu.remoteLockBinds[getRemoteLockBindKey(remoteService, bind)] = time.Now()
+}
+
+func (h *mapBasedTxnHolder) hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool {
+	if remoteService == h.serviceID {
+		return true
+	}
+	h.mu.RLock()
+	lastSeen, ok := h.mu.remoteLockBinds[getRemoteLockBindKey(remoteService, bind)]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if maxKeepInterval <= 0 {
+		return true
+	}
+	return time.Since(lastSeen) < maxKeepInterval
+}
+
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
 	needRemoved [][]byte,
@@ -806,6 +833,11 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	}
 	h.mu.Lock()
 	now := time.Now()
+	for key, lastSeen := range h.mu.remoteLockBinds {
+		if now.Sub(lastSeen) >= maxKeepInterval {
+			delete(h.mu.remoteLockBinds, key)
+		}
+	}
 	h.mu.dequeue.Iter(0, func(r remote) bool {
 		v := now.Sub(r.time)
 		if v < maxKeepInterval {
@@ -951,6 +983,10 @@ func getUUIDFromServiceIdentifier(id string) string {
 		return id
 	}
 	return id[19:]
+}
+
+func getRemoteLockBindKey(remoteService string, bind pb.LockTable) string {
+	return remoteService + "/" + bind.DebugString()
 }
 
 func ShardingByRow(row []byte) uint64 {

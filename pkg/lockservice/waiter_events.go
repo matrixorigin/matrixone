@@ -109,14 +109,15 @@ func (e event) notified() {
 // waiterEvents is used to handle all notified waiters. And use a pool to retry the lock op,
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
-	logger       *log.MOLogger
-	workers      int
-	detector     *detector
-	eventC       chan *lockContext
-	checkOrphanC chan checkOrphan
-	txnHolder    activeTxnHolder
-	unlock       func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
-	stopper      *stopper.Stopper
+	logger            *log.MOLogger
+	workers           int
+	detector          *detector
+	eventC            chan *lockContext
+	checkOrphanC      chan checkOrphan
+	txnHolder         activeTxnHolder
+	remoteLockTimeout time.Duration
+	unlock            func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
+	stopper           *stopper.Stopper
 
 	mu struct {
 		sync.RWMutex
@@ -128,18 +129,20 @@ func newWaiterEvents(
 	workers int,
 	detector *detector,
 	txnHolder activeTxnHolder,
+	remoteLockTimeout time.Duration,
 	unlock func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error,
 	logger *log.MOLogger,
 ) *waiterEvents {
 	return &waiterEvents{
-		logger:       logger,
-		workers:      workers,
-		detector:     detector,
-		txnHolder:    txnHolder,
-		unlock:       unlock,
-		eventC:       make(chan *lockContext, 10000),
-		checkOrphanC: make(chan checkOrphan, 64),
-		stopper:      stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
+		logger:            logger,
+		workers:           workers,
+		detector:          detector,
+		txnHolder:         txnHolder,
+		remoteLockTimeout: remoteLockTimeout,
+		unlock:            unlock,
+		eventC:            make(chan *lockContext, 10000),
+		checkOrphanC:      make(chan checkOrphan, 64),
+		stopper:           stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
 
@@ -279,6 +282,13 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 	}
 
 	for _, h := range holders {
+		if !mw.txnHolder.hasRemoteLockBind(h.CreatedOn, v.lt.bind, mw.remoteLockTimeout) {
+			mw.logger.Warn("found stale remote lock without bind heartbeat",
+				zap.String("bind", v.lt.bind.DebugString()),
+				bytesArrayField("txns", [][]byte{h.TxnID}))
+			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+			continue
+		}
 		// When you have determined that a remote transaction is an orphaned transaction, you
 		// can release the lock that the remote transaction has placed on the current cn.
 		if !mw.txnHolder.isValidRemoteTxn(h) {
