@@ -5158,6 +5158,12 @@ func resolveViewChainPrivilegeContext(
 				viewDb = ses.GetDatabaseName()
 			}
 		}
+		if isSystemViewDatabase(viewDb) {
+			// Outer user views have already been validated by prior iterations.
+			// Once the chain reaches a system view, stop explicit inner-view checks
+			// and preserve normal base-object authorization semantics.
+			return currentRoleId, true, false, nil
+		}
 
 		useCache := enableCache && cache != nil && currentRoleId == roleId
 		cacheToUse := cache
@@ -8224,8 +8230,11 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	objType objectType,
 	level tree.PrivilegeLevel,
 ) (*btree.Set[int64], error) {
-	// For specific named objects (db.table or table), filter by obj_type + obj_id
-	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+	// For specific named objects (db.table, table) and database-scoped wildcards (db.*),
+	// keep the resolved object id so WGO cannot leak across databases.
+	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
 		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
 		if err != nil {
 			// If we can't resolve the object, fall back to obj_type-only check

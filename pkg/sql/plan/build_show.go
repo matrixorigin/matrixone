@@ -216,22 +216,92 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 }
 
 // findViewKeyword finds the position of the VIEW keyword in an uppercased SQL string.
-// It requires VIEW to be bounded by whitespace (space, tab, newline) or string boundaries.
+// It skips comments and quoted segments so VIEW inside them is ignored.
 // Returns -1 if not found.
 func findViewKeyword(upper string) int {
-	for i := 0; i+4 <= len(upper); i++ {
-		if upper[i:i+4] != "VIEW" {
+	for i := 0; i < len(upper); {
+		switch upper[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+			continue
+		case '/':
+			if i+1 < len(upper) && upper[i+1] == '*' {
+				i = skipBlockComment(upper, i+2)
+				continue
+			}
+		case '-':
+			if startsDashComment(upper, i) {
+				i = skipLineComment(upper, i+2)
+				continue
+			}
+		case '#':
+			i = skipLineComment(upper, i+1)
+			continue
+		case '\'', '"', '`':
+			i = skipQuotedSegment(upper, i, upper[i])
 			continue
 		}
-		if i > 0 && upper[i-1] != ' ' && upper[i-1] != '\t' && upper[i-1] != '\n' && upper[i-1] != '\r' {
+
+		if isSQLIdentChar(upper[i]) {
+			start := i
+			for i < len(upper) && isSQLIdentChar(upper[i]) {
+				i++
+			}
+			if upper[start:i] == "VIEW" {
+				return start
+			}
 			continue
 		}
-		if i+4 < len(upper) && upper[i+4] != ' ' && upper[i+4] != '\t' && upper[i+4] != '\n' && upper[i+4] != '\r' {
-			continue
-		}
-		return i
+		i++
 	}
 	return -1
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '*' && i+1 < len(s) && s[i+1] == '/' {
+			return i + 2
+		}
+	}
+	return len(s)
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '\n' || s[i] == '\r' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+func skipQuotedSegment(s string, start int, quote byte) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote {
+			i++
+			continue
+		}
+		return i + 1
+	}
+	return len(s)
+}
+
+func startsDashComment(s string, idx int) bool {
+	return idx+1 < len(s) && s[idx+1] == '-' &&
+		(idx+2 == len(s) || s[idx+2] == ' ' || s[idx+2] == '\t' || s[idx+2] == '\n' || s[idx+2] == '\r')
+}
+
+func isSQLIdentChar(ch byte) bool {
+	return ch == '_' ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9')
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {

@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -8365,6 +8366,27 @@ func newMrsForCheckDatabaseTable(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForCheckViewMeta(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("viewdef")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("owner")
+	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -9268,6 +9290,119 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedFallsBackToLegacyViewRecords(t
 	)
 	require.NoError(t, err)
 	require.True(t, roleSet.Contains(roleID))
+}
+
+func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsDatabaseScopeForViewDatabaseStar(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("db1")
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+	roleID := int64(1001)
+	dbID := int64(20002)
+
+	checkDbSQL, err := getSqlForCheckDatabase(ctx, "db2")
+	require.NoError(t, err)
+	bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{dbID}})
+
+	viewScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, dbID)
+	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, dbID)
+	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+	// 旧实现会错误命中 obj_type 级别结果，把其他数据库上的 db.* WGO 复用到当前库。
+	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView)
+	bh.sql2result[viewObjTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+	legacyObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable)
+	bh.sql2result[legacyObjTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+		ctx,
+		ses,
+		bh,
+		PrivilegeTypeSelect,
+		tree.OBJECT_TYPE_VIEW,
+		tree.PrivilegeLevel{
+			Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+			DbName: "db2",
+		},
+	)
+	require.NoError(t, err)
+	require.Zero(t, roleSet.Len())
+	require.False(t, roleSet.Contains(roleID))
+}
+
+func TestResolveViewChainPrivilegeContextSkipsNestedSystemViewPrivilegeChecks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("userdb")
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+	roleID := int64(1001)
+
+	viewPLs, err := getPrivilegeLevelsOfObjectType(ctx, objectTypeView)
+	require.NoError(t, err)
+
+	entry := privilegeEntriesMap[PrivilegeTypeSelect]
+	entry.objType = objectTypeView
+	entry.databaseName = "userdb"
+	entry.tableName = "outer"
+	for _, pl := range viewPLs {
+		sql, err := getSqlForPrivilege2(ctx, ses, roleID, entry, pl)
+		require.NoError(t, err)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+	}
+
+	outerViewData, err := json.Marshal(plan2.ViewData{
+		Stmt:            "create view outer as select 1",
+		DefaultDatabase: "userdb",
+		SecurityType:    "INVOKER",
+	})
+	require.NoError(t, err)
+
+	viewMetaSQL, err := getSqlForCheckViewMeta(ctx, "userdb", "outer")
+	require.NoError(t, err)
+	bh.sql2result[viewMetaSQL] = newMrsForCheckViewMeta([][]interface{}{
+		{string(outerViewData), roleID},
+	})
+
+	checkRoleID, allowed, skipBaseCheck, err := resolveViewChainPrivilegeContext(
+		ctx,
+		bh,
+		ses,
+		nil,
+		roleID,
+		PrivilegeTypeSelect,
+		[]string{"userdb.outer", "information_schema.inner"},
+		"",
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, roleID, checkRoleID)
+	require.True(t, allowed)
+	require.False(t, skipBaseCheck)
+	require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), "information_schema")
 }
 
 func TestPrivilegeCacheGetPrivilegeSetForView(t *testing.T) {

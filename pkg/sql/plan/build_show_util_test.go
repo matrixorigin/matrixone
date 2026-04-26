@@ -29,6 +29,9 @@ func TestFindViewKeywordRequiresBoundaries(t *testing.T) {
 	require.Equal(t, -1, findViewKeyword("CREATE VIEWER V"))
 	require.Equal(t, strings.Index("CREATE VIEW V", "VIEW"), findViewKeyword("CREATE VIEW V"))
 	require.Equal(t, strings.Index("CREATE\tVIEW\nV", "VIEW"), findViewKeyword("CREATE\tVIEW\nV"))
+	require.Equal(t, strings.LastIndex("CREATE /* VIEW */ VIEW V", "VIEW"), findViewKeyword("CREATE /* VIEW */ VIEW V"))
+	require.Equal(t, strings.LastIndex("CREATE -- VIEW\nVIEW V", "VIEW"), findViewKeyword("CREATE -- VIEW\nVIEW V"))
+	require.Equal(t, strings.LastIndex("CREATE # VIEW\nVIEW V", "VIEW"), findViewKeyword("CREATE # VIEW\nVIEW V"))
 }
 
 func Test_buildTestShowCreateTable(t *testing.T) {
