@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -197,7 +198,7 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 
 func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 	run := func(t *testing.T, conn *testIOSession) {
-		futureReleased := 0
+		var futureReleased atomic.Int32
 		s := &server{
 			name:     "test",
 			metrics:  newServerMetrics("test"),
@@ -216,7 +217,7 @@ func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 			nil,
 		)
 
-		f := newFuture(func(*Future) { futureReleased++ })
+		f := newFuture(func(*Future) { futureReleased.Add(1) })
 		f.init(RPCMessage{
 			Ctx:     context.Background(),
 			Message: newTestMessage(1),
@@ -226,7 +227,7 @@ func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 
 		require.NoError(t, s.startWriteLoop(cs))
 		require.Eventually(t, func() bool {
-			return futureReleased == 1
+			return futureReleased.Load() == 1
 		}, time.Second, time.Millisecond*10)
 		s.stopper.Stop()
 	}
