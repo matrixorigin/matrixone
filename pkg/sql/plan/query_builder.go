@@ -1130,6 +1130,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_WINDOW:
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1140,8 +1143,30 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		// append children projection list
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		windowTag := node.BindingTags[0]
+		l := len(childProjList)
+
+		// In the window function node,
+		// the filtering conditions also need to be remapped
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.FilterList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			// get col pos from remap info
+			err = builder.remapWindowClause(
+				expr,
+				windowTag,
+				node.GetWindowIdx(),
+				int32(l),
+				childRemapping.globalToLocal,
+				&remapInfo)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// append children projection list
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -1159,24 +1184,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
-		}
-
-		windowTag := node.BindingTags[0]
-		l := len(childProjList)
-
-		// In the window function node,
-		// the filtering conditions also need to be remapped
-		for _, expr := range node.FilterList {
-			// get col pos from remap info
-			err = builder.remapWindowClause(
-				expr,
-				windowTag,
-				int32(l),
-				childRemapping.globalToLocal,
-				&remapInfo)
-			if err != nil {
-				return nil, err
-			}
 		}
 
 		// remap all window function
@@ -4801,7 +4808,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if err != nil {
 				return 0, err
 			}
-			acctName := builder.compCtx.GetUserName()
+			accountName := builder.compCtx.GetAccountName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -4817,7 +4824,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(acctName)
+					motablesFilter := util.BuildSysMetricFilter(accountName)
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
@@ -4825,7 +4832,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					motablesFilter := util.BuildSysStatementInfoFilter(accountName)
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {

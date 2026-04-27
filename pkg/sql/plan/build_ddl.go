@@ -1297,7 +1297,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		// FROM
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" FROM (%s)", fmtCtx.String()))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" FROM (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
@@ -1565,6 +1565,86 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	return nil
+}
+
+func restoreIntervalSyntaxForCTAS(sql string) string {
+	var out strings.Builder
+	for i := 0; i < len(sql); {
+		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		expr, unit, next, ok := parseIntervalCall(sql, i)
+		if !ok || !isIntervalUnitToken(unit) {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		out.WriteString("interval ")
+		out.WriteString(strings.TrimSpace(expr))
+		out.WriteByte(' ')
+		out.WriteString(strings.TrimSpace(unit))
+		i = next
+	}
+	return out.String()
+}
+
+func parseIntervalCall(sql string, start int) (expr string, unit string, next int, ok bool) {
+	const prefix = "interval("
+	pos := start + len(prefix)
+	depth := 1
+	comma := -1
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	for pos < len(sql) {
+		ch := sql[pos]
+		switch ch {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		case '(':
+			if !inSingleQuote && !inDoubleQuote {
+				depth++
+			}
+		case ')':
+			if !inSingleQuote && !inDoubleQuote {
+				depth--
+				if depth == 0 {
+					if comma == -1 {
+						return "", "", 0, false
+					}
+					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+				}
+			}
+		case ',':
+			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+				comma = pos
+			}
+		}
+		pos++
+	}
+	return "", "", 0, false
+}
+
+func isIntervalUnitToken(unit string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(unit), "`'\"")) {
+	case "microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond",
+		"hour_second", "hour_minute", "day_microsecond", "day_second", "day_minute",
+		"day_hour", "year_month":
+		return true
+	default:
+		return false
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {

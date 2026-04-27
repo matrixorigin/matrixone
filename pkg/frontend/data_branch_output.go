@@ -155,6 +155,60 @@ func mergeDiffs(
 	return
 }
 
+// resolveProjectedIdxes resolves the user-specified COLUMNS list to a subset
+// of visibleIdxes. Returns nil if no COLUMNS clause was specified.
+func resolveProjectedIdxes(columns tree.IdentifierList, tblStuff tableStuff) ([]int, error) {
+	if columns == nil {
+		return nil, nil
+	}
+
+	nameToIdx := make(map[string]int, len(tblStuff.def.visibleIdxes))
+	for _, idx := range tblStuff.def.visibleIdxes {
+		nameToIdx[strings.ToLower(tblStuff.def.colNames[idx])] = idx
+	}
+
+	projected := make([]int, 0, len(columns))
+	seen := make(map[int]bool, len(columns))
+	for _, col := range columns {
+		idx, ok := nameToIdx[strings.ToLower(string(col))]
+		if !ok {
+			if tblStuff.tarRel != nil && tblStuff.tarRel.GetTableName() != "" {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"column %q not found in table %q",
+					string(col),
+					tblStuff.tarRel.GetTableName(),
+				)
+			}
+			return nil, moerr.NewInvalidInputNoCtxf("column %q not found", string(col))
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		projected = append(projected, idx)
+	}
+
+	return projected, nil
+}
+
+func validateProjectedColumns(stmt *tree.DataBranchDiff, tblStuff tableStuff) error {
+	if stmt == nil || stmt.Columns == nil {
+		return nil
+	}
+
+	if _, err := resolveProjectedIdxes(stmt.Columns, tblStuff); err != nil {
+		return err
+	}
+
+	if stmt.OutputOpt != nil && len(stmt.OutputOpt.DirPath) != 0 {
+		return moerr.NewNotSupportedNoCtx(
+			"DATA BRANCH DIFF COLUMNS is not supported with OUTPUT FILE",
+		)
+	}
+
+	return nil
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -182,6 +236,35 @@ func satisfyDiffOutputOpt(
 			rows = make([][]any, 0, 100)
 		)
 
+		// Resolve column projection (nil means show all visible columns).
+		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
+		if resolveErr != nil {
+			return resolveErr
+		}
+
+		// Determine which columns to extract from batch vectors.
+		// When projecting, only extract display columns + PK columns (for sorting).
+		extractIdxes := tblStuff.def.visibleIdxes
+		rowSize := len(tblStuff.def.visibleIdxes) + 2
+		if displayIdxes != nil {
+			seen := make(map[int]bool, len(displayIdxes)+len(tblStuff.def.pkColIdxes))
+			extractIdxes = make([]int, 0, len(displayIdxes)+len(tblStuff.def.pkColIdxes))
+			for _, idx := range displayIdxes {
+				if !seen[idx] {
+					seen[idx] = true
+					extractIdxes = append(extractIdxes, idx)
+				}
+			}
+			for _, idx := range tblStuff.def.pkColIdxes {
+				if !seen[idx] {
+					seen[idx] = true
+					extractIdxes = append(extractIdxes, idx)
+				}
+			}
+			// Sparse row: indexed by colIdx+2, so size must accommodate the largest index.
+			rowSize = slices.Max(extractIdxes) + 3
+		}
+
 		for wrapped := range retCh {
 			if first != nil {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
@@ -200,12 +283,12 @@ func satisfyDiffOutputOpt(
 
 			for rowIdx := range wrapped.batch.RowCount() {
 				var (
-					row = make([]any, len(tblStuff.def.visibleIdxes)+2)
+					row = make([]any, rowSize)
 				)
 				row[0] = wrapped.name
 				row[1] = wrapped.kind
 
-				for _, colIdx := range tblStuff.def.visibleIdxes {
+				for _, colIdx := range extractIdxes {
 					vec := wrapped.batch.Vecs[colIdx]
 					if err = extractRowFromVector(
 						ctx, ses, vec, colIdx+2, row, rowIdx, false,
@@ -237,8 +320,21 @@ func satisfyDiffOutputOpt(
 			return 0
 		})
 
-		for _, row := range rows {
-			mrs.AddRow(row)
+		if displayIdxes != nil {
+			// Column projection: build compact rows with only projected columns.
+			for _, row := range rows {
+				projRow := make([]any, len(displayIdxes)+2)
+				projRow[0] = row[0]
+				projRow[1] = row[1]
+				for j, colIdx := range displayIdxes {
+					projRow[j+2] = row[colIdx+2]
+				}
+				mrs.AddRow(projRow)
+			}
+		} else {
+			for _, row := range rows {
+				mrs.AddRow(row)
+			}
 		}
 
 	} else if stmt.OutputOpt.Count {
@@ -475,6 +571,14 @@ func buildOutputSchema(
 	if stmt.OutputOpt == nil || stmt.OutputOpt.Limit != nil {
 		// output all rows OR
 		// output limited rows (is this can be pushed down to hash-phase?)
+
+		displayIdxes := tblStuff.def.visibleIdxes
+		if stmt.Columns != nil {
+			if displayIdxes, err = resolveProjectedIdxes(stmt.Columns, tblStuff); err != nil {
+				return
+			}
+		}
+
 		showCols = make([]*MysqlColumn, 0, 2)
 		showCols = append(showCols, new(MysqlColumn), new(MysqlColumn))
 		showCols[0].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -484,7 +588,7 @@ func buildOutputSchema(
 		showCols[1].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 		showCols[1].SetName("flag")
 
-		for _, idx := range tblStuff.def.visibleIdxes {
+		for _, idx := range displayIdxes {
 			nCol := new(MysqlColumn)
 			if err = convertEngineTypeToMysqlType(ctx, tblStuff.def.colTypes[idx].Oid, nCol); err != nil {
 				return
@@ -902,6 +1006,12 @@ func appendBatchRowsAsSQLValues(
 		for _, colIdx := range tblStuff.def.visibleIdxes {
 			//seenCols[colIdx] = struct{}{}
 			vec := wrapped.batch.Vecs[colIdx]
+			if rowIdx >= vec.Length() {
+				return moerr.NewInternalErrorNoCtxf(
+					"data branch output batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d type=%s",
+					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(), vec.GetType().String(),
+				)
+			}
 			if vec.GetNulls().Contains(uint64(rowIdx)) {
 				row[colIdx] = nil
 				continue
@@ -910,8 +1020,7 @@ func appendBatchRowsAsSQLValues(
 			switch vec.GetType().Oid {
 			case types.T_datetime, types.T_timestamp, types.T_decimal64,
 				types.T_decimal128, types.T_time:
-				bb := vec.GetRawBytesAt(rowIdx)
-				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 			default:
 				if err = extractRowFromVector(
 					ctx, ses, vec, colIdx, row, rowIdx, false,

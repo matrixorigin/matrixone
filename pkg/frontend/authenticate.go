@@ -975,6 +975,7 @@ var (
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_ROLE_RULE:          0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1016,6 +1017,7 @@ var (
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogMoRoleRuleDDL,
 	}
 
 	//drop tables for the tenant
@@ -1035,6 +1037,7 @@ var (
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
+		`drop table if exists mo_catalog.mo_role_rule;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -5793,10 +5796,15 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow:
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask,
+		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
+		*tree.ShowRules:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
+	case *tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
+		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll)
 	case *tree.ShowAccounts:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
@@ -5897,12 +5905,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case
-		*tree.CloneTable,
+	case *tree.CloneTable,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
+		*tree.DataBranchMerge,
 		*tree.DataBranchDiff,
-		*tree.DataBranchMerge:
+		*tree.DataBranchPick:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
@@ -6906,7 +6914,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
 		case *tree.CloneTable, *tree.CloneDatabase,
-			*tree.DataBranchDiff, *tree.DataBranchMerge,
+			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil

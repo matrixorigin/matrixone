@@ -36,15 +36,13 @@ func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Pro
 		nulls.Add(c.vs[vecDst].GetGrouping(), uint64(dst))
 	} else {
 		nulls.Del(c.vs[vecDst].GetGrouping(), uint64(dst))
-		c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	}
 	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
 		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
 		return nil
-	} else {
-		nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
-		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	}
+	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 
 func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {

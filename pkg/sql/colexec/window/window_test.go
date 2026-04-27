@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
@@ -152,4 +153,28 @@ func newFunExpr() *plan.Expr {
 			},
 		},
 	}
+}
+
+func TestSearchLeftUnsupportedType(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(vec, []byte("abc"), false, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	_, err = searchLeft(0, 1, 0, vec, nil, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported type")
+}
+
+func TestSearchRightUnsupportedType(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	err := vector.AppendBytes(vec, []byte("abc"), false, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	_, err = searchRight(0, 1, 0, vec, nil, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported type")
 }

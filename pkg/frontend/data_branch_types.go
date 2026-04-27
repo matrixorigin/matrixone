@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -103,6 +104,7 @@ type tableStuff struct {
 		colTypes     []types.Type // all columns
 		visibleIdxes []int
 		pkColIdx     int
+		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
 		pkColIdxes   []int // expanded pk columns
 		pkKind       int
 	}
@@ -110,6 +112,10 @@ type tableStuff struct {
 	worker               *ants.Pool
 	hashmapAllocator     *branchHashmapAllocator
 	maxTombstoneBatchCnt int
+	// lcaReaderProbeMode is shared across copies of tableStuff in a single diff
+	// request. When enabled, LCA probing skips SQL and directly uses reader
+	// fallback.
+	lcaReaderProbeMode *atomic.Bool
 
 	retPool *retBatchList
 
@@ -117,10 +123,11 @@ type tableStuff struct {
 }
 
 type batchWithKind struct {
-	name  string
-	kind  string
-	side  int
-	batch *batch.Batch
+	name       string
+	kind       string
+	side       int
+	fromUpdate bool
+	batch      *batch.Batch
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)
@@ -133,7 +140,6 @@ type retBatchList struct {
 	tList []*batch.Batch
 
 	pinned map[*batch.Batch]struct{}
-	//debug  map[*batch.Batch]retBatchDebug
 
 	dataVecCnt    int
 	tombVecCnt    int
@@ -142,7 +148,8 @@ type retBatchList struct {
 }
 
 type compositeOption struct {
-	conflictOpt  *tree.ConflictOpt
-	outputSQL    bool
-	expandUpdate bool
+	conflictOpt           *tree.ConflictOpt
+	outputSQL             bool
+	expandUpdate          bool
+	preservePickConflicts bool
 }

@@ -172,6 +172,7 @@ mo_role
 mo_user_grant
 mo_role_grant
 mo_role_privs
+mo_role_rule
 mo_user_defined_function
 mo_mysql_compatibility_mode
 mo_stored_procedure

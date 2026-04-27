@@ -55,7 +55,7 @@ func TestBranchChangeHandleNextWithoutUnderlying(t *testing.T) {
 	require.Equal(t, engine.ChangesHandle_Hint(0), hint)
 }
 
-func TestBranchChangeHandleNextWithFilter(t *testing.T) {
+func TestBranchChangeHandleNextPassthrough(t *testing.T) {
 	ctx := context.Background()
 	bat := &batch.Batch{}
 	fake := &fakeChangesHandle{
@@ -63,37 +63,15 @@ func TestBranchChangeHandleNextWithFilter(t *testing.T) {
 		tombstone: &batch.Batch{},
 		hint:      engine.ChangesHandle_Tail_done,
 	}
-	var called bool
 	h := &BranchChangeHandle{
 		handle: fake,
-		filterData: func(b *batch.Batch) error {
-			require.Equal(t, bat, b)
-			called = true
-			return nil
-		},
 	}
 
 	data, tomb, hint, err := h.Next(ctx, nil)
 	require.NoError(t, err)
-	require.True(t, called)
 	require.Equal(t, bat, data)
 	require.Equal(t, fake.tombstone, tomb)
 	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
-}
-
-func TestBranchChangeHandleNextFilterError(t *testing.T) {
-	ctx := context.Background()
-	filterErr := moerr.NewInternalErrorNoCtx("filter failed")
-
-	h := &BranchChangeHandle{
-		handle: &fakeChangesHandle{data: &batch.Batch{}},
-		filterData: func(*batch.Batch) error {
-			return filterErr
-		},
-	}
-
-	_, _, _, err := h.Next(ctx, nil)
-	require.ErrorIs(t, err, filterErr)
 }
 
 func TestBranchChangeHandleNextUnderlyingError(t *testing.T) {
@@ -124,7 +102,18 @@ func TestCollectChangesRange(t *testing.T) {
 	end := types.BuildTS(2, 0)
 	fake := &fakeChangesHandle{}
 
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(fake, nil)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).DoAndReturn(
+		func(
+			ctx context.Context,
+			_ types.TS,
+			_ types.TS,
+			_ bool,
+			_ *mpool.MPool,
+		) (engine.ChangesHandle, error) {
+			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			return fake, nil
+		},
+	)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.NoError(t, err)
@@ -157,7 +146,18 @@ func TestCollectChangesPropagatesError(t *testing.T) {
 	end := types.BuildTS(3, 0)
 
 	expectedErr := moerr.NewInternalErrorNoCtx("collect failed")
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(nil, expectedErr)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).DoAndReturn(
+		func(
+			ctx context.Context,
+			_ types.TS,
+			_ types.TS,
+			_ bool,
+			_ *mpool.MPool,
+		) (engine.ChangesHandle, error) {
+			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			return nil, expectedErr
+		},
+	)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.Nil(t, handle)

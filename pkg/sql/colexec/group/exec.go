@@ -262,6 +262,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 				return err
 			}
 		}
+		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 
 	default:
 		// with group by.

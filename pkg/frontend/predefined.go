@@ -326,6 +326,13 @@ var (
     	index(creator),
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
+
+	MoCatalogMoRoleRuleDDL = fmt.Sprintf("create table %s.%s ("+
+		"role_id int signed,"+
+		"rule_name varchar(200),"+
+		"`rule` text,"+
+		"primary key(role_id, rule_name)"+
+		")", catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
 )
 
 // `mo_catalog` database system tables
@@ -487,8 +494,8 @@ var (
 		catalog.MOTaskDB)
 
 	MoTaskSysDaemonTaskDDL = fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50),
+				task_id                     bigint primary key auto_increment,
+				task_metadata_id            varchar(50),
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),
@@ -500,8 +507,52 @@ var (
 			last_heartbeat              timestamp,
 			create_at                   timestamp not null,
 			update_at                   timestamp not null,
-			end_at                      timestamp,
-			last_run                    timestamp,
-			details                     blob)`,
+				end_at                      timestamp,
+				last_run                    timestamp,
+				details                     blob)`,
 		catalog.MOTaskDB)
+
+	MoTaskSQLTaskDDL = fmt.Sprintf(`create table %s.%s (
+				task_id                     bigint primary key auto_increment,
+				task_name                   varchar(128) not null,
+				account_id                  int unsigned not null,
+				database_name               varchar(128) not null default '',
+				cron_expr                   varchar(128) not null default '',
+				`+"`timezone`"+`                  varchar(64) not null default 'UTC',
+				sql_body                    text not null,
+				gate_condition              text not null default '',
+				retry_limit                 int not null default 0,
+				timeout_seconds             int not null default 0,
+				enabled                     tinyint not null default 1,
+				next_fire_time              bigint not null default 0,
+				trigger_count               bigint not null default 0,
+				creator                     varchar(128) not null default '',
+				creator_user_id             int unsigned not null default 0,
+				creator_role_id             int unsigned not null default 0,
+				created_at                  timestamp not null default current_timestamp,
+				updated_at                  timestamp not null default current_timestamp,
+				unique key uk_task_name_account (task_name, account_id))`,
+		catalog.MOTaskDB, catalog.MOSQLTask)
+
+	MoTaskSQLTaskRunDDL = fmt.Sprintf(`create table %s.%s (
+				run_id                      bigint primary key auto_increment,
+				task_id                     bigint not null,
+				task_name                   varchar(128) not null,
+				account_id                  int unsigned not null,
+				scheduled_at                timestamp null,
+				started_at                  timestamp null,
+				finished_at                 timestamp null,
+				duration_seconds            double not null default 0,
+				status                      varchar(20) not null default 'RUNNING',
+				trigger_type                varchar(20) not null default 'SCHEDULED',
+				attempt_number              int not null default 1,
+				rows_affected               bigint not null default 0,
+				error_code                  int not null default 0,
+				error_message               text,
+				gate_result                 tinyint not null default 1,
+				runner_cn                   varchar(128) not null default '',
+				index idx_task_id (task_id),
+				index idx_status (status),
+				index idx_started_at (started_at))`,
+		catalog.MOTaskDB, catalog.MOSQLTaskRun)
 )

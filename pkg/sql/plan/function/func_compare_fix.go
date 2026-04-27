@@ -172,6 +172,20 @@ func getAsFloat64Slice(v *vector.Vector) []float64 {
 		return result
 	case types.T_float64:
 		return vector.MustFixedColNoTypeCheck[float64](v)
+	case types.T_decimal64:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
+		result := make([]float64, len(cols))
+		for i, val := range cols {
+			result[i] = types.Decimal64ToFloat64(val, t.Scale)
+		}
+		return result
+	case types.T_decimal128:
+		cols := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
+		result := make([]float64, len(cols))
+		for i, val := range cols {
+			result[i] = types.Decimal128ToFloat64(val, t.Scale)
+		}
+		return result
 	default:
 		// For other types, return empty slice (should not happen for numeric comparisons)
 		return nil
@@ -194,7 +208,8 @@ func isNumericType(t types.T) bool {
 	switch t {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64:
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
 		return true
 	default:
 		return false

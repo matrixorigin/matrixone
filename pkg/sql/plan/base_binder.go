@@ -43,6 +43,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 

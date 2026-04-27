@@ -378,17 +378,29 @@ func (exec *valueWindowExec) Free() {
 	if exec.resultVec != nil {
 		exec.resultVec.Free(exec.mg.Mp())
 	}
+	exec.frameValues = nil
+	exec.currentRowPosition = nil
 }
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
+	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
+	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	const sliceHeaderSize = 24
+	const ptrSize = 8
+	const entrySize = 32
+	const intSize = 8
+
+	size += int64(cap(exec.frameValues)) * sliceHeaderSize
 	for _, frame := range exec.frameValues {
+		size += int64(cap(frame)) * ptrSize
 		for _, entry := range frame {
 			if entry != nil {
-				size += int64(len(entry.data)) + 8 // data + isNull flag overhead
+				size += entrySize + int64(len(entry.data))
 			}
 		}
 	}
+	size += int64(cap(exec.currentRowPosition)) * intSize
 	return size
 }
 

@@ -92,6 +92,7 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.True(t, diffStmt.OutputOpt.Summary)
 	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
 
 	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
 	require.NoError(t, err)
@@ -101,6 +102,44 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt)
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
 }
 
 func getFuncExprsFromSelect(t *testing.T, sql string) []*tree.FuncExpr {
@@ -2012,6 +2051,14 @@ var (
 			input:  "alter role 'role1' rename to 'role2'",
 			output: "alter role role1 rename to role2",
 		}, {
+			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
+			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
+		}, {
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
+		}, {
+			input: "show rules on role role_name",
+		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
 			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
@@ -3428,6 +3475,111 @@ func TestSQLStringFmt(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 	}
+}
+
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create table task (task int, id int)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Equal(t, "task", string(createStmt.Table.ObjectName))
+	require.Len(t, createStmt.Defs, 2)
+}
+
+func TestTaskStatementsStillParse(t *testing.T) {
+	cases := []struct {
+		sql      string
+		expected any
+	}{
+		{sql: "create task parser_task as begin select 1; end", expected: &tree.CreateSQLTask{}},
+		{sql: "alter task parser_task suspend", expected: &tree.AlterSQLTask{}},
+		{sql: "drop task parser_task", expected: &tree.DropSQLTask{}},
+		{sql: "execute task parser_task", expected: &tree.ExecuteSQLTask{}},
+		{sql: "show task runs for parser_task limit 1", expected: &tree.ShowSQLTaskRuns{}},
+	}
+
+	for _, tc := range cases {
+		stmt, err := ParseOne(context.TODO(), tc.sql, 1)
+		require.NoError(t, err, tc.sql)
+		require.IsType(t, tc.expected, stmt, tc.sql)
+	}
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "interval(1, hour)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "interval(1, hour)")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
 }
 
 var (

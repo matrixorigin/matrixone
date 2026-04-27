@@ -1515,6 +1515,38 @@ func TestCopy(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // string null with stale varlena metadata
+		v := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(v, []byte("seed"), false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_varchar.ToType())
+		err = AppendBytes(w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 8)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // array null with stale varlena metadata
+		v := NewVec(types.T_array_float64.ToType())
+		err := AppendArray[float64](v, []float64{1, 2}, false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_array_float64.ToType())
+		err = AppendArray[float64](w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 16)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 }
 
 func TestCloneWindow(t *testing.T) {

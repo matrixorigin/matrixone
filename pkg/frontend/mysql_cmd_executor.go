@@ -2387,6 +2387,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
+		if _, ok := stmt.(*tree.DataBranchPick); ok {
+			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
 			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())
@@ -3312,6 +3315,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Inject rewrite rules hint before building UserInput (only if enabled)
+		if ses.rewriteEnabled.Load() {
+			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
+		}
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3352,6 +3359,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Inject rewrite rules hint before prepare wrapping (only if enabled)
+		if ses.rewriteEnabled.Load() {
+			sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
+		}
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"

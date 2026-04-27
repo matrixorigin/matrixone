@@ -16,7 +16,9 @@ package fifocache
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
@@ -164,4 +166,106 @@ func TestGhostQueue(t *testing.T) {
 	// 2 is in the ghost queue now
 	cache.Set(t.Context(), 3, 3, 1)
 	// 2 was evicted from ghost queue
+}
+
+// TestPostEvictRunsOutsideQueueLock verifies that postEvict callbacks execute
+// outside the queueLock by attempting a concurrent Set() while a postEvict is
+// blocked. If postEvict ran under the lock, the concurrent Set would deadlock.
+func TestPostEvictRunsOutsideQueueLock(t *testing.T) {
+	evictStarted := make(chan struct{})
+	evictContinue := make(chan struct{})
+	var evictCount atomic.Int32
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64) {
+			// Only the first eviction blocks; subsequent ones skip immediately.
+			// Cannot use sync.Once because it blocks callers until f() returns.
+			if evictCount.Add(1) == 1 {
+				close(evictStarted)
+				<-evictContinue
+			}
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	// Trigger eviction: inserting key=2 exceeds capacity, evicts key=1.
+	// postEvict for key=1 will block in the callback above.
+	go cache.Set(ctx, 2, 2, 1)
+	<-evictStarted
+	// postEvict is running outside queueLock. If the queueLock were still
+	// held, this concurrent Set would deadlock trying to enqueue.
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 3, 3, 1)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// success — concurrent Set() completed, queueLock was not held
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: concurrent Set blocked, postEvict likely holds queueLock")
+	}
+	close(evictContinue)
+}
+
+// TestSetLatencyUnderSlowPostEvict checks that the queueLock is released before
+// postEvict runs, so concurrent callers don't inherit slow callback latency.
+func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
+	slowDuration := 200 * time.Millisecond
+	evictStarted := make(chan struct{})
+	cache := New(
+		fscache.ConstCapacity(2),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64) {
+			select {
+			case evictStarted <- struct{}{}:
+			default:
+			}
+			time.Sleep(slowDuration)
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	cache.Set(ctx, 2, 2, 1)
+	// Trigger slow eviction in background
+	go cache.Set(ctx, 3, 3, 1) // evicts key=1, postEvict sleeps 200ms
+	<-evictStarted
+	// queueLock should be released now; used() only needs RLock.
+	start := time.Now()
+	_ = cache.used()
+	elapsed := time.Since(start)
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("used() took %v during slow postEvict; queueLock appears blocked", elapsed)
+	}
+}
+
+// TestPostEvictPanicDoesNotBlockDone verifies that if a postEvict callback
+// panics, the done channel still receives a value (via nested defer) and
+// doesn't deadlock. The panic itself propagates to the caller.
+func TestPostEvictPanicDoesNotBlockDone(t *testing.T) {
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil, nil,
+		func(_ context.Context, _ int, _ int, _ int64) {
+			panic("boom")
+		},
+	)
+	ctx := t.Context()
+	cache.Set(ctx, 1, 1, 1)
+	done := make(chan int64, 1)
+	// Synchronous Evict with capacityCut=1 forces eviction + postEvict panic.
+	// The panic propagates but the nested defer guarantees done is signaled.
+	assert.Panics(t, func() {
+		cache.Evict(ctx, done, 1)
+	})
+	select {
+	case <-done:
+		// success — done received despite panic
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: done channel not signaled after postEvict panic")
+	}
 }

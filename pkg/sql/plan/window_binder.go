@@ -143,8 +143,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if len(w.OrderBy) != 0 {
 			typ = &w.OrderBy[0].Expr.Typ
 			t := types.Type{Oid: types.T(typ.Id)}
-			if !t.IsNumericOrTemporal() {
-				return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE N PRECEDING/FOLLOWING frame requires exactly one ORDER BY expression, of numeric or temporal type")
+			isWinOrderFunc := function.GetFunctionIsWinOrderFunByName(funcName)
+			if !isWinOrderFunc && !t.IsNumericOrTemporal() {
+				return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 			}
 		}
 	case tree.Groups:
