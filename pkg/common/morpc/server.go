@@ -623,6 +623,9 @@ func (cs *clientSession) cleanSend() {
 			}
 			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
+			if f.oneWay {
+				f.Close()
+			}
 		default:
 			return
 		}

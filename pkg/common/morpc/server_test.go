@@ -170,6 +170,7 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 
 func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 	released := 0
+	futureReleased := 0
 	cs := newClientSession(
 		newServerMetrics("test"),
 		nil,
@@ -178,7 +179,7 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 		func(Message) { released++ },
 	)
 
-	f := newFuture(nil)
+	f := newFuture(func(*Future) { futureReleased++ })
 	f.init(RPCMessage{
 		Ctx:     context.Background(),
 		Message: newTestMessage(1),
@@ -188,6 +189,7 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 
 	cs.cleanSend()
 	require.Equal(t, 1, released)
+	require.Equal(t, 1, futureReleased)
 }
 
 func TestStreamServer(t *testing.T) {
