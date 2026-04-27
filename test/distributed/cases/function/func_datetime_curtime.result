@@ -1,20 +1,20 @@
 select curtime() is not null q1;
-➤ q1[12,4,0]  𝄀
+q1
 true
 select current_time()=curtime() q2;
-➤ q2[12,4,0]  𝄀
+q2
 true
 select curtime(3) is not null q3;
-➤ q3[12,4,0]  𝄀
+q3
 true
 select current_time(6) is not null q4;
-➤ q4[12,4,0]  𝄀
+q4
 true
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
 select current_time()=curtime() q from t1;
-➤ q[12,4,0]  𝄀
-true  𝄀
-true  𝄀
+q
+true
+true
 true
 drop table t1;
