@@ -762,6 +762,26 @@ func (c *Compile) lockTable() error {
 	return nil
 }
 
+func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
+	target.LockTableAtTheEnd = false
+	if !target.LockTable {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	if qry == nil {
+		return true
+	}
+	// For INSERT statements, pre-run table locking can stretch the target-table
+	// lock hold window. Keep the same table-lock semantics by letting LockOp
+	// acquire it when the first batch reaches the target pipeline and by
+	// falling back to EOF-time table locking if the child produces no rows.
+	if qry.StmtType == plan.Query_INSERT {
+		target.LockTableAtTheEnd = true
+		return false
+	}
+	return true
+}
+
 // func (c *Compile) compileAttachedScope(attachedPlan *plan.Plan) ([]*Scope, error) {
 // 	query := attachedPlan.Plan.(*plan.Plan_Query)
 // 	attachedScope, err := c.compileQuery(ctx, query.Query)
@@ -3629,7 +3649,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
 	for _, tbl := range n.LockTargets {
-		if tbl.LockTable {
+		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
 			if _, ok := c.lockTables[tbl.TableId]; !ok {
