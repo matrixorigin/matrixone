@@ -689,11 +689,9 @@ DROP TABLE decimal05;
 no such table decimal.decimal05
 DROP TABLE IF EXISTS decimal06;
 CREATE TABLE decimal06(a DECIMAL(39,10));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
 CREATE TABLE decimal06(b DECIMAL(40,39));
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 39 near "));";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display scale for decimal out of range (max = 30) at line 1 column 39 near "));";
 DROP TABLE decimal06;
-no such table decimal.decimal06
 DROP TABLE IF EXISTS decimal07;
 CREATE TABLE decimal07(a int PRIMARY KEY, b DECIMAL(38));
 INSERT INTO decimal07 VALUES(1, 3728193.3902);
@@ -765,11 +763,7 @@ ln(b + 20000)
 9.69720111828834
 85.40636946379534
 SELECT EXP(b) FROM decimal07;
-exp(b)
-Infinity
-1.0
-0.0
-Infinity
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'exp(3.728193e+06)'
 DROP TABLE decimal07;
 DROP TABLE IF EXISTS decimal08;
 CREATE TABLE decimal08(a DECIMAL(38,0));

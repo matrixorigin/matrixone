@@ -145,6 +145,14 @@ func TestDataBranchDiffColumns(t *testing.T) {
 func TestDecimalPrecisionUpTo65(t *testing.T) {
 	_, err := ParseOne(context.TODO(), "create table t (a decimal(65,30), b numeric(39,0))", 1)
 	require.NoError(t, err)
+
+	_, err = ParseOne(context.TODO(), "create table t (a decimal(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
+
+	_, err = ParseOne(context.TODO(), "create table t (a numeric(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
 }
 
 var (

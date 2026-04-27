@@ -2135,6 +2135,39 @@ func Test_strToDecimal256(t *testing.T) {
 	require.Equal(t, "1000000.0000", values[2].Format(4))
 }
 
+func TestDecimal256ToFloat64Cast(t *testing.T) {
+	ctx := context.Background()
+	fromType := types.New(types.T_decimal256, 65, 16)
+	toType := types.T_float64.ToType()
+	_, err := GetFunctionByName(ctx, "cast", []types.Type{fromType, toType})
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	inputVec := vector.NewVec(fromType)
+	defer inputVec.Free(mp)
+
+	value, err := types.ParseDecimal256(
+		"12421512141241241241241241849912840129402.1241124124241241",
+		65,
+		16,
+	)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(inputVec, []types.Decimal256{value}, nil, mp))
+
+	targetVec := vector.NewVec(toType)
+	defer targetVec.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(toType, mp).(*vector.FunctionResult[float64])
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	proc := testutil.NewProcess(t)
+	require.NoError(t, NewCast([]*vector.Vector{inputVec, targetVec}, result, proc, 1, nil))
+
+	resultValues := vector.MustFixedColNoTypeCheck[float64](result.GetResultVector())
+	require.InDelta(t, 1.2421512141241241e40, resultValues[0], 1e27)
+}
+
 func TestYearCastHelpers(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

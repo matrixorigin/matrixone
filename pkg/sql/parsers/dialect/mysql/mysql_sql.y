@@ -12428,6 +12428,10 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for decimal out of range (max = 30)")
+            goto ret1
+        }
         if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
@@ -12463,6 +12467,10 @@ decimal_type:
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
+        }
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for decimal out of range (max = 30)")
+            goto ret1
         }
         if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 65.")

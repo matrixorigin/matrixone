@@ -268,6 +268,10 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_datalink,
 	},
 
+	types.T_decimal256: {
+		types.T_float32, types.T_float64,
+	},
+
 	types.T_char: {
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -487,6 +491,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
 		err = decimal128ToOthers(proc.Ctx, s, *toType, result, length, selectList)
+	case types.T_decimal256:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		err = decimal256ToOthers(proc.Ctx, s, *toType, result, length)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
 		err = dateToOthers(proc, s, *toType, result, length, selectList)
@@ -1612,6 +1619,20 @@ func decimal128ToOthers(ctx context.Context,
 		return decimal128ToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
+}
+
+func decimal256ToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Decimal256],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	switch toType.Oid {
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return decimal256ToFloat(ctx, source, rs, length, 32)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return decimal256ToFloat(ctx, source, rs, length, 64)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal256 to %s", toType))
 }
 
 func strTypeToOthers(proc *process.Process,
@@ -3601,6 +3622,46 @@ func decimal128ToFloat[T constraints.Float](
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
+	var i uint64
+	l := uint64(length)
+	fromType := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			xStr := v.Format(fromType.Scale)
+			result, err := strconv.ParseFloat(xStr, bitSize)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
+			}
+			if bitSize == 32 {
+				result, _ = strconv.ParseFloat(xStr, 64)
+			}
+			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
+				if err = to.Append(T(result), false); err != nil {
+					return err
+				}
+			} else {
+				v2, err := floatNumToFixFloat(ctx, result, to, xStr)
+				if err != nil {
+					return err
+				}
+				if err = to.Append(T(v2), false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func decimal256ToFloat[T constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[T], length int, bitSize int) error {
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
