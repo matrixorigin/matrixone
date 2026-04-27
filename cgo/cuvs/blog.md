@@ -117,11 +117,11 @@ This is the bitset pre-filtering payoff: IVF-PQ stays flat at ~67 QPS across `np
 | Lists | 1000 / 4096 | 6000 | 10000 |
 | PQ Params | BITS_PER_CODE 8, M 192 | BITS_PER_CODE 8, M 192 | — |
 | Quantization | f32 / f16 | f16 | f32 |
-| GPU | 1× L40S (46 GB) | 8× L40S (sharded) | 1× L40S (46 GB) |
+| GPU | 1× L40S (48 GB) | 8× L40S (sharded) | 1× L40S (48 GB) |
 | Instance | `g6e.12xlarge` | `g6e.48xlarge` | `g6e.16xlarge` |
 | Host RAM / usable DB cache | — | — | 512 GB / ~256 GB |
 
-The 88M IVF-PQ deployment runs **sharded across 8 GPUs at ~3.5 GB VRAM each** — well under the 46 GB per-GPU budget — leaving headroom for concurrent workloads.
+The 88M IVF-PQ deployment runs **sharded across 8 GPUs at ~3.5 GB VRAM each** — well under the 48 GB per-GPU budget — leaving headroom for concurrent workloads.
 
 ## Supported Indexes
 
