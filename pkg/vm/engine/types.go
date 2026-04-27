@@ -1018,6 +1018,8 @@ type Relation interface {
 
 	CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (ChangesHandle, error)
 
+	CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error
+
 	TableDefs(context.Context) ([]TableDef, error)
 
 	GetExtraInfo() *api.SchemaExtra
@@ -1098,6 +1100,9 @@ type Relation interface {
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
+
+	// GetFlushTS returns the flush timestamp of the relation.
+	GetFlushTS(ctx context.Context) (types.TS, error)
 
 	// Reset resets the relation.
 	Reset(op client.TxnOperator) error

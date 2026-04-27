@@ -397,6 +397,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.ShuffleExpr = sourceArg.ShuffleExpr
 		op.CurrentShuffleIdx = int32(index)
 		op.SetInfo(&info)
 		return op
@@ -414,6 +415,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.ShuffleExpr = sourceArg.ShuffleExpr
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
@@ -544,7 +546,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
 		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			t.Channel = make(chan *dedupjoin.WorkerJoinMsg, maxParallel)
 		}
 		op.Channel = t.Channel
 		op.NumCPU = uint64(maxParallel)
@@ -566,6 +568,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
 	case vm.RightDedupJoin:
 		t := sourceOp.(*rightdedupjoin.RightDedupJoin)
@@ -1002,6 +1006,14 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			arg.OldColCapturePlaceholderIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			arg.OldColCaptureProbeIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			for i, capture := range node.DedupJoinCtx.OldColCaptureList {
+				arg.OldColCapturePlaceholderIdxList[i] = capture.BuildPlaceholder.ColPos
+				arg.OldColCaptureProbeIdxList[i] = capture.ProbeSource.ColPos
+			}
+		}
 	}
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
@@ -1327,7 +1339,12 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
@@ -1355,7 +1372,12 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax

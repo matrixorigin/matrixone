@@ -26,8 +26,10 @@ import (
 var _ engine.ChangesHandle = new(BranchChangeHandle)
 
 type BranchChangeHandle struct {
-	handle     engine.ChangesHandle
-	filterData func(bat *batch.Batch) error
+	handle             engine.ChangesHandle
+	snapshotReadPolicy engine.SnapshotReadPolicy
+	retainRowID        bool
+	pkFilter           *engine.PKFilter
 }
 
 func (b *BranchChangeHandle) Next(
@@ -45,17 +47,15 @@ func (b *BranchChangeHandle) Next(
 		return
 	}
 
-	if data, tombstone, hint, err = b.handle.Next(ctx, mp); err != nil {
-		return
+	ctx = engine.WithSnapshotReadPolicy(ctx, b.snapshotReadPolicy)
+	if b.retainRowID {
+		ctx = engine.WithRetainRowID(ctx, true)
+	}
+	if b.pkFilter != nil && len(b.pkFilter.Segments) > 0 {
+		ctx = engine.WithPKFilter(ctx, b.pkFilter)
 	}
 
-	if data != nil && b.filterData != nil {
-		if err = b.filterData(data); err != nil {
-			return
-		}
-	}
-
-	return data, tombstone, hint, nil
+	return b.handle.Next(ctx, mp)
 }
 
 func (b *BranchChangeHandle) Close() error {
@@ -74,8 +74,49 @@ var CollectChanges = func(
 ) (engine.ChangesHandle, error) {
 
 	if end.GE(&from) {
-		handle := new(BranchChangeHandle)
+		handle := &BranchChangeHandle{
+			snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+			retainRowID:        true,
+		}
 		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		ctx = engine.WithRetainRowID(ctx, true)
+		var err error
+		if handle.handle, err = rel.CollectChanges(
+			ctx, from, end, false, mp,
+		); err != nil {
+			return nil, err
+		}
+		return handle, nil
+	}
+
+	return nil, nil
+}
+
+// CollectChangesWithPKFilter is the same as CollectChanges but additionally
+// attaches a PK filter to the context so that CollectChanges can prune
+// objects and blocks via ZoneMap that do not match the requested PK values.
+// Only DATA BRANCH PICK uses this; other callers use the plain CollectChanges.
+// Row-level PK filtering is handled downstream by the data branch hashmap.
+var CollectChangesWithPKFilter = func(
+	ctx context.Context,
+	rel engine.Relation,
+	from types.TS,
+	end types.TS,
+	mp *mpool.MPool,
+	pkFilter *engine.PKFilter,
+) (engine.ChangesHandle, error) {
+
+	if end.GE(&from) {
+		handle := &BranchChangeHandle{
+			snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+			retainRowID:        true,
+			pkFilter:           pkFilter,
+		}
+		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		ctx = engine.WithRetainRowID(ctx, true)
+		if pkFilter != nil && len(pkFilter.Segments) > 0 {
+			ctx = engine.WithPKFilter(ctx, pkFilter)
+		}
 		var err error
 		if handle.handle, err = rel.CollectChanges(
 			ctx, from, end, false, mp,

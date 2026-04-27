@@ -3895,6 +3895,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
 		Default:           int64(0),
 	},
+	"sidecar_url": {
+		Name:              "sidecar_url",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("sidecar_url"),
+		Default:           "",
+	},
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {

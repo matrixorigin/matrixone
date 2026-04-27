@@ -32,6 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
+// debugPoisonOnFree, when enabled, fills freed memory with 0xDD bytes before
+// releasing it to the C allocator. This makes use-after-free bugs deterministically
+// visible in tests instead of silently reading stale-but-valid data.
+var debugPoisonOnFree atomic.Bool
+
+func EnableDebugPoisonOnFree()  { debugPoisonOnFree.Store(true) }
+func DisableDebugPoisonOnFree() { debugPoisonOnFree.Store(false) }
+
 // Mo's extremely simple memory pool.
 // Stats
 type MPoolStats struct {
@@ -608,6 +616,12 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 		return
 	}
 	sz := int64(hdr.allocSz)
+	if debugPoisonOnFree.Load() {
+		bs := unsafe.Slice((*byte)(ptr), sz)
+		for i := range bs {
+			bs[i] = 0xDD
+		}
+	}
 	profileRecordFree(uintptr(ptr), sz)
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)

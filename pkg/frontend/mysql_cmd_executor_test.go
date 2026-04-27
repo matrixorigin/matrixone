@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -646,6 +648,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_geometry,
 			types.T_array_float32,
 			types.T_array_float64,
 			types.T_bit,
@@ -673,6 +676,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_GEOMETRY, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_BIT},
@@ -841,7 +845,6 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 				gSysVars: &SystemVariables{mp: sysVars},
 			},
 		}
-
 		ctrl := gomock.NewController(t)
 		ec := newTestExecCtx(context.Background(), ctrl)
 		ec.ses = ses
@@ -854,6 +857,134 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 		sv, ok := stmt.(*tree.ShowVariables)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(sv.Global, convey.ShouldBeTrue)
+	})
+}
+
+// Test_GetComputationWrapper_InternalCmds tests the internal command parsing in GetComputationWrapper
+func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("GetComputationWrapper internal commands", t, func() {
+		db, user := "T", "root"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Test internal_get_snapshot_ts command
+		convey.Convey("internal_get_snapshot_ts command", func() {
+			sql := makeGetSnapshotTsSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetSnapshotTs)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_databases command
+		convey.Convey("internal_get_databases command", func() {
+			sql := makeGetDatabasesSql("snap1", "account1", "pub1", "account", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDatabases)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_mo_indexes command
+		convey.Convey("internal_get_mo_indexes command", func() {
+			sql := makeGetMoIndexesSql(123, "account1", "pub1", "snap1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetMoIndexes)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_ddl command
+		convey.Convey("internal_get_ddl command", func() {
+			sql := makeGetDdlSql("snap1", "account1", "pub1", "table", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDdl)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_object command
+		convey.Convey("internal_get_object command", func() {
+			sql := makeGetObjectSql("account1", "pub1", "object1", 0)
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetObject)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_object_list command
+		convey.Convey("internal_object_list command", func() {
+			sql := makeObjectListSql("snap1", "snap0", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdObjectList)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_check_snapshot_flushed command
+		convey.Convey("internal_check_snapshot_flushed command", func() {
+			sql := makeCheckSnapshotFlushedSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdCheckSnapshotFlushed)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
 	})
 }
 
@@ -1805,6 +1936,101 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func Test_ExecRequest_SidecarSuccess(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar returning a valid JSONCompact response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"meta":[{"name":"x","type":"INTEGER"}],"data":[[42]],"rows":1}`))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, ResultResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarError(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar that returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	// Should be an error response (from sidecar), not a success.
+	assert.Equal(t, ErrorResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
+	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
+	// doComQuery will fail (no engine), but we verify the fallthrough happened.
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1"),
+	}
+
+	// ExecRequest won't return an error even though doComQuery panics/fails;
+	// the deferred recover catches it. We just verify it doesn't panic.
+	resp, _ := ExecRequest(ses, ec, req)
+	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {

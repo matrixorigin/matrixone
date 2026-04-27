@@ -108,3 +108,34 @@ func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {
 	exec.Free()
 	restored.Free()
 }
+
+func TestMedianIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	exec, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 3, 2, 4}, nil, mp))
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	var buf bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &buf))
+
+	restored, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, 2.5, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+	results[0].Free(mp)
+	exec.Free()
+	restored.Free()
+}

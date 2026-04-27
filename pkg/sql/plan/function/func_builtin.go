@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,6 +240,9 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 			}
+			if typ.Oid == types.T_geometry {
+				return functionUtil.QuickStrToBytes("GEOMETRY"), nil
+			}
 
 			return functionUtil.QuickStrToBytes(ts), nil
 		}
@@ -256,6 +260,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
+			} else if typ.Oid == types.T_geometry {
+				ret = "GEOMETRY"
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -357,6 +363,34 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		typeName := "ENUM"
 		if typ.Oid == types.T_uint64 {
 			typeName = "SET"
+		} else if typ.Oid == types.T_geometry {
+			subtype := ""
+			sridDefined := false
+			var sridValue uint64
+			for idx, part := range strings.Split(enumStr, ";") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				if idx == 0 && !strings.HasPrefix(strings.ToUpper(part), "SRID=") {
+					subtype = strings.ToUpper(part)
+					continue
+				}
+				if len(part) >= len("SRID=") && strings.EqualFold(part[:5], "SRID=") {
+					parsed, parseErr := strconv.ParseUint(strings.TrimSpace(part[5:]), 10, 32)
+					if parseErr == nil {
+						sridDefined = true
+						sridValue = parsed
+					}
+				}
+			}
+			if subtype == "" {
+				subtype = "GEOMETRY"
+			}
+			if sridDefined {
+				subtype = fmt.Sprintf("%s SRID %d", subtype, sridValue)
+			}
+			return functionUtil.QuickStrToBytes(subtype), nil
 		} else if typ.Oid != types.T_enum {
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
@@ -1735,6 +1769,7 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 			ps.EncodeUuid(val)
 		}, nil
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_geometry,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
@@ -2150,6 +2185,7 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 			}
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_geometry,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
@@ -2241,7 +2277,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}

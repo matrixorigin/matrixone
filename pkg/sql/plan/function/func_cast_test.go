@@ -259,6 +259,77 @@ func Test_CastFromDecimal256(t *testing.T) {
 	}
 }
 
+func Test_CastVarcharToGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "cast varchar to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 1)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(1 1)"}, []bool{false}),
+		},
+		{
+			info: "cast geometry to geometry",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(2 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"POINT(2 2)"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+
+	require.True(t, IfTypeCastSupported(types.T_varchar, types.T_geometry))
+	require.True(t, IfTypeCastSupported(types.T_geometry, types.T_geometry))
+
+	t.Run("cast null to geometry", func(t *testing.T) {
+		nullVec := vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+		defer nullVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{nullVec, targetType}, result, proc, 1, nil)
+		require.NoError(t, err)
+
+		resultVec := result.GetResultVector()
+		require.Equal(t, types.T_geometry, resultVec.GetType().Oid)
+		require.True(t, resultVec.GetNulls().Contains(0))
+	})
+
+	t.Run("reject internal geometry payload syntax", func(t *testing.T) {
+		inputVec := testutil.MakeVarcharVector([]string{"SRID=4326;POINT(1 1)"}, nil, proc.Mp())
+		defer inputVec.Free(proc.Mp())
+
+		targetType := vector.NewConstNull(types.T_geometry.ToType(), 1, proc.Mp())
+		defer targetType.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), proc.Mp())
+		defer result.Free()
+
+		err := result.PreExtendAndReset(1)
+		require.NoError(t, err)
+		err = NewCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid geometry type")
+	})
+}
+
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
 
@@ -2280,6 +2351,38 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			want:     []string{"short", longString260, "medium length string"},
 			wantErr:  false,
 		},
+		{
+			name:     "VARCHAR to GEOMETRY with valid point",
+			inputs:   []string{"POINT(1 2)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			want:     []string{"POINT(1 2)"},
+			wantErr:  false,
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects invalid payload",
+			inputs:   []string{"INVALID"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects non-finite coordinates",
+			inputs:   []string{"POINT(NaN 1)"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
+		{
+			name:     "VARCHAR to GEOMETRY rejects malformed structure",
+			inputs:   []string{"POINT(1"},
+			fromType: types.T_varchar.ToType(),
+			toType:   types.T_geometry.ToType(),
+			wantErr:  true,
+			errMsg:   "invalid geometry payload",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2303,7 +2406,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2339,6 +2442,31 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+
+	inputVec := testutil.MakeVarcharVector([]string{"LINESTRING(0 0,1 1,2 2,3 3)"}, nil, mp)
+	defer inputVec.Free(mp)
+	inputVec.SetType(types.T_varchar.ToType())
+
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	to := vector.NewFunctionResultWrapper(types.T_geometry.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer to.Free()
+	err := to.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
 
 // makeJSONEncodedFromText parses JSON text strings and returns their bytejson-encoded form as []string for vector.
@@ -2647,5 +2775,119 @@ func emptySliceForCastTarget(oid types.T) any {
 		return []types.Decimal128{}
 	default:
 		return []int64{}
+	}
+}
+
+// TestDecimal64ToDecimal128FastPaths tests the optimized decimal64→128 cast
+// paths added in the decimal-perf PR.
+func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Negative decimal64 value (sign extension matters).
+	neg100 := types.Decimal64(^uint64(99)) // -100
+
+	cases := []tcTemp{
+		{
+			info: "d64→d128 same-scale with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{100, 200, 300, 400},
+					[]bool{false, true, false, true}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 2),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 2), false,
+				[]types.Decimal128{{B0_63: 100}, {}, {B0_63: 300}, {}},
+				[]bool{false, true, false, true}),
+		},
+		{
+			info: "d64→d128 same-scale negative values with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{neg100, 50},
+					[]bool{false, false}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{B0_63: ^uint64(99), B64_127: ^uint64(0)}, {B0_63: 50}},
+				nil),
+		},
+		{
+			info: "d64→d128 diff-scale no nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{12345},
+					nil),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{B0_63: 1234500}},
+				nil),
+		},
+		{
+			info: "d64→d128 diff-scale with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 2),
+					[]types.Decimal64{12345, 67890},
+					[]bool{true, false}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 38, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 38, 4), false,
+				[]types.Decimal128{{}, {B0_63: 6789000}},
+				[]bool{true, false}),
+		},
+		{
+			info: "d64→d128 narrowing width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{123456789},
+					nil),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 10, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 10, 4), false,
+				[]types.Decimal128{{B0_63: 123456789}},
+				nil),
+		},
+		{
+			info: "d64→d128 narrowing width with nulls",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 18, 4),
+					[]types.Decimal64{123456789, 987654321},
+					[]bool{false, true}),
+				NewFunctionTestInput(
+					types.New(types.T_decimal128, 10, 4),
+					[]types.Decimal128{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_decimal128, 10, 4), false,
+				[]types.Decimal128{{B0_63: 123456789}, {}},
+				[]bool{false, true}),
+		},
+	}
+
+	for _, tc := range cases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }

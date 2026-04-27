@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +27,7 @@ const (
 	UnsupportedIndexCondition = 0
 	EqualIndexCondition       = 1
 	NonEqualIndexCondition    = 2
+	SpatialIndexCondition     = 3
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -35,6 +35,27 @@ const (
 	// Value of 100 means we fetch at most 100x the original LIMIT value.
 	MaxOverFetchFactor = 100.0
 )
+
+var spatialIndexPredicateNames = map[string]struct{}{
+	"st_contains":   {},
+	"st_coveredby":  {},
+	"st_covers":     {},
+	"st_crosses":    {},
+	"st_disjoint":   {},
+	"st_equals":     {},
+	"st_intersects": {},
+	"st_overlaps":   {},
+	"st_touches":    {},
+	"st_within":     {},
+}
+
+var spatialIndexDistanceComparisonNames = map[string]struct{}{
+	"<":  {},
+	"<=": {},
+	"=":  {},
+	">=": {},
+	">":  {},
+}
 
 type specialIndexKind uint8
 
@@ -71,34 +92,19 @@ func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
 	}
 }
 
-// calculateAutoModeOverFetchFactor calculates the over-fetch factor for auto mode.
-// It uses a simplified selectivity-based formula: max(baseFactor, 1/Selectivity)
-//
-// Parameters:
-//   - originalLimit: The user-specified LIMIT value
-//   - stats: Statistics of the scan node
-//
-// Returns:
-//   - over-fetch factor (multiplier)
-func calculateAutoModeOverFetchFactor(originalLimit uint64, stats *plan.Stats) float64 {
-	// 1. Base factor: use existing conservative strategy (1.2x - 5.0x)
-	baseFactor := calculatePostFilterOverFetchFactor(originalLimit)
-
-	// 2. If no statistics available or selectivity is invalid, return base factor
-	// We check for selectivity > 1 and <= 0 as invalid/unsupported cases
-	if stats == nil || stats.Selectivity <= 0 || stats.Selectivity >= 1 {
-		return baseFactor
+// calculateFilteredPostModeOverFetchFactor returns a fixed, more conservative
+// multiplier for filtered post mode. It intentionally avoids statistics-based
+// heuristics so the behavior is predictable across plans.
+func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
+	if originalLimit < 50 {
+		return 5.0
+	} else if originalLimit < 100 {
+		return 2.0
+	} else if originalLimit < 200 {
+		return 1.5
+	} else {
+		return 1.3
 	}
-
-	// 3. Compensation factor: 1 / Selectivity
-	// E.g., if only 10% rows remain, we need 10x more candidates to satisfy LIMIT
-	selectivityFactor := 1.0 / stats.Selectivity
-
-	// 4. Combine factors: take maximum to maintain at least the base redundancy
-	adaptiveFactor := math.Max(baseFactor, selectivityFactor)
-
-	// 5. Cap at MaxOverFetchFactor to avoid excessive memory usage and candidate processing
-	return math.Min(adaptiveFactor, MaxOverFetchFactor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {
@@ -140,6 +146,128 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 
 	default:
 		return false
+	}
+}
+
+func checkSpatialIndexFilter(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	if _, ok := spatialIndexPredicateNames[catalog.ToLower(fn.Func.ObjName)]; !ok {
+		return checkSpatialIndexDistanceFilter(fn)
+	}
+	return checkSpatialIndexPredicateFilter(fn)
+}
+
+func checkSpatialIndexPredicateFilter(fn *plan.Function) *plan.ColRef {
+	if fn == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	if col := fn.Args[0].GetCol(); col != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return col
+	}
+	if col := fn.Args[1].GetCol(); col != nil && isRuntimeConstExpr(fn.Args[0]) {
+		return col
+	}
+	return nil
+}
+
+func checkSpatialIndexDistanceFilter(fn *plan.Function) *plan.ColRef {
+	if fn == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	if _, ok := spatialIndexDistanceComparisonNames[fn.Func.ObjName]; !ok {
+		return nil
+	}
+	if isRuntimeConstExpr(fn.Args[1]) {
+		if col := checkSpatialDistanceExpr(fn.Args[0]); col != nil {
+			return col
+		}
+	}
+	if isRuntimeConstExpr(fn.Args[0]) {
+		if col := checkSpatialDistanceExpr(fn.Args[1]); col != nil {
+			return col
+		}
+	}
+	return nil
+}
+
+func checkSpatialDistanceExpr(expr *plan.Expr) *plan.ColRef {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 || catalog.ToLower(fn.Func.ObjName) != "st_distance" {
+		return nil
+	}
+	return checkSpatialIndexPredicateFilter(fn)
+}
+
+func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
+	targetColPos, ok := node.TableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
+	if !ok {
+		return -1
+	}
+	for i := range node.FilterList {
+		col := checkSpatialIndexFilter(node.FilterList[i])
+		if col != nil && col.ColPos == targetColPos {
+			return int32(i)
+		}
+	}
+	return -1
+}
+
+func buildSpatialIndexColMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTableDef *plan.TableDef) map[[2]int32]*plan.Expr {
+	partColPos := node.TableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
+	pkColPos := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+	partKey := [2]int32{node.BindingTags[0], partColPos}
+	pkKey := [2]int32{node.BindingTags[0], pkColPos}
+	return map[[2]int32]*plan.Expr{
+		partKey: GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0),
+		pkKey:   GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1),
+	}
+}
+
+func exprUsesOnlyMappedCols(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		_, ok := projMap[[2]int32{ne.Col.RelPos, ne.Col.ColPos}]
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range ne.F.Args {
+			if !exprUsesOnlyMappedCols(arg, projMap) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, arg := range ne.List.List {
+			if !exprUsesOnlyMappedCols(arg, projMap) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_W:
+		if !exprUsesOnlyMappedCols(ne.W.WindowFunc, projMap) {
+			return false
+		}
+		for _, arg := range ne.W.PartitionBy {
+			if !exprUsesOnlyMappedCols(arg, projMap) {
+				return false
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			if !exprUsesOnlyMappedCols(order.Expr, projMap) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
 	}
 }
 
@@ -488,6 +616,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 				}
 			}
 		}
+
+		builder.stabilizeExactVectorSort(vecCtx)
 	}
 END0:
 	// 2. Regular Index Check
@@ -737,13 +867,18 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	indexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
+	spatialIndexes := make([]*IndexDef, 0, len(node.TableDef.Indexes))
 	for i := range node.TableDef.Indexes {
 		if node.TableDef.Indexes[i].IndexAlgo == "fulltext" || !node.TableDef.Indexes[i].TableExist {
 			continue
 		}
+		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
+			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
+			continue
+		}
 		indexes = append(indexes, node.TableDef.Indexes[i])
 	}
-	if len(indexes) == 0 {
+	if len(indexes) == 0 && len(spatialIndexes) == 0 {
 		return nodeID
 	}
 
@@ -755,6 +890,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// Apply unique/secondary indices if only indexed column is referenced
 	for i := range indexes {
 		ret := builder.tryIndexOnlyScan(indexes[i], node, colRefCnt, idxColMap, scanSnapshot)
+		if ret != -1 {
+			return ret
+		}
+	}
+	for i := range spatialIndexes {
+		ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
 		if ret != -1 {
 			return ret
 		}
@@ -786,6 +927,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, NonEqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
+		return retID
+	}
+
+	idxToChoose, filterIdx = builder.getIndexForSpatialCond(spatialIndexes, node)
+	if idxToChoose != -1 {
+		retID, _ := builder.applyIndexJoin(spatialIndexes[idxToChoose], node, SpatialIndexCondition, filterIdx, scanSnapshot)
 		return retID
 	}
 
@@ -1133,6 +1280,92 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	return idxTableNodeID
 }
 
+func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	if !isSpatialIndexDef(idxDef) || len(node.BindingTags) == 0 || len(node.FilterList) == 0 {
+		return -1
+	}
+
+	filterIdx := findSpatialIndexFilter(idxDef, node)
+	if filterIdx == -1 {
+		return -1
+	}
+
+	partColIdx, ok := node.TableDef.Name2ColIndex[indexPrimaryPartName(idxDef)]
+	if !ok {
+		return -1
+	}
+	pkColIdx, ok := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+	if !ok {
+		return -1
+	}
+
+	for i := range node.TableDef.Cols {
+		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] == 0 {
+			continue
+		}
+		if int32(i) != partColIdx && int32(i) != pkColIdx {
+			return -1
+		}
+	}
+
+	idxTag := builder.genNewBindTag()
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	if err != nil {
+		panic(err)
+	}
+	builder.addNameByColRef(idxTag, idxTableDef)
+
+	spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
+
+	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
+	for _, filter := range node.FilterList {
+		if !exprUsesOnlyMappedCols(filter, spatialColMap) {
+			return -1
+		}
+		newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(filter), spatialColMap))
+	}
+
+	idxScanInfo := plan.IndexScanInfo{
+		IsIndexScan:    true,
+		IndexName:      idxDef.IndexName,
+		BelongToTable:  node.ObjRef.ObjName,
+		Parts:          slices.Clone(idxDef.Parts),
+		IsUnique:       idxDef.Unique,
+		IndexTableName: idxDef.IndexTableName,
+	}
+
+	idxTableNodeID := builder.appendNode(&plan.Node{
+		NodeType:      plan.Node_TABLE_SCAN,
+		TableDef:      idxTableDef,
+		IndexScanInfo: idxScanInfo,
+		ObjRef:        idxObjRef,
+		ParentObjRef:  node.ObjRef,
+		FilterList:    newFilterList,
+		Limit:         node.Limit,
+		Offset:        node.Offset,
+		BindingTags:   []int32{idxTag},
+		ScanSnapshot:  node.ScanSnapshot,
+	}, builder.ctxByNode[node.NodeId])
+
+	for key, expr := range spatialColMap {
+		idxColMap[key] = expr
+	}
+	forceScanNodeStatsTP(idxTableNodeID, builder)
+	return idxTableNodeID
+}
+
+func (builder *QueryBuilder) getIndexForSpatialCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
+	for i, idxDef := range indexes {
+		if !isSpatialIndexDef(idxDef) {
+			continue
+		}
+		if filterIdx := findSpatialIndexFilter(idxDef, node); filterIdx != -1 {
+			return i, []int32{filterIdx}
+		}
+	}
+	return -1, nil
+}
+
 func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
 	// Apply single-column unique/secondary indices for non-equi expression
 	colPos2Idx := make(map[int32]int)
@@ -1172,6 +1405,9 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	var idxFilter *plan.Expr
 	if filterType == EqualIndexCondition {
 		idxFilter = builder.replaceEqualCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
+	} else if filterType == SpatialIndexCondition {
+		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
+		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
 	} else {
 		idxFilter = builder.replaceNonEqualCondition(node.FilterList[filterIdx[0]], idxTag, idxTableDef, numParts)
 	}

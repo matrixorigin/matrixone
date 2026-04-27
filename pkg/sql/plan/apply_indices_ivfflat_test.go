@@ -836,6 +836,173 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(true)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			if varName == "ivf_threads_search" {
+				return int64(4), nil
+			}
+			if varName == "probe_limit" {
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+
+	scanNode := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "test_table",
+			Name2ColIndex: map[string]int32{
+				"vec_col": 0,
+				"id":      1,
+			},
+			Cols: []*plan.ColDef{
+				{
+					Name: "vec_col",
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+				},
+				{
+					Name: "id",
+					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
+				},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "id",
+			},
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{
+				ObjName: "l2_distance",
+			},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 0},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{},
+					},
+				},
+			},
+		},
+		scanNode:      scanNode,
+		sortDirection: plan.OrderBySpec_DESC,
+	}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
+	multiTableIndex := &MultiTableIndex{
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				Parts:           []string{"vec_col"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
+		},
+	}
+
+	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(true)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			if varName == "ivf_threads_search" {
+				return int64(4), nil
+			}
+			if varName == "probe_limit" {
+				return int64(10), nil
+			}
+			return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+		},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+
+	scanNode := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "test_table",
+			Name2ColIndex: map[string]int32{
+				"vec_col": 0,
+				"id":      1,
+			},
+			Cols: []*plan.ColDef{
+				{
+					Name: "vec_col",
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+				},
+				{
+					Name: "id",
+					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
+				},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "id",
+			},
+		},
+	}
+
+	vecCtx := &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{
+				ObjName: "l2_distance",
+			},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 0},
+					},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{},
+					},
+				},
+			},
+		},
+		scanNode:      scanNode,
+		sortDirection: plan.OrderBySpec_DESC,
+		rankOption:    &plan.RankOption{Mode: "pre"},
+	}
+
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
+	multiTableIndex := &MultiTableIndex{
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				Parts:           []string{"vec_col"},
+				IndexAlgoParams: idxAlgoParams,
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
+		},
+	}
+
+	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
 // ============================================================================
 // Tests for shouldUseForceMode
 // ============================================================================

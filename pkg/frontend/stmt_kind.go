@@ -181,7 +181,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowAccounts,
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
+		*tree.ShowCcprSubscriptions,
 		*tree.ShowCreatePublications,
+		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors,
@@ -191,7 +193,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
@@ -238,6 +240,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase:
 		return true, nil
+	case *tree.DataBranchPick:
+		return false, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

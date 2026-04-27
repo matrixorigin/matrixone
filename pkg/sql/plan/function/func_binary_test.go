@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -5065,6 +5066,2676 @@ func TestCosineSimilarityArray(t *testing.T) {
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// L2 Distance
+func initStDistanceTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_distance point to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)", "POINT(-1 -1)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(3 4)", "POINT(2 3)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{5, 5},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance point to linestring",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance linestring to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 0)", "POINT(3 0)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance point to polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1, 0},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_distance polygon to point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)", "POINT(3 1)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance linestring to linestring",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance linestring to polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance polygon to linestring",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance polygon to polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"POLYGON((3 0,5 0,5 2,3 2,3 0))",
+					},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_distance null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(3 4)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStDistance(t *testing.T) {
+	testCases := initStDistanceTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StDistance)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStDistanceRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(0 0)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+}
+
+func TestStDistanceWithPolygonHoles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(3 3)",
+				"POINT(1.5 1.5)",
+				"POINT(1 1.5)",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0.5, 0}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1.25 1.5,1.75 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0, 0.25}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0.25}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOINT((0 0),(3 0))",
+				"POINT(2 0)",
+				"MULTIPOINT((0 0),(4 0))",
+				"MULTIPOINT((1 1),(5 3))",
+				"MULTIPOINT((0 0),(5 0))",
+				"POINT(1 1)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"LINESTRING(5 3,6 3)",
+				"MULTILINESTRING((0 0,2 0),(5 0,7 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((5 0,7 0,7 2,5 2,5 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(3 0)",
+				"POINT(2 0)",
+				"MULTIPOINT((0 0),(3 0))",
+				"LINESTRING(1 0,3 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((2 0),(8 0))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"POINT(5 1)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTILINESTRING((3 0,4 0),(8 0,9 0))",
+				"MULTIPOLYGON(((3 0,4 0,4 1,3 1,3 0)),((8 0,9 0,9 1,8 1,8 0)))",
+				"POLYGON((5 0,7 0,7 2,5 2,5 0))",
+			},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1, 1, 1, 0, 2, 1, 0, 1, 1, 1, 0}, []bool{false, false, false, false, false, false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func initStContainsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_contains basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(1 0)",
+						"POINT(0 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0.5 0.5,1.5 1.5)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, true, false, true, false, false, true, false, true, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_contains null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(5 5)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStContains(t *testing.T) {
+	testCases := initStContainsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StContains)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStContainsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,2 0)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StContains)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(5 0)",
+				"LINESTRING(0 0,2 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+				"POINT(1 1)",
+				"MULTIPOINT((0.5 0),(5 0))",
+				"MULTIPOINT((0.5 0.5),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(0 0)",
+				"LINESTRING(0 0,2 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"POINT(2 2)",
+				"MULTIPOINT((0 0),(5 0))",
+				"MULTIPOINT((0 0),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StContains)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StContains)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStContainsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection contains point on member line interior",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "collection contains collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not contain uncovered member",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryContains(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func initStWithinTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_within basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POINT(1 0)",
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(0.5 0.5,1.5 1.5)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, false, true, false, false, true, false, true, false, false, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_within null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(5 5)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStWithin(t *testing.T) {
+	testCases := initStWithinTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StWithin)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStWithinRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(5 5)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StWithin)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStWithinWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(5 0)",
+				"LINESTRING(0 0,2 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+				"POINT(1 1)",
+				"MULTIPOINT((0.5 0),(5 0))",
+				"MULTIPOINT((0.5 0.5),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POINT(0 0)",
+				"LINESTRING(0 0,2 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"POINT(2 2)",
+				"MULTIPOINT((0 0),(5 0))",
+				"MULTIPOINT((0 0),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StWithin)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStWithinWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStWithinWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StWithin)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStWithinWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "point within collection member line",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			want:  true,
+		},
+		{
+			name:  "collection within collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not within when one member is outside",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryWithin(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func initStIntersectsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_intersects basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 2)",
+						"POINT(0 1)",
+						"LINESTRING(-1 1,3 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(0 0,2 2)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POINT(2 2)",
+						"MULTIPOINT((0 1),(3 3))",
+						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
+						"LINESTRING(4 1,6 1)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"POINT(2 2)",
+						"LINESTRING(0 0,2 2)",
+						"LINESTRING(0 2,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((2 1,4 1,4 3,2 3,2 1))",
+						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
+						"SRID=4326;POINT(1 1)",
+						"POINT(1 1)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(1 -1,1 1)",
+						"POINT(4 1)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
+						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, true, true, true, true, false, true, true, false, true, true, true, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_intersects null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIntersects(t *testing.T) {
+	testCases := initStIntersectsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIntersects)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIntersectsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StIntersects)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StIntersects)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStIntersectsWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1.25 1.5,1.75 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StIntersects)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStIntersectsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StIntersects)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStIntersectsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection intersects point on member line",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "point intersects collection",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "nested collection intersects point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(0 0)",
+			want:  true,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryIntersects(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestStIntersectsRejectExcessiveGeometryCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	point := encodeGeometryPayload("POINT(0 0)", 0, false)
+	boundary := encodeGeometryPayload(buildNestedCollection(maxGeometryCollectionNestingDepth), 0, false)
+	intersects, err := geometryIntersects(boundary, point)
+	require.NoError(t, err)
+	require.True(t, intersects)
+
+	tooDeep := encodeGeometryPayload(buildNestedCollection(maxGeometryCollectionNestingDepth+1), 0, false)
+	_, err = geometryIntersects(tooDeep, point)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
+func initStDisjointTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_disjoint basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0 0,2 2)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(0 0,2 2)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POINT(2 2)",
+						"MULTIPOINT((0 1),(3 3))",
+						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
+						"LINESTRING(4 1,6 1)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(2 2)",
+						"POINT(1 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 2,2 0)",
+						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
+						"SRID=4326;POINT(1 1)",
+						"POINT(1 1)",
+						"MULTIPOINT((0 0),(1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(1 -1,1 1)",
+						"POINT(4 1)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
+						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, true, false, false, true, false, false, false, false, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_disjoint null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 1)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(2 2)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStDisjoint(t *testing.T) {
+	testCases := initStDisjointTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StDisjoint)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStDisjointRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StDisjoint)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)"},
+			[]bool{false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, true}, []bool{false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StDisjoint)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDisjointWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1.25 1.5,1.75 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, true}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDisjoint)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDisjointWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDisjoint)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDisjointWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection disjoint from outside point",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(1 1)",
+			want:  true,
+		},
+		{
+			name:  "point not disjoint from collection",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+		{
+			name:  "nested collection not disjoint from point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(0 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryDisjoint(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func initStTouchesTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_touches basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(1 0)",
+						"POINT(0 1)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POINT(0 0)",
+						"SRID=4326;POINT(0 1)",
+						"LINESTRING(-1 0,3 0)",
+						"LINESTRING(-1 1,3 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 2)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(2 0)",
+						"LINESTRING(0 0,1 1,0 0)",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(2 2,3 2)",
+						"LINESTRING(2 0,2 2)",
+						"LINESTRING(0 2,2 0)",
+						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, true, false, true, false, true, false, true, true, false, true, true, false, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_touches null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStTouches(t *testing.T) {
+	testCases := initStTouchesTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StTouches)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStTouchesRejectInvalidInput(t *testing.T) {
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("POINT(1 1)", 0, false)
+	touched, err := geometryTouches(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, touched)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+
+	proc := testutil.NewProcess(t)
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(0 1)", "POINT(1 1.5)", "POINT(3 3)"},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, holeInputs, holeExpect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStTouchesWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"LINESTRING(1 0,3 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(3 3))",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOINT((2 1),(7 7))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2 0,2 2)",
+				"MULTILINESTRING((0 0,1 0),(3 0,4 0))",
+				"POINT(2 1)",
+				"LINESTRING(2 2,3 2)",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOINT((0 0),(3 3))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((1 0),(3 3))",
+				"MULTIPOINT((1 1),(7 7))",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(1 -1,1 1)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"LINESTRING(0 0,2 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false}, []bool{false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StTouches)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStTouchesWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection touches point at member line endpoint",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(2 0)",
+			want:  true,
+		},
+		{
+			name:  "point touches collection",
+			left:  "POINT(4 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "nested collection touches point",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "POINT(2 0)",
+			want:  true,
+		},
+		{
+			name:  "collection does not touch point on member interior",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "POINT(3 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryTouches(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestStTouchesWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStTouchesWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((2 2.5,3 2.5,3 3.5,2 3.5,2 2.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StTouches)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func initStCrossesTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_crosses basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
+						"POINT(1 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 2)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(-1 1,3 1)",
+						"LINESTRING(0.5 1,1.5 1)",
+						"LINESTRING(-1 0,3 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(-1 1,3 1)",
+						"MULTIPOINT((1 0),(3 0))",
+						"LINESTRING(0 0,2 0)",
+						"MULTILINESTRING((0 0,2 2),(3 0,4 0))",
+						"MULTILINESTRING((0 0,2 0),(3 0,4 0))",
+						"LINESTRING(-1 1,3 1)",
+						"MULTILINESTRING((-1 1,3 1),(5 3,6 3))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(1 1)",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 2,2 0)",
+						"LINESTRING(2 0,2 2)",
+						"LINESTRING(1 0,3 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(-1 1,3 1)",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,2 0)",
+						"MULTIPOINT((1 0),(3 0))",
+						"MULTILINESTRING((0 2,2 0),(5 0,6 0))",
+						"LINESTRING(1 0,3 0)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"LINESTRING(-1 1,3 1)",
+						"SRID=4326;MULTILINESTRING((0 2,2 0),(5 0,6 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_crosses null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStCrosses(t *testing.T) {
+	testCases := initStCrossesTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StCrosses)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStCrossesRejectInvalidInput(t *testing.T) {
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("POLYGON((0 0,2 0,2 2,0 2,0 0))", 0, false)
+	crosses, err := geometryCrosses(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, crosses)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
+
+func TestStCrossesWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection crosses line via member point",
+			left:  "GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))",
+			right: "LINESTRING(0 0,2 0)",
+			want:  true,
+		},
+		{
+			name:  "line crosses collection polygon member",
+			left:  "LINESTRING(-1 1,3 1)",
+			right: "GEOMETRYCOLLECTION(POINT(9 9),POLYGON((0 0,2 0,2 2,0 2,0 0)))",
+			want:  true,
+		},
+		{
+			name:  "nested collection crosses multipoint via nested line",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(LINESTRING(0 0,2 0)),POINT(8 8))",
+			right: "MULTIPOINT((1 0),(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not cross line at endpoint touch",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(8 8))",
+			right: "LINESTRING(0 0,2 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCrosses(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestStCrossesWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCrosses)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func initStOverlapsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_overlaps basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(-1 1,3 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(0 0,4 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 2)",
+						"LINESTRING(0 0,2 0,3 1)",
+						"LINESTRING(3 0,0 0)",
+						"SRID=4326;LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(1 1)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(1 1)",
+						"POINT(1 1)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"LINESTRING(-1 1,3 1)",
+						"LINESTRING(1 0,4 0)",
+						"LINESTRING(0 0,3 0)",
+						"LINESTRING(1 0,3 0)",
+						"LINESTRING(2 0,4 0)",
+						"LINESTRING(0 2,2 0)",
+						"LINESTRING(1 0,3 0,4 -1)",
+						"LINESTRING(1 0,4 0)",
+						"SRID=4326;LINESTRING(1 0,4 0)",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
+						"POLYGON((1 1,3 1,3 3,1 3,1 1))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"SRID=4326;POINT(1 1)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, false, false, false, false, false, true, false, false, false, false, true, true, true, true, false, false, false, true, false},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_overlaps null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(1 0,4 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStOverlaps(t *testing.T) {
+	testCases := initStOverlapsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StOverlaps)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStOverlapsRejectInvalidInput(t *testing.T) {
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("LINESTRING(0 0,1 1)", 0, false)
+	overlaps, err := geometryOverlaps(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, overlaps)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
+
+func TestStOverlapsWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,3 0),(4 0,5 0))",
+				"LINESTRING(0 0,5 0)",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTIPOINT((0 0),(2 2),(4 4))",
+			},
+			[]bool{false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(1 0,4 0)",
+				"MULTILINESTRING((1 0,3 0),(6 0,7 0))",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"MULTIPOINT((1 1),(2 2))",
+				"MULTIPOINT((2 2),(3 3),(4 4))",
+			},
+			[]bool{false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true}, []bool{false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StOverlaps)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"POINT(1 1)",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTIPOINT((0 0),(1 1),(2 2))",
+				"MULTIPOINT((0 0),(1 1))",
+			},
+			[]bool{false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((2 0,4 0),(6 0,8 0))",
+				"POLYGON((-1 -1,7 -1,7 3,-1 3,-1 -1))",
+				"MULTIPOINT((1 1),(2 2))",
+				"POINT(1 1)",
+				"MULTIPOINT((1 1),(2 2))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+			},
+			[]bool{false, false, false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StOverlaps)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStOverlapsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection overlaps line through member line",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "LINESTRING(1 0,4 0)",
+			want:  true,
+		},
+		{
+			name:  "collection overlaps collection through member lines",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(1 0,4 0),POINT(9 9))",
+			want:  true,
+		},
+		{
+			name:  "nested collection overlaps multipoint through member multipoint",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT((0 0),(1 1))),POINT(8 8))",
+			right: "MULTIPOINT((1 1),(2 2))",
+			want:  true,
+		},
+		{
+			name:  "collection does not overlap equal member line",
+			left:  "GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "LINESTRING(0 0,3 0)",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryOverlaps(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestStOverlapsWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((3 1,5 1,5 5,3 5,3 1))",
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((2.25 2.25,3.75 2.25,3.75 3.75,2.25 3.75,2.25 2.25))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StOverlaps)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func initStEqualsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_equals basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"MULTIPOINT((0 0),(1 1))",
+						"MULTIPOINT((0 0),(1 1))",
+						"POINT(0 0)",
+						"MULTILINESTRING((0 0,2 0))",
+						"MULTILINESTRING((0 0,2 0),(3 0,4 0))",
+						"LINESTRING(0 0,2 0)",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;MULTIPOINT((0 0),(1 1))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(2 0,0 0)",
+						"LINESTRING(0 0,1 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((2 0,2 2,0 2,0 0,2 0))",
+						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+						"SRID=4326;POLYGON((2 0,2 2,0 2,0 0,2 0))",
+						"MULTIPOINT((1 1),(0 0))",
+						"MULTIPOINT((0 0),(2 2))",
+						"MULTIPOINT((0 0))",
+						"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+						"MULTILINESTRING((0 0,2 0),(3 1,4 1))",
+						"MULTILINESTRING((0 0,2 0))",
+						"MULTIPOLYGON(((4 0,6 0,6 2,4 2,4 0)),((0 0,2 0,2 2,0 2,0 0)))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 1,6 1,6 3,4 3,4 1)))",
+						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))",
+						"SRID=4326;MULTIPOINT((1 1),(0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, false, true, true, true, false, false, false, true, false, true, true, false, false, true, false, false, true, false, false, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_equals null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStEquals(t *testing.T) {
+	testCases := initStEqualsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StEquals)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStEqualsRejectInvalidInput(t *testing.T) {
+	invalidLeft := encodeGeometryPayload("GEOMETRYCOLLECTION(", 0, false)
+	validRight := encodeGeometryPayload("POINT(0 0)", 0, false)
+	equal, err := geometryEquals(invalidLeft, validRight)
+	require.Error(t, err)
+	require.False(t, equal)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
+
+func TestStEqualsWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection equals reordered collection",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not equal when member differs",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  false,
+		},
+		{
+			name:  "collection not equal to simple geometry",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0))",
+			right: "POINT(0 0)",
+			want:  false,
+		},
+		{
+			name:  "nested collections equal when matching items reorder",
+			left:  "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),GEOMETRYCOLLECTION(POINT(0 0)))",
+			want:  true,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryEquals(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestStEqualsWithPolygonHoles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				polygon,
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				polygon,
+				"POLYGON((0 0,6 0,6 6,0 6,0 0))",
+				"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StEquals)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func initStCoversTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_covers basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(2 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,3 0)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POINT(1 1)",
+						"POINT(0 1)",
+						"LINESTRING(0.5 0.5,1.5 1.5)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(-1 1,1 1)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(0 0,2 0)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, true, true, false, false, true, true, true, true, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_covers null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStCovers(t *testing.T) {
+	testCases := initStCoversTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StCovers)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStCoversRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,2 0)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCovers)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)", "POINT(1 1.5)"},
+			[]bool{false, false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StCovers)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoversWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(0 0,2 0)",
+				"POINT(5 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+				"POINT(1 1)",
+				"MULTIPOINT((0 0),(5 0))",
+				"MULTIPOINT((0 0),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCovers)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,1 0),(2 0,3 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(0 0,3 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"POINT(2 2)",
+				"MULTIPOINT((0 0),(3 0))",
+				"MULTIPOINT((0 0),(3 0))",
+			},
+			[]bool{false, false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false}, []bool{false, false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StCovers)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoversWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCovers)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoversWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCovers)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoversWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "collection covers point on member line",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			right: "POINT(3 0)",
+			want:  true,
+		},
+		{
+			name:  "collection covers collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			want:  true,
+		},
+		{
+			name:  "collection does not cover uncovered member",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCovers(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func initStCoveredByTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_coveredby basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(1 1)",
+						"POINT(2 0)",
+						"POINT(0 1)",
+						"POINT(3 3)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(0.5 0,1.5 0)",
+						"LINESTRING(0 0,2 0)",
+						"LINESTRING(-1 1,1 1)",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POINT(0 1)",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(0 0)",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POINT(0 0)",
+						"LINESTRING(0 0,2 0)",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, true, false, false, true, true, false, false, false, true, true, true},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_coveredby null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(0 0)"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStCoveredBy(t *testing.T) {
+	testCases := initStCoveredByTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StCoveredBy)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStCoveredByRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"GEOMETRYCOLLECTION("},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(0 0)"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, unsupportedInputs, expect, StCoveredBy)
+	succeed, info := tcc.Run()
+	require.False(t, succeed)
+	require.Contains(t, info, "invalid geometry payload")
+
+	holeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(3 3)", "POINT(1.5 1.5)", "POINT(1 1.5)"},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+				"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))",
+			},
+			[]bool{false, false, false}),
+	}
+	holeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc = NewFunctionTestCase(proc, holeInputs, holeExpect, StCoveredBy)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoveredByWithMultiGeometries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(0 0,2 0)",
+				"POINT(5 0)",
+				"MULTILINESTRING((0.5 0.5,1.5 0.5),(4.5 1,5.5 1))",
+				"MULTIPOLYGON(((0.5 0.5,1.5 0.5,1.5 1.5,0.5 1.5,0.5 0.5)),((4.5 0.5,5.5 0.5,5.5 1.5,4.5 1.5,4.5 0.5)))",
+				"POINT(1 1)",
+				"MULTIPOINT((0 0),(5 0))",
+				"MULTIPOINT((0 0),(4.5 1))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true, true, true, true, true}, []bool{false, false, false, false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCoveredBy)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+
+	negativeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(0 0,3 0)",
+				"POLYGON((1 0,5 0,5 2,1 2,1 0))",
+				"POINT(2 2)",
+				"MULTIPOINT((0 0),(3 0))",
+				"MULTIPOINT((0 0),(3 0))",
+			},
+			[]bool{false, false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"MULTILINESTRING((0 0,1 0),(2 0,3 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+				"MULTIPOINT((0 0),(1 1))",
+				"MULTILINESTRING((0 0,2 0),(4 0,6 0))",
+				"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+			},
+			[]bool{false, false, false, false, false}),
+	}
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false}, []bool{false, false, false, false, false})
+	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StCoveredBy)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoveredByWithPolygonHoleLines(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"LINESTRING(2.5 2.5,3.5 3.5)",
+				"LINESTRING(-1 1.5,5 1.5)",
+				"LINESTRING(1 1,2 1)",
+				"LINESTRING(1 1.5,2 1.5)",
+			},
+			[]bool{false, false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon, polygon},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true, false}, []bool{false, false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCoveredBy)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoveredByWithPolygonHolePolygons(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	polygon := "POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))"
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{
+				"POLYGON((4.5 4.5,5.5 4.5,5.5 5.5,4.5 5.5,4.5 4.5))",
+				"POLYGON((1 1,5 1,5 5,1 5,1 1))",
+				polygon,
+			},
+			[]bool{false, false, false}),
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{polygon, polygon, polygon},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, true}, []bool{false, false, false})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StCoveredBy)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStCoveredByWithGeometryCollections(t *testing.T) {
+	testCases := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{
+			name:  "point covered by collection member line",
+			left:  "POINT(3 0)",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0),POLYGON((10 0,12 0,12 2,10 2,10 0)))",
+			want:  true,
+		},
+		{
+			name:  "collection covered by collection when all members match",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(3 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  true,
+		},
+		{
+			name:  "collection not covered by when one member is outside",
+			left:  "GEOMETRYCOLLECTION(POINT(0 0),POINT(5 0))",
+			right: "GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			want:  false,
+		},
+	}
+	for _, tc := range testCases {
+		left := encodeGeometryPayload(tc.left, 0, false)
+		right := encodeGeometryPayload(tc.right, 0, false)
+		got, err := geometryCoveredBy(left, right)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
+	boolTests := []struct {
+		name  string
+		fn    fEvalFn
+		label string
+		left  string
+		right string
+	}{
+		{
+			name:  "contains",
+			fn:    StContains,
+			label: "ST_CONTAINS",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(3 0)",
+		},
+		{
+			name:  "within",
+			fn:    StWithin,
+			label: "ST_WITHIN",
+			left:  "SRID=4326;POINT(3 0)",
+			right: "SRID=3857;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+		},
+		{
+			name:  "intersects",
+			fn:    StIntersects,
+			label: "ST_INTERSECTS",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))",
+			right: "SRID=3857;POINT(1 0)",
+		},
+		{
+			name:  "disjoint",
+			fn:    StDisjoint,
+			label: "ST_DISJOINT",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(1 1)",
+		},
+		{
+			name:  "touches",
+			fn:    StTouches,
+			label: "ST_TOUCHES",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(2 0)",
+		},
+		{
+			name:  "crosses",
+			fn:    StCrosses,
+			label: "ST_CROSSES",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(1 0),POINT(8 8))",
+			right: "SRID=3857;LINESTRING(0 0,2 0)",
+		},
+		{
+			name:  "overlaps",
+			fn:    StOverlaps,
+			label: "ST_OVERLAPS",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(LINESTRING(0 0,3 0),POINT(8 8))",
+			right: "SRID=3857;LINESTRING(1 0,4 0)",
+		},
+		{
+			name:  "equals",
+			fn:    StEquals,
+			label: "ST_EQUALS",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;GEOMETRYCOLLECTION(LINESTRING(2 0,4 0),POINT(0 0))",
+		},
+		{
+			name:  "covers",
+			fn:    StCovers,
+			label: "ST_COVERS",
+			left:  "SRID=4326;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+			right: "SRID=3857;POINT(3 0)",
+		},
+		{
+			name:  "coveredby",
+			fn:    StCoveredBy,
+			label: "ST_COVEREDBY",
+			left:  "SRID=4326;POINT(3 0)",
+			right: "SRID=3857;GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))",
+		},
+	}
+
+	for _, tc := range boolTests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.left}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.right}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+			tcc := NewFunctionTestCase(proc, inputs, expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.False(t, succeed)
+			require.Contains(t, info, tc.label)
+			require.Contains(t, info, "different srids")
+		})
+	}
+
+	t.Run("distance", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=4326;MULTIPOINT((0 0),(3 0))"}, []bool{false}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"SRID=3857;POINT(2 0)"}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+		tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+		succeed, info := tcc.Run()
+		require.False(t, succeed)
+		require.Contains(t, info, "ST_DISTANCE")
+		require.Contains(t, info, "different srids")
+	})
+}
+
+func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "point to linestring requires two points",
+			run: func() error {
+				_, err := pointDistanceToLineString(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 1, y: 1}})
+				return err
+			},
+		},
+		{
+			name: "linestring to linestring requires two points each",
+			run: func() error {
+				_, err := lineStringDistanceToLineString(
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+					[]geometryPoint2D{{x: 2, y: 2}},
+				)
+				return err
+			},
+		},
+		{
+			name: "point to polygon requires three points",
+			run: func() error {
+				_, err := pointDistanceToPolygon(geometryPoint2D{x: 0, y: 0}, []geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}})
+				return err
+			},
+		},
+		{
+			name: "linestring to polygon validates both sides",
+			run: func() error {
+				_, err := lineStringDistanceToPolygon(
+					[]geometryPoint2D{{x: 0, y: 0}},
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+				)
+				return err
+			},
+		},
+		{
+			name: "polygon to polygon requires three points each",
+			run: func() error {
+				_, err := polygonDistanceToPolygon(
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}},
+					[]geometryPoint2D{{x: 0, y: 0}, {x: 1, y: 1}},
+				)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			require.Error(t, err)
+			require.True(t, strings.Contains(err.Error(), "invalid linestring payload") || strings.Contains(err.Error(), "invalid polygon payload"))
+		})
 	}
 }
 

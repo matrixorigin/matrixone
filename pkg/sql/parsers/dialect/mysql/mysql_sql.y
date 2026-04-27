@@ -234,6 +234,7 @@ import (
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
+    pickKeys *tree.PickKeys
     diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
@@ -364,13 +365,13 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE BRANCH LOG REVERT REBASE DIFF
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF PICK
 %token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+%token <str> PUBLICATION SUBSCRIPTION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE CCPR
 
 // MO table option
 %token <str> PROPERTIES
@@ -458,6 +459,7 @@ import (
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> GET_FORMAT
+%token <str> SRID
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -567,7 +569,7 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt drop_ccpr_subscription_stmt resume_ccpr_subscription_stmt pause_ccpr_subscription_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt remove_stage_files_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
@@ -579,6 +581,7 @@ import (
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
+%type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
@@ -599,7 +602,7 @@ import (
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
@@ -626,7 +629,7 @@ import (
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
-%type <str> integer_opt
+%type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
@@ -747,7 +750,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value sync_interval_opt
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -978,6 +981,8 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   resume_ccpr_subscription_stmt
+|   pause_ccpr_subscription_stmt
 |   branch_stmt
 
 backup_stmt:
@@ -1169,6 +1174,41 @@ snapshot_object_opt:
         $$ = tree.ObjectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
+|   TABLE ident ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+            AccountName: tree.Identifier($5.Compare()),
+            PubName: tree.Identifier($7.Compare()),
+        }
+    }
+|   DATABASE ident FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+            AccountName: tree.Identifier($4.Compare()),
+            PubName: tree.Identifier($6.Compare()),
+        }
+    }
+|   ACCOUNT FROM ident PUBLICATION ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            AccountName: tree.Identifier($3.Compare()),
+            PubName: tree.Identifier($5.Compare()),
         }
     }
 
@@ -4261,6 +4301,8 @@ show_stmt:
 |   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_publication_coverage_stmt
+|   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
@@ -4667,6 +4709,12 @@ show_publications_stmt:
 	$$ = &tree.ShowPublications{Like: $3}
     }
 
+show_publication_coverage_stmt:
+    SHOW PUBLICATION COVERAGE db_name
+    {
+	$$ = &tree.ShowPublicationCoverage{Name: $4}
+    }
+
 show_upgrade_stmt:
     SHOW UPGRADE
     {
@@ -4681,6 +4729,16 @@ show_subscriptions_stmt:
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
 	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
+    }
+
+show_ccpr_subscriptions_stmt:
+    SHOW CCPR SUBSCRIPTION STRING
+    {
+	    $$ = &tree.ShowCcprSubscriptions{TaskId: $4}
+    }
+|   SHOW CCPR SUBSCRIPTIONS
+    {
+	    $$ = &tree.ShowCcprSubscriptions{}
     }
 
 like_opt:
@@ -4824,6 +4882,7 @@ drop_ddl_stmt:
 |   drop_function_stmt
 |   drop_sequence_stmt
 |   drop_publication_stmt
+|   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
@@ -6955,6 +7014,23 @@ create_account_stmt:
             Comment,
     	)
     }
+|   CREATE ACCOUNT FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var FromUri = $4
+        var SubscriptionAccountName = $5.Compare()
+        var PubName = tree.Identifier($7.Compare())
+        var SyncInterval = $8
+        var cs = tree.NewCreateSubscription(
+            true,  // isDatabase
+            tree.Identifier(""),  // dbName (empty for account level)
+            "",  // tableName
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
+        $$ = cs
+    }
 
 view_list_opt:
     view_opt
@@ -7181,6 +7257,22 @@ create_publication_stmt:
             Comment,
         )
     }
+|   CREATE PUBLICATION not_exists_opt ident DATABASE '*' create_publication_accounts comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier("*")
+        var AccountsSet = $7
+        var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            nil,
+            AccountsSet,
+            Comment,
+        )
+    }
 
 create_publication_accounts:
     ACCOUNT ALL
@@ -7247,6 +7339,23 @@ stage_comment_opt:
         $$ = tree.StageComment{
             Exist: true,
             Comment: $3,
+        }
+    }
+
+
+sync_interval_opt:
+    {
+        $$ = int64(0)
+    }
+|   SYNC INTERVAL INTEGRAL
+    {
+        switch v := $3.(type) {
+        case int64:
+            $$ = v
+        case uint64:
+            $$ = int64(v)
+        default:
+            $$ = int64(0)
         }
     }
 
@@ -7392,6 +7501,28 @@ drop_publication_stmt:
         $$ = tree.NewDropPublication(ifExists, name)
     }
 
+drop_ccpr_subscription_stmt:
+    DROP CCPR SUBSCRIPTION exists_opt STRING
+    {
+        var ifExists = $4
+        var taskID = $5
+        $$ = tree.NewDropCcprSubscription(ifExists, taskID)
+    }
+
+resume_ccpr_subscription_stmt:
+    RESUME CCPR SUBSCRIPTION STRING
+    {
+        var taskID = $4
+        $$ = tree.NewResumeCcprSubscription(taskID)
+    }
+
+pause_ccpr_subscription_stmt:
+    PAUSE CCPR SUBSCRIPTION STRING
+    {
+        var taskID = $4
+        $$ = tree.NewPauseCcprSubscription(taskID)
+    }
+
 drop_stage_stmt:
     DROP STAGE exists_opt ident
     {
@@ -7413,7 +7544,15 @@ drop_snapshot_stmt:
    {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
-        $$ = tree.NewDropSnapShot(ifExists, name)
+        $$ = tree.NewDropSnapShot(ifExists, name, "", "")
+    }
+|   DROP SNAPSHOT exists_opt ident FROM ident PUBLICATION ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountName = tree.Identifier($6.Compare())
+        var pubName = tree.Identifier($8.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name, accountName, pubName)
     }
 
 drop_pitr_stmt:
@@ -8047,6 +8186,23 @@ create_database_stmt:
     	t.ToAccountOpt = $8
     	$$ = t
     }
+|   CREATE database_or_schema not_exists_opt db_name FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var DbName = tree.Identifier($4)
+        var FromUri = $6
+        var SubscriptionAccountName = $7.Compare()
+        var PubName = tree.Identifier($9.Compare())
+        var SyncInterval = $10
+        $$ = tree.NewCreateSubscription(
+            true,  // isDatabase
+            DbName,
+            "",
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
+    }
 
 subscription_opt:
     {
@@ -8263,12 +8419,13 @@ branch_stmt:
 	t.DatabaseName = tree.Identifier($5)
 	$$ = t
     }
-|   DATA BRANCH DIFF table_name AGAINST table_name diff_output_opt
+|   DATA BRANCH DIFF table_name AGAINST table_name diff_columns_opt diff_output_opt
     {
     	t := tree.NewDataBranchDiff()
     	t.TargetTable = *$4
     	t.BaseTable = *$6
-    	t.OutputOpt = $7
+    	t.Columns = $7
+    	t.OutputOpt = $8
     	$$ = t
     }
 |   DATA BRANCH MERGE table_name INTO table_name conflict_opt
@@ -8278,6 +8435,66 @@ branch_stmt:
     	t.DstTable = *$6
     	t.ConflictOpt = $7
     	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.Keys = $7
+    	t.ConflictOpt = $8
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.ConflictOpt = $12
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT ident AND ident pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = yylex.(*Lexer).GetDbOrTblName($9.Origin())
+    	t.BetweenTo = yylex.(*Lexer).GetDbOrTblName($11.Origin())
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
+|   DATA BRANCH PICK table_name INTO table_name BETWEEN SNAPSHOT STRING AND STRING pick_keys_clause conflict_opt
+    {
+    	t := tree.NewDataBranchPick()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.BetweenFrom = $9
+    	t.BetweenTo = $11
+    	t.Keys = $12
+    	t.ConflictOpt = $13
+    	$$ = t
+    }
+
+diff_columns_opt:
+    {
+        $$ = nil
+    }
+|   COLUMNS '(' column_list ')'
+    {
+        $$ = $3
     }
 
 diff_output_opt:
@@ -8337,6 +8554,22 @@ conflict_opt:
     {
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
+    	}
+    }
+
+pick_keys_clause:
+    KEYS '(' expression_list ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:     tree.PickKeysValues,
+    	    KeyExprs: $3,
+    	}
+    }
+|   KEYS '(' select_no_parens ')'
+    {
+    	$$ = &tree.PickKeys{
+    	    Type:   tree.PickKeysSubquery,
+    	    Select: $3,
     	}
     }
 
@@ -8464,6 +8697,29 @@ create_table_stmt:
 	t.SrcTable = *$7
 	t.ToAccountOpt = $8
 	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
+    {
+        var TableName = $5
+        var FromUri = $7
+        var SubscriptionAccountName = $8.Compare()
+        var PubName = tree.Identifier($10.Compare())
+        var SyncInterval = $11
+        var TableNameStr = string(TableName.ObjectName)
+        var DbName = tree.Identifier("")
+        // Extract database name from table name if explicitly specified
+        if TableName.ExplicitSchema {
+            DbName = TableName.SchemaName
+        }
+        $$ = tree.NewCreateSubscription(
+            false,  // isDatabase
+            DbName,
+            TableNameStr,
+            FromUri,
+            SubscriptionAccountName,
+            PubName,
+            SyncInterval,
+        )
     }
 
 load_param_opt_2:
@@ -9916,6 +10172,19 @@ column_attribute_elem:
         }
         $$ = tree.NewAttributeOnUpdate(expr)
     }
+|   SRID INTEGRAL
+    {
+        v, errStr := util.GetInt64($2)
+        if errStr != "" {
+            yylex.Error(errStr)
+            goto ret1
+        }
+        if v < 0 || v > 4294967295 {
+            yylex.Error("SRID should be between 0 and 4294967295")
+            goto ret1
+        }
+        $$ = tree.NewAttributeSRID(uint32(v))
+    }
 |   LOW_CARDINALITY
     {
 	    $$ = tree.NewAttributeLowCardinality()
@@ -11027,7 +11296,7 @@ function_call_aggregate:
 |   APPROX_COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -11102,7 +11371,7 @@ function_call_aggregate:
 |   COUNT '(' '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
-        es := tree.NewNumVal("*", "*", false, tree.P_char)
+        es := tree.NewNumVal("*", "*", false, tree.P_star)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -12869,7 +13138,7 @@ declare_stmt:
     }
 
 spatial_type:
-    GEOMETRY
+    spatial_type_name
     {
         locale := ""
         $$ = &tree.T{
@@ -12881,13 +13150,16 @@ spatial_type:
             },
         }
     }
-// |   POINT
-// |   LINESTRING
-// |   POLYGON
-// |   GEOMETRYCOLLECTION
-// |   MULTIPOINT
-// |   MULTILINESTRING
-// |   MULTIPOLYGON
+
+spatial_type_name:
+    GEOMETRY
+|   POINT
+|   LINESTRING
+|   POLYGON
+|   GEOMETRYCOLLECTION
+|   MULTIPOINT
+|   MULTILINESTRING
+|   MULTIPOLYGON
 
 // TODO:
 // need to encode SQL string
@@ -13341,6 +13613,7 @@ non_reserved_keyword:
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
+|   PICK
 |   POINT
 |   POLYGON
 |   PROCEDURE
@@ -13377,6 +13650,7 @@ non_reserved_keyword:
 |   PITR
 |   RECOVERY_WINDOW
 |   SPATIAL
+|   SRID
 |   START
 |   STATUS
 |   STORAGE

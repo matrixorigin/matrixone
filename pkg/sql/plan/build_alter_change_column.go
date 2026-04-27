@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -250,6 +251,10 @@ func buildColumnAndConstraint(
 		}
 	}
 
+	if err = checkIndexedColumnTypeChange(ctx.GetContext(), targetTableDef, oldCol, newCol); err != nil {
+		return nil, err
+	}
+
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
@@ -286,6 +291,44 @@ func buildColumnAndConstraint(
 	}
 
 	return newCol, nil
+}
+
+func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, oldCol, newCol *ColDef) error {
+	if oldCol == nil || newCol == nil || oldCol.Name == "" || oldCol.Typ.Id == newCol.Typ.Id {
+		return nil
+	}
+
+	if tableDef != nil && tableDef.Pkey != nil {
+		for _, partCol := range tableDef.Pkey.Names {
+			if partCol == oldCol.Name || partCol == newCol.Name {
+				if err := checkPrimaryKeyPartType(ctx, newCol.Typ, newCol.OriginName); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+
+	if tableDef != nil {
+		for _, indexInfo := range tableDef.Indexes {
+			for _, partCol := range indexInfo.Parts {
+				partCol = catalog.ResolveAlias(partCol)
+				if partCol != oldCol.Name && partCol != newCol.Name {
+					continue
+				}
+
+				if indexInfo.Unique {
+					return checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName)
+				}
+				if isGeometryPlanType(&newCol.Typ) {
+					return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", newCol.OriginName))
+				}
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 // Check if the column name is valid and conflicts with internal hidden columns

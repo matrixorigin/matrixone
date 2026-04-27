@@ -22,6 +22,7 @@ import (
 
 	goSort "sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -229,6 +231,7 @@ type CNObjectHandle struct {
 	base               *baseHandle
 
 	cache []*batch.Batch
+	blks  []types.Blockid
 	TSs   []types.TS
 }
 
@@ -240,17 +243,22 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		fs:          fs,
 		mp:          mp,
 		cache:       make([]*batch.Batch, 0),
+		blks:        make([]types.Blockid, 0),
 	}
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
+	blks := make([]types.Blockid, 0)
 	for i := 0; i < LoadParallism; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
-		stats := h.objects[h.objectOffsetCursor].ObjectStats
-		h.TSs = append(h.TSs, h.objects[h.objectOffsetCursor].CreateTime)
+		entry := h.objects[h.objectOffsetCursor]
+		stats := entry.ObjectStats
+		blk := uint16(h.blkOffsetCursor)
+		h.TSs = append(h.TSs, entry.CreateTime)
+		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(ctx, uint32(h.blkOffsetCursor), h.fs, &stats, h.base.changesHandle.scheduler)
 		jobs = append(jobs, job)
 		h.blkOffsetCursor++
@@ -259,7 +267,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.objectOffsetCursor++
 		}
 	}
-	for _, job := range jobs {
+	for i, job := range jobs {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
@@ -273,6 +281,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
 		h.cache = append(h.cache, bat)
+		h.blks = append(h.blks, blks[i])
 	}
 	h.base.changesHandle.readDuration += time.Since(t0)
 	return
@@ -294,20 +303,32 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		}
 	}
 	data := h.cache[0]
+	var blk *types.Blockid
+	if len(h.blks) > 0 {
+		blk = &h.blks[0]
+	}
 	ts := h.TSs[0]
 	t0 := time.Now()
 	if h.isTombstone {
-		updateCNTombstoneBatch(
+		if err = updateCNTombstoneBatch(
 			data,
 			ts,
+			blk,
+			h.base.changesHandle.retainRowID,
 			h.mp,
-		)
+		); err != nil {
+			return err
+		}
 	} else {
-		updateCNDataBatch(
+		if err = updateCNDataBatch(
 			data,
 			ts,
+			blk,
+			h.base.changesHandle.retainRowID,
 			h.mp,
-		)
+		); err != nil {
+			return err
+		}
 	}
 	h.base.changesHandle.updateDuration += time.Since(t0)
 	t0 = time.Now()
@@ -325,6 +346,9 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		return moerr.GetOkExpectedEOB()
 	}
 	h.cache = h.cache[1:]
+	if len(h.blks) > 0 {
+		h.blks = h.blks[1:]
+	}
 	h.TSs = h.TSs[1:]
 	srcLen := data.Vecs[0].Length()
 	sels := make([]int64, srcLen)
@@ -367,6 +391,7 @@ type AObjectHandle struct {
 	fs                 fileservice.FileService
 	mp                 *mpool.MPool
 	cache              []*batch.Batch
+	blks               []types.Blockid
 	p                  *baseHandle
 
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
@@ -401,6 +426,7 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		mp:          mp,
 		p:           p,
 		cache:       make([]*batch.Batch, 0),
+		blks:        make([]types.Blockid, 0),
 		blockPlans:  make(map[string]*aobjBlockPlan),
 	}
 	return handle
@@ -527,12 +553,12 @@ func (h *AObjectHandle) buildBlockPlan(
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	evaluableBlockCnt := 0
 	overlapBlockCnt := 0
+	pkf := h.p.changesHandle.pkFilter
+	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
 	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
 		blk := dataMeta.GetBlockMeta(uint32(i))
 		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
 		if !evaluable {
-			// Keep non-evaluable blocks as "read=true" (default). We can still
-			// preserve correctness by row-wise commit-ts filtering after read.
 			plan.nonEvaluableReasons[reason]++
 			if len(plan.nonEvaluableSamples) < 5 {
 				plan.nonEvaluableSamples = append(
@@ -540,10 +566,26 @@ func (h *AObjectHandle) buildBlockPlan(
 					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
 				)
 			}
+			// Even for non-evaluable blocks, PK pruning can still skip them.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+				if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
+					plan.shouldReadByBlks[i] = false
+					plan.prunedBlocks++
+				}
+			}
 			continue
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
+		// Apply PK pruning as a secondary filter on blocks that survived commit-TS check.
+		if overlap && pkf != nil && len(pkf.Segments) > 0 {
+			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
+			if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
+				plan.shouldReadByBlks[i] = false
+				overlap = false
+			}
+		}
 		if overlap {
 			overlapBlockCnt++
 		} else {
@@ -645,6 +687,7 @@ func calcPruneRate(pruned, total int) float64 {
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
+	blks := make([]types.Blockid, 0)
 	for i := 0; i < LoadParallism; i++ {
 		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
 		if targetErr != nil {
@@ -658,8 +701,9 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		stats := obj.ObjectStats
 		job := prefetchObjects(ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler)
 		jobs = append(jobs, job)
+		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
-	for _, job := range jobs {
+	for i, job := range jobs {
 		res := job.GetResult()
 		if res.Err != nil {
 			err = res.Err
@@ -673,6 +717,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
 		h.cache = append(h.cache, bat)
+		h.blks = append(h.blks, blks[i])
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
 	return
@@ -711,11 +756,20 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		}
 		h.currentBatch = h.cache[0]
 		h.cache = h.cache[1:]
+		var blk *types.Blockid
+		if len(h.blks) > 0 {
+			blk = &h.blks[0]
+			h.blks = h.blks[1:]
+		}
 		t0 := time.Now()
 		if h.isTombstone {
-			updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, h.mp)
+			if err = updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, blk, h.p.changesHandle.retainRowID, h.mp); err != nil {
+				return err
+			}
 		} else {
-			updateDataBatch(h.currentBatch, h.start, h.end, h.mp)
+			if err = updateDataBatch(h.currentBatch, h.start, h.end, blk, h.p.changesHandle.retainRowID, h.mp); err != nil {
+				return err
+			}
 		}
 		h.p.changesHandle.updateDuration += time.Since(t0)
 		h.batchLength = h.currentBatch.Vecs[0].Length()
@@ -1006,7 +1060,7 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], star
 		entry := iter.Item()
 		if checkTS(start, end, entry.Time) {
 			if !entry.Deleted && !tombstone {
-				fillInInsertBatch(&bat, entry, mp)
+				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
 			}
 			if entry.Deleted && tombstone {
 				if p.skipTS != nil {
@@ -1015,7 +1069,7 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], star
 						continue
 					}
 				}
-				fillInDeleteBatch(&bat, entry, mp)
+				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
 			}
 		}
 	}
@@ -1033,6 +1087,10 @@ func (p *baseHandle) getObjectEntries(
 	cnObj = make([]*objectio.ObjectEntry, 0)
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
 	tnKeySet := make(map[types.TS]struct{})
+	var pkf *engine.PKFilter
+	if p.changesHandle != nil {
+		pkf = p.changesHandle.pkFilter
+	}
 	for objIter.Next() {
 		entry := objIter.Item()
 		entryCopy := entry
@@ -1043,17 +1101,38 @@ func (p *baseHandle) getObjectEntries(
 			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
 				continue
 			}
+			// PK zonemap pruning: skip appendable objects whose sort-key range
+			// does not overlap with the requested PK values.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					continue
+				}
+			}
 			aobj = append(aobj, &entryCopy)
 		} else {
 			if entry.ObjectStats.GetCNCreated() {
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
+				if pkf != nil && len(pkf.Segments) > 0 {
+					zm := entry.SortKeyZoneMap()
+					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+						continue
+					}
+				}
 				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
 			if entry.CreateTime.GT(&end) {
 				continue
+			}
+			// PK zonemap pruning for TN non-appendable objects.
+			if pkf != nil && len(pkf.Segments) > 0 {
+				zm := entry.SortKeyZoneMap()
+				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					continue
+				}
 			}
 			// Keep every TN-produced non-appendable object in the create-time index so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
@@ -1111,10 +1190,10 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 		}
 		visited[name] = struct{}{}
 		// For snapshot-state range replay, we only need terminal objects that are
-		// still visible at range end. If a non-appendable object has already been
-		// deleted at or before end, keep following its delete-time chain instead
-		// of reading this transient intermediate object.
-		if !current.GetAppendable() && !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
+		// still visible at range end. If an object has already been deleted at or
+		// before end, keep following its delete-time chain instead of reading this
+		// transient intermediate object.
+		if !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
 			next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
 			if len(next) == 0 {
 				logutil.Warn(
@@ -1345,6 +1424,12 @@ type ChangeHandler struct {
 	// through delete-time linked TN non-appendable objects before replay starts.
 	enableDeleteChainResolve bool
 
+	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
+	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
+	pkFilter *engine.PKFilter
+
+	retainRowID bool
+
 	LogThreshold time.Duration
 }
 
@@ -1472,6 +1557,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -1539,6 +1625,7 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
+		retainRowID:    engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
 		if err == nil {
@@ -1768,6 +1855,8 @@ func NewChangesHandler(
 		primarySeqnum: primarySeqnum,
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
+		pkFilter:      engine.PKFilterFromContext(ctx),
+		retainRowID:   engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -1920,7 +2009,11 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	rowInfoMap := make(map[any][]rowInfo)
 
 	// Process data batch
-	pkVec := data.Vecs[primarySeqnum]
+	dataPKIdx := primarySeqnum
+	if len(data.Vecs) > 0 && data.Vecs[0] != nil && data.Vecs[0].GetType().Oid == types.T_Rowid {
+		dataPKIdx++
+	}
+	pkVec := data.Vecs[dataPKIdx]
 	tsVec := data.Vecs[len(data.Vecs)-1]
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 	for i := 0; i < pkVec.Length(); i++ {
@@ -1936,8 +2029,14 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	}
 
 	// Process tombstone batch
-	pkVec = tombstone.Vecs[0]
-	tsVec = tombstone.Vecs[1]
+	tombstonePKIdx := 0
+	tombstoneTSIdx := 1
+	if len(tombstone.Vecs) > 0 && tombstone.Vecs[0] != nil && tombstone.Vecs[0].GetType().Oid == types.T_Rowid {
+		tombstonePKIdx = 1
+		tombstoneTSIdx = 2
+	}
+	pkVec = tombstone.Vecs[tombstonePKIdx]
+	tsVec = tombstone.Vecs[tombstoneTSIdx]
 	timestamps = vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 	for i := 0; i < pkVec.Length(); i++ {
 		pkVal := vector.GetAny(pkVec, i, false)
@@ -2248,8 +2347,12 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 //	}
 //}
 
-func newDataBatchWithBatch(src *batch.Batch) (data *batch.Batch) {
+func newDataBatchWithBatch(src *batch.Batch, retainRowID bool) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
+	if retainRowID {
+		data.Attrs = append(data.Attrs, catalog.Row_ID)
+		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType()))
+	}
 	data.Attrs = append(data.Attrs, src.Attrs[2:]...)
 	for _, vec := range src.Vecs {
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
@@ -2328,32 +2431,53 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 
 }
 
-func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
+func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
 	if *bat == nil {
-		(*bat) = newDataBatchWithBatch(entry.Batch)
+		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID)
+	}
+	dstOffset := 0
+	if retainRowID {
+		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
+		dstOffset = 1
 	}
 	for i, vec := range entry.Batch.Vecs {
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
-		appendFromEntry(vec, (*bat).Vecs[i-2], int(entry.Offset), mp)
+		appendFromEntry(vec, (*bat).Vecs[i-2+dstOffset], int(entry.Offset), mp)
 	}
 	appendFromEntry(entry.Batch.Vecs[1], (*bat).Vecs[len((*bat).Vecs)-1], int(entry.Offset), mp)
 
 }
-func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, mp *mpool.MPool) {
+func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
 	pkVec := entry.Batch.Vecs[2]
 	if *bat == nil {
-		(*bat) = batch.NewWithSize(2)
-		(*bat).SetAttributes([]string{
-			objectio.TombstoneAttr_PK_Attr,
-			objectio.DefaultCommitTS_Attr,
-		})
-		(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
-		(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		vecCnt := 2
+		attrs := []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+		if retainRowID {
+			vecCnt = 3
+			attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+		}
+		(*bat) = batch.NewWithSize(vecCnt)
+		(*bat).SetAttributes(attrs)
+		if retainRowID {
+			(*bat).Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			(*bat).Vecs[1] = vector.NewVec(*pkVec.GetType())
+			(*bat).Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		} else {
+			(*bat).Vecs[0] = vector.NewVec(*pkVec.GetType())
+			(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		}
 	}
-	appendFromEntry(pkVec, (*bat).Vecs[0], int(entry.Offset), mp)
-	vector.AppendFixed((*bat).Vecs[1], entry.Time, false, mp)
+	pkIdx := 0
+	tsIdx := 1
+	if retainRowID {
+		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
+		pkIdx = 1
+		tsIdx = 2
+	}
+	appendFromEntry(pkVec, (*bat).Vecs[pkIdx], int(entry.Offset), mp)
+	vector.AppendFixed((*bat).Vecs[tsIdx], entry.Time, false, mp)
 }
 
 // PXU TODO
@@ -2392,19 +2516,132 @@ func prefetchObjects(
 	return
 }
 
-func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, skipTS map[types.TS]struct{}, sort bool, mp *mpool.MPool) {
-	bat.Vecs[0].Free(mp) // rowid
-	//bat.Vecs[2].Free(mp) // phyaddr
-	bat.Vecs = []*vector.Vector{bat.Vecs[1], bat.Vecs[2]}
-	bat.Attrs = []string{
-		objectio.TombstoneAttr_PK_Attr,
-		objectio.DefaultCommitTS_Attr}
-	applyTSFilterForBatch(bat, 1, skipTS, start, end)
-	if sort {
-		sortBatch(bat, 1, mp)
+func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {
+	if bat == nil || blk == nil || bat.RowCount() == 0 {
+		return nil
 	}
+	firstRowIDIdx := -1
+	rowIDCnt := 0
+	for i, vec := range bat.Vecs {
+		if vec != nil && vec.GetType().Oid == types.T_Rowid {
+			rowIDCnt++
+			if firstRowIDIdx == -1 {
+				firstRowIDIdx = i
+			}
+		}
+	}
+	if firstRowIDIdx >= 0 {
+		if rowIDCnt == 1 && firstRowIDIdx == 0 {
+			return nil
+		}
+		origVecs := bat.Vecs
+		rebuiltVecs := make([]*vector.Vector, 0, len(origVecs)-rowIDCnt+1)
+		rebuiltVecs = append(rebuiltVecs, origVecs[firstRowIDIdx])
+		for i, vec := range origVecs {
+			if i == firstRowIDIdx {
+				continue
+			}
+			if vec != nil && vec.GetType().Oid == types.T_Rowid {
+				vec.Free(mp)
+				continue
+			}
+			rebuiltVecs = append(rebuiltVecs, vec)
+		}
+		bat.Vecs = rebuiltVecs
+		if len(bat.Attrs) == len(origVecs) {
+			rebuiltAttrs := make([]string, 0, len(rebuiltVecs))
+			rebuiltAttrs = append(rebuiltAttrs, catalog.Row_ID)
+			for i, attr := range bat.Attrs {
+				if i == firstRowIDIdx {
+					continue
+				}
+				if origVecs[i] != nil && origVecs[i].GetType().Oid == types.T_Rowid {
+					continue
+				}
+				rebuiltAttrs = append(rebuiltAttrs, attr)
+			}
+			bat.Attrs = rebuiltAttrs
+		}
+		return nil
+	}
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	for i := 0; i < bat.RowCount(); i++ {
+		if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
+			rowIDVec.Free(mp)
+			return err
+		}
+	}
+	bat.Vecs = append([]*vector.Vector{rowIDVec}, bat.Vecs...)
+	if len(bat.Attrs) == len(bat.Vecs)-1 {
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+	}
+	return nil
 }
-func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
+
+func updateTombstoneBatch(bat *batch.Batch, start, end types.TS, skipTS map[types.TS]struct{}, sort bool, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if retainRowID {
+		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+			return err
+		}
+	}
+	var rowIDVec *vector.Vector
+	var pkVec *vector.Vector
+	var commitTSVec *vector.Vector
+	for _, vec := range bat.Vecs {
+		switch vec.GetType().Oid {
+		case types.T_Rowid:
+			if rowIDVec == nil {
+				rowIDVec = vec
+			} else {
+				vec.Free(mp)
+			}
+		case types.T_TS:
+			if commitTSVec == nil {
+				commitTSVec = vec
+			} else {
+				vec.Free(mp)
+			}
+		default:
+			if pkVec == nil {
+				pkVec = vec
+			} else {
+				vec.Free(mp)
+			}
+		}
+	}
+	if pkVec == nil || commitTSVec == nil || (retainRowID && rowIDVec == nil) {
+		return moerr.NewInternalErrorNoCtx("invalid tombstone batch layout for collect changes")
+	}
+	if retainRowID {
+		bat.Vecs = []*vector.Vector{rowIDVec, pkVec, commitTSVec}
+		bat.Attrs = []string{
+			catalog.Row_ID,
+			objectio.TombstoneAttr_PK_Attr,
+			objectio.DefaultCommitTS_Attr,
+		}
+		applyTSFilterForBatch(bat, 2, skipTS, start, end)
+	} else {
+		if rowIDVec != nil {
+			rowIDVec.Free(mp)
+		}
+		bat.Vecs = []*vector.Vector{pkVec, commitTSVec}
+		bat.Attrs = []string{
+			objectio.TombstoneAttr_PK_Attr,
+			objectio.DefaultCommitTS_Attr}
+		applyTSFilterForBatch(bat, 1, skipTS, start, end)
+	}
+	if sort {
+		sortIdx := len(bat.Vecs) - 1
+		return sortBatch(bat, sortIdx, mp)
+	}
+	return nil
+}
+func updateDataBatch(bat *batch.Batch, start, end types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if retainRowID {
+		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+			return err
+		}
+	}
 	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
 	var commitTSVec *vector.Vector
 	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
@@ -2414,7 +2651,14 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 	for i, vec := range bat.Vecs {
 		switch vec.GetType().Oid {
 		case types.T_Rowid:
-			vec.Free(mp)
+			if retainRowID {
+				filteredVecs = append(filteredVecs, vec)
+				if rebuildAttrs {
+					filteredAttrs = append(filteredAttrs, bat.Attrs[i])
+				}
+			} else {
+				vec.Free(mp)
+			}
 		case types.T_TS:
 			commitTSVec = vec
 			if rebuildAttrs {
@@ -2441,35 +2685,83 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 		bat.Attrs = filteredAttrs
 	}
 	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
+	return nil
 }
-func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
+func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: nil batch")
+	}
+	if retainRowID {
+		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+			return err
+		}
+	}
+	var rowid *vector.Vector
 	var pk *vector.Vector
 	for _, vec := range bat.Vecs {
-		if vec.GetType().Oid != types.T_Rowid && vec.GetType().Oid != types.T_TS {
-			pk = vec
-		} else {
+		switch vec.GetType().Oid {
+		case types.T_Rowid:
+			if retainRowID {
+				rowid = vec
+			} else {
+				vec.Free(mp)
+			}
+		case types.T_TS:
 			vec.Free(mp)
+		default:
+			pk = vec
 		}
+	}
+	if pk == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: tombstone batch missing pk vector")
+	}
+	if retainRowID && rowid == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: retainRowID set but rowid vector missing")
 	}
 	commitTS, err := vector.NewConstFixed(types.T_TS.ToType(), committs, pk.Length(), mp)
 	if err != nil {
-		return
+		return err
 	}
-	bat.Vecs = []*vector.Vector{pk, commitTS}
-	bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	if retainRowID {
+		bat.Vecs = []*vector.Vector{rowid, pk, commitTS}
+		bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	} else {
+		bat.Vecs = []*vector.Vector{pk, commitTS}
+		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
+	}
+	return nil
 }
-func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
+func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: nil batch")
+	}
 	for i, vec := range bat.Vecs {
 		if vec.GetType().Oid == types.T_TS {
 			vec.Free(mp)
 			bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
+			if len(bat.Attrs) == len(bat.Vecs)+1 {
+				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
+			}
+			break
 		}
+	}
+	if retainRowID {
+		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+			return err
+		}
+	}
+	if len(bat.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: data batch has no vectors after stripping commit-ts")
 	}
 	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
 	if err != nil {
-		return
+		return err
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
+	if len(bat.Attrs) == len(bat.Vecs)-1 {
+		bat.Attrs = append(bat.Attrs, objectio.DefaultCommitTS_Attr)
+	}
+	return nil
 }
 
 // TestGetObjectsFromCheckpointEntries exposes getObjectsFromCheckpointEntries for tests in other packages.

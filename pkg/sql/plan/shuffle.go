@@ -367,7 +367,10 @@ func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		//do not support shuffle on expr for now. will improve this in the future
+		// support shuffle on serial_full/serial function expressions used in secondary index joins
+		if exprImpl.F.Func.ObjName == "serial_full" || exprImpl.F.Func.ObjName == "serial" {
+			return nil, expr.Typ.Id
+		}
 		return nil, -1
 	case *plan.Expr_Col:
 		return exprImpl.Col, expr.Typ.Id
@@ -469,6 +472,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+
 	switch node.JoinType {
 	case plan.Node_DEDUP:
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.GetDedupJoinCtx().GetOldColList()) > 0 {
@@ -546,19 +550,33 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	leftHashCol, typ := GetHashColumn(expr0)
-	if leftHashCol == nil {
+	if leftHashCol == nil && typ == -1 {
 		return
 	}
-	rightHashCol, _ := GetHashColumn(expr1)
-	if rightHashCol == nil {
+	rightHashCol, rightTyp := GetHashColumn(expr1)
+	if rightHashCol == nil && rightTyp == -1 {
 		return
 	}
+
 	//for now ,only support integer and string type
+	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
-		determineShuffleType(leftHashCol, node, builder)
+		if leftHashCol != nil && !isExprBasedShuffle {
+			determineShuffleType(leftHashCol, node, builder)
+		}
+		// For expression-based shuffle (serial_full/serial in join condition):
+		// Force hash shuffle because range shuffle depends on column stats (min/max/ranges)
+		// which don't apply to expression results. Hash shuffle works universally.
+		if isExprBasedShuffle {
+			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+			if node.OnList[idx].Ndv < 0 {
+				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
+			}
+		}
+	default:
 	}
 
 	//recheck shuffle plan
@@ -667,7 +685,7 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 				case *plan.Expr_F:
 					for _, arg := range exprImpl.F.Args {
 						joinHashCol, _ := GetHashColumn(arg)
-						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+						if joinHashCol != nil && groupHashCol != nil && groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
 							node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
 							return
 						}

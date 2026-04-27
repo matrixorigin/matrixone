@@ -104,6 +104,7 @@ type tableStuff struct {
 		colTypes     []types.Type // all columns
 		visibleIdxes []int
 		pkColIdx     int
+		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
 		pkColIdxes   []int // expanded pk columns
 		pkKind       int
 	}
@@ -122,10 +123,11 @@ type tableStuff struct {
 }
 
 type batchWithKind struct {
-	name  string
-	kind  string
-	side  int
-	batch *batch.Batch
+	name       string
+	kind       string
+	side       int
+	fromUpdate bool
+	batch      *batch.Batch
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)
@@ -138,16 +140,18 @@ type retBatchList struct {
 	tList []*batch.Batch
 
 	pinned map[*batch.Batch]struct{}
-	//debug  map[*batch.Batch]retBatchDebug
 
 	dataVecCnt    int
 	tombVecCnt    int
 	dataTypes     []types.Type
 	tombstoneType types.Type
+	tombRowIDType types.Type
+	tombKeyType   types.Type
 }
 
 type compositeOption struct {
-	conflictOpt  *tree.ConflictOpt
-	outputSQL    bool
-	expandUpdate bool
+	conflictOpt           *tree.ConflictOpt
+	outputSQL             bool
+	expandUpdate          bool
+	preservePickConflicts bool
 }
