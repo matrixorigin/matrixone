@@ -1052,6 +1052,66 @@ var supportedStringBuiltIns = []FuncNew{
 					return AddTime
 				},
 			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varchar, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_char, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_text, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_text, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_datetime, 0, 6)
+				},
+				newOp: func() executeLogicOfOverload {
+					return AddTime
+				},
+			},
 		},
 	},
 
@@ -4124,7 +4184,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_time.ToType()
-					typ.Scale = 0
+					typ.Scale = 6
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -5307,7 +5367,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[2]
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddString

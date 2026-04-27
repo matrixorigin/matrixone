@@ -2888,20 +2888,11 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // timestamp
 		v := NewVec(types.T_timestamp.ToType())
-		// Use FromClockZone with UTC to create timestamp that will display correctly
-		// RowToString uses time.Local, so we need to create timestamp that accounts for local timezone
-		// If we want to display "1970-01-01 00:00:00" in local time, we need to create timestamp
-		// that represents that time in local timezone
 		utc := time.UTC
 		ts := types.FromClockZone(utc, 1970, 1, 1, 0, 0, 0, 0)
 		err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		// RowToString uses time.Local, so the displayed time will be in local timezone
-		// If local timezone is UTC+8, UTC time 1970-01-01 00:00:00 will display as 1970-01-01 08:00:00
-		// So we need to adjust the expected value based on local timezone offset
-		_, offset := time.Now().In(time.Local).Zone()
-		expectedHour := offset / 3600
-		expectedStr := fmt.Sprintf("1970-01-01 %02d:00:00", expectedHour)
+		expectedStr := time.Unix(0, 0).In(time.Local).Format("2006-01-02 15:04:05")
 		require.Equal(t, expectedStr, v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
