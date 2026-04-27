@@ -123,6 +123,8 @@ This is the bitset pre-filtering payoff: IVF-PQ stays flat at ~67 QPS across `np
 
 The 88M IVF-PQ deployment runs **sharded across 8 GPUs at ~3.5 GB VRAM each** — well under the 48 GB per-GPU budget — leaving headroom for concurrent workloads.
 
+**Why L40S and not A10?** Training requires the input vectors to be uploaded as a *single contiguous* GPU allocation. Even at `float16`, 10M × 768-D is ~15 GB for the input alone — and once the training working set (centroids, intermediate buffers, PQ codebook fitting) is layered on top, the allocation exceeds A10's 24 GB VRAM and OOMs, even though the final compressed index would fit comfortably. L40S's 48 GB is large enough to hold the contiguous training input plus working set, which is why it's the smallest GPU we can build on at this scale.
+
 ## Supported Indexes
 
 Our architecture now supports a suite of high-performance indexes, each with a clear sweet spot:
