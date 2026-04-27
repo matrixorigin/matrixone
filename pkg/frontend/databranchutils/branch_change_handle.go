@@ -26,7 +26,10 @@ import (
 var _ engine.ChangesHandle = new(BranchChangeHandle)
 
 type BranchChangeHandle struct {
-	handle engine.ChangesHandle
+	handle             engine.ChangesHandle
+	snapshotReadPolicy engine.SnapshotReadPolicy
+	retainRowID        bool
+	pkFilter           *engine.PKFilter
 }
 
 func (b *BranchChangeHandle) Next(
@@ -42,6 +45,14 @@ func (b *BranchChangeHandle) Next(
 	if b.handle == nil {
 		// collect nothing
 		return
+	}
+
+	ctx = engine.WithSnapshotReadPolicy(ctx, b.snapshotReadPolicy)
+	if b.retainRowID {
+		ctx = engine.WithRetainRowID(ctx, true)
+	}
+	if b.pkFilter != nil && len(b.pkFilter.Segments) > 0 {
+		ctx = engine.WithPKFilter(ctx, b.pkFilter)
 	}
 
 	return b.handle.Next(ctx, mp)
@@ -63,8 +74,12 @@ var CollectChanges = func(
 ) (engine.ChangesHandle, error) {
 
 	if end.GE(&from) {
-		handle := new(BranchChangeHandle)
+		handle := &BranchChangeHandle{
+			snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+			retainRowID:        true,
+		}
 		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		ctx = engine.WithRetainRowID(ctx, true)
 		var err error
 		if handle.handle, err = rel.CollectChanges(
 			ctx, from, end, false, mp,
@@ -92,8 +107,13 @@ var CollectChangesWithPKFilter = func(
 ) (engine.ChangesHandle, error) {
 
 	if end.GE(&from) {
-		handle := new(BranchChangeHandle)
+		handle := &BranchChangeHandle{
+			snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+			retainRowID:        true,
+			pkFilter:           pkFilter,
+		}
 		ctx = engine.WithSnapshotReadPolicy(ctx, engine.SnapshotReadPolicyVisibleState)
+		ctx = engine.WithRetainRowID(ctx, true)
 		if pkFilter != nil && len(pkFilter.Segments) > 0 {
 			ctx = engine.WithPKFilter(ctx, pkFilter)
 		}

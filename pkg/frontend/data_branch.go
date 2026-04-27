@@ -140,15 +140,19 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
-		retBatchPool.tombVecCnt = 1
+		retBatchPool.tombVecCnt = 3
 		retBatchPool.dataTypes = tblStuff.def.colTypes
 		retBatchPool.tombstoneType = tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+		retBatchPool.tombRowIDType = types.T_Rowid.ToType()
+		retBatchPool.tombKeyType = types.T_varbinary.ToType()
 	}
 
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
 			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
+			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType)
+			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType)
 			goto done
 		}
 
@@ -160,6 +164,12 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 		}
 		if !typeMatched(bat.Vecs[0], retBatchPool.tombstoneType) {
 			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone vec type mismatch, got %v expect %v", bat.Vecs[0].GetType(), retBatchPool.tombstoneType))
+		}
+		if !typeMatched(bat.Vecs[1], retBatchPool.tombRowIDType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone rowid vec type mismatch, got %v expect %v", bat.Vecs[1].GetType(), retBatchPool.tombRowIDType))
+		}
+		if !typeMatched(bat.Vecs[2], retBatchPool.tombKeyType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone key vec type mismatch, got %v expect %v", bat.Vecs[2].GetType(), retBatchPool.tombKeyType))
 		}
 
 		bat.CleanOnlyData()

@@ -132,4 +132,37 @@ data branch diff c3_tar against c3_src output count;
 drop table c3_src;
 drop table c3_tar;
 
+-- Case 4: merged branch inserts must remain INSERT after GC even if base updates same PK
+create table t1(a int, b int, primary key(a));
+insert into t1 values(1, 1), (2, 2), (3, 3);
+data branch create table t2 from t1;
+insert into t2 values(4, 4), (5, 5);
+
+data branch diff t2 against t1;
+data branch merge t2 into t1;
+data branch diff t2 against t1;
+
+update t1 set b = b + 1 where a = 4;
+data branch diff t2 against t1;
+
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.t2');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.t1');
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+
+data branch diff t2 against t1;
+
+drop table t1;
+drop table t2;
+
 drop database test_gc_diff;
