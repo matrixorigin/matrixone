@@ -141,6 +141,40 @@ func TestSplitSnapshotScanShards(t *testing.T) {
 	require.Equal(t, relData.DataCnt(), totalBlocks)
 }
 
+// TestSplitSnapshotScanShards_TombstoneInheritance pins the ordering invariant
+// that callers must AttachTombstones BEFORE splitting. BlockListRelData.DataSlice
+// snapshots the parent's tombstones pointer at split time, so attaching
+// afterwards leaves shards with nil tombstones and silently drops tombstone
+// filtering in the parallel snapshot scan.
+func TestSplitSnapshotScanShards_TombstoneInheritance(t *testing.T) {
+	tombstones := &recordingTombstoner{}
+
+	t.Run("attach before split: shards inherit tombstones", func(t *testing.T) {
+		relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*4 + 1)
+		require.NoError(t, relData.AttachTombstones(tombstones))
+		shards := splitSnapshotScanShards(relData, 4)
+		require.Greater(t, len(shards), 1)
+		for i, shard := range shards {
+			require.NotNil(t, shard.GetTombstones(), "shard[%d] missing tombstones", i)
+			require.Same(t, tombstones, shard.GetTombstones(),
+				"shard[%d] tombstones pointer mismatch", i)
+		}
+	})
+
+	t.Run("attach after split: shards do NOT see tombstones", func(t *testing.T) {
+		// This locks the documented hazard: if a future caller reorders these
+		// two operations, this test starts passing the inverse assertion below
+		// and surfaces the regression.
+		relData := newTestSnapshotRelData(snapshotScanMinBlocksPerReader*4 + 1)
+		shards := splitSnapshotScanShards(relData, 4)
+		require.NoError(t, relData.AttachTombstones(tombstones))
+		for i, shard := range shards {
+			require.Nil(t, shard.GetTombstones(),
+				"shard[%d] should NOT have tombstones when attached after split", i)
+		}
+	})
+}
+
 func TestAttrsToSeqnums(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
