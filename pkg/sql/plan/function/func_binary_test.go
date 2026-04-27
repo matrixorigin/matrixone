@@ -1090,6 +1090,37 @@ func TestFormat2Or3(t *testing.T) {
 	}
 }
 
+func TestFormatWithNullArgs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Cover the 2-arg null branch.
+	tc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456", "12332.1"}, []bool{true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"4", "0"}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", ""}, []bool{true, true}),
+		FormatWith2Args,
+	)
+	ok, info := tc2.Run()
+	require.True(t, ok, fmt.Sprintf("format 2-arg null case failed: %s", info))
+
+	// Cover the 3-arg null locale branch and the null input branch.
+	tc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456", "12332.1"}, []bool{false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"4", "0"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "ar_SA"}, []bool{true, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"12,332.1235", ""}, []bool{false, true}),
+		FormatWith3Args,
+	)
+	ok, info = tc3.Run()
+	require.True(t, ok, fmt.Sprintf("format 3-arg null case failed: %s", info))
+}
+
 func initFromUnixTimeTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
 	d2, _ := types.ParseDatetime("2016-01-01 00:00:00", 6)
@@ -1183,6 +1214,137 @@ func TestFromUnixTime(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestFromUnixTimeNullAndRange(t *testing.T) {
+	proc := newTmpProcess(t)
+	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
+
+	t.Run("int64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -1, 1}, []bool{false, false, true}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1, d1}, []bool{false, true, true}),
+			FromUnixTimeInt64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 null/range case failed: %s", info))
+	})
+
+	t.Run("uint64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, uint64(maxUnixTimestampInt + 1)}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1}, []bool{false, true}),
+			FromUnixTimeUint64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 null/range case failed: %s", info))
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0, float64(maxUnixTimestampInt) + 1}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1}, []bool{false, true}),
+			FromUnixTimeFloat64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 null/range case failed: %s", info))
+	})
+}
+
+func TestFromUnixTimeFormatValidation(t *testing.T) {
+	proc := newTmpProcess(t)
+
+	t.Run("int64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeInt64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 format-null case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeInt64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 dynamic format case failed: %s", info))
+	})
+
+	t.Run("uint64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeUint64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 format-null case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeUint64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 dynamic format case failed: %s", info))
+	})
+
+	t.Run("float64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 format-null case failed: %s", info))
+
+		validCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d %H:%i:%s"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1970-01-01 00:00:00"}, []bool{false}),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info := validCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 valid format case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 dynamic format case failed: %s", info))
+	})
 }
 
 func initStrCmpTestCase() []tcTemp {
