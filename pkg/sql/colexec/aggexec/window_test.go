@@ -365,6 +365,14 @@ func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
 	mp := hackAggMemoryManager()
 	defer mp.Mp().Free(nil)
 
+	assertFloatSlice := func(t *testing.T, got, want []float64) {
+		t.Helper()
+		require.Len(t, got, len(want))
+		for i := range want {
+			require.InDelta(t, want[i], got[i], 1e-12)
+		}
+	}
+
 	t.Run("cume_dist", func(t *testing.T) {
 		execI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
 		require.NoError(t, err)
@@ -384,10 +392,6 @@ func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
 		}
 
 		// Leave one empty group to exercise the skip branch in Flush.
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
 		data, err := exec.marshal()
 		require.NoError(t, err)
 		encoded := &EncodedAgg{}
@@ -397,8 +401,15 @@ func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
 		require.NoError(t, err)
 		clone := cloneI.(*cumeDistWindowExec)
 		defer clone.Free()
-		require.NoError(t, clone.GroupGrow(len(encoded.Groups)))
 		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+		require.Len(t, clone.groups, len(encoded.Groups))
+		require.Equal(t, []int64{1, 3, 4}, clone.groups[0])
+
+		cloneResults, err := clone.Flush()
+		require.NoError(t, err)
+		require.Len(t, cloneResults, 1)
+		cloneValues := vector.MustFixedColNoTypeCheck[float64](cloneResults[0])
+		assertFloatSlice(t, cloneValues, []float64{2.0 / 3.0, 2.0 / 3.0, 1, 0})
 
 		otherI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
 		require.NoError(t, err)
@@ -434,11 +445,6 @@ func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
 		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{vec}))
 
 		// A singleton group should take the totalRows == 1 path.
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		require.Equal(t, 2, results[0].Length())
-
 		data, err := exec.marshal()
 		require.NoError(t, err)
 		encoded := &EncodedAgg{}
@@ -448,8 +454,15 @@ func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
 		require.NoError(t, err)
 		clone := cloneI.(*percentRankExec)
 		defer clone.Free()
-		require.NoError(t, clone.GroupGrow(len(encoded.Groups)))
 		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+		require.Len(t, clone.groups, len(encoded.Groups))
+		require.Equal(t, []int64{7}, clone.groups[0])
+
+		cloneResults, err := clone.Flush()
+		require.NoError(t, err)
+		require.Len(t, cloneResults, 1)
+		cloneValues := vector.MustFixedColNoTypeCheck[float64](cloneResults[0])
+		assertFloatSlice(t, cloneValues, []float64{0, 0})
 
 		otherI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
 		require.NoError(t, err)

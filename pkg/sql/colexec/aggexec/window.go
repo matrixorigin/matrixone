@@ -299,7 +299,7 @@ func (exec *cumeDistWindowExec) marshal() ([]byte, error) {
 }
 
 func (exec *cumeDistWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
+	if len(groups) > 0 {
 		exec.groups = make([][]int64, len(groups))
 		for i := range exec.groups {
 			if len(groups[i]) > 0 {
@@ -444,7 +444,7 @@ func (exec *percentRankExec) marshal() ([]byte, error) {
 }
 
 func (exec *percentRankExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
-	if len(exec.groups) > 0 {
+	if len(groups) > 0 {
 		exec.groups = make([][]int64, len(groups))
 		for i := range exec.groups {
 			if len(groups[i]) > 0 {
