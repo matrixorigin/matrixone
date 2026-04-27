@@ -361,6 +361,115 @@ func TestCumeDistAndPercentRankExec(t *testing.T) {
 	})
 }
 
+func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
+	mp := hackAggMemoryManager()
+	defer mp.Mp().Free(nil)
+
+	t.Run("cume_dist", func(t *testing.T) {
+		execI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		exec := execI.(*cumeDistWindowExec)
+		defer exec.Free()
+
+		require.NoError(t, exec.PreAllocateGroups(1))
+		require.NotNil(t, exec.GetOptResult())
+
+		require.NoError(t, exec.GroupGrow(4))
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(vec, []int64{1, 3, 4}, nil, mp.Mp()))
+
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+
+		// Leave one empty group to exercise the skip branch in Flush.
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		cloneI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		clone := cloneI.(*cumeDistWindowExec)
+		defer clone.Free()
+		require.NoError(t, clone.GroupGrow(len(encoded.Groups)))
+		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+
+		otherI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		other := otherI.(*cumeDistWindowExec)
+		defer other.Free()
+		require.NoError(t, other.GroupGrow(2))
+		otherVec := vector.NewVec(types.T_int64.ToType())
+		defer otherVec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(otherVec, []int64{2, 5}, nil, mp.Mp()))
+		require.NoError(t, other.Fill(1, 0, []*vector.Vector{otherVec}))
+		require.NoError(t, other.Fill(1, 1, []*vector.Vector{otherVec}))
+
+		require.NoError(t, exec.Merge(other, 0, 1))
+		require.NoError(t, exec.BatchMerge(other, 0, []uint64{1, GroupNotMatched}))
+		require.Panics(t, func() { _ = exec.BulkFill(0, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.SetExtraInformation(nil, 0) })
+	})
+
+	t.Run("percent_rank", func(t *testing.T) {
+		execI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		exec := execI.(*percentRankExec)
+		defer exec.Free()
+
+		require.NoError(t, exec.PreAllocateGroups(1))
+		require.NotNil(t, exec.GetOptResult())
+
+		require.NoError(t, exec.GroupGrow(2))
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(vec, []int64{7}, nil, mp.Mp()))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{vec}))
+
+		// A singleton group should take the totalRows == 1 path.
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.Equal(t, 2, results[0].Length())
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		cloneI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		clone := cloneI.(*percentRankExec)
+		defer clone.Free()
+		require.NoError(t, clone.GroupGrow(len(encoded.Groups)))
+		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+
+		otherI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		other := otherI.(*percentRankExec)
+		defer other.Free()
+		require.NoError(t, other.GroupGrow(2))
+		otherVec := vector.NewVec(types.T_int64.ToType())
+		defer otherVec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(otherVec, []int64{2, 5}, nil, mp.Mp()))
+		require.NoError(t, other.Fill(1, 0, []*vector.Vector{otherVec}))
+		require.NoError(t, other.Fill(1, 1, []*vector.Vector{otherVec}))
+
+		require.NoError(t, exec.Merge(other, 0, 1))
+		require.NoError(t, exec.BatchMerge(other, 0, []uint64{GroupNotMatched, 1}))
+		require.Panics(t, func() { _ = exec.BulkFill(0, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.SetExtraInformation(nil, 0) })
+	})
+}
+
 func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)

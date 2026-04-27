@@ -107,6 +107,17 @@ func TestEltCheck(t *testing.T) {
 	require.NotEqual(t, failedFunctionParametersWrong, r.status)
 }
 
+func TestEltCheckCastAndFailurePaths(t *testing.T) {
+	r := eltCheck(nil, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+	require.Equal(t, succeedWithCast, r.status)
+	require.Equal(t, types.T_int64.ToType(), r.finalType[0])
+	require.Equal(t, types.T_varchar.ToType(), r.finalType[1])
+
+	// A non-convertible first argument should fail the type check path.
+	r = eltCheck(nil, []types.Type{types.T_Rowid.ToType(), types.T_varchar.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, r.status)
+}
+
 func TestEltBitIndex(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := NewFunctionTestCase(proc,
@@ -121,6 +132,35 @@ func TestEltBitIndex(t *testing.T) {
 	)
 	ok, info := tc.Run()
 	require.True(t, ok, fmt.Sprintf("elt(bit) failed: %s", info))
+}
+
+func TestEltBitIndexSelectListAndOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_bit.ToType(), []uint64{2, 0, 4}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"alpha", "alpha", "alpha"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"beta", "beta", "beta"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"gamma", "gamma", "gamma"}, nil),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(3))
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
+	require.NoError(t, Elt(ivecs, result, proc, 3, selectList))
+
+	resultVec := result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+	value, isNull := strParam.GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, "beta", string(value))
+
+	_, isNull = strParam.GetStrValue(1)
+	require.True(t, isNull)
+
+	_, isNull = strParam.GetStrValue(2)
+	require.True(t, isNull)
 }
 
 func TestMakeSet(t *testing.T) {
@@ -164,6 +204,65 @@ func TestMakeSet(t *testing.T) {
 	)
 	ok, info = tc3.Run()
 	require.True(t, ok, fmt.Sprintf("make_set(null) failed: %s", info))
+}
+
+func TestMakeSetNullNumericTypePaths(t *testing.T) {
+	testCases := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "int8", typ: types.T_int8.ToType()},
+		{name: "int16", typ: types.T_int16.ToType()},
+		{name: "int32", typ: types.T_int32.ToType()},
+		{name: "int64", typ: types.T_int64.ToType()},
+		{name: "uint8", typ: types.T_uint8.ToType()},
+		{name: "uint16", typ: types.T_uint16.ToType()},
+		{name: "uint32", typ: types.T_uint32.ToType()},
+		{name: "uint64", typ: types.T_uint64.ToType()},
+		{name: "float32", typ: types.T_float32.ToType()},
+		{name: "float64", typ: types.T_float64.ToType()},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			var bits any
+			switch tc.name {
+			case "int8":
+				bits = []int8{0}
+			case "int16":
+				bits = []int16{0}
+			case "int32":
+				bits = []int32{0}
+			case "int64":
+				bits = []int64{0}
+			case "uint8":
+				bits = []uint8{0}
+			case "uint16":
+				bits = []uint16{0}
+			case "uint32":
+				bits = []uint32{0}
+			case "uint64":
+				bits = []uint64{0}
+			case "float32":
+				bits = []float32{0}
+			case "float64":
+				bits = []float64{0}
+			}
+			tcCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.typ, bits, []bool{true}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"c"}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+				MakeSet,
+			)
+			ok, info := tcCase.Run()
+			require.True(t, ok, fmt.Sprintf("make_set(%s null) failed: %s", tc.name, info))
+		})
+	}
 }
 
 func TestMakeSetNumericTypePaths(t *testing.T) {
@@ -259,6 +358,66 @@ func TestExportSet(t *testing.T) {
 	)
 	ok, info = tc2.Run()
 	require.True(t, ok, fmt.Sprintf("export_set(null) failed: %s", info))
+}
+
+func TestExportSetNullNumericTypePaths(t *testing.T) {
+	testCases := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "int8", typ: types.T_int8.ToType()},
+		{name: "int16", typ: types.T_int16.ToType()},
+		{name: "int32", typ: types.T_int32.ToType()},
+		{name: "int64", typ: types.T_int64.ToType()},
+		{name: "uint8", typ: types.T_uint8.ToType()},
+		{name: "uint16", typ: types.T_uint16.ToType()},
+		{name: "uint32", typ: types.T_uint32.ToType()},
+		{name: "uint64", typ: types.T_uint64.ToType()},
+		{name: "float32", typ: types.T_float32.ToType()},
+		{name: "float64", typ: types.T_float64.ToType()},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			var bits any
+			switch tc.name {
+			case "int8":
+				bits = []int8{0}
+			case "int16":
+				bits = []int16{0}
+			case "int32":
+				bits = []int32{0}
+			case "int64":
+				bits = []int64{0}
+			case "uint8":
+				bits = []uint8{0}
+			case "uint16":
+				bits = []uint16{0}
+			case "uint32":
+				bits = []uint32{0}
+			case "uint64":
+				bits = []uint64{0}
+			case "float32":
+				bits = []float32{0}
+			case "float64":
+				bits = []float64{0}
+			}
+			tcCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.typ, bits, []bool{true}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"Y"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"N"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+				ExportSet,
+			)
+			ok, info := tcCase.Run()
+			require.True(t, ok, fmt.Sprintf("export_set(%s null) failed: %s", tc.name, info))
+		})
+	}
 }
 
 func TestExportSetNumericTypePaths(t *testing.T) {
