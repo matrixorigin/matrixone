@@ -53,7 +53,7 @@ We leverage the **RAFT** library to manage long-lived `raft::resources`. By cach
 
 ## Step 5: Pushing SQL Predicates Down — Filtered Search Inside cuVS
 
-A vector index is rarely queried in isolation. Real workloads look like *"find the top-10 nearest passages **where `file_id = X` AND score > threshold**"*. The naive approach — search first, filter later — wastes GPU cycles ranking candidates that the optimizer is about to throw away, and forces deep `nprobe` sweeps just to backfill `top-k` after filtering.
+A vector index is rarely queried in isolation. Real workloads look like *"find the top-10 nearest passages **where `file_id = X`**"*. The naive approach — search first, filter later — wastes GPU cycles ranking candidates that the optimizer is about to throw away, and forces deep `nprobe` sweeps just to backfill `top-k` after filtering.
 
 cuVS supports **pre-filtering via a predicate bitset**, and we wired it directly into the MatrixOne query pipeline:
 
@@ -62,7 +62,7 @@ cuVS supports **pre-filtering via a predicate bitset**, and we wired it directly
 3. The bitset is handed to cuVS, which consults it during graph traversal / list scanning so the GPU skips disqualified vectors before distance computation.
 4. The CAGRA / IVF-PQ kernel returns only `top-k` results that already satisfy the predicate — no post-hoc reranking pass.
 
-The bitset itself stays in host RAM; only the index data lives on the GPU. The combination — RAM-resident filter columns plus CPU-computed bitsets driving GPU pre-filtering — sidesteps both disk I/O and wasted GPU work. The 88M numbers below show the payoff concretely: under combined SQL filter + score threshold, GPU-enhanced IVF-Flat (which has to filter on the CPU *after* search) drops to **~3 QPS at high recall (0.97)** and tops out at ~12 QPS at lower recall, while pure-GPU IVF-PQ with bitset pre-filtering holds **~67 QPS** essentially flat across `nprobe`.
+The bitset itself stays in host RAM; only the index data lives on the GPU. The combination — RAM-resident filter columns plus CPU-computed bitsets driving GPU pre-filtering — sidesteps both disk I/O and wasted GPU work. The 88M numbers below show the payoff concretely: under SQL pre-filtering, GPU-enhanced IVF-Flat (which has to filter on the CPU *after* search) drops to **~3 QPS at high recall (0.97)** and tops out at ~12 QPS at lower recall, while pure-GPU IVF-PQ with bitset pre-filtering holds **~67 QPS** essentially flat across `nprobe`.
 
 ## Head-to-Head: GPU-Enhanced IVF-Flat vs. Pure-GPU IVF-PQ
 
@@ -92,7 +92,7 @@ At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-PQ builds n
 | 88M | 20 | 0.91 | 10 | 0.87 | 233 |
 | 88M | 100 | 0.96 | 4 | 0.87 | 230 |
 
-### Search Throughput Under SQL Pre-Filter + Threshold (88M, top-10)
+### Search Throughput Under SQL Pre-Filter (88M, top-10)
 
 | Nprobe | IVF-Flat Recall | IVF-Flat QPS | IVF-PQ Recall | IVF-PQ QPS |
 |---|---|---|---|---|
