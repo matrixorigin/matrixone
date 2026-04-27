@@ -191,6 +191,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	} else {
 		if mergeGroup.ctr.hr.IsEmpty() {
+			// MergeGroup receives already-evaluated group-by vectors, so it must
+			// reconstruct nullable-key metadata before building its hash table.
+			mergeGroup.ctr.initGroupKeyMetaFromBatch(bat.Vecs)
 			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}

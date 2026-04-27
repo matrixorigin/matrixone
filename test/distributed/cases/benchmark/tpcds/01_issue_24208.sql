@@ -1,37 +1,38 @@
 -- @bvt:issue#24208
--- Repro case from q34.
--- This reproduces: `hd_dep_count / hd_vehicle_count > 1.2` on BIGINT with boundary count.
--- If integer division uses float64, borderline value may be rounded to 1.2 and filtered out unexpectedly.
+-- Case 1 keeps the q34-style integer-division boundary repro.
+-- Case 2 reproduces the real execution bug: AP merge-group on nullable
+-- ss_customer_sk must not drop the NULL group.
 
+-- Case 1: q34-style precision regression on integer division.
 drop table if exists issue_24208_store_sales;
 drop table if exists issue_24208_date_dim;
 drop table if exists issue_24208_store;
 drop table if exists issue_24208_household_demographics;
 drop table if exists issue_24208_customer;
 
-create table if not exists issue_24208_store_sales(
+create table issue_24208_store_sales(
   ss_sold_date_sk bigint,
   ss_store_sk bigint,
   ss_hdemo_sk bigint,
   ss_ticket_number bigint,
   ss_customer_sk bigint
 );
-create table if not exists issue_24208_date_dim(
+create table issue_24208_date_dim(
   d_date_sk bigint,
   d_dom int,
   d_year int
 );
-create table if not exists issue_24208_store(
+create table issue_24208_store(
   s_store_sk bigint,
   s_county varchar(32)
 );
-create table if not exists issue_24208_household_demographics(
+create table issue_24208_household_demographics(
   hd_demo_sk bigint,
   hd_dep_count bigint,
   hd_vehicle_count bigint,
   hd_buy_potential varchar(20)
 );
-create table if not exists issue_24208_customer(
+create table issue_24208_customer(
   c_customer_sk bigint,
   c_last_name varchar(32),
   c_first_name varchar(32),
@@ -51,7 +52,6 @@ insert into issue_24208_household_demographics values
 insert into issue_24208_customer values
   (5001, 'Issue', 'Repro', 'Mr', 'Y');
 
--- 14 rows are safely >1.2, 1 boundary row relies on precise bigint division.
 insert into issue_24208_store_sales values
   (1, 10, 101, 9001, 5001),
   (1, 10, 101, 9001, 5001),
@@ -122,3 +122,57 @@ drop table if exists issue_24208_date_dim;
 drop table if exists issue_24208_store;
 drop table if exists issue_24208_household_demographics;
 drop table if exists issue_24208_customer;
+
+-- Case 2: AP merge-group must preserve nullable ss_customer_sk.
+drop table if exists issue_24208_store_sales_ap;
+drop table if exists issue_24208_sales_ext;
+
+create table issue_24208_store_sales_ap(
+  ss_row_id bigint,
+  ss_ticket_number int,
+  ss_customer_sk int
+);
+create table issue_24208_sales_ext(
+  ss_row_id bigint,
+  filler int
+);
+
+insert into issue_24208_store_sales_ap
+select
+  result,
+  1,
+  case when result % 2 = 0 then null else 10 end
+from generate_series(1, 100000, 1) g;
+
+insert into issue_24208_sales_ext
+select
+  ((result - 1) % 100000) + 1,
+  1
+from generate_series(1, 1000000, 1) g;
+
+set @@max_dop = 12;
+
+select count(*) as group_cnt
+from (
+  select
+    ss_ticket_number,
+    ss_customer_sk,
+    count(*) cnt
+  from issue_24208_store_sales_ap
+  join issue_24208_sales_ext using (ss_row_id)
+  group by ss_ticket_number, ss_customer_sk
+) s;
+
+select
+  ss_ticket_number,
+  ifnull(cast(ss_customer_sk as char), 'NULL') as customer_key,
+  count(*) cnt
+from issue_24208_store_sales_ap
+join issue_24208_sales_ext using (ss_row_id)
+group by ss_ticket_number, ss_customer_sk
+order by customer_key;
+
+set @@max_dop = 0;
+
+drop table if exists issue_24208_store_sales_ap;
+drop table if exists issue_24208_sales_ext;

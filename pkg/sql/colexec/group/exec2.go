@@ -386,6 +386,29 @@ func (ctr *container) buildHashTable(ctx context.Context) error {
 	return nil
 }
 
+func (ctr *container) initGroupKeyMetaFromBatch(vs []*vector.Vector) {
+	if len(vs) == 0 {
+		return
+	}
+
+	if len(ctr.groupByTypes) == 0 {
+		ctr.groupByTypes = make([]types.Type, len(vs))
+		for i, vec := range vs {
+			ctr.groupByTypes[i] = *vec.GetType()
+		}
+	}
+
+	if ctr.keyNullable {
+		return
+	}
+	for _, vec := range vs {
+		if !vec.GetType().GetNotNull() || vec.IsConstNull() || vec.GetNulls().Any() {
+			ctr.keyNullable = true
+			return
+		}
+	}
+}
+
 func (ctr *container) createNewGroupByBatch(vs []*vector.Vector, size int) *batch.Batch {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
