@@ -749,15 +749,24 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 }
 
 func (c *Compile) lockTable() error {
-	for _, tbl := range c.lockTables {
+	tableIDs := make([]uint64, 0, len(c.lockTables))
+	for tableID := range c.lockTables {
+		tableIDs = append(tableIDs, tableID)
+	}
+	sort.Slice(tableIDs, func(i, j int) bool {
+		return tableIDs[i] < tableIDs[j]
+	})
+	for _, tableID := range tableIDs {
+		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		return lockop.LockTable(
+		if err := lockop.LockTable(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
-			false)
-
+			false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -776,6 +785,11 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 	// acquire it when the first batch reaches the target pipeline and by
 	// falling back to EOF-time table locking if the child produces no rows.
 	if qry.StmtType == plan.Query_INSERT {
+		// LOAD DATA always plans a table-locking LockOp. Keeping the pre-pipeline
+		// lock avoids retrying the same whole-table lock on every non-empty batch.
+		if qry.LoadTag {
+			return true
+		}
 		target.LockTableAtTheEnd = true
 		return false
 	}

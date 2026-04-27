@@ -26,15 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -160,6 +165,15 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	target = &plan.LockTarget{LockTable: true}
 	c.pn = &plan.Plan{
 		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT, LoadTag: true},
+		},
+	}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
 			Query: &plan.Query{StmtType: plan.Query_UPDATE},
 		},
 	}
@@ -177,6 +191,61 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			runtime.SetupServiceBasedRuntime("s1", rt)
+			lockservice.RunLockServicesForTest(
+				zap.DebugLevel,
+				[]string{"s1"},
+				time.Second,
+				func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+					rt.SetGlobalVariables(runtime.LockService, services[0])
+
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					sender, err := rpc.NewSender(rpc.Config{}, rt)
+					require.NoError(t, err)
+
+					txnClient := client.NewTxnClient("", sender, client.WithLockService(services[0]))
+					txnClient.Resume()
+					defer func() {
+						require.NoError(t, txnClient.Close())
+					}()
+
+					txnOp, err := txnClient.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
+
+					proc := process.NewTopProcess(
+						ctx,
+						mpool.MustNewZero(),
+						txnClient,
+						txnOp,
+						nil,
+						services[0],
+						nil,
+						nil,
+						nil,
+						nil)
+					c := &Compile{
+						proc: proc,
+						lockTables: map[uint64]*plan.LockTarget{
+							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+							11: {TableId: 11, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+						},
+					}
+
+					require.NoError(t, c.lockTable())
+					require.True(t, txnOp.HasLockTable(10))
+					require.True(t, txnOp.HasLockTable(11))
+				},
+				nil,
+			)
+		},
+	)
+}
 func makeJoinColExpr(relPos, colPos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
