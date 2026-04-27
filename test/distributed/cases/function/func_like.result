@@ -82,10 +82,10 @@ result
 1
 select json_extract('{"a":"1"}', '$.a') like '1' as result;
 result
-0
+1
 select json_extract('{"a":"1"}', '$.a') like 1 as result;
 result
-0
+1
 select json_extract('{"a":"1"}', '$.a') like '%1%' as result;
 result
 1

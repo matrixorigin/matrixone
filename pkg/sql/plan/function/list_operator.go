@@ -130,6 +130,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if jsonOrderingWithStringNotSupported(inputs) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -165,6 +168,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if jsonOrderingWithStringNotSupported(inputs) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -200,6 +206,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if jsonOrderingWithStringNotSupported(inputs) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -235,6 +244,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if jsonOrderingWithStringNotSupported(inputs) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -269,6 +281,11 @@ var supportedOperators = []FuncNew{
 		layout:     BETWEEN_AND_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 3 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
+				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 

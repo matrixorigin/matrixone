@@ -330,7 +330,8 @@ create table jt_diff(id int primary key, doc json);
 insert into jt_diff values (1, '{"status": "active", "score": 90}');
 insert into jt_diff values (2, '{"status": "inactive", "score": 60}');
 insert into jt_diff values (3, '{"status": "active", "score": 85}');
--- @bvt:issue#23935
+-- comparing -> result with JSON-quoted string should return empty set (MySQL compatible)
 select id from jt_diff where doc -> '$.status' = '"active"' order by id;
--- @bvt:issue
+-- comparing -> result with unquoted string should return matching rows (MySQL compatible)
+select id from jt_diff where doc -> '$.status' = 'active' order by id;
 drop table if exists jt_diff;
