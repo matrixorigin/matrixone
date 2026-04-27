@@ -114,7 +114,7 @@ This is the bitset pre-filtering payoff: IVF-PQ stays flat at ~67 QPS across `np
 
 | | IVF-PQ (1M / 10M) | IVF-PQ (88M) | IVF-Flat |
 |---|---|---|---|
-| Lists | 1000 / 4096 | 6000 | — |
+| Lists | 1000 / 4096 | 6000 | 10000 |
 | PQ Params | BITS_PER_CODE 8, M 192 | BITS_PER_CODE 8, M 192 | — |
 | Quantization | f32 / f16 | f16 | f32 |
 | GPU | 1× L40S (46 GB) | 8× L40S (sharded) | 1× L40S (46 GB) |
