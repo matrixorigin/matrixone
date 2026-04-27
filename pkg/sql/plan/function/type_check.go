@@ -128,13 +128,6 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 		SetTargetScaleFromSource(&s1, &t1)
 		SetTargetScaleFromSource(&s2, &t2)
-		if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 &&
-			s1.Oid == s2.Oid && s1.Oid.IsInteger() {
-			// Preserve enough fractional precision for exact integer division so
-			// boundary predicates like `a / b > 1.2` do not get truncated to scale 6.
-			t1 = types.New(types.T_decimal128, 38, 18)
-			t2 = types.New(types.T_decimal128, 38, 18)
-		}
 		if t1.Oid == t2.Oid && t1.Oid.IsDecimal() &&
 			(s1.Oid.IsMySQLString() || s2.Oid.IsMySQLString()) {
 			targets := []types.Type{t1, t2}
@@ -1219,7 +1212,7 @@ func initFixed2() {
 		{types.T_bool, types.T_uint64, types.T_uint64, types.T_uint64},
 		{types.T_int8, types.T_any, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_bool, types.T_int8, types.T_int8},
-		{types.T_int8, types.T_int8, types.T_decimal128, types.T_decimal128},
+		{types.T_int8, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_int16, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_int32, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_int64, types.T_float64, types.T_float64},
@@ -1244,7 +1237,7 @@ func initFixed2() {
 		{types.T_int16, types.T_any, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_bool, types.T_int16, types.T_int16},
 		{types.T_int16, types.T_int8, types.T_float64, types.T_float64},
-		{types.T_int16, types.T_int16, types.T_decimal128, types.T_decimal128},
+		{types.T_int16, types.T_int16, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_int32, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_int64, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_uint8, types.T_float64, types.T_float64},
@@ -1269,7 +1262,7 @@ func initFixed2() {
 		{types.T_int32, types.T_bool, types.T_int32, types.T_int32},
 		{types.T_int32, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_int16, types.T_float64, types.T_float64},
-		{types.T_int32, types.T_int32, types.T_decimal128, types.T_decimal128},
+		{types.T_int32, types.T_int32, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_int64, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_uint8, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_uint16, types.T_float64, types.T_float64},
@@ -1294,7 +1287,7 @@ func initFixed2() {
 		{types.T_int64, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_int16, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_int32, types.T_float64, types.T_float64},
-		{types.T_int64, types.T_int64, types.T_decimal128, types.T_decimal128},
+		{types.T_int64, types.T_int64, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_uint8, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_uint16, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_uint32, types.T_int64, types.T_int64},
@@ -1320,7 +1313,7 @@ func initFixed2() {
 		{types.T_uint8, types.T_int16, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_int32, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_int64, types.T_float64, types.T_float64},
-		{types.T_uint8, types.T_uint8, types.T_decimal128, types.T_decimal128},
+		{types.T_uint8, types.T_uint8, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_uint64, types.T_float64, types.T_float64},
@@ -1345,7 +1338,7 @@ func initFixed2() {
 		{types.T_uint16, types.T_int32, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_int64, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_uint8, types.T_float64, types.T_float64},
-		{types.T_uint16, types.T_uint16, types.T_decimal128, types.T_decimal128},
+		{types.T_uint16, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_float32, types.T_float64, types.T_float64},
@@ -1370,7 +1363,7 @@ func initFixed2() {
 		{types.T_uint32, types.T_int64, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_uint8, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_uint16, types.T_float64, types.T_float64},
-		{types.T_uint32, types.T_uint32, types.T_decimal128, types.T_decimal128},
+		{types.T_uint32, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_float64, types.T_float64, types.T_float64},
@@ -1395,7 +1388,7 @@ func initFixed2() {
 		{types.T_uint64, types.T_uint8, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_uint32, types.T_float64, types.T_float64},
-		{types.T_uint64, types.T_uint64, types.T_decimal128, types.T_decimal128},
+		{types.T_uint64, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_decimal64, types.T_decimal128, types.T_decimal128},

@@ -29,6 +29,10 @@ import (
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
+	mergeGroup.ctr.groupByTypes = nil
+	mergeGroup.ctr.keyNullable = false
+	mergeGroup.ctr.keyWidth = 0
+	mergeGroup.ctr.mtyp = 0
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -147,6 +151,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		if mergeGroup.ctr.mtyp, err = types.ReadInt32(reader); err != nil {
 			return false, err
 		}
+		if mergeGroup.ctr.keyNullable, err = types.ReadBool(reader); err != nil {
+			return false, err
+		}
 
 		if mergeGroup.ctr.mtyp == H0 {
 			if len(mergeGroup.ctr.groupByBatches) == 0 {
@@ -191,9 +198,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	} else {
 		if mergeGroup.ctr.hr.IsEmpty() {
-			// MergeGroup receives already-evaluated group-by vectors, so it must
-			// reconstruct nullable-key metadata before building its hash table.
-			mergeGroup.ctr.initGroupKeyMetaFromBatch(bat.Vecs)
+			// MergeGroup restores nullable-key metadata from the serialized
+			// partial-group payload rather than guessing it from the first batch.
+			mergeGroup.ctr.initGroupKeyTypesFromBatch(bat.Vecs)
 			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}

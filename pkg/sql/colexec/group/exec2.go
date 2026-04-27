@@ -386,7 +386,7 @@ func (ctr *container) buildHashTable(ctx context.Context) error {
 	return nil
 }
 
-func (ctr *container) initGroupKeyMetaFromBatch(vs []*vector.Vector) {
+func (ctr *container) initGroupKeyTypesFromBatch(vs []*vector.Vector) {
 	if len(vs) == 0 {
 		return
 	}
@@ -395,16 +395,6 @@ func (ctr *container) initGroupKeyMetaFromBatch(vs []*vector.Vector) {
 		ctr.groupByTypes = make([]types.Type, len(vs))
 		for i, vec := range vs {
 			ctr.groupByTypes[i] = *vec.GetType()
-		}
-	}
-
-	if ctr.keyNullable {
-		return
-	}
-	for _, vec := range vs {
-		if !vec.GetType().GetNotNull() || vec.IsConstNull() || vec.GetNulls().Any() {
-			ctr.keyNullable = true
-			return
 		}
 	}
 }
@@ -516,6 +506,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	// But well,
 	var buf bytes.Buffer
 	buf.Write(types.EncodeInt32(&group.ctr.mtyp))
+	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {

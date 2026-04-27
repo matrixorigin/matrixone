@@ -127,46 +127,6 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 			in:         [2]types.Type{types.T_any.ToType(), types.T_any.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_uint32.ToType(), types.T_uint32.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_uint16.ToType(), types.T_uint16.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_int16.ToType(), types.T_int16.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_int8.ToType(), types.T_int8.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
-		{
-			shouldCast: true,
-			in:         [2]types.Type{types.T_uint8.ToType(), types.T_uint8.ToType()},
-			want:       [2]types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-		},
 	}
 
 	for i, in := range inputs {
@@ -221,64 +181,6 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 			requireRet: types.T_float64.ToType(),
-		},
-
-		{
-			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-
-		{
-			name: "/", args: []types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_uint32.ToType(), types.T_uint32.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_int16.ToType(), types.T_int16.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_uint16.ToType(), types.T_uint16.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_int8.ToType(), types.T_int8.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
-		},
-		{
-			name: "/", args: []types.Type{types.T_uint8.ToType(), types.T_uint8.ToType()},
-			shouldErr:  false,
-			requireFid: DIV, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.New(types.T_decimal128, 38, 18), types.New(types.T_decimal128, 38, 18)},
-			requireRet: types.New(types.T_decimal128, 38, 18),
 		},
 
 		{
