@@ -4940,11 +4940,18 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
 				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
-			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			deleteObjTypes := []objectType{objType}
+			if rp.ObjType == tree.OBJECT_TYPE_VIEW {
+				// Legacy upgraded clusters may still store view grants as obj_type='table'.
+				deleteObjTypes = append(deleteObjTypes, objectTypeTable)
+			}
+			for _, deleteObjType := range deleteObjTypes {
+				sql = getSqlForDeleteRolePrivs(role.id, deleteObjType.String(), objId, int64(privType), privLevel.String())
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -6343,6 +6350,19 @@ type privilegeTips struct {
 
 type privilegeTipsArray []privilegeTips
 
+func privilegeTypeFromQueryStmtType(stmtType plan.Query_StatementType) PrivilegeType {
+	switch stmtType {
+	case plan.Query_UPDATE:
+		return PrivilegeTypeUpdate
+	case plan.Query_DELETE:
+		return PrivilegeTypeDelete
+	case plan.Query_INSERT:
+		return PrivilegeTypeInsert
+	default:
+		return PrivilegeTypeSelect
+	}
+}
+
 func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	if objRef.GetSubscriptionName() != "" {
 		return objRef.GetSubscriptionName()
@@ -6378,16 +6398,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		var clusterTable bool
 		var scanTargetTables map[[2]string]struct{}
 
-		switch q.StmtType {
-		case plan.Query_UPDATE:
-			t = PrivilegeTypeUpdate
-		case plan.Query_DELETE:
-			t = PrivilegeTypeDelete
-		case plan.Query_INSERT:
-			t = PrivilegeTypeInsert
-		default:
-			t = PrivilegeTypeSelect
-		}
+		t = privilegeTypeFromQueryStmtType(q.StmtType)
 
 		if q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE {
 			scanTargetTables = make(map[[2]string]struct{})
@@ -6649,6 +6660,42 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func extractDirectViewPrivilegeTipFromPlan(p *plan2.Plan) (privilegeTips, bool) {
+	if p == nil || p.GetQuery() == nil {
+		return privilegeTips{}, false
+	}
+
+	tipType := privilegeTypeFromQueryStmtType(p.GetQuery().StmtType)
+	for _, node := range p.GetQuery().Nodes {
+		directView := node.GetDirectView()
+		originViews := node.GetOriginViews()
+		if directView == "" {
+			if len(originViews) == 0 {
+				continue
+			}
+			directView = originViews[0]
+		}
+
+		dbName, viewName := parseViewKey(directView)
+		if viewName == "" {
+			continue
+		}
+
+		return privilegeTips{
+			typ:                   tipType,
+			objType:               objectTypeView,
+			originViews:           originViews,
+			directView:            directView,
+			scanSnapshot:          node.GetScanSnapshot(),
+			databaseName:          dbName,
+			tableName:             viewName,
+			clusterTableOperation: clusterTableSelect,
+		}, true
+	}
+
+	return privilegeTips{}, false
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
@@ -7190,11 +7237,17 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									if skipBaseCheck {
 										yes = true
 									} else if len(viewChain) > 0 {
-										// View path: always expand role inheritance for the effective role,
-										// even if checkRoleId == roleId (definer may rely on inherited privileges)
-										yes, err = verifyPrivilegeWithRoleInheritance(ctx, bh, ses, checkRoleId, tempEntry, enableCache)
-										if err != nil {
-											return false, err
+										if tempEntry.objType == objectTypeView {
+											// Synthetic view-only tips represent the authorization target itself.
+											// Once the chain check passes, there is no separate base object to verify.
+											yes = true
+										} else {
+											// View path: always expand role inheritance for the effective role,
+											// even if checkRoleId == roleId (definer may rely on inherited privileges)
+											yes, err = verifyPrivilegeWithRoleInheritance(ctx, bh, ses, checkRoleId, tempEntry, enableCache)
+											if err != nil {
+												return false, err
+											}
 										}
 									} else {
 										useCache := enableCache && cache != nil && checkRoleId == roleId
@@ -7935,6 +7988,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			}
 		}
 		if len(arr) == 0 {
+			if viewTip, ok := extractDirectViewPrivilegeTipFromPlan(p); ok {
+				arr = append(arr, viewTip)
+			}
+		}
+		if len(arr) == 0 {
 			return true, stats, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
@@ -8234,7 +8292,8 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 	// keep the resolved object id so WGO cannot leak across databases.
 	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
 		level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
-		level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR {
 		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
 		if err != nil {
 			// If we can't resolve the object, fall back to obj_type-only check
@@ -8243,7 +8302,7 @@ func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
 		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
 	}
 
-	// For wildcard levels (*, *.*, db.*), filter by obj_type only
+	// For truly global wildcard levels (*.*), filter by obj_type only.
 	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
 }
 

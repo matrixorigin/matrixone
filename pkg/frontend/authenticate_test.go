@@ -5854,6 +5854,58 @@ func Test_doRevokePrivilege(t *testing.T) {
 	})
 }
 
+func TestDoRevokePrivilegeViewDeletesLegacyTableGrants(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt := &tree.RevokePrivilege{
+		Privileges: []*tree.Privilege{
+			{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+		},
+		ObjType: tree.OBJECT_TYPE_VIEW,
+		Level: &tree.PrivilegeLevel{
+			Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+			DbName:  "db",
+			TabName: "v",
+		},
+		Roles: []*tree.Role{
+			{UserName: "r1"},
+		},
+	}
+
+	priv := determinePrivilegeSetOfStatement(stmt)
+	ses := newSes(priv, ctrl)
+	ses.SetDatabaseName("db")
+
+	ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+
+	sql, _ := getSqlForRoleIdOfRole(ctx, "r1")
+	bh.sql2result[sql] = newMrsForRoleIdOfRole([][]interface{}{{7}})
+
+	checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+	require.NoError(t, err)
+	bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+	viewSQL := getSqlForCheckRoleHasPrivilege(int64(7), objectTypeView, 10001, int64(PrivilegeTypeSelect))
+	bh.sql2result[viewSQL] = newMrsForCheckRoleHasPrivilege([][]interface{}{})
+
+	err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
+	require.NoError(t, err)
+
+	require.Contains(t, bh.executedSQLs, getSqlForDeleteRolePrivs(7, objectTypeView.String(), 10001, int64(PrivilegeTypeSelect), privilegeLevelDatabaseTable.String()))
+	require.Contains(t, bh.executedSQLs, getSqlForDeleteRolePrivs(7, objectTypeTable.String(), 10001, int64(PrivilegeTypeSelect), privilegeLevelDatabaseTable.String()))
+}
+
 func Test_doDropFunctionWithDB(t *testing.T) {
 	convey.Convey("drop function with db", t, func() {
 		ctrl := gomock.NewController(t)
@@ -9347,6 +9399,57 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsDatabaseScopeForViewDatab
 	require.False(t, roleSet.Contains(roleID))
 }
 
+func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsCurrentDatabaseScopeForViewStar(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newSes(nil, ctrl)
+	ses.SetDatabaseName("db2")
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+	roleID := int64(1001)
+	dbID := int64(20002)
+
+	checkDbSQL, err := getSqlForCheckDatabase(ctx, "db2")
+	require.NoError(t, err)
+	bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{dbID}})
+
+	viewScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, dbID)
+	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, dbID)
+	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView)
+	bh.sql2result[viewObjTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+	legacyObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable)
+	bh.sql2result[legacyObjTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+		ctx,
+		ses,
+		bh,
+		PrivilegeTypeSelect,
+		tree.OBJECT_TYPE_VIEW,
+		tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+	)
+	require.NoError(t, err)
+	require.Zero(t, roleSet.Len())
+	require.False(t, roleSet.Contains(roleID))
+}
+
 func TestResolveViewChainPrivilegeContextSkipsNestedSystemViewPrivilegeChecks(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -9403,6 +9506,74 @@ func TestResolveViewChainPrivilegeContextSkipsNestedSystemViewPrivilegeChecks(t 
 	require.True(t, allowed)
 	require.False(t, skipBaseCheck)
 	require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), "information_schema")
+}
+
+func TestAuthenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTableRejectsConstantViewWithoutGrant(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	stmt := &tree.Select{}
+	priv := determinePrivilegeSetOfStatement(stmt)
+	ses := newSes(priv, ctrl)
+	ses.SetDatabaseName("db")
+	ses.tenant = &TenantInfo{
+		Tenant:        "acc",
+		User:          "u1",
+		DefaultRole:   "r1",
+		TenantID:      1001,
+		UserID:        1001,
+		DefaultRoleID: 1001,
+	}
+
+	p := &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan2.Node{
+					{
+						NodeType:    plan.Node_PROJECT,
+						DirectView:  "db#v_const",
+						OriginViews: []string{"db#v_const"},
+					},
+				},
+			},
+		},
+	}
+
+	sql2result := map[string]ExecResult{
+		"begin;":  nil,
+		"commit;": nil,
+	}
+
+	viewPrivTypes := []PrivilegeType{PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	for _, objType := range []objectType{objectTypeView, objectTypeTable} {
+		pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), objType)
+		require.NoError(t, err)
+		for _, privType := range viewPrivTypes {
+			entry := privilegeEntriesMap[privType]
+			entry.objType = objType
+			entry.databaseName = "db"
+			entry.tableName = "v_const"
+			entry.privilegeEntryTyp = privilegeEntryTypeGeneral
+			entry.compound = nil
+			for _, pl := range pls {
+				sql, err := getSqlForPrivilege(context.TODO(), 1001, entry, pl)
+				require.NoError(t, err)
+				sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{})
+			}
+		}
+	}
+
+	sql2result[getSqlForInheritedRoleIdOfRoleId(1001)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+	bh := newBh(ctrl, sql2result)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+		ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestPrivilegeCacheGetPrivilegeSetForView(t *testing.T) {
