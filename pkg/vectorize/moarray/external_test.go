@@ -15,10 +15,12 @@
 package moarray
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestAdd(t *testing.T) {
@@ -937,5 +939,37 @@ func TestScalarOp(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestScalarOpOverflow(t *testing.T) {
+	maxF32 := float32(math.MaxFloat32)
+	maxF64 := math.MaxFloat64
+
+	// float32 overflow: MaxFloat32 * 2 → +Inf
+	_, err := ScalarOp[float32]([]float32{maxF32}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float32 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// float64 overflow: MaxFloat64 * 2 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// addition overflow: MaxFloat64 + MaxFloat64 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "+", maxF64)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 add overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
 	}
 }

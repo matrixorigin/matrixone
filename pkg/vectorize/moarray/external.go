@@ -374,7 +374,7 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	// check overflow
 	for i := range ret {
 		if math.IsInf(float64(ret[i]), 0) {
-			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
 		}
 	}
 	return ret, nil
