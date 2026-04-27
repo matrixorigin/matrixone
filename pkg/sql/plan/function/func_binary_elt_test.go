@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -148,6 +149,67 @@ func TestMakeSet(t *testing.T) {
 	require.True(t, ok, fmt.Sprintf("make_set(null) failed: %s", info))
 }
 
+func TestMakeSetNumericTypePaths(t *testing.T) {
+	testCases := []struct {
+		name     string
+		typ      types.Type
+		values   any
+		expected any
+	}{
+		{name: "int8", typ: types.T_int8.ToType(), values: []int8{5}, expected: []string{"a,c"}},
+		{name: "int16", typ: types.T_int16.ToType(), values: []int16{5}, expected: []string{"a,c"}},
+		{name: "int32", typ: types.T_int32.ToType(), values: []int32{5}, expected: []string{"a,c"}},
+		{name: "int64", typ: types.T_int64.ToType(), values: []int64{5}, expected: []string{"a,c"}},
+		{name: "uint8", typ: types.T_uint8.ToType(), values: []uint8{5}, expected: []string{"a,c"}},
+		{name: "uint16", typ: types.T_uint16.ToType(), values: []uint16{5}, expected: []string{"a,c"}},
+		{name: "uint32", typ: types.T_uint32.ToType(), values: []uint32{5}, expected: []string{"a,c"}},
+		{name: "uint64", typ: types.T_uint64.ToType(), values: []uint64{5}, expected: []string{"a,c"}},
+		{name: "float32", typ: types.T_float32.ToType(), values: []float32{5}, expected: []string{"a,c"}},
+		{name: "float64", typ: types.T_float64.ToType(), values: []float64{5}, expected: []string{"a,c"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.values, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"c"}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expected, []bool{false})
+			tcCase := NewFunctionTestCase(proc, inputs, expect, MakeSet)
+			ok, info := tcCase.Run()
+			require.True(t, ok, fmt.Sprintf("make_set(%s) failed: %s", tc.name, info))
+		})
+	}
+}
+
+func TestMakeSetSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{5, 5}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "a"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"b", "b"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"c", "c"}, nil),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, MakeSet(ivecs, result, proc, 2, selectList))
+
+	resultVec := result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+	_, isNull := strParam.GetStrValue(0)
+	require.True(t, isNull)
+	value, isNull := strParam.GetStrValue(1)
+	require.False(t, isNull)
+	require.Equal(t, "a,c", string(value))
+}
+
 func TestExportSet(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -180,6 +242,69 @@ func TestExportSet(t *testing.T) {
 	)
 	ok, info = tc2.Run()
 	require.True(t, ok, fmt.Sprintf("export_set(null) failed: %s", info))
+}
+
+func TestExportSetNumericTypePaths(t *testing.T) {
+	testCases := []struct {
+		name     string
+		typ      types.Type
+		values   any
+		expected any
+	}{
+		{name: "int8", typ: types.T_int8.ToType(), values: []int8{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "int16", typ: types.T_int16.ToType(), values: []int16{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "int32", typ: types.T_int32.ToType(), values: []int32{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "int64", typ: types.T_int64.ToType(), values: []int64{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "uint8", typ: types.T_uint8.ToType(), values: []uint8{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "uint16", typ: types.T_uint16.ToType(), values: []uint16{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "uint32", typ: types.T_uint32.ToType(), values: []uint32{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "uint64", typ: types.T_uint64.ToType(), values: []uint64{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "float32", typ: types.T_float32.ToType(), values: []float32{5}, expected: []string{"Y,N,Y,N"}},
+		{name: "float64", typ: types.T_float64.ToType(), values: []float64{5}, expected: []string{"Y,N,Y,N"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.values, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Y"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"N"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.expected, []bool{false})
+			tcCase := NewFunctionTestCase(proc, inputs, expect, ExportSet)
+			ok, info := tcCase.Run()
+			require.True(t, ok, fmt.Sprintf("export_set(%s) failed: %s", tc.name, info))
+		})
+	}
+}
+
+func TestExportSetSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{5, 5}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"Y", "Y"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"N", "N"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{",", ","}, nil),
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{4, 4}, nil),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, ExportSet(ivecs, result, proc, 2, selectList))
+
+	resultVec := result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+	_, isNull := strParam.GetStrValue(0)
+	require.True(t, isNull)
+	value, isNull := strParam.GetStrValue(1)
+	require.False(t, isNull)
+	require.Equal(t, "Y,N,Y,N", string(value))
 }
 
 func TestPKCS7PaddingUnpadding(t *testing.T) {

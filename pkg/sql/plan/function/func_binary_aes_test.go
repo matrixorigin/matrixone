@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,60 @@ func TestGenerateAESKeyEdgeCases(t *testing.T) {
 	kfold, err := generateAESKey(longKey, 16)
 	require.NoError(t, err)
 	require.Equal(t, expect, kfold)
+}
+
+func TestAESEncryptSelectList(t *testing.T) {
+	proc := newAESProcess(t, "aes-128-ecb")
+	plain := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"hello", "world"}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"secret-key", "secret-key"}, nil),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, AESEncrypt(plain, result, proc, 2, selectList))
+
+	aesKey, err := generateAESKey([]byte("secret-key"), 16)
+	require.NoError(t, err)
+	expectedSecond, err := encryptECB([]byte("world"), aesKey)
+	require.NoError(t, err)
+
+	resultVec := result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+	_, isNull := strParam.GetStrValue(0)
+	require.True(t, isNull)
+	value, isNull := strParam.GetStrValue(1)
+	require.False(t, isNull)
+	require.Equal(t, string(expectedSecond), string(value))
+}
+
+func TestAESDecryptSelectList(t *testing.T) {
+	proc := newAESProcess(t, "aes-128-ecb")
+	aesKey, err := generateAESKey([]byte("secret-key"), 16)
+	require.NoError(t, err)
+	ciphertext, err := encryptECB([]byte("world"), aesKey)
+	require.NoError(t, err)
+
+	plain := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_blob.ToType(), []string{"ignored", string(ciphertext)}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"secret-key", "secret-key"}, nil),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, AESDecrypt(plain, result, proc, 2, selectList))
+
+	resultVec := result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+	_, isNull := strParam.GetStrValue(0)
+	require.True(t, isNull)
+	value, isNull := strParam.GetStrValue(1)
+	require.False(t, isNull)
+	require.Equal(t, "world", string(value))
 }
