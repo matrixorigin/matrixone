@@ -318,6 +318,9 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	}
 
 	if isSetPlanType(&typ) {
+		if newExpr.GetLit() == nil {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+		}
 		if _, err = funcCastForSetType(proc.Ctx, newExpr, typ); err != nil {
 			return nil, err
 		}
@@ -370,10 +373,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 
 	if isSetPlanType(&typ) {
 		foldedExpr, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(onUpdateExpr), proc, false, true)
-		if foldErr == nil {
-			if _, valErr := funcCastForSetType(proc.Ctx, foldedExpr, typ); valErr != nil {
-				return nil, valErr
-			}
+		if foldErr != nil || foldedExpr.GetLit() == nil {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "SET column on-update value must be a constant expression")
+		}
+		if _, valErr := funcCastForSetType(proc.Ctx, foldedExpr, typ); valErr != nil {
+			return nil, valErr
 		}
 	}
 

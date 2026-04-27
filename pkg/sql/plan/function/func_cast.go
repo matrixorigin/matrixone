@@ -189,6 +189,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_year,
 		types.T_datalink,
 	},
 
@@ -201,6 +202,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_year,
 		types.T_datalink,
 	},
 
@@ -346,7 +348,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_json,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
@@ -1282,6 +1284,9 @@ func float32ToOthers(ctx context.Context,
 		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return floatToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float32 to %s", toType))
 }
@@ -1342,6 +1347,9 @@ func float64ToOthers(ctx context.Context,
 		types.T_binary, types.T_text, types.T_varbinary, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return floatToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return floatToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float64 to %s", toType))
 }
@@ -4371,7 +4379,31 @@ func strToYear(ctx context.Context,
 			}
 			continue
 		}
-		year, err := types.ParseMoYear(convertByteSliceToString(v))
+		s := strings.TrimRight(convertByteSliceToString(v), "\x00")
+		year, err := types.ParseMoYear(s)
+		if err != nil {
+			return err
+		}
+		if err := to.Append(year, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func floatToYear[T constraints.Float](ctx context.Context,
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		year, err := types.ParseMoYearFromInt(int64(v))
 		if err != nil {
 			return err
 		}

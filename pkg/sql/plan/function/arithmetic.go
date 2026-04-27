@@ -820,54 +820,62 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Add(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Subtract(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Multiply(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Divide(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
