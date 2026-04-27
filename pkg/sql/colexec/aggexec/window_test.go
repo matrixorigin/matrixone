@@ -281,6 +281,86 @@ func TestValueWindowExec_FillAndFlush(t *testing.T) {
 	})
 }
 
+func TestCumeDistAndPercentRankExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+	mg := NewSimpleAggMemoryManager(mp)
+
+	makeGroupVec := func(values []int64) *vector.Vector {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		return vec
+	}
+
+	t.Run("CUME_DIST_basic", func(t *testing.T) {
+		exec, err := makeCumeDistExec(mg, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+
+		vec := makeGroupVec([]int64{1, 3, 4})
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.GroupGrow(4))
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+		require.Greater(t, exec.Size(), int64(0))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		col := vector.MustFixedColNoTypeCheck[float64](results[0])
+		require.Len(t, col, 4)
+		require.InDelta(t, 2.0/3.0, col[0], 1e-9)
+		require.InDelta(t, 2.0/3.0, col[1], 1e-9)
+		require.InDelta(t, 1.0, col[2], 1e-9)
+		require.InDelta(t, 0.0, col[3], 1e-9)
+
+		results[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("CUME_DIST_distinct_rejected", func(t *testing.T) {
+		_, err := makeCumeDistExec(mg, WinIdOfCumeDist, true)
+		require.Error(t, err)
+	})
+
+	t.Run("PERCENT_RANK_basic", func(t *testing.T) {
+		exec, err := makePercentRankExec(mg, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+
+		vec := makeGroupVec([]int64{1, 3, 4})
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.GroupGrow(4))
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+		require.Greater(t, exec.Size(), int64(0))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		col := vector.MustFixedColNoTypeCheck[float64](results[0])
+		require.Len(t, col, 4)
+		require.InDelta(t, 0.0, col[0], 1e-9)
+		require.InDelta(t, 0.0, col[1], 1e-9)
+		require.InDelta(t, 1.0, col[2], 1e-9)
+		require.InDelta(t, 0.0, col[3], 1e-9)
+
+		results[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("PERCENT_RANK_distinct_rejected", func(t *testing.T) {
+		_, err := makePercentRankExec(mg, WinIdOfPercentRank, true)
+		require.Error(t, err)
+	})
+}
+
 func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)

@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,6 +105,22 @@ func TestEltCheck(t *testing.T) {
 	// Bool index should cast
 	r = eltCheck(nil, []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()})
 	require.NotEqual(t, failedFunctionParametersWrong, r.status)
+}
+
+func TestEltBitIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_bit.ToType(), []uint64{2}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"alpha"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"beta"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"gamma"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"beta"}, []bool{false}),
+		Elt,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, fmt.Sprintf("elt(bit) failed: %s", info))
 }
 
 func TestMakeSet(t *testing.T) {
@@ -305,6 +322,57 @@ func TestExportSetSelectList(t *testing.T) {
 	value, isNull := strParam.GetStrValue(1)
 	require.False(t, isNull)
 	require.Equal(t, "Y,N,Y,N", string(value))
+}
+
+func TestExportSetOptionalArguments(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("default_separator_and_bits", func(t *testing.T) {
+		ivecs := []*vector.Vector{
+			newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{5}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"Y"}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"N"}, nil),
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, ExportSet(ivecs, result, proc, 1, nil))
+
+		resultVec := result.GetResultVector()
+		strParam := vector.GenerateFunctionStrParameter(resultVec)
+		value, isNull := strParam.GetStrValue(0)
+		require.False(t, isNull)
+
+		parts := make([]string, 0, 64)
+		for bit := 0; bit < 64; bit++ {
+			if (uint64(5)>>uint(bit))&1 == 1 {
+				parts = append(parts, "Y")
+			} else {
+				parts = append(parts, "N")
+			}
+		}
+		require.Equal(t, strings.Join(parts, ","), string(value))
+	})
+
+	t.Run("number_of_bits_lower_bound", func(t *testing.T) {
+		ivecs := []*vector.Vector{
+			newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{5}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"Y"}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"N"}, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"|"}, nil),
+			newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0}, nil),
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, ExportSet(ivecs, result, proc, 1, nil))
+
+		resultVec := result.GetResultVector()
+		strParam := vector.GenerateFunctionStrParameter(resultVec)
+		value, isNull := strParam.GetStrValue(0)
+		require.False(t, isNull)
+		require.Equal(t, "Y", string(value))
+	})
 }
 
 func TestPKCS7PaddingUnpadding(t *testing.T) {
