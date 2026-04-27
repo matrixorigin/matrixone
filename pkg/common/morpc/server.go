@@ -371,6 +371,11 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 				written := responses[:0]
 				timeout := time.Duration(0)
+				closeNeedClose := func() {
+					for _, f := range needClose {
+						f.Close()
+					}
+				}
 				for _, f := range responses {
 					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 					if f.oneWay {
@@ -417,6 +422,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							cs.releaseMessage(f.send)
 						}
 						f.messageSent(err)
+						closeNeedClose()
 						return
 					}
 					written = append(written, f)
@@ -443,6 +449,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						ce.Write(fields...)
 					}
 					if err != nil {
+						closeNeedClose()
 						return
 					}
 				}
@@ -450,9 +457,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				for _, f := range written {
 					f.messageSent(nil)
 				}
-				for _, f := range needClose {
-					f.Close()
-				}
+				closeNeedClose()
 
 				s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
 			}

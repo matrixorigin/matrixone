@@ -17,12 +17,15 @@ package morpc
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,6 +195,50 @@ func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
 	require.Equal(t, 1, futureReleased)
 }
 
+func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
+	run := func(t *testing.T, conn *testIOSession) {
+		futureReleased := 0
+		s := &server{
+			name:     "test",
+			metrics:  newServerMetrics("test"),
+			logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+			stopper:  stopper.NewStopper("test"),
+			sessions: &sync.Map{},
+		}
+		s.adjust()
+		s.options.batchSendSize = 1
+
+		cs := newClientSession(
+			s.metrics,
+			conn,
+			newTestCodec(),
+			func() *Future { return newFuture(nil) },
+			nil,
+		)
+
+		f := newFuture(func(*Future) { futureReleased++ })
+		f.init(RPCMessage{
+			Ctx:     context.Background(),
+			Message: newTestMessage(1),
+			oneWay:  true,
+		})
+		cs.c <- f
+
+		require.NoError(t, s.startWriteLoop(cs))
+		require.Eventually(t, func() bool {
+			return futureReleased == 1
+		}, time.Second, time.Millisecond*10)
+		s.stopper.Stop()
+	}
+
+	t.Run("write error", func(t *testing.T) {
+		run(t, newTestIOSession(goetty.ErrIllegalState, nil))
+	})
+	t.Run("flush error", func(t *testing.T) {
+		run(t, newTestIOSession(nil, io.ErrClosedPipe))
+	})
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -233,6 +280,34 @@ func TestStreamServer(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+type testIOSession struct {
+	out      *buf.ByteBuf
+	writeErr error
+	flushErr error
+}
+
+func newTestIOSession(writeErr, flushErr error) *testIOSession {
+	return &testIOSession{
+		out:      buf.NewByteBuf(1),
+		writeErr: writeErr,
+		flushErr: flushErr,
+	}
+}
+
+func (s *testIOSession) ID() uint64                           { return 1 }
+func (s *testIOSession) Connect(string, time.Duration) error  { return nil }
+func (s *testIOSession) Connected() bool                      { return true }
+func (s *testIOSession) Disconnect() error                    { return nil }
+func (s *testIOSession) Close() error                         { s.out.Close(); return nil }
+func (s *testIOSession) Ref()                                 {}
+func (s *testIOSession) Read(goetty.ReadOptions) (any, error) { return nil, io.EOF }
+func (s *testIOSession) Write(any, goetty.WriteOptions) error { return s.writeErr }
+func (s *testIOSession) Flush(time.Duration) error            { return s.flushErr }
+func (s *testIOSession) RemoteAddress() string                { return "" }
+func (s *testIOSession) RawConn() net.Conn                    { return nil }
+func (s *testIOSession) UseConn(net.Conn)                     {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf                 { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
