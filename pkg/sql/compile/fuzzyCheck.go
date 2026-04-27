@@ -80,6 +80,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
 		} else {
 			f.col = n.Fuzzymessage.ParentUniqueCols[0]
+			f.attr = n.Fuzzymessage.ParentUniqueCols[0].Name
 		}
 	}
 
