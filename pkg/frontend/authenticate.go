@@ -8049,6 +8049,11 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	}
 	arr := extractPrivilegeTipsFromPlan(sourcePlan)
 	if len(arr) == 0 {
+		if viewTip, ok := extractDirectViewPrivilegeTipFromPlan(sourcePlan); ok {
+			arr = append(arr, viewTip)
+		}
+	}
+	if len(arr) == 0 {
 		return true, stats, nil
 	}
 
