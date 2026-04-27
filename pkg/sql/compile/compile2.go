@@ -266,6 +266,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				err = rewriteHiddenIndexDupEntry(c.pn, err)
+			}
 			if c.proc.GetTxnOperator().Txn().IsRCIsolation() &&
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				orphan, e := c.proc.Base.LockService.IsOrphanTxn(

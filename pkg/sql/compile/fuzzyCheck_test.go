@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -130,4 +131,80 @@ func TestConstructFuzzyFilterFallsBackToPkeyColName(t *testing.T) {
 	op := constructFuzzyFilter(n, tableScan, sinkScan)
 	require.NotNil(t, op)
 	require.Equal(t, "id", op.PkName)
+}
+
+// TestRewriteHiddenIndexDupEntrySingleColumn verifies that duplicate-entry
+// errors carrying the internal __mo_index_idx_col key get rewritten to the
+// user-visible column name.
+func TestRewriteHiddenIndexDupEntrySingleColumn(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "decimal15",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "a_index", Parts: []string{"a"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("271.21212", catalog.IndexTableIndexColName)
+	rewritten := rewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, "Duplicate entry '271.21212' for key 'a'", rewritten.Error())
+}
+
+// TestRewriteHiddenIndexDupEntryCompositeIndex verifies composite unique
+// indexes are rewritten using the index name rather than the internal key.
+func TestRewriteHiddenIndexDupEntryCompositeIndex(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "t1",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "tempKey", Parts: []string{"col1", "col2"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("(1,2)", catalog.IndexTableIndexColName)
+	rewritten := rewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, "Duplicate entry '(1,2)' for key 'tempKey'", rewritten.Error())
+}
+
+// TestRewriteHiddenIndexDupEntryUnchanged verifies errors that do not reference
+// the hidden column are left alone.
+func TestRewriteHiddenIndexDupEntryUnchanged(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "t1",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "a_index", Parts: []string{"a"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("v", "pk")
+	rewritten := rewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, src.Error(), rewritten.Error())
 }
