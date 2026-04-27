@@ -140,11 +140,13 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 }
 
 func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.T) {
+	released := 0
 	cs := newClientSession(
 		newServerMetrics("test"),
 		nil,
 		newTestCodec(),
 		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
 	)
 	cs.c = make(chan *Future, 1)
 	cs.c <- newFuture(nil)
@@ -160,6 +162,7 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 1, released)
 	case <-time.After(time.Second):
 		t.Fatal("write blocked after context deadline")
 	}
