@@ -376,7 +376,16 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						f.Close()
 					}
 				}
-				for _, f := range responses {
+				failUnwritten := func(values []*Future, err error) {
+					for _, f := range values {
+						cs.releaseMessage(f.send)
+						f.messageSent(err)
+						if f.oneWay {
+							f.Close()
+						}
+					}
+				}
+				for idx, f := range responses {
 					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 					if f.oneWay {
 						needClose = append(needClose, f)
@@ -422,6 +431,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							cs.releaseMessage(f.send)
 						}
 						f.messageSent(err)
+						for _, writtenFuture := range written {
+							writtenFuture.messageSent(err)
+						}
+						failUnwritten(responses[idx+1:], err)
 						closeNeedClose()
 						return
 					}

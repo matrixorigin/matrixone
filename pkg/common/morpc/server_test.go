@@ -240,6 +240,58 @@ func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
 	})
 }
 
+func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
+	var released atomic.Int32
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 3
+	defer s.stopper.Stop()
+
+	cs := newClientSession(
+		s.metrics,
+		newTestIOSessionWithWriteErrorAt(2, goetty.ErrIllegalState, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released.Add(1) },
+	)
+
+	newSyncFuture := func(id uint64) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{
+			Ctx:     ctx,
+			Message: newTestMessage(id),
+		})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	f1 := newSyncFuture(1)
+	f2 := newSyncFuture(2)
+	f3 := newSyncFuture(3)
+	cs.c <- f1
+	cs.c <- f2
+	cs.c <- f3
+
+	require.NoError(t, s.startWriteLoop(cs))
+	for _, f := range []*Future{f1, f2, f3} {
+		select {
+		case err := <-f.writtenC:
+			require.ErrorIs(t, err, goetty.ErrIllegalState)
+		case <-time.After(time.Second):
+			t.Fatalf("future %d was not completed after batch write failure", f.getSendMessageID())
+		}
+	}
+	require.Equal(t, int32(2), released.Load())
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -283,16 +335,27 @@ func TestStreamServer(t *testing.T) {
 }
 
 type testIOSession struct {
-	out      *buf.ByteBuf
-	writeErr error
-	flushErr error
+	out        *buf.ByteBuf
+	writeErr   error
+	writeErrAt int32
+	writeCount atomic.Int32
+	flushErr   error
 }
 
 func newTestIOSession(writeErr, flushErr error) *testIOSession {
+	writeErrAt := int32(0)
+	if writeErr != nil {
+		writeErrAt = 1
+	}
+	return newTestIOSessionWithWriteErrorAt(writeErrAt, writeErr, flushErr)
+}
+
+func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error) *testIOSession {
 	return &testIOSession{
-		out:      buf.NewByteBuf(1),
-		writeErr: writeErr,
-		flushErr: flushErr,
+		out:        buf.NewByteBuf(1),
+		writeErr:   writeErr,
+		writeErrAt: writeErrAt,
+		flushErr:   flushErr,
 	}
 }
 
@@ -303,12 +366,17 @@ func (s *testIOSession) Disconnect() error                    { return nil }
 func (s *testIOSession) Close() error                         { s.out.Close(); return nil }
 func (s *testIOSession) Ref()                                 {}
 func (s *testIOSession) Read(goetty.ReadOptions) (any, error) { return nil, io.EOF }
-func (s *testIOSession) Write(any, goetty.WriteOptions) error { return s.writeErr }
-func (s *testIOSession) Flush(time.Duration) error            { return s.flushErr }
-func (s *testIOSession) RemoteAddress() string                { return "" }
-func (s *testIOSession) RawConn() net.Conn                    { return nil }
-func (s *testIOSession) UseConn(net.Conn)                     {}
-func (s *testIOSession) OutBuf() *buf.ByteBuf                 { return s.out }
+func (s *testIOSession) Write(any, goetty.WriteOptions) error {
+	if s.writeErr != nil && s.writeCount.Add(1) == s.writeErrAt {
+		return s.writeErr
+	}
+	return nil
+}
+func (s *testIOSession) Flush(time.Duration) error { return s.flushErr }
+func (s *testIOSession) RemoteAddress() string     { return "" }
+func (s *testIOSession) RawConn() net.Conn         { return nil }
+func (s *testIOSession) UseConn(net.Conn)          {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf      { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
