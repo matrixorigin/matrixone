@@ -1094,3 +1094,11 @@ Contributions to MatrixOne are welcome from everyone.
 ## <a id="license">License</a>
 
 MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).
+
+## 💰 Bounty Contribution
+
+- **Task:** [Bug]: query66 (TPC-DS) drops a GROUP BY row AND returns non-deterministic numer
+- **Reward:** $1
+- **Source:** GitHub-Paid
+- **Date:** 2026-04-27
+
