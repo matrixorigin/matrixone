@@ -210,6 +210,7 @@ func TestUnlockOrphanTxnWithServiceRestart(t *testing.T) {
 
 func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 	remoteLockTimeout := time.Millisecond * 200
+	activeTxns := [][]byte{[]byte("anchor"), []byte("holder"), []byte("waiter")}
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
@@ -256,6 +257,13 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+			c.TxnIterFunc = func(f func([]byte) bool) {
+				for _, txn := range activeTxns {
+					if !f(txn) {
+						return
+					}
+				}
+			}
 		},
 	)
 }
@@ -307,6 +315,72 @@ func TestKeepRemoteLockRefreshesAllRemoteBinds(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+		},
+	)
+}
+
+func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
+	remoteLockTimeout := time.Millisecond * 200
+	activeTxns := [][]byte{[]byte("anchor"), []byte("holder"), []byte("waiter")}
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			anchorTxn := []byte("anchor")
+			holderTxn := []byte("holder")
+			waiterTxn := []byte("waiter")
+			table1 := uint64(1)
+			row1 := []byte{1}
+			row2 := []byte{2}
+
+			mustAddTestLock(t, ctx, l1, table1, anchorTxn, [][]byte{row2}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
+			alloc.getCtl(l2.GetServiceID()).add(string(holderTxn), committingState)
+
+			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
+				return id == table1
+			})
+
+			doneC := make(chan struct{})
+			go func() {
+				defer close(doneC)
+				mustAddTestLock(t, ctx, l1, table1, waiterTxn, [][]byte{row1}, pb.Granularity_Row)
+			}()
+
+			select {
+			case <-doneC:
+				require.FailNow(t, "waiter txn was unlocked while holder txn was still committing")
+			case <-time.After(remoteLockTimeout * 3):
+			}
+
+			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(holderTxn, false, ""))
+			require.NoError(t, l1.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+			select {
+			case <-doneC:
+			case <-ctx.Done():
+				require.FailNow(t, "waiter txn did not resume after holder unlock")
+			}
+
+			require.NoError(t, l1.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, l1.Unlock(ctx, anchorTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
+			c.TxnIterFunc = func(f func([]byte) bool) {
+				for _, txn := range activeTxns {
+					if !f(txn) {
+						return
+					}
+				}
+			}
 		},
 	)
 }
@@ -770,4 +844,40 @@ func TestValidTxnWithInvalidRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
 		},
 	).(*mapBasedTxnHolder)
 	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestCanUnlockRemoteTxnWithNotifyOK(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, ErrLockConflict },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	require.False(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
+func TestCanUnlockRemoteTxnWithNotifyFoundCommitting(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	require.False(t, hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }

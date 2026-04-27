@@ -283,6 +283,12 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 
 	for _, h := range holders {
 		if !mw.txnHolder.hasRemoteLockBind(h.CreatedOn, v.lt.bind, mw.remoteLockTimeout) {
+			if !mw.txnHolder.canUnlockRemoteTxn(h) {
+				mw.logger.Warn("found stale remote lock without bind heartbeat, but txn may still commit",
+					zap.String("bind", v.lt.bind.DebugString()),
+					bytesArrayField("txns", [][]byte{h.TxnID}))
+				continue
+			}
 			mw.logger.Warn("found stale remote lock without bind heartbeat",
 				zap.String("bind", v.lt.bind.DebugString()),
 				bytesArrayField("txns", [][]byte{h.TxnID}))

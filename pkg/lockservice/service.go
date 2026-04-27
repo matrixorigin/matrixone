@@ -656,6 +656,7 @@ type activeTxnHolder interface {
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
+	canUnlockRemoteTxn(pb.WaitTxn) bool
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
@@ -935,7 +936,13 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 	if isRetryError(err) {
 		return true
 	}
+	return !h.canUnlockRemoteTxn(txn)
+}
 
+func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
+	if txn.CreatedOn == h.serviceID {
+		return false
+	}
 	cannotCommit := []pb.OrphanTxn{
 		{
 			Service: txn.CreatedOn,
@@ -945,11 +952,11 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
-		// any error, we cannot make txn as a invalid txn
-		return true
+		// any error, we cannot determine that the txn is safe to unlock.
+		return false
 	}
-	// the target txn is committing, valid
-	return len(committing) != 0
+	// the target txn is safe to unlock only when TN confirms it is not committing.
+	return len(committing) == 0
 }
 
 func (h *mapBasedTxnHolder) close() {
