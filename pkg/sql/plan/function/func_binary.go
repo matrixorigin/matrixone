@@ -4098,54 +4098,6 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
-func eltCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) < 2 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-
-	shouldCast := false
-	castTypes := make([]types.Type, len(inputs))
-
-	// First argument must be numeric (int64)
-	if !inputs[0].Oid.IsInteger() && inputs[0].Oid != types.T_any {
-		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
-		if c == matchFailed {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[0] = types.T_int64.ToType()
-		} else {
-			castTypes[0] = inputs[0]
-		}
-	} else {
-		castTypes[0] = inputs[0]
-	}
-
-	// Rest arguments must be strings
-	for i := 1; i < len(inputs); i++ {
-		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
-			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
-			if c == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if c == matchByCast {
-				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
-			} else {
-				castTypes[i] = inputs[i]
-			}
-		} else {
-			castTypes[i] = inputs[i]
-		}
-	}
-
-	if shouldCast {
-		return newCheckResultWithCast(0, castTypes)
-	}
-	return newCheckResultWithSuccess(0)
-}
-
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
 func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4190,57 +4142,6 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		}
 	}
 	return nil
-}
-
-func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
-	// MAKE_SET(bits, str1, str2, ...)
-	// Minimum 2 arguments (bits + at least one string)
-	if len(inputs) < 2 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-
-	shouldCast := false
-	castTypes := make([]types.Type, len(inputs))
-
-	// First argument (bits) must be numeric
-	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
-	if !isNumeric && inputs[0].Oid != types.T_any {
-		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
-		if c == matchFailed {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[0] = types.T_int64.ToType()
-		} else {
-			castTypes[0] = inputs[0]
-		}
-	} else {
-		castTypes[0] = inputs[0]
-	}
-
-	// Rest arguments must be strings
-	for i := 1; i < len(inputs); i++ {
-		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
-			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
-			if c == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if c == matchByCast {
-				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
-			} else {
-				castTypes[i] = inputs[i]
-			}
-		} else {
-			castTypes[i] = inputs[i]
-		}
-	}
-
-	if shouldCast {
-		return newCheckResultWithCast(0, castTypes)
-	}
-	return newCheckResultWithSuccess(0)
 }
 
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
@@ -4397,94 +4298,6 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		}
 	}
 	return nil
-}
-
-func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
-	// EXPORT_SET(bits, on, off[, separator[, number_of_bits]])
-	// Minimum 3 arguments, maximum 5 arguments
-	if len(inputs) < 3 || len(inputs) > 5 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-
-	shouldCast := false
-	castTypes := make([]types.Type, len(inputs))
-
-	// First argument (bits) must be numeric
-	// Check if it's a numeric type (integer, float, or decimal)
-	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
-	if !isNumeric && inputs[0].Oid != types.T_any {
-		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
-		if c == matchFailed {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if c == matchByCast {
-			shouldCast = true
-			castTypes[0] = types.T_int64.ToType()
-		} else {
-			castTypes[0] = inputs[0]
-		}
-	} else {
-		castTypes[0] = inputs[0]
-	}
-
-	// Second and third arguments (on, off) must be strings
-	for i := 1; i <= 2; i++ {
-		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
-			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
-			if c == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if c == matchByCast {
-				shouldCast = true
-				castTypes[i] = types.T_varchar.ToType()
-			} else {
-				castTypes[i] = inputs[i]
-			}
-		} else {
-			castTypes[i] = inputs[i]
-		}
-	}
-
-	// Optional fourth argument (separator) must be string
-	if len(inputs) >= 4 {
-		if !inputs[3].Oid.IsMySQLString() && inputs[3].Oid != types.T_any {
-			c, _ := tryToMatch([]types.Type{inputs[3]}, []types.T{types.T_varchar})
-			if c == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if c == matchByCast {
-				shouldCast = true
-				castTypes[3] = types.T_varchar.ToType()
-			} else {
-				castTypes[3] = inputs[3]
-			}
-		} else {
-			castTypes[3] = inputs[3]
-		}
-	}
-
-	// Optional fifth argument (number_of_bits) must be numeric
-	if len(inputs) >= 5 {
-		if !inputs[4].Oid.IsInteger() && inputs[4].Oid != types.T_any {
-			c, _ := tryToMatch([]types.Type{inputs[4]}, []types.T{types.T_int64})
-			if c == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if c == matchByCast {
-				shouldCast = true
-				castTypes[4] = types.T_int64.ToType()
-			} else {
-				castTypes[4] = inputs[4]
-			}
-		} else {
-			castTypes[4] = inputs[4]
-		}
-	}
-
-	if shouldCast {
-		return newCheckResultWithCast(0, castTypes)
-	}
-	return newCheckResultWithSuccess(0)
 }
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
