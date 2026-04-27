@@ -14,8 +14,6 @@ jobs:
       github.event.issue.pull_request &&
       contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association) &&
       (
-        startsWith(github.event.comment.body, '/analyze-pr') ||
-        startsWith(github.event.comment.body, '/gen-chaos-pr') ||
         startsWith(github.event.comment.body, '/auto-test-pr')
       )
     runs-on: ubuntu-latest
@@ -25,8 +23,6 @@ jobs:
         run: |
           body="${{ github.event.comment.body }}"
           case "$body" in
-            /analyze-pr*)   echo "name=analyze-pr"   >> "$GITHUB_OUTPUT" ;;
-            /gen-chaos-pr*) echo "name=gen-chaos-pr" >> "$GITHUB_OUTPUT" ;;
             /auto-test-pr*) echo "name=auto-test-pr" >> "$GITHUB_OUTPUT" ;;
             *) echo "Unsupported command" >&2; exit 1 ;;
           esac
