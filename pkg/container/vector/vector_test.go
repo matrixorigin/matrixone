@@ -62,6 +62,26 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestMakeAppendBytesFuncSupportsYearAndDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	yearVec := NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	appendYear := MakeAppendBytesFunc(yearVec)
+	require.NoError(t, appendYear(types.EncodeFixed(types.MoYear(2024)), false, mp))
+	years := MustFixedColNoTypeCheck[types.MoYear](yearVec)
+	require.Equal(t, types.MoYear(2024), years[0])
+
+	decimalVec := NewVec(types.New(types.T_decimal256, 65, 4))
+	defer decimalVec.Free(mp)
+	appendDecimal := MakeAppendBytesFunc(decimalVec)
+	decimal, err := types.ParseDecimal256("123456789012345678901234567890.1234", 65, 4)
+	require.NoError(t, err)
+	require.NoError(t, appendDecimal(types.EncodeFixed(decimal), false, mp))
+	decimals := MustFixedColNoTypeCheck[types.Decimal256](decimalVec)
+	require.Equal(t, "123456789012345678901234567890.1234", decimals[0].Format(4))
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())

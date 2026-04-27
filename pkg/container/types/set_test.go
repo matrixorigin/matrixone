@@ -55,6 +55,27 @@ func TestParseSet(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseSetWithEmptyMember(t *testing.T) {
+	setDef := EncodeSetValues([]string{"", "a"})
+	require.NotEqual(t, ",a", setDef)
+
+	bits, err := ParseSet(setDef, "")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), bits)
+
+	bits, err = ParseSet(setDef, ",a")
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), bits)
+
+	value, err := ParseSetIndex(setDef, 3)
+	require.NoError(t, err)
+	require.Equal(t, ",a", value)
+
+	values, err := DecodeSetValues(setDef)
+	require.NoError(t, err)
+	require.Equal(t, []string{"", "a"}, values)
+}
+
 func TestNormalizeSetValuesMaxMembers(t *testing.T) {
 	values := make([]string, MaxSetMembers+1)
 	for i := range values {

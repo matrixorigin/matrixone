@@ -36,6 +36,9 @@ func ParseMoYear(s string) (MoYear, error) {
 	if err != nil {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid year format: %s", s)
 	}
+	if s == "0" || s == "00" {
+		return 0, nil
+	}
 	if len(s) == 4 {
 		if s == "0000" {
 			return 0, nil

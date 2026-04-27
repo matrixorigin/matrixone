@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -665,6 +666,14 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 		expr = makePlan2Uint64ConstExprWithType(value.U64Val)
 		expr.Typ = targetType
 		return expr, nil
+	case *plan.Literal_I8Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I8Val), targetType)
+	case *plan.Literal_I16Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I16Val), targetType)
+	case *plan.Literal_I32Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I32Val), targetType)
+	case *plan.Literal_I64Val:
+		return funcCastSignedLiteralForSetType(ctx, value.I64Val, targetType)
 	case *plan.Literal_U8Val:
 		bits := uint64(value.U8Val)
 		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
@@ -691,6 +700,19 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 		return expr, nil
 	}
 
+	return expr, nil
+}
+
+func funcCastSignedLiteralForSetType(ctx context.Context, value int64, targetType Type) (*Expr, error) {
+	if value < 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "convert to MySQL set failed: negative value %d", value)
+	}
+	bits := uint64(value)
+	if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+		return nil, err
+	}
+	expr := makePlan2Uint64ConstExprWithType(bits)
+	expr.Typ = targetType
 	return expr, nil
 }
 

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 )
 
 const MaxSetMembers = 64
+const encodedSetValuesPrefix = "\x00setjson:"
 
 var setDescriptorCache sync.Map
 
@@ -51,6 +53,30 @@ func NormalizeSetValues(values []string) ([]string, error) {
 		result = append(result, trimmed)
 	}
 	return result, nil
+}
+
+func EncodeSetValues(values []string) string {
+	for _, value := range values {
+		if value == "" {
+			encoded, _ := json.Marshal(values)
+			return encodedSetValuesPrefix + string(encoded)
+		}
+	}
+	return strings.Join(values, ",")
+}
+
+func DecodeSetValues(setStr string) ([]string, error) {
+	if strings.HasPrefix(setStr, encodedSetValuesPrefix) {
+		var values []string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(setStr, encodedSetValuesPrefix)), &values); err != nil {
+			return nil, err
+		}
+		return values, nil
+	}
+	if len(setStr) == 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
+	}
+	return strings.Split(setStr, ","), nil
 }
 
 func ParseSet(setStr string, name string) (uint64, error) {
@@ -114,11 +140,11 @@ func getSetDescriptor(setStr string) (*setDescriptor, error) {
 }
 
 func buildSetDescriptor(setStr string) (*setDescriptor, error) {
-	if len(setStr) == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
+	decoded, err := DecodeSetValues(setStr)
+	if err != nil {
+		return nil, err
 	}
-
-	values, err := NormalizeSetValues(strings.Split(setStr, ","))
+	values, err := NormalizeSetValues(decoded)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +169,9 @@ func buildSetDescriptor(setStr string) (*setDescriptor, error) {
 
 func (d *setDescriptor) parseName(name string) (uint64, bool) {
 	if len(name) == 0 {
+		if bit, ok := d.valueToBit[""]; ok {
+			return bit, true
+		}
 		return 0, true
 	}
 
@@ -175,16 +204,18 @@ func (d *setDescriptor) bitsToString(bits uint64) (string, error) {
 		return "", err
 	}
 	builder := strings.Builder{}
+	first := true
 	for idx, value := range d.values {
 		mask := uint64(1) << uint(idx)
 		if bits&mask == 0 {
 			continue
 		}
 
-		if builder.Len() > 0 {
+		if !first {
 			builder.WriteByte(',')
 		}
 		builder.WriteString(value)
+		first = false
 	}
 	return builder.String(), nil
 }

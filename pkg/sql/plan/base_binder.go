@@ -2004,7 +2004,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
-			return nil, err
+			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
 		}
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)

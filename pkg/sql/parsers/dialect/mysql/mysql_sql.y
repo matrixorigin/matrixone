@@ -12884,13 +12884,90 @@ spatial_type:
             },
         }
     }
-// |   POINT
-// |   LINESTRING
-// |   POLYGON
-// |   GEOMETRYCOLLECTION
-// |   MULTIPOINT
-// |   MULTILINESTRING
-// |   MULTIPOLYGON
+|   POINT
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   LINESTRING
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   POLYGON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   GEOMETRYCOLLECTION
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTIPOINT
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTILINESTRING
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTIPOLYGON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
 
 // TODO:
 // need to encode SQL string

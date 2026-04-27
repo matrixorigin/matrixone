@@ -4352,10 +4352,7 @@ func strToYear(ctx context.Context,
 		}
 		year, err := types.ParseMoYear(convertByteSliceToString(v))
 		if err != nil {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-			continue
+			return err
 		}
 		if err := to.Append(year, false); err != nil {
 			return err
@@ -4378,10 +4375,7 @@ func integerToYear[T constraints.Integer](ctx context.Context,
 		}
 		year, err := types.ParseMoYearFromInt(int64(v))
 		if err != nil {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-			continue
+			return err
 		}
 		if err := to.Append(year, false); err != nil {
 			return err

@@ -2172,7 +2172,7 @@ func TestYearCastHelpers(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 
-	inputVec := testutil.MakeVarcharVector([]string{"69", "1901", "2156"}, nil)
+	inputVec := testutil.MakeVarcharVector([]string{"69", "1901", "0"}, nil)
 	defer inputVec.Free(mp)
 	from := vector.GenerateFunctionStrParameter(inputVec)
 	to := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
@@ -2185,7 +2185,7 @@ func TestYearCastHelpers(t *testing.T) {
 	years := vector.MustFixedColNoTypeCheck[types.MoYear](yearVec)
 	require.Equal(t, types.MoYear(2069), years[0])
 	require.Equal(t, types.MoYear(1901), years[1])
-	require.True(t, yearVec.GetNulls().Contains(2))
+	require.Equal(t, types.MoYear(0), years[2])
 
 	strResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp).(*vector.FunctionResult[types.Varlena])
 	defer strResult.Free()
@@ -2195,6 +2195,26 @@ func TestYearCastHelpers(t *testing.T) {
 	got, null := strParam.GetStrValue(0)
 	require.False(t, null)
 	require.Equal(t, "2069", string(got))
+}
+
+func TestYearCastRejectsInvalidValues(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	inputVec := testutil.MakeVarcharVector([]string{"2156", "abcd"}, nil)
+	defer inputVec.Free(mp)
+	strResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer strResult.Free()
+	require.NoError(t, strResult.PreExtendAndReset(2))
+	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(inputVec), strResult, 2, nil))
+
+	intVec := vector.NewVec(types.T_int64.ToType())
+	defer intVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(intVec, []int64{2156}, nil, mp))
+	intResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(1))
+	require.Error(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](intVec), intResult, 1, nil))
 }
 
 func TestYearToOthersCoversSupportedNumericMatrix(t *testing.T) {
@@ -2285,6 +2305,16 @@ func TestYearToStringRespectsTargetWidthAndBinaryPadding(t *testing.T) {
 	got, null := binaryParam.GetStrValue(0)
 	require.False(t, null)
 	require.Equal(t, []byte{'2', '0', '2', '4', 0, 0}, got)
+
+	varbinaryType := types.New(types.T_varbinary, 4, 0)
+	varbinaryResult := vector.NewFunctionResultWrapper(varbinaryType, mp).(*vector.FunctionResult[types.Varlena])
+	defer varbinaryResult.Free()
+	require.NoError(t, varbinaryResult.PreExtendAndReset(1))
+	require.NoError(t, yearToOthers(ctx, from, varbinaryType, varbinaryResult, 1, nil))
+	varbinaryParam := vector.GenerateFunctionStrParameter(varbinaryResult.GetResultVector())
+	got, null = varbinaryParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, []byte("2024"), got)
 }
 
 func TestScalarNullToDecimal256(t *testing.T) {

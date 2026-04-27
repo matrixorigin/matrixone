@@ -120,6 +120,16 @@ func TestMakePlan2DecimalExprWithTypeUsesDecimal256(t *testing.T) {
 	require.Equal(t, int32(0), expr.Typ.Scale)
 }
 
+func TestDefaultBinderUntypedDecimalLiteralUsesDecimal256(t *testing.T) {
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	decimal := "123456789012345678901234567890123456789"
+	expr, err := binder.BindExpr(tree.NewNumVal(decimal, decimal, false, tree.P_decimal), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(0), expr.Typ.Scale)
+}
+
 func TestSetDefaultAndOnUpdateUseSetMembers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
@@ -145,4 +155,30 @@ func TestSetDefaultAndOnUpdateUseSetMembers(t *testing.T) {
 	onUpdate, err := buildOnUpdate(onUpdateCol, setType, proc)
 	require.NoError(t, err)
 	require.NotNil(t, onUpdate.Expr)
+}
+
+func TestSetDefaultRejectsSignedNumericOverflow(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
+	expr := makePlan2Int64ConstExprWithType(8)
+	_, err := funcCastForSetType(context.Background(), expr, setType)
+	require.Error(t, err)
+
+	expr = makePlan2Int64ConstExprWithType(-1)
+	_, err = funcCastForSetType(context.Background(), expr, setType)
+	require.Error(t, err)
+
+	expr = makePlan2Int64ConstExprWithType(3)
+	casted, err := funcCastForSetType(context.Background(), expr, setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), casted.GetLit().GetU64Val())
+}
+
+func TestSetEmptyMemberFormatting(t *testing.T) {
+	setValues, err := types.NormalizeSetValues([]string{"", "a"})
+	require.NoError(t, err)
+	encoded := types.EncodeSetValues(setValues)
+	require.NotEqual(t, ",a", encoded)
+
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: encoded}
+	require.Equal(t, "SET('','a')", FormatColType(setType))
 }

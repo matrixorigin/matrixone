@@ -570,13 +570,22 @@ func FormatColType(colType plan.Type) string {
 	suffix := ""
 	switch types.T(colType.Id) {
 	case types.T_enum:
-		fallthrough
+		elements := strings.Split(colType.GetEnumvalues(), ",")
+		// format enum as ENUM ('e1', 'e2')
+		elems := make([]string, 0, len(elements))
+		for _, e := range elements {
+			e = EscapeFormat(e)
+			elems = append(elems, e)
+		}
+		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
 	case types.T_uint64:
 		if !isEnumOrSetPlanType(&colType) {
 			break
 		}
-		elements := strings.Split(colType.GetEnumvalues(), ",")
-		// format enum as ENUM ('e1', 'e2')
+		elements, err := types.DecodeSetValues(colType.GetEnumvalues())
+		if err != nil {
+			elements = strings.Split(colType.GetEnumvalues(), ",")
+		}
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
 			e = EscapeFormat(e)
