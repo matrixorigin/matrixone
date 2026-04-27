@@ -413,7 +413,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						s.logger.Error("write response failed",
 							zap.Uint64("request-id", f.send.Message.GetID()),
 							zap.Error(err))
-						cs.releaseMessage(f.send)
+						if err == goetty.ErrIllegalState {
+							cs.releaseMessage(f.send)
+						}
 						f.messageSent(err)
 						return
 					}
@@ -619,6 +621,7 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
 		default:
 			return

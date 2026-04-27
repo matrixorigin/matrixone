@@ -432,25 +432,7 @@ func writeResponse(
 	err error,
 	cs morpc.ClientSession,
 ) {
-	if cancel != nil {
-		defer cancel()
-	}
-
-	if err != nil {
-		resp.WrapError(err)
-	}
-	detail := ""
-	if logger.Enabled(zap.DebugLevel) {
-		detail = resp.DebugString()
-		logger.Debug("handle request completed",
-			zap.String("response", detail))
-	}
-	// after write, response will be released by rpc
-	if err := cs.AsyncWrite(resp); err != nil {
-		logger.Error("write response failed",
-			zap.Error(err),
-			zap.String("response", detail))
-	}
+	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout)
 }
 
 func writeResponseWithDeadline(

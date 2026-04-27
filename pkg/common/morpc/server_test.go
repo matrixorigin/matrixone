@@ -168,6 +168,28 @@ func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.
 	}
 }
 
+func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
+	released := 0
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
+	)
+
+	f := newFuture(nil)
+	f.init(RPCMessage{
+		Ctx:     context.Background(),
+		Message: newTestMessage(1),
+		oneWay:  true,
+	})
+	cs.c <- f
+
+	cs.cleanSend()
+	require.Equal(t, 1, released)
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)

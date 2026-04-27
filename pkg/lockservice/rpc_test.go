@@ -79,6 +79,18 @@ func TestWriteResponseWithDeadlineUsesSyncWrite(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestWriteResponseUsesSyncWrite(t *testing.T) {
+	resp := acquireResponse()
+	defer releaseResponse(resp)
+
+	cs := &testClientSession{ctx: context.Background()}
+	writeResponse(getLogger(""), nil, resp, nil, cs)
+	require.True(t, cs.writeCalled)
+	require.False(t, cs.asyncCalled)
+	_, ok := cs.writeCtx.Deadline()
+	require.True(t, ok)
+}
+
 func TestRPCSend(t *testing.T) {
 	runRPCTests(
 		t,
