@@ -139,6 +139,32 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 	})
 }
 
+func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.T) {
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+	)
+	cs.c = make(chan *Future, 1)
+	cs.c <- newFuture(nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cs.Write(ctx, newTestMessage(1))
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("write blocked after context deadline")
+	}
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)

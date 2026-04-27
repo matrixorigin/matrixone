@@ -670,7 +670,15 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	if !f.oneWay {
 		f.ref()
 	}
-	cs.c <- f
+	select {
+	case cs.c <- f:
+	case <-msg.Ctx.Done():
+		f.Close()
+		if !f.oneWay {
+			f.unRef()
+		}
+		return nil, msg.Ctx.Err()
+	}
 	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
 }
