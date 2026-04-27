@@ -1499,6 +1499,7 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	flag := false
 	t := false
 	floatflag := false
+	expDigitSeen := false
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
@@ -1594,11 +1595,16 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				scale++
 			}
 		} else {
+			expDigitSeen = true
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
 		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
 		return
 	}
@@ -1691,6 +1697,7 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	i := 0
 	flag := false
 	floatflag := false
+	expDigitSeen := false
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
@@ -1789,11 +1796,16 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				scale++
 			}
 		} else {
+			expDigitSeen = true
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
 		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
 		return
 	}
@@ -1830,6 +1842,7 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	i := 0
 	flag := false
 	floatflag := false
+	expDigitSeen := false
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
@@ -1934,11 +1947,16 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 				scale++
 			}
 		} else {
+			expDigitSeen = true
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
 		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
 		return
 	}

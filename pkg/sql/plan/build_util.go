@@ -317,6 +317,12 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		return nil, err
 	}
 
+	if isSetPlanType(&typ) {
+		if _, err = funcCastForSetType(proc.Ctx, newExpr, typ); err != nil {
+			return nil, err
+		}
+	}
+
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
@@ -360,6 +366,15 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if isSetPlanType(&typ) {
+		foldedExpr, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(onUpdateExpr), proc, false, true)
+		if foldErr == nil {
+			if _, valErr := funcCastForSetType(proc.Ctx, foldedExpr, typ); valErr != nil {
+				return nil, valErr
+			}
+		}
 	}
 
 	ret := &plan.OnUpdate{

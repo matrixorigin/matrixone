@@ -83,7 +83,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -96,7 +96,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -109,7 +109,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -135,7 +135,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -148,7 +148,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -161,7 +161,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -174,7 +174,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -315,7 +315,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bool,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_varbinary, types.T_binary,
 		types.T_datalink,
@@ -330,7 +330,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bool,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -760,6 +760,9 @@ func int8ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int8 to %s", toType))
 }
@@ -821,6 +824,9 @@ func int16ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int16 to %s", toType))
 }
@@ -882,6 +888,9 @@ func int32ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int32 to %s", toType))
 }
@@ -1009,6 +1018,9 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
@@ -1072,6 +1084,9 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
@@ -1135,6 +1150,9 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
@@ -1198,6 +1216,9 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)

@@ -36,3 +36,51 @@ func addFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, 
 	}
 	return result, nil
 }
+
+func subFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	result := v1 - v2
+	if math.IsInf(result, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v - %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func subFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	result := v1 - v2
+	if math.IsInf(float64(result), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v - %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func mulFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	result := v1 * v2
+	if math.IsInf(result, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v * %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func mulFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	result := v1 * v2
+	if math.IsInf(float64(result), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v * %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func divFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	result := v1 / v2
+	if math.IsInf(result, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v / %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+func divFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	result := v1 / v2
+	if math.IsInf(float64(result), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v / %v)'", v1, v2)
+	}
+	return result, nil
+}
