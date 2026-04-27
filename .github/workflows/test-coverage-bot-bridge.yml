@@ -1,0 +1,42 @@
+name: Test Coverage Bot Bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: read
+  issues: read
+
+jobs:
+  forward:
+    if: >-
+      github.event.issue.pull_request &&
+      contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      (
+        startsWith(github.event.comment.body, '/analyze-pr') ||
+        startsWith(github.event.comment.body, '/gen-chaos-pr') ||
+        startsWith(github.event.comment.body, '/auto-test-pr')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine command
+        id: cmd
+        run: |
+          body="${{ github.event.comment.body }}"
+          case "$body" in
+            /analyze-pr*)   echo "name=analyze-pr"   >> "$GITHUB_OUTPUT" ;;
+            /gen-chaos-pr*) echo "name=gen-chaos-pr" >> "$GITHUB_OUTPUT" ;;
+            /auto-test-pr*) echo "name=auto-test-pr" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unsupported command" >&2; exit 1 ;;
+          esac
+
+      - name: Dispatch to bot repo
+        env:
+          GH_TOKEN: ${{ secrets.BOT_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/Ariznawlll/mo-test-coverage-bot/dispatches \
+            -f event_type='${{ steps.cmd.outputs.name }}' \
+            -F client_payload[pr_number]='${{ github.event.issue.number }}' \
+            -F client_payload[repo]='${{ github.repository }}' \
+            -F client_payload[comment_id]='${{ github.event.comment.id }}'
