@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,46 +52,515 @@ func (builder *QueryBuilder) rewriteInDomainNotInFilters(nodeID int32) {
 		}
 		return
 	}
-	if len(node.FilterList) < 2 {
+	if len(node.FilterList) == 0 {
 		return
 	}
 
-	domains := collectInFilterDomains(node.FilterList)
-	if len(domains) == 0 {
-		return
-	}
-	for idx, filter := range node.FilterList {
-		node.FilterList[idx] = builder.rewriteExprByInDomains(filter, domains)
-	}
+	node.FilterList = builder.normalizeColumnDomain(node.FilterList)
 }
 
+type domainKind int
+
+const (
+	domainOther domainKind = iota
+	domainPointIn
+	domainPointOut
+	domainBetween
+	domainIsNull
+	domainIsNotNull
+)
+
+type orderedValueSet struct {
+	keys   map[string]int
+	values []*plan.Expr
+}
+
+func newOrderedValueSet() *orderedValueSet {
+	return &orderedValueSet{keys: make(map[string]int)}
+}
+
+func (s *orderedValueSet) add(key string, value *plan.Expr) {
+	if _, ok := s.keys[key]; ok {
+		return
+	}
+	s.keys[key] = len(s.values)
+	s.values = append(s.values, value)
+}
+
+func (s *orderedValueSet) intersect(other map[string]struct{}) *orderedValueSet {
+	result := newOrderedValueSet()
+	for _, value := range s.values {
+		key, ok := constLiteralKey(value)
+		if !ok {
+			continue
+		}
+		if _, hit := other[key]; hit {
+			result.add(key, value)
+		}
+	}
+	return result
+}
+
+func (s *orderedValueSet) difference(other map[string]struct{}) []*plan.Expr {
+	diff := make([]*plan.Expr, 0, len(s.values))
+	for _, value := range s.values {
+		key, ok := constLiteralKey(value)
+		if !ok {
+			return nil
+		}
+		if _, excluded := other[key]; excluded {
+			continue
+		}
+		diff = append(diff, DeepCopyExpr(value))
+	}
+	return diff
+}
+
+func (s *orderedValueSet) keySet() map[string]struct{} {
+	out := make(map[string]struct{}, len(s.keys))
+	for k := range s.keys {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+type columnDomain struct {
+	colExpr       *plan.Expr
+	pointsIn      *orderedValueSet
+	pointsInInit  bool
+	pointsInIdxs  []int
+	pointsOut     *orderedValueSet
+	pointsOutIdxs []int
+	hasRange      bool
+	isNullSeen    bool
+}
+
+func (builder *QueryBuilder) normalizeColumnDomain(filters []*plan.Expr) []*plan.Expr {
+	var conjuncts []*plan.Expr
+	for _, filter := range filters {
+		flattenLogicalExpressions(filter, "and", &conjuncts)
+	}
+
+	kinds := make([]domainKind, len(conjuncts))
+	domains := make(map[[2]int32]*columnDomain)
+	for idx, conjunct := range conjuncts {
+		col, kind, vs := classifyDomainConjunct(conjunct)
+		kinds[idx] = kind
+		if col == nil || kind == domainOther {
+			continue
+		}
+		ref := col.GetCol()
+		key := [2]int32{ref.RelPos, ref.ColPos}
+		domain := domains[key]
+		if domain == nil {
+			domain = &columnDomain{colExpr: DeepCopyExpr(col)}
+			domains[key] = domain
+		}
+		switch kind {
+		case domainPointIn:
+			if !domain.pointsInInit {
+				domain.pointsIn = newOrderedValueSet()
+				for _, v := range vs {
+					k, _ := constLiteralKey(v)
+					domain.pointsIn.add(k, DeepCopyExpr(v))
+				}
+				domain.pointsInInit = true
+			} else {
+				incoming := make(map[string]struct{}, len(vs))
+				for _, v := range vs {
+					k, _ := constLiteralKey(v)
+					incoming[k] = struct{}{}
+				}
+				domain.pointsIn = domain.pointsIn.intersect(incoming)
+			}
+			domain.pointsInIdxs = append(domain.pointsInIdxs, idx)
+		case domainPointOut:
+			if domain.pointsOut == nil {
+				domain.pointsOut = newOrderedValueSet()
+			}
+			for _, v := range vs {
+				k, _ := constLiteralKey(v)
+				domain.pointsOut.add(k, DeepCopyExpr(v))
+			}
+			domain.pointsOutIdxs = append(domain.pointsOutIdxs, idx)
+		case domainBetween:
+			domain.hasRange = true
+		case domainIsNull:
+			domain.isNullSeen = true
+		}
+	}
+
+	toDrop := make(map[int]struct{})
+	appended := make([]*plan.Expr, 0, len(domains))
+	changed := false
+
+	for _, domain := range domains {
+		if domain.isNullSeen && domain.pointsInInit {
+			return []*plan.Expr{MakeFalseExpr()}
+		}
+		if !domain.pointsInInit {
+			continue
+		}
+		if domain.hasRange {
+			continue
+		}
+		if domain.pointsIn.keys != nil && len(domain.pointsIn.values) == 0 {
+			return []*plan.Expr{MakeFalseExpr()}
+		}
+
+		col := domain.colExpr
+		var outKeys map[string]struct{}
+		if domain.pointsOut != nil {
+			outKeys = domain.pointsOut.keySet()
+		}
+
+		mergePointsIn := len(domain.pointsInIdxs) > 1
+		if outKeys == nil && !mergePointsIn {
+			continue
+		}
+
+		keep := domain.pointsIn.difference(outKeys)
+		if keep == nil {
+			continue
+		}
+
+		for _, i := range domain.pointsInIdxs {
+			toDrop[i] = struct{}{}
+		}
+		for _, i := range domain.pointsOutIdxs {
+			toDrop[i] = struct{}{}
+		}
+
+		if len(keep) == 0 {
+			return []*plan.Expr{MakeFalseExpr()}
+		}
+
+		newExpr, err := buildColumnDomainExpr(builder.GetContext(), col, keep)
+		if err != nil {
+			for _, i := range domain.pointsInIdxs {
+				delete(toDrop, i)
+			}
+			for _, i := range domain.pointsOutIdxs {
+				delete(toDrop, i)
+			}
+			continue
+		}
+		appended = append(appended, newExpr)
+		changed = true
+	}
+
+	// Propagate domains into non-domain conjuncts (OR branches, inner NOTs).
+	inheritedDomains := make(map[[2]int32]*inFilterDomain)
+	for key, domain := range domains {
+		if !domain.pointsInInit || domain.pointsIn == nil || len(domain.pointsIn.values) == 0 {
+			continue
+		}
+		inheritedDomains[key] = &inFilterDomain{
+			colExpr: DeepCopyExpr(domain.colExpr),
+			values:  append([]*plan.Expr{}, domain.pointsIn.values...),
+		}
+	}
+	if len(inheritedDomains) > 0 {
+		for idx, conjunct := range conjuncts {
+			if _, drop := toDrop[idx]; drop {
+				continue
+			}
+			if kinds[idx] != domainOther {
+				continue
+			}
+			rewritten, rewritten2 := builder.rewriteExprByInDomains(conjunct, inheritedDomains)
+			if rewritten2 {
+				conjuncts[idx] = rewritten
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return filters
+	}
+
+	newFilters := make([]*plan.Expr, 0, len(conjuncts)+len(appended)-len(toDrop))
+	for idx, conjunct := range conjuncts {
+		if _, drop := toDrop[idx]; drop {
+			continue
+		}
+		newFilters = append(newFilters, conjunct)
+	}
+	newFilters = append(newFilters, appended...)
+	if len(newFilters) == 0 {
+		return []*plan.Expr{makePlan2BoolConstExprWithType(true)}
+	}
+	return newFilters
+}
+
+// inFilterDomain carries a column's constant IN set for propagation into
+// OR branches or nested NOT expressions.
 type inFilterDomain struct {
 	colExpr *plan.Expr
 	values  []*plan.Expr
 }
 
-func collectInFilterDomains(filters []*plan.Expr) map[[2]int32]*inFilterDomain {
-	domains := make(map[[2]int32]*inFilterDomain)
-	for _, filter := range filters {
-		colExpr, values, ok := extractInListFilter(filter)
+// rewriteExprByInDomains rewrites NOT IN / <> under an outer IN domain.
+// Returns the (possibly rewritten) expression and whether any rewrite happened.
+func (builder *QueryBuilder) rewriteExprByInDomains(
+	expr *plan.Expr,
+	domains map[[2]int32]*inFilterDomain,
+) (*plan.Expr, bool) {
+	fn := expr.GetF()
+	if fn == nil {
+		return expr, false
+	}
+
+	switch fn.Func.ObjName {
+	case "not":
+		if len(fn.Args) != 1 {
+			return expr, false
+		}
+		if rewritten := builder.rewriteNotInByDomains(fn.Args[0], domains); rewritten != nil {
+			return rewritten, true
+		}
+		newArg, changed := builder.rewriteExprByInDomains(fn.Args[0], domains)
+		if changed {
+			fn.Args[0] = newArg
+		}
+		return expr, changed
+	case "and":
+		anyChanged := false
+		for idx, arg := range fn.Args {
+			newArg, changed := builder.rewriteExprByInDomains(arg, domains)
+			if changed {
+				fn.Args[idx] = newArg
+				anyChanged = true
+			}
+		}
+		newExpr, changed := builder.rewriteAndNotEqualByDomains(expr, domains)
+		return newExpr, anyChanged || changed
+	default:
+		anyChanged := false
+		for idx, arg := range fn.Args {
+			newArg, changed := builder.rewriteExprByInDomains(arg, domains)
+			if changed {
+				fn.Args[idx] = newArg
+				anyChanged = true
+			}
+		}
+		return expr, anyChanged
+	}
+}
+
+func (builder *QueryBuilder) rewriteNotInByDomains(
+	inExpr *plan.Expr,
+	domains map[[2]int32]*inFilterDomain,
+) *plan.Expr {
+	colExpr, listValues, ok := extractInListFilter(inExpr)
+	if !ok {
+		return nil
+	}
+	ref := colExpr.GetCol()
+	domain := domains[[2]int32{ref.RelPos, ref.ColPos}]
+	if domain == nil {
+		return nil
+	}
+	_, excludeKeys, ok := constLiteralListValues(listValues)
+	if !ok {
+		return nil
+	}
+	return builder.buildDomainDifferenceExpr(domain, excludeKeys)
+}
+
+func (builder *QueryBuilder) rewriteAndNotEqualByDomains(
+	expr *plan.Expr,
+	domains map[[2]int32]*inFilterDomain,
+) (*plan.Expr, bool) {
+	conjuncts := make([]*plan.Expr, 0, 4)
+	flattenLogicalExpressions(expr, "and", &conjuncts)
+	if len(conjuncts) < 2 {
+		return expr, false
+	}
+
+	type notEqualGroup struct {
+		positions []int
+		keys      map[string]struct{}
+	}
+	groups := make(map[[2]int32]*notEqualGroup)
+	groupOrder := make([][2]int32, 0)
+	for idx, conjunct := range conjuncts {
+		colExpr, value, ok := extractNotEqualConst(conjunct)
 		if !ok {
 			continue
 		}
-		colRef := colExpr.GetCol()
-		colKey := [2]int32{colRef.RelPos, colRef.ColPos}
-		if _, exists := domains[colKey]; exists {
+		key, ok := constLiteralKey(value)
+		if !ok {
 			continue
 		}
-		uniqueValues, _, ok := constLiteralListValues(values)
-		if !ok || len(uniqueValues) == 0 {
+		ref := colExpr.GetCol()
+		colKey := [2]int32{ref.RelPos, ref.ColPos}
+		if domains[colKey] == nil {
 			continue
 		}
-		domains[colKey] = &inFilterDomain{
-			colExpr: DeepCopyExpr(colExpr),
-			values:  uniqueValues,
+		group := groups[colKey]
+		if group == nil {
+			group = &notEqualGroup{keys: make(map[string]struct{})}
+			groups[colKey] = group
+			groupOrder = append(groupOrder, colKey)
+		}
+		group.positions = append(group.positions, idx)
+		group.keys[key] = struct{}{}
+	}
+
+	replaced := false
+	skip := make(map[int]struct{})
+	for _, colKey := range groupOrder {
+		group := groups[colKey]
+		rewritten := builder.buildDomainDifferenceExpr(domains[colKey], group.keys)
+		if rewritten == nil {
+			continue
+		}
+		for _, pos := range group.positions {
+			skip[pos] = struct{}{}
+		}
+		conjuncts = append(conjuncts, rewritten)
+		replaced = true
+	}
+	if !replaced {
+		return expr, false
+	}
+
+	newConjuncts := make([]*plan.Expr, 0, len(conjuncts))
+	for idx, conjunct := range conjuncts {
+		if _, ok := skip[idx]; ok {
+			continue
+		}
+		newConjuncts = append(newConjuncts, conjunct)
+	}
+	if len(newConjuncts) == 0 {
+		return makePlan2BoolConstExprWithType(true), true
+	}
+	newExpr, err := combinePlanConjunction(builder.GetContext(), newConjuncts)
+	if err != nil {
+		return expr, false
+	}
+	return newExpr, true
+}
+
+func extractNotEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 {
+		return nil, nil, false
+	}
+	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
+		return nil, nil, false
+	}
+	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
+		return fn.Args[0], fn.Args[1], true
+	}
+	if fn.Args[1].GetCol() != nil && fn.Args[0].GetLit() != nil {
+		return fn.Args[1], fn.Args[0], true
+	}
+	return nil, nil, false
+}
+
+func (builder *QueryBuilder) buildDomainDifferenceExpr(
+	domain *inFilterDomain,
+	excludeKeys map[string]struct{},
+) *plan.Expr {
+	diffValues := make([]*plan.Expr, 0, len(domain.values))
+	overlap := false
+	for _, value := range domain.values {
+		key, ok := constLiteralKey(value)
+		if !ok {
+			return nil
+		}
+		if _, excluded := excludeKeys[key]; excluded {
+			overlap = true
+			continue
+		}
+		diffValues = append(diffValues, DeepCopyExpr(value))
+	}
+	if !overlap {
+		return nil
+	}
+	if len(diffValues) == 0 {
+		return MakeFalseExpr()
+	}
+	expr, err := buildColumnDomainExpr(builder.GetContext(), domain.colExpr, diffValues)
+	if err != nil {
+		return nil
+	}
+	return expr
+}
+
+func classifyDomainConjunct(expr *plan.Expr) (*plan.Expr, domainKind, []*plan.Expr) {
+	fn := expr.GetF()
+	if fn == nil {
+		return nil, domainOther, nil
+	}
+
+	switch fn.Func.ObjName {
+	case "in":
+		col, listValues, ok := extractInListFilter(expr)
+		if !ok {
+			return nil, domainOther, nil
+		}
+		unique, _, ok := constLiteralListValues(listValues)
+		if !ok || len(unique) == 0 {
+			return nil, domainOther, nil
+		}
+		return col, domainPointIn, unique
+	case "not":
+		if len(fn.Args) != 1 {
+			return nil, domainOther, nil
+		}
+		child := fn.Args[0].GetF()
+		if child == nil || child.Func.ObjName != "in" {
+			return nil, domainOther, nil
+		}
+		col, listValues, ok := extractInListFilter(fn.Args[0])
+		if !ok {
+			return nil, domainOther, nil
+		}
+		unique, _, ok := constLiteralListValues(listValues)
+		if !ok || len(unique) == 0 {
+			return nil, domainOther, nil
+		}
+		return col, domainPointOut, unique
+	case "=":
+		return classifyDomainEquality(fn, domainPointIn)
+	case "!=", "<>":
+		return classifyDomainEquality(fn, domainPointOut)
+	case "isnull", "is_null":
+		if len(fn.Args) == 1 && fn.Args[0].GetCol() != nil {
+			return fn.Args[0], domainIsNull, nil
+		}
+	case "isnotnull", "is_not_null":
+		if len(fn.Args) == 1 && fn.Args[0].GetCol() != nil {
+			return fn.Args[0], domainIsNotNull, nil
+		}
+	case "between":
+		if len(fn.Args) == 3 && fn.Args[0].GetCol() != nil {
+			return fn.Args[0], domainBetween, nil
 		}
 	}
-	return domains
+	return nil, domainOther, nil
+}
+
+func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, domainKind, []*plan.Expr) {
+	if len(fn.Args) != 2 {
+		return nil, domainOther, nil
+	}
+	var colExpr, constExpr *plan.Expr
+	if fn.Args[0].GetCol() != nil {
+		colExpr, constExpr = fn.Args[0], fn.Args[1]
+	} else if fn.Args[1].GetCol() != nil {
+		colExpr, constExpr = fn.Args[1], fn.Args[0]
+	} else {
+		return nil, domainOther, nil
+	}
+	if _, ok := constLiteralKey(constExpr); !ok {
+		return nil, domainOther, nil
+	}
+	return colExpr, kind, []*plan.Expr{DeepCopyExpr(constExpr)}
 }
 
 func extractInListFilter(expr *plan.Expr) (*plan.Expr, []*plan.Expr, bool) {
@@ -134,190 +604,23 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	return fmt.Sprintf("%d/%d/%d/%s", expr.Typ.Id, expr.Typ.Width, expr.Typ.Scale, lit.String()), true
 }
 
-func (builder *QueryBuilder) rewriteExprByInDomains(
-	expr *plan.Expr,
-	domains map[[2]int32]*inFilterDomain,
-) *plan.Expr {
-	fn := expr.GetF()
-	if fn == nil {
-		return expr
+func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*plan.Expr) (*plan.Expr, error) {
+	if len(values) == 1 {
+		return BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			DeepCopyExpr(colExpr),
+			values[0],
+		})
 	}
-
-	switch fn.Func.ObjName {
-	case "not":
-		if len(fn.Args) != 1 {
-			return expr
-		}
-		if rewritten := builder.rewriteNotInByDomains(fn.Args[0], domains); rewritten != nil {
-			return rewritten
-		}
-		fn.Args[0] = builder.rewriteExprByInDomains(fn.Args[0], domains)
-		return expr
-	case "and":
-		for idx, arg := range fn.Args {
-			fn.Args[idx] = builder.rewriteExprByInDomains(arg, domains)
-		}
-		return builder.rewriteAndNotEqualByDomains(expr, domains)
-	default:
-		for idx, arg := range fn.Args {
-			fn.Args[idx] = builder.rewriteExprByInDomains(arg, domains)
-		}
-		return expr
-	}
-}
-
-func (builder *QueryBuilder) rewriteNotInByDomains(
-	inExpr *plan.Expr,
-	domains map[[2]int32]*inFilterDomain,
-) *plan.Expr {
-	colExpr, values, ok := extractInListFilter(inExpr)
-	if !ok {
-		return nil
-	}
-	colRef := colExpr.GetCol()
-	domain := domains[[2]int32{colRef.RelPos, colRef.ColPos}]
-	if domain == nil {
-		return nil
-	}
-	_, excludeKeys, ok := constLiteralListValues(values)
-	if !ok {
-		return nil
-	}
-	return builder.buildDomainDifferenceInExpr(domain, excludeKeys)
-}
-
-func (builder *QueryBuilder) rewriteAndNotEqualByDomains(
-	expr *plan.Expr,
-	domains map[[2]int32]*inFilterDomain,
-) *plan.Expr {
-	var conjuncts []*plan.Expr
-	flattenLogicalExpressions(expr, "and", &conjuncts)
-	if len(conjuncts) < 2 {
-		return expr
-	}
-
-	type notEqualGroup struct {
-		positions []int
-		keys      map[string]struct{}
-	}
-	groups := make(map[[2]int32]*notEqualGroup)
-	groupOrder := make([][2]int32, 0)
-	for idx, conjunct := range conjuncts {
-		colExpr, value, ok := extractNotEqualConst(conjunct)
-		if !ok {
-			continue
-		}
-		key, ok := constLiteralKey(value)
-		if !ok {
-			continue
-		}
-		colRef := colExpr.GetCol()
-		colKey := [2]int32{colRef.RelPos, colRef.ColPos}
-		if domains[colKey] == nil {
-			continue
-		}
-		group := groups[colKey]
-		if group == nil {
-			group = &notEqualGroup{keys: make(map[string]struct{})}
-			groups[colKey] = group
-			groupOrder = append(groupOrder, colKey)
-		}
-		group.positions = append(group.positions, idx)
-		group.keys[key] = struct{}{}
-	}
-
-	replaced := false
-	skip := make(map[int]struct{})
-	for _, colKey := range groupOrder {
-		group := groups[colKey]
-		rewritten := builder.buildDomainDifferenceInExpr(domains[colKey], group.keys)
-		if rewritten == nil {
-			continue
-		}
-		for _, pos := range group.positions {
-			skip[pos] = struct{}{}
-		}
-		conjuncts = append(conjuncts, rewritten)
-		replaced = true
-	}
-	if !replaced {
-		return expr
-	}
-
-	newConjuncts := make([]*plan.Expr, 0, len(conjuncts))
-	for idx, conjunct := range conjuncts {
-		if _, ok := skip[idx]; ok {
-			continue
-		}
-		newConjuncts = append(newConjuncts, conjunct)
-	}
-	if len(newConjuncts) == 0 {
-		return makePlan2BoolConstExprWithType(true)
-	}
-	newExpr, err := combinePlanConjunction(builder.GetContext(), newConjuncts)
-	if err != nil {
-		return expr
-	}
-	return newExpr
-}
-
-func extractNotEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
-	fn := expr.GetF()
-	if fn == nil || len(fn.Args) != 2 {
-		return nil, nil, false
-	}
-	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
-		return nil, nil, false
-	}
-	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
-		return fn.Args[0], fn.Args[1], true
-	}
-	if fn.Args[1].GetCol() != nil && fn.Args[0].GetLit() != nil {
-		return fn.Args[1], fn.Args[0], true
-	}
-	return nil, nil, false
-}
-
-func (builder *QueryBuilder) buildDomainDifferenceInExpr(
-	domain *inFilterDomain,
-	excludeKeys map[string]struct{},
-) *plan.Expr {
-	diffValues := make([]*plan.Expr, 0, len(domain.values))
-	overlap := false
-	for _, value := range domain.values {
-		key, ok := constLiteralKey(value)
-		if !ok {
-			return nil
-		}
-		if _, excluded := excludeKeys[key]; excluded {
-			overlap = true
-			continue
-		}
-		diffValues = append(diffValues, DeepCopyExpr(value))
-	}
-	if !overlap {
-		return nil
-	}
-	if len(diffValues) == 0 {
-		return MakeFalseExpr()
-	}
-
 	listExpr := &plan.Expr{
-		Typ: domain.colExpr.Typ,
+		Typ: colExpr.Typ,
 		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: diffValues,
-			},
+			List: &plan.ExprList{List: values},
 		},
 	}
-	rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*plan.Expr{
-		DeepCopyExpr(domain.colExpr),
+	return BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{
+		DeepCopyExpr(colExpr),
 		listExpr,
 	})
-	if err != nil {
-		return nil
-	}
-	return rewritten
 }
 
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {

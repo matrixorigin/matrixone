@@ -1,3 +1,17 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package plan
 
 import (
@@ -140,20 +154,10 @@ func int64ConstValue(expr *planpb.Expr) (int64, bool) {
 	return 0, false
 }
 
-func containsNotEqualExpr(expr *planpb.Expr) bool {
-	fn := expr.GetF()
-	if fn == nil {
-		return false
-	}
-	if fn.Func.ObjName == "!=" || fn.Func.ObjName == "<>" {
-		return true
-	}
-	for _, arg := range fn.Args {
-		if containsNotEqualExpr(arg) {
-			return true
-		}
-	}
-	return false
+func singleFilter(t *testing.T, builder *QueryBuilder) *planpb.Expr {
+	t.Helper()
+	require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+	return builder.qry.Nodes[0].FilterList[0]
 }
 
 func TestRewriteInDomainNotInFilter(t *testing.T) {
@@ -166,32 +170,25 @@ func TestRewriteInDomainNotInFilter(t *testing.T) {
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
 	builder.rewriteInDomainNotInFilters(0)
 
-	requireInValues(t, builder.qry.Nodes[0].FilterList[1], 1, 4)
+	requireInValues(t, singleFilter(t, builder), 1, 4)
 }
 
 func TestRewriteInDomainNotEqualConjunction(t *testing.T) {
 	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
 
 	domainExpr := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3, 4)
-	isNotNullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnotnull", []*planpb.Expr{
-		DeepCopyExpr(colExpr),
-	})
-	require.NoError(t, err)
 	notEqualExpr := makeAndExpr(
 		t,
 		ctx,
 		makeInt64NotEqualExpr(t, ctx, colExpr, 2),
 		makeInt64NotEqualExpr(t, ctx, colExpr, 3),
 	)
-	filterExpr := makeAndExpr(t, ctx, isNotNullExpr, notEqualExpr)
-	setSingleScanFilters(builder, tag, domainExpr, filterExpr)
+	setSingleScanFilters(builder, tag, domainExpr, notEqualExpr)
 
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
 	builder.rewriteInDomainNotInFilters(0)
 
-	rewritten := builder.qry.Nodes[0].FilterList[1]
-	require.True(t, findInExprWithValues(rewritten, 1, 4))
-	require.False(t, containsNotEqualExpr(rewritten))
+	requireInValues(t, singleFilter(t, builder), 1, 4)
 }
 
 func TestRewriteInDomainNotInFilterEmptyDifference(t *testing.T) {
@@ -204,7 +201,120 @@ func TestRewriteInDomainNotInFilterEmptyDifference(t *testing.T) {
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
 	builder.rewriteInDomainNotInFilters(0)
 
-	require.True(t, IsFalseExpr(builder.qry.Nodes[0].FilterList[1]))
+	require.True(t, IsFalseExpr(singleFilter(t, builder)))
+}
+
+func TestRewriteInDomainMergesTwoInLists(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	first := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3, 4)
+	second := makeInt64InExpr(t, ctx, colExpr, 2, 3, 5)
+	setSingleScanFilters(builder, tag, first, second)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	requireInValues(t, singleFilter(t, builder), 2, 3)
+}
+
+func TestRewriteInDomainMergesEqualAndIn(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		MakePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	inExpr := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3)
+	setSingleScanFilters(builder, tag, eqExpr, inExpr)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	result := singleFilter(t, builder)
+	require.Equal(t, "=", result.GetF().Func.ObjName)
+	value, ok := int64ConstValue(result.GetF().Args[1])
+	require.True(t, ok)
+	require.Equal(t, int64(2), value)
+}
+
+func TestRewriteInDomainEmptyInIntersection(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	first := makeInt64InExpr(t, ctx, colExpr, 1, 2)
+	second := makeInt64InExpr(t, ctx, colExpr, 3, 4)
+	setSingleScanFilters(builder, tag, first, second)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.True(t, IsFalseExpr(singleFilter(t, builder)))
+}
+
+func TestRewriteInDomainIsNullContradiction(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	inExpr := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3)
+	isNullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+	})
+	require.NoError(t, err)
+	setSingleScanFilters(builder, tag, inExpr, isNullExpr)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.True(t, IsFalseExpr(singleFilter(t, builder)))
+}
+
+func TestRewriteInDomainOrBranchNotIn(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	domainExpr := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3, 4)
+	notInExpr := makeInt64NotInExpr(t, ctx, colExpr, 2, 3)
+	otherExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		MakePlan2Int64ConstExprWithType(99),
+	})
+	require.NoError(t, err)
+	orExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", []*planpb.Expr{
+		notInExpr,
+		otherExpr,
+	})
+	require.NoError(t, err)
+	setSingleScanFilters(builder, tag, domainExpr, orExpr)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	// outer IN domain keeps; inner NOT IN within OR is rewritten to IN(1,4).
+	require.True(t, findInExprWithValues(builder.qry.Nodes[0].FilterList[1], 1, 4))
+}
+
+func TestRewriteInDomainIgnoresOtherColumn(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	otherCol := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{
+				RelPos: tag,
+				ColPos: 1,
+				Name:   "b",
+			},
+		},
+	}
+	inExpr := makeInt64InExpr(t, ctx, colExpr, 1, 2, 3)
+	otherNotEqual := makeInt64NotEqualExpr(t, ctx, otherCol, 99)
+	setSingleScanFilters(builder, tag, inExpr, otherNotEqual)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	requireInValues(t, builder.qry.Nodes[0].FilterList[0], 1, 2, 3)
+	require.Equal(t, "!=", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
 }
 
 func TestRewriteInDomainNotInFilterSkipsNullList(t *testing.T) {
@@ -221,5 +331,6 @@ func TestRewriteInDomainNotInFilterSkipsNullList(t *testing.T) {
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
 	builder.rewriteInDomainNotInFilters(0)
 
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
 	require.Equal(t, "not", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
 }
