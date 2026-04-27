@@ -750,8 +750,16 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 		}
 	}
 
+	// When the fuzzy filter target is a hidden unique-index table, report the
+	// user-visible column name (e.g. "a") in the duplicate-entry error instead
+	// of the hidden index column ("__mo_index_idx_col").
+	displayPkName := pkName
+	if n.Fuzzymessage != nil && len(n.Fuzzymessage.ParentUniqueCols) == 1 {
+		displayPkName = n.Fuzzymessage.ParentUniqueCols[0].Name
+	}
+
 	op := fuzzyfilter.NewArgument()
-	op.PkName = pkName
+	op.PkName = displayPkName
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = n.IfInsertFromUnique
 

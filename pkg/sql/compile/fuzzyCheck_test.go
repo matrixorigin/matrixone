@@ -77,3 +77,57 @@ func TestNewFuzzyCheckAttrFallsBackToPkeyColName(t *testing.T) {
 
 	require.Equal(t, "id", f.attr)
 }
+
+// TestConstructFuzzyFilterUsesParentUniqueColName verifies the fuzzy filter
+// operator carries the user-visible column name for unique-index hidden tables
+// so runtime duplicate errors report "for key 'a'" not "for key
+// '__mo_index_idx_col'".
+func TestConstructFuzzyFilterUsesParentUniqueColName(t *testing.T) {
+	idxColType := plan.Type{Id: 27}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "__mo_index_unique_a_index",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.IndexTableIndexColName,
+			},
+			Cols: []*plan.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: idxColType},
+			},
+		},
+		Fuzzymessage: &plan.OriginTableMessageForFuzzy{
+			ParentTableName: "decimal15",
+			ParentUniqueCols: []*plan.ColDef{
+				{Name: "a", Typ: idxColType},
+			},
+		},
+	}
+	tableScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+	sinkScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+
+	op := constructFuzzyFilter(n, tableScan, sinkScan)
+	require.NotNil(t, op)
+	require.Equal(t, "a", op.PkName)
+}
+
+// TestConstructFuzzyFilterFallsBackToPkeyColName verifies non-hidden-index
+// targets keep using the primary-key column name.
+func TestConstructFuzzyFilterFallsBackToPkeyColName(t *testing.T) {
+	pkType := plan.Type{Id: 23}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "t1",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "id",
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: pkType},
+			},
+		},
+	}
+	tableScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+	sinkScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+
+	op := constructFuzzyFilter(n, tableScan, sinkScan)
+	require.NotNil(t, op)
+	require.Equal(t, "id", op.PkName)
+}
