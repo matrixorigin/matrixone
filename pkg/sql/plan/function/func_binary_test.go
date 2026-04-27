@@ -1331,7 +1331,7 @@ func TestFromUnixTimeFormatValidation(t *testing.T) {
 			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1970-01-01 00:00:00"}, []bool{false}),
 			FromUnixTimeFloat64Format,
 		)
-		ok, info := validCase.Run()
+		ok, info = validCase.Run()
 		require.True(t, ok, fmt.Sprintf("from_unixtime float64 valid format case failed: %s", info))
 
 		errCase := NewFunctionTestCase(proc,
