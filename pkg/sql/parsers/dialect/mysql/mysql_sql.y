@@ -354,6 +354,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
+%left <str> ARROW LONG_ARROW
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
@@ -490,8 +491,7 @@ func sqlTaskInt64(v any) int64 {
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
 
-//JSON function
-%token <str> ARROW
+// JSON function: ARROW and LONG_ARROW declared via %left for precedence
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
@@ -10306,6 +10306,30 @@ bit_expr:
 |   bit_expr SHIFT_RIGHT bit_expr %prec SHIFT_RIGHT
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
+    }
+|   bit_expr ARROW simple_expr %prec ARROW
+    {
+        name := tree.NewUnresolvedColName("json_extract")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
+|   bit_expr LONG_ARROW simple_expr %prec LONG_ARROW
+    {
+        extractName := tree.NewUnresolvedColName("json_extract")
+        inner := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(extractName),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+        unquoteName := tree.NewUnresolvedColName("json_unquote")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(unquoteName),
+            FuncName: tree.NewCStr("json_unquote", 1),
+            Exprs: tree.Exprs{inner},
+        }
     }
 |   simple_expr
     {
