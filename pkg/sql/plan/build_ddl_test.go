@@ -356,6 +356,41 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCanDropTableWithTargetsIgnoresSelfReferenceSentinel(t *testing.T) {
+	tableDef := &plan.TableDef{
+		TblId:        42,
+		RefChildTbls: []uint64{0, 100},
+	}
+
+	require.True(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{
+		100: {},
+	}))
+	require.False(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{}))
+}
+
+func TestCanDropTableWithTargetsSelfReferenceOnly(t *testing.T) {
+	// HasFkSelfReferOnly: RefChildTbls contains only the 0 sentinel. Even with
+	// an empty target set the drop must be allowed, because the only referrer is
+	// the table itself.
+	tableDef := &plan.TableDef{
+		TblId:        7,
+		RefChildTbls: []uint64{0},
+	}
+	require.True(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{}))
+	require.True(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{42: {}}))
+}
+
+func TestCanDropTableWithTargetsMissingOneBlocks(t *testing.T) {
+	// Two distinct child tables: if only one of them is in the drop target set,
+	// the drop must be blocked because the other child would be left dangling.
+	tableDef := &plan.TableDef{
+		TblId:        5,
+		RefChildTbls: []uint64{0, 100, 200},
+	}
+	require.False(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{100: {}}))
+	require.True(t, canDropTableWithTargets(tableDef, map[uint64]struct{}{100: {}, 200: {}}))
+}
+
 func TestBuildCreateTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqlerrs := []string{
