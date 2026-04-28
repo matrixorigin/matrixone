@@ -519,3 +519,6 @@ CREATE TABLE `t2` (
 `DATE_SUB(CAST(a AS DATETIME), INTERVAL 1 MICROSECOND)` datetime(6) DEFAULT NULL
 );
 DROP TABLE t2;
+select date_sub(date('0001-01-01'), interval 1 day) is null q_date_sub_underflow;
+➤ q_date_sub_underflow[12,4,0]  𝄀
+true

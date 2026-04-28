@@ -10,3 +10,9 @@ select cast(subtime(cast('2024-01-02 00:00:00' as datetime), '24:00:00') as char
 select subtime(null, '01:00:00') is null q4;
 ➤ q4[12,4,0]  𝄀
 true
+select subtime(cast('0001-01-01 00:00:00.000001' as datetime(6)), '00:00:00.000002') is null q5;
+➤ q5[12,4,0]  𝄀
+true
+select subtime(cast('0001-01-01 00:00:00.000001' as timestamp(6)), '00:00:00.000002') is null q6;
+➤ q6[12,4,0]  𝄀
+true

@@ -1155,6 +1155,27 @@ func checkedDatetimeYearAfterFixedInterval(start types.Datetime, diff int64, iTy
 	return int64(year), true
 }
 
+func checkedAddMicrosecondsToDatetime(start types.Datetime, delta int64) (types.Datetime, bool) {
+	resultValue, ok := checkedAddInt64(int64(start), delta)
+	if !ok || resultValue < minDatetimeValue || resultValue > maxDatetimeValue {
+		return 0, false
+	}
+	resultDatetime := types.Datetime(resultValue)
+	year, month, day, _ := resultDatetime.ToDate().Calendar(true)
+	if !types.ValidDatetime(year, month, day) {
+		return 0, false
+	}
+	return resultDatetime, true
+}
+
+func checkedSubMicrosecondsFromDatetime(start types.Datetime, delta int64) (types.Datetime, bool) {
+	negDelta, ok := checkedNegateInt64(delta)
+	if !ok {
+		return 0, false
+	}
+	return checkedAddMicrosecondsToDatetime(start, negDelta)
+}
+
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
@@ -2630,8 +2651,13 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 
-		// Add time2 to datetime (both are in microseconds)
-		resultDt := types.Datetime(int64(dt) + int64(time2))
+		resultDt, ok := checkedAddMicrosecondsToDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := rs.Append(resultDt, false); err != nil {
 			return err
@@ -2680,9 +2706,14 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			continue
 		}
 
-		// Convert timestamp to datetime, add time, convert back
 		dt := ts.ToDatetime(loc)
-		resultDt := types.Datetime(int64(dt) + int64(time2))
+		resultDt, ok := checkedAddMicrosecondsToDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		resultTs := resultDt.ToTimestamp(loc)
 
 		if err := rs.Append(resultTs, false); err != nil {
@@ -2744,8 +2775,13 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			continue
 		}
 
-		// Add time2 to datetime
-		resultDt := types.Datetime(int64(dt) + int64(time2))
+		resultDt, ok := checkedAddMicrosecondsToDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := rs.Append(resultDt, false); err != nil {
 			return err
@@ -2876,8 +2912,13 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 
-		// Subtract time2 from datetime (both are in microseconds)
-		resultDt := types.Datetime(int64(dt) - int64(time2))
+		resultDt, ok := checkedSubMicrosecondsFromDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := rs.Append(resultDt, false); err != nil {
 			return err
@@ -2926,9 +2967,14 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 			continue
 		}
 
-		// Convert timestamp to datetime, subtract time, convert back
 		dt := ts.ToDatetime(loc)
-		resultDt := types.Datetime(int64(dt) - int64(time2))
+		resultDt, ok := checkedSubMicrosecondsFromDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		resultTs := resultDt.ToTimestamp(loc)
 
 		if err := rs.Append(resultTs, false); err != nil {
@@ -2990,8 +3036,13 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 
-		// Subtract time2 from datetime
-		resultDt := types.Datetime(int64(dt) - int64(time2))
+		resultDt, ok := checkedSubMicrosecondsFromDatetime(dt, int64(time2))
+		if !ok {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := rs.Append(resultDt, false); err != nil {
 			return err
@@ -3637,10 +3688,14 @@ func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 	dt, success := start.ToDatetime().AddInterval(negDiff, iTyp, types.DateType)
 	if success {
-		return dt.ToDate(), nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		resultDate := dt.ToDate()
+		year, _, _, _ := resultDate.Calendar(true)
+		if year < 1 || int64(dt) < 0 || year > types.MaxDatetimeYear {
+			return 0, dateOverflowMaxError
+		}
+		return resultDate, nil
 	}
+	return 0, dateOverflowMaxError
 }
 
 func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
@@ -3781,9 +3836,37 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
-		return doDateSub(v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Date](result)
+	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
+			resultDate, err := doDateSub(v1, v2, iTyp)
+			if err != nil {
+				if isDateOverflowMaxError(err) {
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultDate
+			}
+		}
+	}
+	return nil
 }
 
 func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

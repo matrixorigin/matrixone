@@ -9128,3 +9128,85 @@ func Test_doDateStringSub_Edge(t *testing.T) {
 	_, err = doDateStringSub("2024-01-01 00:00:00", int64(types.IntervalNumMAX)+1, types.Year)
 	require.Error(t, err)
 }
+func requireBinaryTemporalFunctionNull(t *testing.T, proc *process.Process, inputVec *vector.Vector, timeValue string, resultType types.Type, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+	t.Helper()
+	timeType := types.New(types.T_varchar, 0, 6)
+	timeVec, err := vector.NewConstBytes(timeType, []byte(timeValue), 1, proc.Mp())
+	require.NoError(t, err)
+	parameters := []*vector.Vector{inputVec, timeVec}
+	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, fn(parameters, result, proc, 1, nil))
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+
+	for _, vec := range parameters {
+		if vec != nil {
+			vec.Free(proc.Mp())
+		}
+	}
+	result.Free()
+}
+
+func TestAddTimeSubTimeDatetimeTimestampOverflowReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	datetimeType := types.New(types.T_datetime, 0, 6)
+	maxDatetime, err := types.ParseDatetime("9999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	maxDatetimeVec, err := vector.NewConstFixed(datetimeType, maxDatetime, 1, proc.Mp())
+	require.NoError(t, err)
+	requireBinaryTemporalFunctionNull(t, proc, maxDatetimeVec, "00:00:00.000001", datetimeType, addTimeToDatetime)
+
+	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00", 6)
+	require.NoError(t, err)
+	minDatetimeVec, err := vector.NewConstFixed(datetimeType, minDatetime, 1, proc.Mp())
+	require.NoError(t, err)
+	requireBinaryTemporalFunctionNull(t, proc, minDatetimeVec, "00:00:00.000001", datetimeType, subTimeFromDatetime)
+
+	timestampType := types.New(types.T_timestamp, 0, 6)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	maxTimestampVec, err := vector.NewConstFixed(timestampType, maxTimestamp, 1, proc.Mp())
+	require.NoError(t, err)
+	requireBinaryTemporalFunctionNull(t, proc, maxTimestampVec, "00:00:00.000001", timestampType, addTimeToTimestamp)
+
+	minTimestamp, err := types.ParseTimestamp(time.UTC, "0001-01-01 00:00:00", 6)
+	require.NoError(t, err)
+	minTimestampVec, err := vector.NewConstFixed(timestampType, minTimestamp, 1, proc.Mp())
+	require.NoError(t, err)
+	requireBinaryTemporalFunctionNull(t, proc, minTimestampVec, "00:00:00.000001", timestampType, subTimeFromTimestamp)
+}
+
+func TestDateSubOverflowReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	minDate, err := types.ParseDateCast("0001-01-01")
+	require.NoError(t, err)
+	dateVec, err := vector.NewConstFixed(types.T_date.ToType(), minDate, 1, proc.Mp())
+	require.NoError(t, err)
+	intervalVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	unitVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 1, proc.Mp())
+	require.NoError(t, err)
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, DateSub([]*vector.Vector{dateVec, intervalVec, unitVec}, result, proc, 1, nil))
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+
+	for _, vec := range []*vector.Vector{dateVec, intervalVec, unitVec} {
+		vec.Free(proc.Mp())
+	}
+	result.Free()
+}
+
+func TestDoDateSubOverflowUsesDateOverflowError(t *testing.T) {
+	minDate, err := types.ParseDateCast("0001-01-01")
+	require.NoError(t, err)
+
+	result, err := doDateSub(minDate, 1, types.Day)
+	require.Error(t, err)
+	require.True(t, isDateOverflowMaxError(err))
+	require.Zero(t, result)
+}
