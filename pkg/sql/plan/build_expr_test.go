@@ -386,6 +386,43 @@ func TestExpr_B(t *testing.T) {
 	})
 }
 
+func TestExpr_NullSafeEqualTupleLengthMismatch(t *testing.T) {
+	// (a, b) <=> (c) must fail at bind time with an InvalidInput error.
+	mock := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), "select (1,2) <=> (1,2) from dual;", 1)
+	require.NoError(t, err)
+
+	stmt := stmts[0].(*tree.Select)
+	selectClause := stmt.Select.(*tree.SelectClause)
+	cmp := selectClause.Exprs[0].Expr.(*tree.ComparisonExpr)
+	right := cmp.Right.(*tree.Tuple)
+	right.Exprs = right.Exprs[:1]
+
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	require.Error(t, err)
+}
+
+func TestExpr_NullSafeEqualMultiElementTuple(t *testing.T) {
+	// (a, b) <=> (c, d) should bind to AND(<=>, <=>), not to a scalar <=>.
+	mock := NewMockOptimizer(false)
+	pl, err := runOneExprStmt(mock, t, "select (1,2) <=> (1,2) from dual;")
+	require.NoError(t, err)
+
+	query, ok := pl.Plan.(*plan.Plan_Query)
+	require.True(t, ok)
+	expr := query.Query.Nodes[1].ProjectList[0]
+	exprF, ok := expr.Expr.(*plan.Expr_F)
+	require.True(t, ok)
+	require.Equal(t, int32(types.T_bool), expr.Typ.Id)
+	require.Equal(t, "and", exprF.F.Func.ObjName)
+	require.Len(t, exprF.F.Args, 2)
+	for _, arg := range exprF.F.Args {
+		argF, ok := arg.Expr.(*plan.Expr_F)
+		require.True(t, ok)
+		require.Equal(t, "<=>", argF.F.Func.ObjName)
+	}
+}
+
 func TestExpr_NullSafeEqualSingleElementTuple(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), "select (1,2) <=> (1,2) from dual;", 1)

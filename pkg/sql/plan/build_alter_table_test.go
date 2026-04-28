@@ -119,6 +119,33 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			},
 			wantErr: assert.NoError,
 		},
+		{
+			name: "json to unsigned int is blocked for ddl",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_json)},
+				to:     &plan.Type{Id: int32(types.T_uint64)},
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "json to decimal128 is blocked for ddl",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_json)},
+				to:     &plan.Type{Id: int32(types.T_decimal128)},
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "json to int8 is blocked for ddl",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_json)},
+				to:     &plan.Type{Id: int32(types.T_int8)},
+			},
+			wantErr: assert.Error,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

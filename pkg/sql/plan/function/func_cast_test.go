@@ -2246,3 +2246,90 @@ func TestCastJsonIntegerStringOverflow(t *testing.T) {
 	}, uintResult, proc, 1, nil)
 	require.Error(t, err)
 }
+
+func TestCastJsonContainerRejected(t *testing.T) {
+	// Casting a JSON object or array to a numeric type must fail via jsonCastErr,
+	// not panic or silently succeed.
+	proc := testutil.NewProcess(t)
+
+	for _, payload := range []string{`{"a":1}`, `[1,2,3]`} {
+		intResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+		require.NoError(t, intResult.PreExtendAndReset(1))
+		err := NewCast([]*vector.Vector{
+			testutil.MakeJsonVector([]string{payload}, nil),
+			vector.NewVec(types.T_int64.ToType()),
+		}, intResult, proc, 1, nil)
+		require.Error(t, err, "payload=%s", payload)
+		intResult.Free()
+	}
+}
+
+func TestCastJsonNullPropagates(t *testing.T) {
+	// JSON literal null and an actual SQL NULL input must both produce a SQL NULL
+	// on the output vector, not 0.
+	proc := testutil.NewProcess(t)
+
+	intResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(2))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"null", "1"}, []uint64{1}),
+		vector.NewVec(types.T_int64.ToType()),
+	}, intResult, proc, 2, nil))
+
+	resVec := intResult.GetResultVector()
+	require.True(t, resVec.GetNulls().Contains(0), "JSON literal null should become SQL NULL")
+	require.True(t, resVec.GetNulls().Contains(1), "SQL NULL input should propagate")
+}
+
+func TestCastJsonFloatOverflow(t *testing.T) {
+	// jsonAppendFloatValue must reject overflow when targeting narrower numeric types
+	// and reject negative floats for unsigned targets.
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		input  string
+		target types.Type
+	}{
+		{`1.0e39`, types.T_float32.ToType()}, // |f| > math.MaxFloat32
+		{`-1.0`, types.T_uint32.ToType()},    // negative to unsigned
+		{`1.0e19`, types.T_int32.ToType()},   // overflow int32 via float path
+		{`1.0e20`, types.T_uint32.ToType()},  // overflow uint32 via float path
+		{`1.0e10`, types.T_int8.ToType()},    // overflow int8 bounds
+	}
+	for _, tc := range cases {
+		res := vector.NewFunctionResultWrapper(tc.target, proc.Mp())
+		require.NoError(t, res.PreExtendAndReset(1))
+		err := NewCast([]*vector.Vector{
+			testutil.MakeJsonVector([]string{tc.input}, nil),
+			vector.NewVec(tc.target),
+		}, res, proc, 1, nil)
+		require.Error(t, err, "input=%s target=%s", tc.input, tc.target.Oid.String())
+		res.Free()
+	}
+}
+
+func TestCastJsonStringNumeric(t *testing.T) {
+	// A JSON string containing digits should parse through jsonAppendStringValue
+	// and land as an int64. A JSON string that cannot parse must error.
+	proc := testutil.NewProcess(t)
+
+	ok := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer ok.Free()
+	require.NoError(t, ok.PreExtendAndReset(1))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{`"42"`}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, ok, proc, 1, nil))
+	got := vector.MustFixedColNoTypeCheck[int64](ok.GetResultVector())
+	require.Equal(t, int64(42), got[0])
+
+	bad := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer bad.Free()
+	require.NoError(t, bad.PreExtendAndReset(1))
+	err := NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{`"not a number"`}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, bad, proc, 1, nil)
+	require.Error(t, err)
+}
