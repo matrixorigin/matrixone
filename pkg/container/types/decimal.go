@@ -1595,6 +1595,14 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 			}
 		} else {
 			expDigitSeen = true
+			// Guard against exponent overflow: bail out before scalecount
+			// wraps int32, instead of letting huge exponents produce a
+			// silently wrong scale.
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+				return
+			}
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
@@ -1613,6 +1621,13 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	if floatflag {
 		if scalesign {
 			scalecount = -scalecount
+		}
+		// scale -= scalecount can overflow int32 when scalecount is near the
+		// bounds; detect this explicitly as out-of-range.
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+			return
 		}
 		scale -= scalecount
 		if scale < 0 {
@@ -1796,6 +1811,11 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 			}
 		} else {
 			expDigitSeen = true
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+				return
+			}
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
@@ -1814,6 +1834,11 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	if floatflag {
 		if scalesign {
 			scalecount = -scalecount
+		}
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+			return
 		}
 		scale -= scalecount
 		if scale < 0 {
@@ -1947,6 +1972,11 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 			}
 		} else {
 			expDigitSeen = true
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				return
+			}
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
@@ -1965,6 +1995,11 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 	if floatflag {
 		if scalesign {
 			scalecount = -scalecount
+		}
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			return
 		}
 		scale -= scalecount
 		if scale < 0 {

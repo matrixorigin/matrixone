@@ -69,6 +69,23 @@ func TestParse64ScientificNotation(t *testing.T) {
 	}
 }
 
+// TestParseDecimalRejectsOverflowingExponent verifies scientific-notation
+// exponents that would overflow int32 during parsing are rejected as
+// out-of-range instead of silently wrapping.
+func TestParseDecimalRejectsOverflowingExponent(t *testing.T) {
+	// >10 digit exponents easily exceed int32 capacity.
+	bigExp := "1e99999999999"
+	if _, _, err := Parse64(bigExp); err == nil {
+		t.Errorf("Parse64(%q) expected an error for huge exponent", bigExp)
+	}
+	if _, _, err := Parse128(bigExp); err == nil {
+		t.Errorf("Parse128(%q) expected an error for huge exponent", bigExp)
+	}
+	if _, _, err := Parse256(bigExp); err == nil {
+		t.Errorf("Parse256(%q) expected an error for huge exponent", bigExp)
+	}
+}
+
 // TestParse64RejectsMalformedScientific verifies Decimal64 mirrors
 // Decimal128/256's strict exponent validation: exactly one `e`/`E`, at most
 // one sign right after it, and no trailing non-digit characters.
