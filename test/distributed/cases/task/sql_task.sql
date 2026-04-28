@@ -57,10 +57,12 @@ select count(*) from manual_events;
 
 alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
 execute task sql_task_cron;
+select sleep(1);
 select count(*) from scheduled_events;
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
 execute task sql_task_manual;
+select sleep(1);
 select count(*) from manual_events;
 
 -- @ignore:0,4,5,6
@@ -71,6 +73,7 @@ show task runs for sql_task_manual limit 1;
 alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
+select sleep(1);
 select count(*) from scheduled_events;
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
@@ -86,9 +89,11 @@ $$
 -- @delimiter ;
 
 execute task sql_task_gate;
+select sleep(1);
 select count(*) from gate_sink;
 insert into gate_source values (1);
 execute task sql_task_gate;
+select sleep(1);
 select count(*) from gate_sink;
 select status
 from mo_task.sql_task_run
@@ -108,6 +113,7 @@ $$
 
 -- @pattern
 execute task sql_task_multistmt;
+select sleep(1);
 select count(*), min(v), max(v) from ms_target;
 select status from mo_task.sql_task_run where task_name = 'sql_task_multistmt' order by run_id desc limit 1;
 
@@ -122,6 +128,7 @@ $$
 
 -- @pattern
 execute task sql_task_timeout;
+select sleep(2);
 select count(*) from timeout_sink;
 select status from mo_task.sql_task_run where task_name = 'sql_task_timeout' order by run_id desc limit 1;
 
@@ -137,6 +144,7 @@ $$
 
 -- @pattern
 execute task sql_task_retry;
+select sleep(1);
 select count(*) from retry_target;
 select status from mo_task.sql_task_run where task_name = 'sql_task_retry' order by run_id desc limit 2;
 
@@ -211,6 +219,7 @@ execute task sql_task_build_silver;
 execute task sql_task_build_gold;
 execute task sql_task_validate;
 execute task sql_task_validate;
+select sleep(2);
 
 select count(*) from silver_orders;
 select total_orders, total_amount from gold_summary where summary_id = 1;
@@ -243,8 +252,10 @@ end
 $$
 -- @delimiter ;
 execute task tenant_task_show;
+select sleep(1);
 alter task tenant_task_show set when (0);
 execute task tenant_task_show;
+select sleep(1);
 -- @ignore:6,8
 show tasks;
 -- @ignore:0,4,5,6
