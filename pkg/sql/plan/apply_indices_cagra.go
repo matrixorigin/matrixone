@@ -37,7 +37,7 @@ type cagraIndexContext struct {
 	pkType       plan.Type
 	params       string
 	nThread      int64
-	batchWindow int64
+	batchWindow  int64
 }
 
 func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*cagraIndexContext, error) {
@@ -141,7 +141,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		cagraCtx.idxDef.IndexTableName,
 		cagraCtx.nThread,
 		cagraCtx.origFuncName,
-	        cagraCtx.batchWindow)
+		cagraCtx.batchWindow)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to
