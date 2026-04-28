@@ -237,11 +237,17 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	var last_node_id int32
 	var last_ftnode_pkcol *Expr
 
+	srcTblSchema := scanNode.ObjRef.SchemaName
+	if len(scanNode.ObjRef.SubscriptionName) > 0 {
+		srcTblSchema = scanNode.ObjRef.SubscriptionName
+	}
+
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
-		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
+
+		idxtblname := fmt.Sprintf("`%s`.`%s`", srcTblSchema, idxdef.IndexTableName)
+		srctblname := fmt.Sprintf("`%s`.`%s`", srcTblSchema, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
