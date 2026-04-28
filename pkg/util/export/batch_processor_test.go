@@ -370,9 +370,9 @@ func Test_newBufferHolder_AddAfterStop(t *testing.T) {
 func getDummyOBCollectorConfig() *config.OBCollectorConfig {
 	cfg := &config.OBCollectorConfig{}
 	cfg.SetDefaultValues()
-	cfg.ExporterCntPercent = maxPercentValue
-	cfg.GeneratorCntPercent = maxPercentValue
-	cfg.CollectorCntPercent = maxPercentValue
+	cfg.ExporterCntPercent = 100
+	cfg.GeneratorCntPercent = 100
+	cfg.CollectorCntPercent = 100
 	return cfg
 }
 

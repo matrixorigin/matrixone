@@ -162,11 +162,11 @@ var (
 	defaultOBBufferSize int64 = 10485760
 
 	// defaultOBCollectorCntPercent
-	defaultOBCollectorCntPercent = 1000
+	defaultOBCollectorCntPercent = 10
 	// defaultOBGeneratorCntPercent
-	defaultOBGeneratorCntPercent = 1000
+	defaultOBGeneratorCntPercent = 20
 	// defaultOBExporterCntPercent
-	defaultOBExporterCntPercent = 1000
+	defaultOBExporterCntPercent = 80
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
