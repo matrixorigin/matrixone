@@ -281,6 +281,208 @@ func TestValueWindowExec_FillAndFlush(t *testing.T) {
 	})
 }
 
+func TestCumeDistAndPercentRankExec(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+	mg := NewSimpleAggMemoryManager(mp)
+
+	makeGroupVec := func(values []int64) *vector.Vector {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		return vec
+	}
+
+	t.Run("CUME_DIST_basic", func(t *testing.T) {
+		exec, err := makeCumeDistExec(mg, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+
+		vec := makeGroupVec([]int64{1, 3, 4})
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.GroupGrow(4))
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+		require.Greater(t, exec.Size(), int64(0))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		col := vector.MustFixedColNoTypeCheck[float64](results[0])
+		require.Len(t, col, 4)
+		require.InDelta(t, 2.0/3.0, col[0], 1e-9)
+		require.InDelta(t, 2.0/3.0, col[1], 1e-9)
+		require.InDelta(t, 1.0, col[2], 1e-9)
+		require.InDelta(t, 0.0, col[3], 1e-9)
+
+		results[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("CUME_DIST_distinct_rejected", func(t *testing.T) {
+		_, err := makeCumeDistExec(mg, WinIdOfCumeDist, true)
+		require.Error(t, err)
+	})
+
+	t.Run("PERCENT_RANK_basic", func(t *testing.T) {
+		exec, err := makePercentRankExec(mg, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		require.NotNil(t, exec)
+
+		vec := makeGroupVec([]int64{1, 3, 4})
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.GroupGrow(4))
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+		require.Greater(t, exec.Size(), int64(0))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+
+		col := vector.MustFixedColNoTypeCheck[float64](results[0])
+		require.Len(t, col, 4)
+		require.InDelta(t, 0.0, col[0], 1e-9)
+		require.InDelta(t, 0.0, col[1], 1e-9)
+		require.InDelta(t, 1.0, col[2], 1e-9)
+		require.InDelta(t, 0.0, col[3], 1e-9)
+
+		results[0].Free(mp)
+		exec.Free()
+	})
+
+	t.Run("PERCENT_RANK_distinct_rejected", func(t *testing.T) {
+		_, err := makePercentRankExec(mg, WinIdOfPercentRank, true)
+		require.Error(t, err)
+	})
+}
+
+func TestCumeDistAndPercentRankInternalOperations(t *testing.T) {
+	mp := hackAggMemoryManager()
+	defer mp.Mp().Free(nil)
+
+	assertFloatSlice := func(t *testing.T, got, want []float64) {
+		t.Helper()
+		require.Len(t, got, len(want))
+		for i := range want {
+			require.InDelta(t, want[i], got[i], 1e-12)
+		}
+	}
+
+	t.Run("cume_dist", func(t *testing.T) {
+		execI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		exec := execI.(*cumeDistWindowExec)
+		defer exec.Free()
+
+		require.NoError(t, exec.PreAllocateGroups(1))
+		require.NotNil(t, exec.GetOptResult())
+
+		require.NoError(t, exec.GroupGrow(4))
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(vec, []int64{1, 3, 4}, nil, mp.Mp()))
+
+		for row := 0; row < 3; row++ {
+			require.NoError(t, exec.Fill(0, row, []*vector.Vector{vec}))
+		}
+
+		// Leave one empty group to exercise the skip branch in Flush.
+		data, err := exec.marshal()
+		require.NoError(t, err)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		cloneI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		clone := cloneI.(*cumeDistWindowExec)
+		defer clone.Free()
+		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+		require.Len(t, clone.groups, len(encoded.Groups))
+		require.Equal(t, []int64{1, 3, 4}, clone.groups[0])
+
+		cloneResults, err := clone.Flush()
+		require.NoError(t, err)
+		require.Len(t, cloneResults, 1)
+		cloneValues := vector.MustFixedColNoTypeCheck[float64](cloneResults[0])
+		assertFloatSlice(t, cloneValues, []float64{2.0 / 3.0, 2.0 / 3.0, 1, 0})
+
+		otherI, err := makeCumeDistExec(mp, WinIdOfCumeDist, false)
+		require.NoError(t, err)
+		other := otherI.(*cumeDistWindowExec)
+		defer other.Free()
+		require.NoError(t, other.GroupGrow(2))
+		otherVec := vector.NewVec(types.T_int64.ToType())
+		defer otherVec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(otherVec, []int64{2, 5}, nil, mp.Mp()))
+		require.NoError(t, other.Fill(1, 0, []*vector.Vector{otherVec}))
+		require.NoError(t, other.Fill(1, 1, []*vector.Vector{otherVec}))
+
+		require.NoError(t, exec.Merge(other, 0, 1))
+		require.NoError(t, exec.BatchMerge(other, 0, []uint64{1, GroupNotMatched}))
+		require.Panics(t, func() { _ = exec.BulkFill(0, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.SetExtraInformation(nil, 0) })
+	})
+
+	t.Run("percent_rank", func(t *testing.T) {
+		execI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		exec := execI.(*percentRankExec)
+		defer exec.Free()
+
+		require.NoError(t, exec.PreAllocateGroups(1))
+		require.NotNil(t, exec.GetOptResult())
+
+		require.NoError(t, exec.GroupGrow(2))
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(vec, []int64{7}, nil, mp.Mp()))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{vec}))
+
+		// A singleton group should take the totalRows == 1 path.
+		data, err := exec.marshal()
+		require.NoError(t, err)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		cloneI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		clone := cloneI.(*percentRankExec)
+		defer clone.Free()
+		require.NoError(t, clone.unmarshal(mp.Mp(), encoded.Result, encoded.Empties, encoded.Groups))
+		require.Len(t, clone.groups, len(encoded.Groups))
+		require.Equal(t, []int64{7}, clone.groups[0])
+
+		cloneResults, err := clone.Flush()
+		require.NoError(t, err)
+		require.Len(t, cloneResults, 1)
+		cloneValues := vector.MustFixedColNoTypeCheck[float64](cloneResults[0])
+		assertFloatSlice(t, cloneValues, []float64{0, 0})
+
+		otherI, err := makePercentRankExec(mp, WinIdOfPercentRank, false)
+		require.NoError(t, err)
+		other := otherI.(*percentRankExec)
+		defer other.Free()
+		require.NoError(t, other.GroupGrow(2))
+		otherVec := vector.NewVec(types.T_int64.ToType())
+		defer otherVec.Free(mp.Mp())
+		require.NoError(t, vector.AppendFixedList(otherVec, []int64{2, 5}, nil, mp.Mp()))
+		require.NoError(t, other.Fill(1, 0, []*vector.Vector{otherVec}))
+		require.NoError(t, other.Fill(1, 1, []*vector.Vector{otherVec}))
+
+		require.NoError(t, exec.Merge(other, 0, 1))
+		require.NoError(t, exec.BatchMerge(other, 0, []uint64{GroupNotMatched, 1}))
+		require.Panics(t, func() { _ = exec.BulkFill(0, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}) })
+		require.Panics(t, func() { _ = exec.SetExtraInformation(nil, 0) })
+	})
+}
+
 func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)
