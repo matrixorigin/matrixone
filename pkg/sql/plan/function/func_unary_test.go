@@ -3238,7 +3238,7 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 1, 53, 53},
+				[]uint8{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -3249,7 +3249,7 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{7, 25, 39, 49},
+				[]uint8{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -3278,6 +3278,55 @@ func TestDateToWeek(t *testing.T) {
 	}
 }
 
+func TestDateToWeekUsesModePerRow(t *testing.T) {
+	dates := make([]types.Date, 5)
+	for i, value := range []string{"2003-12-30", "2003-12-30", "2003-12-30", "1999-01-03", "1999-01-03"} {
+		var err error
+		dates[i], err = types.ParseDateCast(value)
+		require.NoError(t, err)
+	}
+	modes := []int64{0, 1, 4, 8, -1}
+	expected := make([]uint8, len(dates))
+	for i, date := range dates {
+		expected[i] = uint8(date.Week(int(modes[i])))
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, []bool{false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, expected, []bool{false, false, false, false, false}),
+		DateToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.NotEqual(t, expected[0], expected[1])
+	require.NotEqual(t, expected[3], expected[4])
+}
+
+func TestDateToWeekReturnsNullForNullMode(t *testing.T) {
+	dates := make([]types.Date, 2)
+	for i, value := range []string{"2003-12-30", "2003-12-30"} {
+		var err error
+		dates[i], err = types.ParseDateCast(value)
+		require.NoError(t, err)
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(dates[0].Week(0)), 0}, []bool{false, true}),
+		DateToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func initDateTimeToWeekTestCase() []tcTemp {
 	d11, _ := types.ParseDatetime("2003-12-30 13:11:10", 6)
 	d12, _ := types.ParseDatetime("2004-01-02 19:22:10", 6)
@@ -3297,7 +3346,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 1, 53, 53},
+				[]uint8{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -3308,7 +3357,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{7, 25, 39, 49},
+				[]uint8{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -3319,7 +3368,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1},
+				[]uint8{52},
 				[]bool{true}),
 		},
 	}
@@ -3335,6 +3384,33 @@ func TestDateTimeToWeek(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+}
+
+func TestDatetimeToWeekUsesModePerRow(t *testing.T) {
+	datetimes := make([]types.Datetime, 3)
+	for i, value := range []string{"2003-12-30 13:11:10", "2003-12-30 13:11:10", "2003-12-30 13:11:10"} {
+		var err error
+		datetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+	modes := []int64{0, 1, 4}
+	expected := make([]uint8, len(datetimes))
+	for i, dt := range datetimes {
+		expected[i] = uint8(dt.ToDate().Week(int(modes[i])))
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), datetimes, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, expected, []bool{false, false, false}),
+		DatetimeToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.NotEqual(t, expected[0], expected[1])
 }
 
 // Week day
