@@ -244,8 +244,14 @@ select 1
 where not exists (select 1 from tenant_sink where v = 1);
 end
 execute task tenant_task_show;
+select sleep(1);
+sleep(1)
+0
 alter task tenant_task_show set when (0);
 execute task tenant_task_show;
+select sleep(1);
+sleep(1)
+0
 show tasks;
 task_name    schedule    enabled    gate_condition    retry_limit    timeout    created_at    last_run_status    last_run_time
 tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 18:03:43 +0800 CST    SKIPPED    2026-04-13 18:03:43 +0800 CST

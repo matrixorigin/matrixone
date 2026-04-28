@@ -243,8 +243,10 @@ end
 $$
 -- @delimiter ;
 execute task tenant_task_show;
+select sleep(1);
 alter task tenant_task_show set when (0);
 execute task tenant_task_show;
+select sleep(1);
 -- @ignore:6,8
 show tasks;
 -- @ignore:0,4,5,6
