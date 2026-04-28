@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,6 +99,57 @@ func TestFloatArithmeticHelpers(t *testing.T) {
 	}
 	if _, err := divFloat32WithOverflowCheck(ctx, math.MaxFloat32, math.SmallestNonzeroFloat32); err == nil {
 		t.Fatal("divFloat32 overflow expected error")
+	}
+}
+
+func TestFloatArithmeticOverflowThroughFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		a, b float64
+	}{
+		{"minusFn float64 overflow", minusFn, -math.MaxFloat64, math.MaxFloat64},
+		{"multiFn float64 overflow", multiFn, math.MaxFloat64, 2},
+		{"divFn float64 overflow", divFn, math.MaxFloat64, math.SmallestNonzeroFloat64},
+	}
+	for _, c := range cases {
+		tc := tcTemp{
+			info: c.name,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.a}, nil),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.b}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, c.fn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, c.name, info)
+	}
+
+	// float32 variants exercise the float32-specific helpers
+	cases32 := []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		a, b float32
+	}{
+		{"plusFn float32 overflow", plusFn, math.MaxFloat32, math.MaxFloat32},
+		{"minusFn float32 overflow", minusFn, -math.MaxFloat32, math.MaxFloat32},
+		{"multiFn float32 overflow", multiFn, math.MaxFloat32, 2},
+	}
+	for _, c := range cases32 {
+		tc := tcTemp{
+			info: c.name,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float32.ToType(), []float32{c.a}, nil),
+				NewFunctionTestInput(types.T_float32.ToType(), []float32{c.b}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_float32.ToType(), true, []float32{0}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, c.fn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, c.name, info)
 	}
 }
 

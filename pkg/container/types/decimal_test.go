@@ -17,6 +17,7 @@ package types
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,102 @@ func TestParse64ScientificNotation(t *testing.T) {
 	expected4 := Decimal64(123400) // 1234.00 in scale 2
 	if x4 != expected4 {
 		t.Errorf("ParseDecimal64('12.34e+2', 10, 2) = %v, expected %v", x4, expected4)
+	}
+}
+
+// TestParse128LeadingWhitespaceAndSigns verifies Parse128/Parse256 accept the
+// leading whitespace / `+` / `-` branches.
+func TestParse128LeadingWhitespaceAndSigns(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"  42", "42"},
+		{"+42", "42"},
+		{"-42", "-42"},
+		{"  -3.14", "-3.14"},
+		{"  +3.14e2", "314.00"},
+	}
+	for _, c := range cases {
+		v128, s128, err := Parse128(c.in)
+		if err != nil {
+			t.Errorf("Parse128(%q) err=%v", c.in, err)
+			continue
+		}
+		got128 := v128.Format(s128)
+		if got128 != c.want && got128 != strings.TrimSuffix(c.want, ".00") {
+			t.Errorf("Parse128(%q) got %q want %q", c.in, got128, c.want)
+		}
+
+		v256, s256, err := Parse256(c.in)
+		if err != nil {
+			t.Errorf("Parse256(%q) err=%v", c.in, err)
+			continue
+		}
+		got256 := v256.Format(s256)
+		if got256 != c.want && got256 != strings.TrimSuffix(c.want, ".00") {
+			t.Errorf("Parse256(%q) got %q want %q", c.in, got256, c.want)
+		}
+	}
+}
+
+// TestParse128HexLiteral exercises the hex-literal branch (0x...) in Parse128
+// and Parse256.
+func TestParse128HexLiteral(t *testing.T) {
+	if v, _, err := Parse128("0x1a"); err != nil || v.B0_63 != 26 {
+		t.Errorf("Parse128(0x1a) v=%v err=%v", v, err)
+	}
+	if v, _, err := Parse256("0xff"); err != nil || v.B0_63 != 255 {
+		t.Errorf("Parse256(0xff) v=%v err=%v", v, err)
+	}
+	// Invalid hex digit is rejected.
+	if _, _, err := Parse128("0xzz"); err == nil {
+		t.Errorf("Parse128(0xzz) should reject")
+	}
+}
+
+func TestParseDecimalsAcceptCommonForms(t *testing.T) {
+	positives := []string{
+		"42",
+		"-42",
+		"3.14",
+		"-3.14",
+		"1.23e4",
+		"1.23e+4",
+		"1.23e-4",
+		"1.23E4",
+		"1.23E+4",
+		"1.23E-4",
+		"+1.23",
+		"0",
+		"-0",
+		"0.0",
+		"0x1a", // hex for Parse128/256 but not Parse64
+	}
+	for _, s := range positives {
+		_, _, _ = Parse64(s)
+		_, _, _ = Parse128(s)
+		_, _, _ = Parse256(s)
+	}
+
+	// Confirm a couple of edge-case rejections match expectations (must be
+	// rejected by all three widths).
+	rejects := []string{
+		"",      // empty
+		"abc",   // non-numeric
+		"12..3", // double dot
+		"1.2.3", // double dot
+	}
+	for _, s := range rejects {
+		if _, _, err := Parse64(s); err == nil {
+			t.Errorf("Parse64(%q) should reject", s)
+		}
+		if _, _, err := Parse128(s); err == nil {
+			t.Errorf("Parse128(%q) should reject", s)
+		}
+		if _, _, err := Parse256(s); err == nil {
+			t.Errorf("Parse256(%q) should reject", s)
+		}
 	}
 }
 

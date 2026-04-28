@@ -84,6 +84,100 @@ func TestNewFuzzyCheckAttrFallsBackToPkeyColName(t *testing.T) {
 	require.Equal(t, "id", f.displayAttr)
 }
 
+// TestNewFuzzyCheckCompoundKeyPath covers the compound primary key path —
+// when the hidden PkeyColName is CPrimaryKeyColName, the helper must flip
+// isCompound and populate compoundCols from Pkey.Names.
+func TestNewFuzzyCheckCompoundKeyPath(t *testing.T) {
+	n := &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Name: "t1",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"a", "b"},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{}},
+				{Name: "b", Typ: plan.Type{}},
+			},
+		},
+	}
+	f, err := newFuzzyCheck(n)
+	require.NoError(t, err)
+	defer f.release()
+	require.True(t, f.isCompound)
+	require.Len(t, f.compoundCols, 2)
+	require.Equal(t, "a", f.compoundCols[0].Name)
+	require.Equal(t, "b", f.compoundCols[1].Name)
+}
+
+// TestNewFuzzyCheckHiddenOnlyPath covers the "ALTER TABLE add unique index on
+// existing table" shortcut: hidden index table with no Fuzzymessage ->
+// onlyInsertHidden should be true.
+func TestNewFuzzyCheckHiddenOnlyPath(t *testing.T) {
+	n := &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Name: catalog.PrefixIndexTableName + "unique_hash",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.IndexTableIndexColName,
+			},
+			Cols: []*plan.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: plan.Type{}},
+			},
+		},
+	}
+	f, err := newFuzzyCheck(n)
+	require.NoError(t, err)
+	defer f.release()
+	require.True(t, f.onlyInsertHidden)
+}
+
+// TestNewFuzzyCheckRejectsEmptyNames covers the error branch when tblName or
+// dbName is missing.
+func TestNewFuzzyCheckRejectsEmptyNames(t *testing.T) {
+	n := &plan.Node{
+		ObjRef:   &plan.ObjectRef{SchemaName: ""},
+		TableDef: &plan.TableDef{Name: ""},
+	}
+	_, err := newFuzzyCheck(n)
+	require.Error(t, err)
+}
+
+// TestFuzzyCheckResetAndClear exercises the lifecycle helpers so the reuse
+// pool path is also covered.
+func TestFuzzyCheckResetAndClear(t *testing.T) {
+	n := &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Name: "t1",
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{}}},
+		},
+	}
+	f, err := newFuzzyCheck(n)
+	require.NoError(t, err)
+	f.condition = "x=1"
+	f.cnt = 3
+	f.reset()
+	require.Equal(t, "", f.condition)
+	require.Equal(t, 0, f.cnt)
+	require.Equal(t, "id", f.attr)
+
+	f.clear()
+	require.Equal(t, "", f.attr)
+	require.Equal(t, "", f.displayAttr)
+	require.Equal(t, "", f.db)
+	require.Equal(t, "", f.tbl)
+	require.False(t, f.isCompound)
+	require.False(t, f.onlyInsertHidden)
+	require.Nil(t, f.col)
+	require.Nil(t, f.compoundCols)
+
+	// TypeName returns a stable identifier used by the reuse pool.
+	require.Equal(t, "compile.fuzzyCheck", f.TypeName())
+}
+
 // TestConstructFuzzyFilterUsesParentUniqueColName verifies the fuzzy filter
 // operator carries the user-visible column name for unique-index hidden tables
 // so runtime duplicate errors report "for key 'a'" not "for key

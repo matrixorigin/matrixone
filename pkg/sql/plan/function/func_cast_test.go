@@ -2282,6 +2282,83 @@ func TestFloatToYearRoundsBeforeRangeCheck(t *testing.T) {
 	require.Equal(t, types.MoYear(0), nullYears[0])
 }
 
+func TestIntegerToYearAcrossWidths(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// all integer widths feeding a valid and an invalid YEAR value
+	cases := []struct {
+		name    string
+		valid   int64
+		valOK   types.MoYear
+		invalid int64
+	}{
+		{"int8", 69, 2069, -1},
+		{"int16", 2155, 2155, 2156},
+		{"int32", 1901, 1901, 1900},
+		{"int64", 69, 2069, 3000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			okVec := vector.NewVec(types.T_int64.ToType())
+			defer okVec.Free(mp)
+			require.NoError(t, vector.AppendFixedList(okVec, []int64{c.valid}, nil, mp))
+			okResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+			defer okResult.Free()
+			require.NoError(t, okResult.PreExtendAndReset(1))
+			require.NoError(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](okVec), okResult, 1, nil))
+			years := vector.MustFixedColNoTypeCheck[types.MoYear](okResult.GetResultVector())
+			require.Equal(t, c.valOK, years[0])
+
+			badVec := vector.NewVec(types.T_int64.ToType())
+			defer badVec.Free(mp)
+			require.NoError(t, vector.AppendFixedList(badVec, []int64{c.invalid}, nil, mp))
+			badResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+			defer badResult.Free()
+			require.NoError(t, badResult.PreExtendAndReset(1))
+			require.Error(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](badVec), badResult, 1, nil))
+		})
+	}
+
+	// null integer propagates as null-year.
+	nullVec := vector.NewVec(types.T_int64.ToType())
+	defer nullVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nullVec, []int64{0}, []bool{true}, mp))
+	nullResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer nullResult.Free()
+	require.NoError(t, nullResult.PreExtendAndReset(1))
+	require.NoError(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](nullVec), nullResult, 1, nil))
+	nullYears := vector.MustFixedColNoTypeCheck[types.MoYear](nullResult.GetResultVector())
+	require.Equal(t, types.MoYear(0), nullYears[0])
+}
+
+func TestYearToStringPath(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// year 2024 -> "2024"
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(yearVec, []types.MoYear{2024}, nil, mp))
+	strResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer strResult.Free()
+	require.NoError(t, strResult.PreExtendAndReset(1))
+	require.NoError(t, yearToStr(ctx, vector.GenerateFunctionFixedTypeParameter[types.MoYear](yearVec), strResult, 1, types.T_varchar.ToType()))
+	strParam := vector.GenerateFunctionStrParameter(strResult.GetResultVector())
+	got, null := strParam.GetStrValue(0)
+	require.False(t, null)
+	require.Equal(t, "2024", string(got))
+
+	// null year -> null string
+	nullYear := vector.NewVec(types.T_year.ToType())
+	defer nullYear.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nullYear, []types.MoYear{0}, []bool{true}, mp))
+	nullStrResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp).(*vector.FunctionResult[types.Varlena])
+	defer nullStrResult.Free()
+	require.NoError(t, nullStrResult.PreExtendAndReset(1))
+	require.NoError(t, yearToStr(ctx, vector.GenerateFunctionFixedTypeParameter[types.MoYear](nullYear), nullStrResult, 1, types.T_varchar.ToType()))
+}
+
 func TestYearToOthersCoversSupportedNumericMatrix(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

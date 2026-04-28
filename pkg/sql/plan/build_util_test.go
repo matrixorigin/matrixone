@@ -157,6 +157,71 @@ func TestSetDefaultAndOnUpdateUseSetMembers(t *testing.T) {
 	require.NotNil(t, onUpdate.Expr)
 }
 
+func TestBuildDefaultExprCoversErrorBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// No default attribute at all: non-null column with nullAbility=true.
+	noDefaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		nil,
+	)
+	defaultVal, err := buildDefaultExpr(noDefaultCol, plan.Type{Id: int32(types.T_int32)}, proc)
+	require.NoError(t, err)
+	require.Nil(t, defaultVal.Expr)
+	require.True(t, defaultVal.NullAbility)
+
+	// JSON column with explicit default value is rejected.
+	jsonCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: tree.NewNumVal("{}", "{}", false, tree.P_char)},
+		},
+	)
+	_, err = buildDefaultExpr(jsonCol, plan.Type{Id: int32(types.T_json)}, proc)
+	require.Error(t, err)
+
+	// NOT NULL column with an explicit NULL default is rejected.
+	notNullCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeNull{Is: false},
+			&tree.AttributeDefault{Expr: tree.NewNumVal("null", "null", false, tree.P_null)},
+		},
+	)
+	_, err = buildDefaultExpr(notNullCol, plan.Type{Id: int32(types.T_int32)}, proc)
+	require.Error(t, err)
+
+	// uuid() default on a non-UUID column is rejected.
+	uuidCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("uuid")),
+				Exprs: tree.Exprs{},
+			}},
+		},
+	)
+	_, err = buildDefaultExpr(uuidCol, plan.Type{Id: int32(types.T_varchar), Width: 36}, proc)
+	require.Error(t, err)
+}
+
+func TestBuildOnUpdateNoAttribute(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	noAttrCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("c"),
+		nil,
+		nil,
+	)
+	onUpdate, err := buildOnUpdate(noAttrCol, plan.Type{Id: int32(types.T_int32)}, proc)
+	require.NoError(t, err)
+	require.Nil(t, onUpdate)
+}
+
 func TestSetDefaultAndOnUpdateFoldNonLiteral(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
