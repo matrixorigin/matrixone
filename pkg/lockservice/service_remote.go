@@ -262,13 +262,12 @@ func (s *service) handleForwardLock(
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
 	txn.Lock()
+	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
-		txn.Unlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout)
 		return
 	}
 	if txn.deadlockFound {
-		txn.Unlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrDeadLockDetected, cs, defaultRPCWriteTimeout)
 		return
 	}
@@ -292,7 +291,6 @@ func (s *service) handleForwardLock(
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
-			txn.Unlock()
 			lockErr = err
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout)

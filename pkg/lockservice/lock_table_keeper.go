@@ -114,7 +114,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
-	allBinds := binds[:0]
+	allBinds := make([]pb.LockTable, 0, len(binds))
 	binds = binds[:0]
 	futures = futures[:0]
 
