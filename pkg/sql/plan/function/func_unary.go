@@ -1382,15 +1382,18 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		mode, null := getWeekMode(modes, i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
+		week := int(date.WeekOfYear2())
+		if modes != nil {
+			mode, null := getWeekMode(modes, i)
+			if null {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
+			week = date.Week(mode)
 		}
 
-		week := date.Week(mode)
 		if err := rs.Append(uint8(week), false); err != nil {
 			return err
 		}
@@ -1422,15 +1425,18 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
-		mode, null := getWeekMode(modes, i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
+		week := int(dt.ToDate().WeekOfYear2())
+		if modes != nil {
+			mode, null := getWeekMode(modes, i)
+			if null {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
+			week = dt.ToDate().Week(mode)
 		}
 
-		week := dt.ToDate().Week(mode)
 		if err := rs.Append(uint8(week), false); err != nil {
 			return err
 		}

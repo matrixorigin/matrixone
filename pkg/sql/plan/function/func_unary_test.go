@@ -3224,6 +3224,7 @@ func initDateToWeekTestCase() []tcTemp {
 	d12, _ := types.ParseDateCast("2004-01-02")
 	d13, _ := types.ParseDateCast("2004-12-31")
 	d14, _ := types.ParseDateCast("2005-01-01")
+	d15, _ := types.ParseDateCast("2000-01-01")
 
 	d21, _ := types.ParseDateCast("2001-02-16")
 	d22, _ := types.ParseDateCast("2012-06-18")
@@ -3238,8 +3239,19 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to week - legacy default",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d15},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{52},
+				[]bool{false}),
 		},
 		{
 			info: "test date to week - normal",
@@ -3249,7 +3261,7 @@ func initDateToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+				[]uint8{7, 25, 39, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -3332,6 +3344,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 	d12, _ := types.ParseDatetime("2004-01-02 19:22:10", 6)
 	d13, _ := types.ParseDatetime("2004-12-31 00:00:00", 6)
 	d14, _ := types.ParseDatetime("2005-01-01 04:05:06", 6)
+	d15, _ := types.ParseDatetime("2000-01-01 00:00:00", 6)
 
 	d21, _ := types.ParseDatetime("2001-02-16 13:11:10", 6)
 	d22, _ := types.ParseDatetime("2012-06-18 19:22:10", 6)
@@ -3346,8 +3359,19 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{52, 0, 52, 0},
+				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to week - legacy default",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d15},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{52},
+				[]bool{false}),
 		},
 		{
 			info: "test datetime to week - normal",
@@ -3357,7 +3381,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{6, 25, 38, 49},
+				[]uint8{7, 25, 39, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
