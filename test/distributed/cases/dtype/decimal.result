@@ -1204,16 +1204,17 @@ SELECT -0.487794599999999999999999999999999945451154 * col2 FROM decimal18;
 -4.8779459999999999999999999999999994550
 4.5765056404090315799999999999999994887
 SELECT col1 * col2 FROM decimal18;
-
+[unknown result because it is related to issue#8516]
 SELECT col3 * col2 FROM decimal18;
-
+[unknown result because it is related to issue#8516]
 SELECT col2 * col4 FROM decimal18;
-
+[unknown result because it is related to issue#8516]
 SELECT col1 / col2 FROM decimal18;
-
+[unknown result because it is related to issue#8513]
 SELECT 12345678965412365478965444565896532145 / col1 FROM decimal18;
-
+[unknown result because it is related to issue#8513]
 SELECT col2/522222222225456987.23212654569987523654 FROM decimal18;
+[unknown result because it is related to issue#8513]
 
 DROP TABLE IF EXISTS decimal19;
 CREATE TABLE decimal19 (col1 decimal(38,0),col2 decimal(19,0));
