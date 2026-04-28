@@ -69,6 +69,24 @@ func TestParse64ScientificNotation(t *testing.T) {
 	}
 }
 
+// TestParseDecimalScalePropagation exercises the scale-subtraction overflow
+// guard by combining a positive-scale digit stream with a huge exponent so
+// that the final scale calculation would wrap int32.
+func TestParseDecimalScalePropagation(t *testing.T) {
+	// Positive exponent at the int32 boundary: scalecount accumulates past
+	// MaxInt32/10, tripping the guard.
+	boundary := "0.1e2147483600"
+	if _, _, err := Parse64(boundary); err == nil {
+		t.Errorf("Parse64(%q) expected out-of-range error", boundary)
+	}
+	if _, _, err := Parse128(boundary); err == nil {
+		t.Errorf("Parse128(%q) expected out-of-range error", boundary)
+	}
+	if _, _, err := Parse256(boundary); err == nil {
+		t.Errorf("Parse256(%q) expected out-of-range error", boundary)
+	}
+}
+
 // TestParseDecimalRejectsOverflowingExponent verifies scientific-notation
 // exponents that would overflow int32 during parsing are rejected as
 // out-of-range instead of silently wrapping.

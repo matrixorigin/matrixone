@@ -157,6 +157,67 @@ func TestSetDefaultAndOnUpdateUseSetMembers(t *testing.T) {
 	require.NotNil(t, onUpdate.Expr)
 }
 
+func TestSetDefaultAndOnUpdateFoldNonLiteral(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
+
+	// Default: concat('read','') folds to the literal "read" and should resolve
+	// against the SET members, giving bit 0b001.
+	defaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: &tree.FuncExpr{
+				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("concat")),
+				Exprs: tree.Exprs{
+					tree.NewNumVal("read", "read", false, tree.P_char),
+					tree.NewNumVal("", "", false, tree.P_char),
+				},
+			}},
+		},
+	)
+	d, err := buildDefaultExpr(defaultCol, setType, proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), d.Expr.GetLit().GetU64Val(),
+		"folded non-literal default should be resolved by SET members")
+
+	// Default: concat('read','qq') folds to "readqq" which is not a set member;
+	// should be rejected as an invalid default instead of silently cast to 0.
+	badCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: &tree.FuncExpr{
+				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("concat")),
+				Exprs: tree.Exprs{
+					tree.NewNumVal("read", "read", false, tree.P_char),
+					tree.NewNumVal("qq", "qq", false, tree.P_char),
+				},
+			}},
+		},
+	)
+	_, err = buildDefaultExpr(badCol, setType, proc)
+	require.Error(t, err)
+
+	// On update: concat('read,write','') folds to "read,write", bits 0b011.
+	onUpdateCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeOnUpdate{Expr: &tree.FuncExpr{
+				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("concat")),
+				Exprs: tree.Exprs{
+					tree.NewNumVal("read,write", "read,write", false, tree.P_char),
+					tree.NewNumVal("", "", false, tree.P_char),
+				},
+			}},
+		},
+	)
+	u, err := buildOnUpdate(onUpdateCol, setType, proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), u.Expr.GetLit().GetU64Val())
+}
+
 func TestSetDefaultRejectsSignedNumericOverflow(t *testing.T) {
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
 	expr := makePlan2Int64ConstExprWithType(8)
@@ -171,6 +232,58 @@ func TestSetDefaultRejectsSignedNumericOverflow(t *testing.T) {
 	casted, err := funcCastForSetType(context.Background(), expr, setType)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), casted.GetLit().GetU64Val())
+}
+
+func TestFuncCastForSetTypeCoversAllLiteralShapes(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
+
+	// string -> ParseSet
+	out, err := funcCastForSetType(context.Background(), makePlan2StringConstExprWithType("read,execute"), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), out.GetLit().GetU64Val())
+
+	// u64 value
+	out, err = funcCastForSetType(context.Background(), makePlan2Uint64ConstExprWithType(3), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), out.GetLit().GetU64Val())
+
+	// narrower unsigned ints (uint8/16/32)
+	out, err = funcCastForSetType(context.Background(), makePlan2Uint8ConstExprWithType(1), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), out.GetLit().GetU64Val())
+	out, err = funcCastForSetType(context.Background(), makePlan2Uint16ConstExprWithType(2), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), out.GetLit().GetU64Val())
+	out, err = funcCastForSetType(context.Background(), makePlan2Uint32ConstExprWithType(4), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), out.GetLit().GetU64Val())
+
+	// signed narrower ints
+	out, err = funcCastForSetType(context.Background(), makePlan2Int8ConstExprWithType(1), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), out.GetLit().GetU64Val())
+	out, err = funcCastForSetType(context.Background(), makePlan2Int16ConstExprWithType(2), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), out.GetLit().GetU64Val())
+	out, err = funcCastForSetType(context.Background(), makePlan2Int32ConstExprWithType(4), setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), out.GetLit().GetU64Val())
+
+	// non-set type returns the expression untouched
+	intType := plan.Type{Id: int32(types.T_int64)}
+	pass, err := funcCastForSetType(context.Background(), makePlan2Int64ConstExprWithType(5), intType)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), pass.GetLit().GetI64Val())
+
+	// null literal passes through unchanged
+	nullExpr := &plan.Expr{Typ: setType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	passNull, err := funcCastForSetType(context.Background(), nullExpr, setType)
+	require.NoError(t, err)
+	require.True(t, passNull.GetLit().Isnull)
+
+	// out-of-range value bubbles up an error
+	_, err = funcCastForSetType(context.Background(), makePlan2Uint64ConstExprWithType(16), setType)
+	require.Error(t, err)
 }
 
 func TestSetEmptyMemberFormatting(t *testing.T) {

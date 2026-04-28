@@ -2236,6 +2236,52 @@ func TestYearCastRejectsInvalidValues(t *testing.T) {
 	require.Error(t, integerToYear(ctx, vector.GenerateFunctionFixedTypeParameter[int64](intVec), intResult, 1, nil))
 }
 
+func TestFloatToYearRoundsBeforeRangeCheck(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// 2155.6 should round to 2156 and be rejected as out-of-range (not silently
+	// truncated to 2155 as the old int64(v) cast did).
+	floatVec := vector.NewVec(types.T_float64.ToType())
+	defer floatVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(floatVec, []float64{2155.6}, nil, mp))
+	floatResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer floatResult.Free()
+	require.NoError(t, floatResult.PreExtendAndReset(1))
+	require.Error(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](floatVec), floatResult, 1, nil))
+
+	// 2069.4 rounds to 2069, which maps to year 2069 via the century window.
+	okVec := vector.NewVec(types.T_float64.ToType())
+	defer okVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(okVec, []float64{69.4}, nil, mp))
+	okResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer okResult.Free()
+	require.NoError(t, okResult.PreExtendAndReset(1))
+	require.NoError(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](okVec), okResult, 1, nil))
+	years := vector.MustFixedColNoTypeCheck[types.MoYear](okResult.GetResultVector())
+	require.Equal(t, types.MoYear(2069), years[0])
+
+	// NaN / Inf are rejected up front.
+	nanVec := vector.NewVec(types.T_float64.ToType())
+	defer nanVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nanVec, []float64{math.NaN()}, nil, mp))
+	nanResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer nanResult.Free()
+	require.NoError(t, nanResult.PreExtendAndReset(1))
+	require.Error(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](nanVec), nanResult, 1, nil))
+
+	// Null float propagates as null-year without error.
+	nullVec := vector.NewVec(types.T_float64.ToType())
+	defer nullVec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(nullVec, []float64{0}, []bool{true}, mp))
+	nullResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer nullResult.Free()
+	require.NoError(t, nullResult.PreExtendAndReset(1))
+	require.NoError(t, floatToYear(ctx, vector.GenerateFunctionFixedTypeParameter[float64](nullVec), nullResult, 1, nil))
+	nullYears := vector.MustFixedColNoTypeCheck[types.MoYear](nullResult.GetResultVector())
+	require.Equal(t, types.MoYear(0), nullYears[0])
+}
+
 func TestYearToOthersCoversSupportedNumericMatrix(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
