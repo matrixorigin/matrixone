@@ -7580,3 +7580,145 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 	return nil
 }
+
+func getYearWeekMode(modes vector.FunctionParameterWrapper[int64], row uint64) (int, bool) {
+	if modes == nil {
+		return 0, false
+	}
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0, true
+	}
+	return int(mode & 7), false
+}
+
+// YearWeekDate: YEARWEEK(date, mode) - Returns year and week for a date as YYYYWW format.
+func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		date, null := dates.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := date.YearWeek(mode)
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekDatetime: YEARWEEK(datetime, mode) - Returns year and week for a datetime as YYYYWW format.
+func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null := datetimes.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := dt.YearWeek(mode)
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekTimestamp: YEARWEEK(timestamp, mode) - Returns year and week for a timestamp as YYYYWW format.
+func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ts, null := timestamps.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt := ts.ToDatetime(loc)
+		year, week := dt.YearWeek(mode)
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -429,9 +429,11 @@ const (
 	// function `get_format`
 	GET_FORMAT = 353
 
+	YEARWEEK = 354
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 354
+	FUNCTION_END_NUMBER = 355
 )
 
 // functionIdRegister is what function we have registered already.
@@ -608,6 +610,7 @@ var functionIdRegister = map[string]int32{
 	"week":                           WEEK,
 	"weekday":                        WEEKDAY,
 	"year":                           YEAR,
+	"yearweek":                       YEARWEEK,
 	"extract":                        EXTRACT,
 	"if":                             IFF,
 	"iff":                            IFF,
