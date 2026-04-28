@@ -53,6 +53,17 @@ func TestParseSet(t *testing.T) {
 
 	_, err = ParseSetValue(setDef, 8)
 	require.Error(t, err)
+
+	// Numeric SET values should be parsed as base-10, not Go's base-0 form.
+	// A zero-prefixed decimal ("07") must keep its decimal meaning (7),
+	// and "09" must succeed instead of being rejected as bad octal.
+	wideDef := "a,b,c,d,e,f,g,h,i,j"
+	bits, err = ParseSet(wideDef, "07")
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), bits)
+	bits, err = ParseSet(wideDef, "09")
+	require.NoError(t, err)
+	require.Equal(t, uint64(9), bits)
 }
 
 func TestParseSetWithEmptyMember(t *testing.T) {

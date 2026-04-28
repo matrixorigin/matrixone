@@ -90,7 +90,11 @@ func ParseSet(setStr string, name string) (uint64, error) {
 		return setBits, nil
 	}
 
-	number, err := strconv.ParseUint(name, 0, 64)
+	// Use base 10 explicitly so that quoted numeric SET values like "010" or
+	// "08" are treated as decimals, matching SQL semantics instead of Go's
+	// base-0 auto-detection (which would read "010" as octal and reject
+	// "08"/"09").
+	number, err := strconv.ParseUint(name, 10, 64)
 	if err == nil {
 		return descriptor.parseValue(number)
 	}
