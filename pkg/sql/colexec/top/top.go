@@ -157,12 +157,16 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if top.ctr.state == vm.Eval {
-		top.ctr.state = vm.End
-		if top.ctr.bat != nil {
-			err := top.ctr.eval(top.ctr.limit, top.ctr.n, proc, &result)
-			if err != nil {
-				return result, err
-			}
+		if top.ctr.bat == nil && top.ctr.orderedRefs == nil {
+			top.ctr.state = vm.End
+			return result, nil
+		}
+		done, err := top.ctr.eval(top.ctr.limit, top.ctr.n, proc, &result)
+		if err != nil {
+			return result, err
+		}
+		if done {
+			top.ctr.state = vm.End
 		}
 		return result, nil
 	}
@@ -419,11 +423,12 @@ func (ctr *container) processBatchSpill(limit uint64, bat *batch.Batch, proc *pr
 	return nil
 }
 
-func (ctr *container) eval(limit uint64, n int, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) eval(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
 	if ctr.spilling {
 		return ctr.evalSpill(limit, n, proc, result)
 	}
-	return ctr.evalInMemory(limit, n, proc, result)
+	err := ctr.evalInMemory(limit, n, proc, result)
+	return true, err
 }
 
 func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, result *vm.CallResult) error {
@@ -448,34 +453,54 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 	return nil
 }
 
-func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, result *vm.CallResult) error {
-	if uint64(len(ctr.sels)) < limit {
-		ctr.sortSpill()
+const evalSpillChunkSize = 8192
+
+func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
+	// First call: pop heap into sorted order, free heap batch.
+	if ctr.orderedRefs == nil {
+		if uint64(len(ctr.sels)) < limit {
+			ctr.sortSpill()
+		}
+		ctr.orderedRefs = make([]rowRef, len(ctr.sels))
+		for i, j := 0, len(ctr.sels); i < j; i++ {
+			sel := heap.Pop(ctr).(int64)
+			ctr.orderedRefs[len(ctr.orderedRefs)-1-i] = ctr.rowRefs[sel]
+		}
+		ctr.evalCursor = 0
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+		ctr.rowRefs = nil
+		ctr.sels = nil
 	}
 
-	// Pop all elements from heap in sorted order (reverse pop gives ascending).
-	orderedSels := make([]int64, len(ctr.sels))
-	for i, j := 0, len(ctr.sels); i < j; i++ {
-		orderedSels[len(orderedSels)-1-i] = heap.Pop(ctr).(int64)
+	// Free previous chunk's output batch.
+	if ctr.spillOutBat != nil {
+		ctr.spillOutBat.Clean(proc.Mp())
+		ctr.spillOutBat = nil
 	}
 
-	// Collect refs for each spilled batch.
+	if ctr.evalCursor >= len(ctr.orderedRefs) {
+		return true, nil
+	}
+
+	chunkStart := ctr.evalCursor
+	chunkEnd := min(chunkStart+evalSpillChunkSize, len(ctr.orderedRefs))
+	chunkRefs := ctr.orderedRefs[chunkStart:chunkEnd]
+	chunkSize := chunkEnd - chunkStart
+
 	type batchRow struct {
-		outputIdx int
-		rowIdx    int32
+		chunkPos int
+		rowIdx   int32
 	}
 	batchRows := make(map[int32][]batchRow)
-	for outputIdx, sel := range orderedSels {
-		ref := ctr.rowRefs[sel]
+	for i, ref := range chunkRefs {
 		batchRows[ref.batchIdx] = append(batchRows[ref.batchIdx], batchRow{
-			outputIdx: outputIdx,
-			rowIdx:    ref.rowIdx,
+			chunkPos: i,
+			rowIdx:   ref.rowIdx,
 		})
 	}
 
-	// Build the output batch.
 	outputBat := batch.NewOffHeapWithSize(n)
-	totalRows := len(orderedSels)
 
 	reuseBat := batch.NewOffHeapWithSize(0)
 	defer reuseBat.Clean(proc.Mp())
@@ -484,21 +509,21 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		info := ctr.spillIndex[bIdx]
 		data := make([]byte, info.size)
 		if _, err := ctr.spillFile.ReadAt(data, info.offset); err != nil {
-			return err
+			return false, err
 		}
 
 		reuseBat.CleanOnlyData()
 		if err := reuseBat.UnmarshalBinaryWithAnyMp(data, proc.Mp()); err != nil {
-			return err
+			return false, err
 		}
 
 		if outputBat.Vecs[0] == nil {
 			for i := 0; i < n; i++ {
 				outputBat.Vecs[i] = vector.NewOffHeapVecWithType(*reuseBat.Vecs[i].GetType())
-				if err := outputBat.Vecs[i].PreExtend(totalRows, proc.Mp()); err != nil {
-					return err
+				if err := outputBat.Vecs[i].PreExtend(chunkSize, proc.Mp()); err != nil {
+					return false, err
 				}
-				outputBat.Vecs[i].SetLength(totalRows)
+				outputBat.Vecs[i].SetLength(chunkSize)
 			}
 			if len(reuseBat.Attrs) > 0 {
 				outputBat.Attrs = make([]string, n)
@@ -508,20 +533,18 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 
 		for _, r := range rows {
 			for col := 0; col < n; col++ {
-				if err := outputBat.Vecs[col].Copy(reuseBat.Vecs[col], int64(r.outputIdx), int64(r.rowIdx), proc.Mp()); err != nil {
-					return err
+				if err := outputBat.Vecs[col].Copy(reuseBat.Vecs[col], int64(r.chunkPos), int64(r.rowIdx), proc.Mp()); err != nil {
+					return false, err
 				}
 			}
 		}
 	}
 
-	outputBat.SetRowCount(totalRows)
-
-	// Clean the key-only heap batch and replace with the full output.
-	ctr.bat.Clean(proc.Mp())
-	ctr.bat = outputBat
-	result.Batch = ctr.bat
-	return nil
+	outputBat.SetRowCount(chunkSize)
+	ctr.evalCursor = chunkEnd
+	ctr.spillOutBat = outputBat
+	result.Batch = outputBat
+	return ctr.evalCursor >= len(ctr.orderedRefs), nil
 }
 
 // do sort work for heap, and result order will be set in container.sels

@@ -66,6 +66,11 @@ type container struct {
 	spillIndex    []spilledBatchInfo
 	rowRefs       []rowRef
 	spillCmpPoses []int32 // remapped poses for spill mode (0-based into key-only bat)
+
+	// streaming eval state for spill mode
+	orderedRefs  []rowRef // sorted output order, populated once at eval start
+	evalCursor   int      // next row index to output in orderedRefs
+	spillOutBat  *batch.Batch // current chunk output batch, freed on next call
 }
 
 type Top struct {
@@ -157,6 +162,10 @@ func (ctr *container) reset(proc *process.Process) {
 	if ctr.buildBat != nil {
 		ctr.buildBat = nil
 	}
+	if ctr.spillOutBat != nil {
+		ctr.spillOutBat.Clean(proc.Mp())
+		ctr.spillOutBat = nil
+	}
 
 	ctr.cleanupSpill()
 }
@@ -164,6 +173,10 @@ func (ctr *container) reset(proc *process.Process) {
 func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
+	}
+	if ctr.spillOutBat != nil {
+		ctr.spillOutBat.Clean(proc.Mp())
+		ctr.spillOutBat = nil
 	}
 	for _, executor := range ctr.executorsForOrderColumn {
 		if executor != nil {
@@ -189,6 +202,9 @@ func (ctr *container) cleanupSpill() {
 	ctr.spilling = false
 	ctr.spillBatIdx = 0
 	ctr.spillBuf.Reset()
+	ctr.orderedRefs = nil
+	ctr.evalCursor = 0
+	ctr.spillOutBat = nil
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {
