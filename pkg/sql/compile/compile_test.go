@@ -218,6 +218,9 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 
 					txnOp, err := txnClient.New(ctx, timestamp.Timestamp{})
 					require.NoError(t, err)
+					defer func() {
+						require.NoError(t, txnOp.Rollback(ctx))
+					}()
 
 					proc := process.NewTopProcess(
 						ctx,
@@ -226,6 +229,7 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 						txnOp,
 						nil,
 						services[0],
+						nil,
 						nil,
 						nil,
 						nil,
