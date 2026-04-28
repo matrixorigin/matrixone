@@ -1,0 +1,12 @@
+select cast(timestampadd(day, 1, cast('2024-01-01' as date)) as char) q1;
+➤ q1[12,-1,0]  𝄀
+2024-01-02
+select cast(timestampadd(hour, 1, cast('2024-01-01' as date)) as char) q2;
+➤ q2[12,-1,0]  𝄀
+2024-01-01 01:00:00
+select timestampadd(minute, 30, '2024-01-01 00:00:00') q3;
+➤ q3[12,-1,0]  𝄀
+2024-01-01 00:30:00
+select cast(timestampadd(day, 1, '2024-01-31') as char) q4;
+➤ q4[12,-1,0]  𝄀
+2024-02-01

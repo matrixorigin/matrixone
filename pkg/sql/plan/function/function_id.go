@@ -417,9 +417,21 @@ const (
 	ELT             = 348
 	NULL_SAFE_EQUAL = 349
 
+	// function `current_time`, `curtime`
+	CURRENT_TIME = 350
+
+	// function `timestampadd`
+	TIMESTAMPADD = 351
+
+	// function `subtime`
+	SUBTIME = 352
+
+	// function `get_format`
+	GET_FORMAT = 353
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 350
+	FUNCTION_END_NUMBER = 354
 )
 
 // functionIdRegister is what function we have registered already.
@@ -538,6 +550,8 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"current_time":      CURRENT_TIME,
+	"curtime":           CURRENT_TIME,
 	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
@@ -552,11 +566,13 @@ var functionIdRegister = map[string]int32{
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
+	"get_format":        GET_FORMAT,
 	"left":              LEFT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"addtime":                        ADDTIME,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
@@ -663,7 +679,9 @@ var functionIdRegister = map[string]int32{
 	"hash_value":                     HASH,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
+	"timestampadd":                   TIMESTAMPADD,
 	"timestampdiff":                  TIMESTAMPDIFF,
+	"subtime":                        SUBTIME,
 	"timediff":                       TIMEDIFF,
 	"last_day":                       LAST_DAY,
 	"makedate":                       MAKEDATE,
