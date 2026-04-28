@@ -321,9 +321,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		if newExpr.GetLit() == nil {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
-		if _, err = funcCastForSetType(proc.Ctx, newExpr, typ); err != nil {
+		castedExpr, err := funcCastForSetType(proc.Ctx, newExpr, typ)
+		if err != nil {
 			return nil, err
 		}
+		newExpr = castedExpr
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
@@ -376,9 +378,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		if foldErr != nil || foldedExpr.GetLit() == nil {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "SET column on-update value must be a constant expression")
 		}
-		if _, valErr := funcCastForSetType(proc.Ctx, foldedExpr, typ); valErr != nil {
+		castedExpr, valErr := funcCastForSetType(proc.Ctx, foldedExpr, typ)
+		if valErr != nil {
 			return nil, valErr
 		}
+		onUpdateExpr = castedExpr
 	}
 
 	ret := &plan.OnUpdate{
