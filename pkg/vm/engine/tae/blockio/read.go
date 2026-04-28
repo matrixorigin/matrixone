@@ -566,7 +566,7 @@ func fillOutputBatchBySelectedRows(
 		if outputColPos == phyAddrColumnPos {
 			continue
 		}
-		if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
+		if orderByLimit != nil && !orderByLimit.OrderedLimit && loadedColumnPos == int(orderByLimit.ColPos) {
 			loadedColumnPos++
 			continue
 		}
@@ -583,7 +583,7 @@ func fillOutputBatchBySelectedRows(
 		loadedColumnPos++
 	}
 
-	if orderByLimit != nil {
+	if orderByLimit != nil && !orderByLimit.OrderedLimit {
 		if len(outputBat.Vecs) == len(columns) {
 			distVec := vector.NewVec(types.T_float64.ToType())
 			vector.AppendFixedList(distVec, dists, nil, mp)
@@ -643,7 +643,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -904,9 +904,21 @@ func handleOrderByLimitOnSelectRows(
 	ctx context.Context,
 	selectRows []int64,
 	orderByLimit *objectio.BlockReadTopOp,
+	info *objectio.BlockInfo,
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
 ) ([]int64, []float64, error) {
+	if orderByLimit.OrderedLimit {
+		if !info.IsSorted() || uint64(len(selectRows)) <= orderByLimit.Limit {
+			return selectRows, nil, nil
+		}
+		limit := int(orderByLimit.Limit)
+		if orderByLimit.Desc {
+			return selectRows[len(selectRows)-limit:], nil, nil
+		}
+		return selectRows[:limit], nil, nil
+	}
+
 	vecColPos := orderByLimit.ColPos
 	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
 		vecColPos--
