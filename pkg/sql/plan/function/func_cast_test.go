@@ -2179,7 +2179,7 @@ func TestYearCastHelpers(t *testing.T) {
 	defer to.Free()
 
 	require.NoError(t, to.PreExtendAndReset(3))
-	require.NoError(t, strToYear(ctx, from, to, 3, nil))
+	require.NoError(t, strToYear(ctx, from, to, 3, nil, types.T_varchar.ToType()))
 
 	yearVec := to.GetResultVector()
 	years := vector.MustFixedColNoTypeCheck[types.MoYear](yearVec)
@@ -2206,7 +2206,26 @@ func TestYearCastRejectsInvalidValues(t *testing.T) {
 	strResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
 	defer strResult.Free()
 	require.NoError(t, strResult.PreExtendAndReset(2))
-	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(inputVec), strResult, 2, nil))
+	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(inputVec), strResult, 2, nil, types.T_varchar.ToType()))
+
+	// VARBINARY / BLOB payloads must not be NUL-trimmed: ['0', 0x00] must not
+	// be silently accepted as YEAR 0.
+	varBinPayload := []byte{'0', 0x00}
+	varBinVec := testutil.MakeVarcharVector([]string{string(varBinPayload)}, nil)
+	defer varBinVec.Free(mp)
+	varBinResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer varBinResult.Free()
+	require.NoError(t, varBinResult.PreExtendAndReset(1))
+	require.Error(t, strToYear(ctx, vector.GenerateFunctionStrParameter(varBinVec), varBinResult, 1, nil, types.T_varbinary.ToType()))
+
+	// Fixed-length BINARY right-pads with NUL; keep that behavior and still
+	// parse the logical value. '0' padded with NUL should become YEAR 0.
+	binVec := testutil.MakeVarcharVector([]string{string(varBinPayload)}, nil)
+	defer binVec.Free(mp)
+	binResult := vector.NewFunctionResultWrapper(types.T_year.ToType(), mp).(*vector.FunctionResult[types.MoYear])
+	defer binResult.Free()
+	require.NoError(t, binResult.PreExtendAndReset(1))
+	require.NoError(t, strToYear(ctx, vector.GenerateFunctionStrParameter(binVec), binResult, 1, nil, types.T_binary.ToType()))
 
 	intVec := vector.NewVec(types.T_int64.ToType())
 	defer intVec.Free(mp)

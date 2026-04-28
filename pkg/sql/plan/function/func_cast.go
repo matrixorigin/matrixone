@@ -1768,7 +1768,7 @@ func strTypeToOthers(proc *process.Process,
 		return strToArray[float64](ctx, source, rs, length, toType)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return strToYear(ctx, source, rs, length, selectList)
+		return strToYear(ctx, source, rs, length, selectList, fromType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -4370,7 +4370,13 @@ func strToDecimal256(
 func strToYear(ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList,
+	fromType types.Type,
 ) error {
+	// BINARY(N) right-pads with NUL bytes, so trimming '\x00' is necessary to
+	// reach the logical value. VARBINARY / BLOB carry arbitrary payload and
+	// must not be trimmed, otherwise data like []byte{'0', 0x00} would be
+	// silently accepted as YEAR 0.
+	trimNul := fromType.Oid == types.T_binary
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -4379,7 +4385,10 @@ func strToYear(ctx context.Context,
 			}
 			continue
 		}
-		s := strings.TrimRight(convertByteSliceToString(v), "\x00")
+		s := convertByteSliceToString(v)
+		if trimNul {
+			s = strings.TrimRight(s, "\x00")
+		}
 		year, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
