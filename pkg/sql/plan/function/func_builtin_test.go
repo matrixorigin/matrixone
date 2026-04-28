@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -130,6 +131,30 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestBuiltInCurrentTimeUsesSessionTimezoneAcrossDayBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.FixedZone("UTC+8", 8*60*60)
+	proc.Base.UnixTime = time.Date(2024, time.January, 1, 18, 30, 45, 123456000, time.UTC).UnixNano()
+
+	scaleVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(6), 1, proc.Mp())
+	require.NoError(t, err)
+	defer scaleVec.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_time.ToType(), proc.Mp())
+	defer result.Free()
+
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = builtInCurrentTime([]*vector.Vector{scaleVec}, result, proc, 1, nil)
+	require.NoError(t, err)
+
+	resultVec := result.GetResultVector()
+	resultTime, null := vector.GenerateFunctionFixedTypeParameter[types.Time](resultVec).GetValue(0)
+	require.False(t, null)
+	require.Equal(t, "02:30:45.123456", resultTime.String2(6))
 }
 
 func Test_BuiltIn_Rpad(t *testing.T) {

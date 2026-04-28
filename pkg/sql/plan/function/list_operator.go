@@ -71,6 +71,57 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `<=>`
+	// return true if a = b, return false if a != b, handle nulls as values
+	{
+		functionId: NULL_SAFE_EQUAL,
+		class:      plan.Function_PRODUCE_NO_NULL,
+		layout:     COMPARISON_OPERATOR,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				if has {
+					if equalAndNotEqualOperatorSupports(t1, t2) {
+						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
+							if t1.Scale > t2.Scale {
+								t2.Scale = t1.Scale
+							} else {
+								t1.Scale = t2.Scale
+							}
+						}
+						return newCheckResultWithCast(0, []types.Type{t1, t2})
+					}
+				} else {
+					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
+						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
+							t1, t2 := inputs[0], inputs[1]
+							if t1.Scale > t2.Scale {
+								t2.Scale = t1.Scale
+							} else {
+								t1.Scale = t2.Scale
+							}
+							return newCheckResultWithCast(0, []types.Type{t1, t2})
+						}
+						return newCheckResultWithSuccess(0)
+					}
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return nullSafeEqualFn
+				},
+			},
+		},
+	},
+
 	// operator `>`
 	// return a > b, if any one of a and b is null, return null.
 	{

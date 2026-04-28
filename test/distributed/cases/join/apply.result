@@ -190,7 +190,11 @@ id    key    index    value
 18    m2    null    2
 20    m2    null    2
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and u.value > 2;
-invalid argument operator cast, bad value [JSON BIGINT]
+id    key    index    value
+2    m2    null    22
+3    m2    null    23
+12    m2    null    22
+13    m2    null    23
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and json_extract_float64(u.value, '$') > 2;
 id    key    index    value
 2    m2    null    22
