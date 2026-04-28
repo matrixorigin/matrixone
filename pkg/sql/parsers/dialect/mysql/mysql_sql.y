@@ -6412,6 +6412,14 @@ outer_join:
     {
         $$ = tree.JOIN_TYPE_RIGHT
     }
+|   FULL JOIN
+    {
+        $$ = tree.JOIN_TYPE_FULL
+    }
+|   FULL OUTER JOIN
+    {
+        $$ = tree.JOIN_TYPE_FULL
+    }
 
 dedup_join:
     DEDUP JOIN
@@ -13551,7 +13559,6 @@ non_reserved_keyword:
 |	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
-|   FULL
 |   FIXED
 |   FIELDS
 |   GENERATED

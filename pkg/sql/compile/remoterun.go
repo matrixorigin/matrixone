@@ -573,6 +573,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RelList:    relList,
 			ColList:    colList,
 			NonEqCond:  t.NonEqCond,
+			LeftTypes:  convertToPlanTypes(t.LeftTypes),
 			RightTypes: convertToPlanTypes(t.RightTypes),
 			JoinMapTag: t.JoinMapTag,
 		}
@@ -1003,6 +1004,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLoopJoin()
 		arg := loopjoin.NewArgument()
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
 		arg.NonEqCond = t.NonEqCond
 		arg.JoinMapTag = t.JoinMapTag
