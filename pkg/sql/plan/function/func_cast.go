@@ -1975,15 +1975,17 @@ func jsonAppendFloatValue(ctx context.Context, result vector.FunctionResultWrapp
 	toOid := toType.Oid
 	switch toOid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		if math.IsNaN(f) || f < -math.Exp2(63) || f >= math.Exp2(63) {
+		rounded := math.Round(f)
+		if math.IsNaN(rounded) || rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
 			return jsonCastErr(ctx, toOid)
 		}
-		return jsonAppendExactSigned(ctx, result, toOid, int64(f))
+		return jsonAppendExactSigned(ctx, result, toOid, int64(rounded))
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		if math.IsNaN(f) || f < 0 || f >= math.Exp2(64) {
+		rounded := math.Round(f)
+		if math.IsNaN(rounded) || rounded < 0 || rounded >= math.Exp2(64) {
 			return jsonCastErr(ctx, toOid)
 		}
-		return jsonAppendExactUnsigned(ctx, result, toOid, uint64(f))
+		return jsonAppendExactUnsigned(ctx, result, toOid, uint64(rounded))
 	case types.T_float32:
 		if f < -math.MaxFloat32 || f > math.MaxFloat32 {
 			return jsonCastErr(ctx, toOid)

@@ -346,7 +346,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
-%left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
+%left <str> SHIFT_LEFT SHIFT_RIGHT
 %left <str> '+' '-'
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
@@ -354,6 +354,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
+%left <str> ARROW LONG_ARROW
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
@@ -484,7 +485,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
+%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE CUME_DIST PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 
 // Sequence function
@@ -10301,7 +10302,7 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
     }
-|   bit_expr ARROW simple_expr %prec SHIFT_RIGHT
+|   bit_expr ARROW simple_expr %prec ARROW
     {
         name := tree.NewUnresolvedColName("json_extract")
         $$ = &tree.FuncExpr{
@@ -10310,7 +10311,7 @@ bit_expr:
             Exprs: tree.Exprs{$1, $3},
         }
     }
-|   bit_expr LONG_ARROW simple_expr %prec SHIFT_RIGHT
+|   bit_expr LONG_ARROW simple_expr %prec LONG_ARROW
     {
         extractName := tree.NewUnresolvedColName("json_extract")
         inner := &tree.FuncExpr{
@@ -10522,6 +10523,24 @@ function_call_window:
         }
     }
 |	DENSE_RANK '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
+|	CUME_DIST '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
+|	PERCENT_RANK '(' ')' window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{

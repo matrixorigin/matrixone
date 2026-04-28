@@ -2309,6 +2309,30 @@ func TestCastJsonFloatOverflow(t *testing.T) {
 	}
 }
 
+func TestCastJsonFloatToIntegerRounds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	intResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer intResult.Free()
+	require.NoError(t, intResult.PreExtendAndReset(3))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"1.6", "-1.6", "1.4"}, nil),
+		vector.NewVec(types.T_int64.ToType()),
+	}, intResult, proc, 3, nil))
+	gotInt := vector.MustFixedColNoTypeCheck[int64](intResult.GetResultVector())
+	require.Equal(t, []int64{2, -2, 1}, gotInt)
+
+	uintResult := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+	defer uintResult.Free()
+	require.NoError(t, uintResult.PreExtendAndReset(2))
+	require.NoError(t, NewCast([]*vector.Vector{
+		testutil.MakeJsonVector([]string{"1.6", "1.4"}, nil),
+		vector.NewVec(types.T_uint64.ToType()),
+	}, uintResult, proc, 2, nil))
+	gotUint := vector.MustFixedColNoTypeCheck[uint64](uintResult.GetResultVector())
+	require.Equal(t, []uint64{2, 1}, gotUint)
+}
+
 func TestCastJsonStringNumeric(t *testing.T) {
 	// A JSON string containing digits should parse through jsonAppendStringValue
 	// and land as an int64. A JSON string that cannot parse must error.
