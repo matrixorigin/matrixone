@@ -113,6 +113,53 @@ func TestYearWeekDateReturnsNullForNullMode(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestYearWeekStringUsesModePerRow(t *testing.T) {
+	values := []string{"2003-12-30", "2003-12-30", "invalid-date", "1999-01-03"}
+	modes := []int64{0, 1, 1, -1}
+	expected := make([]int64, len(values))
+	expectedNulls := []bool{false, false, true, false}
+	for i, value := range values {
+		if expectedNulls[i] {
+			continue
+		}
+		date, err := types.ParseDateCast(value)
+		require.NoError(t, err)
+		year, week := date.YearWeek(int(modes[i]))
+		expected[i] = int64(year)*100 + int64(week)
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), values, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, expected, expectedNulls),
+		YearWeekString,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.NotEqual(t, expected[0], expected[1])
+}
+
+func TestYearWeekStringReturnsNullForNullMode(t *testing.T) {
+	date, err := types.ParseDateCast("2000-01-01")
+	require.NoError(t, err)
+	year, week := date.YearWeek(0)
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2000-01-01", "2000-01-01"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{int64(year)*100 + int64(week), 0}, []bool{false, true}),
+		YearWeekString,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func initCeilTestCase() []tcTemp {
 	rfs := []float64{1, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
 		0, 2, 5, 9, 17, 33, 65, math.MaxInt64, math.MaxFloat64, 0}
