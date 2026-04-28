@@ -658,23 +658,6 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 	return newExpr, true
 }
 
-func extractNotEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
-	fn := expr.GetF()
-	if fn == nil || len(fn.Args) != 2 {
-		return nil, nil, false
-	}
-	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
-		return nil, nil, false
-	}
-	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
-		return fn.Args[0], fn.Args[1], true
-	}
-	if fn.Args[1].GetCol() != nil && fn.Args[0].GetLit() != nil {
-		return fn.Args[1], fn.Args[0], true
-	}
-	return nil, nil, false
-}
-
 func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
