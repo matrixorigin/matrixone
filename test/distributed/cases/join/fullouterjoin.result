@@ -9,16 +9,16 @@ insert into l values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(null,'lN');
 insert into r values (3,'C'),(4,'D'),(5,'E'),(6,'F'),(null,'rN');
 select l.k as lk, lv, r.k as rk, rv
 from l full outer join r on l.k = r.k
-order by lk nulls last, rk nulls last;
+order by lk, rk, lv, rv;
 ➤ lk[4,32,0]  ¦  lv[12,-1,0]  ¦  rk[4,32,0]  ¦  rv[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  rN  𝄀
+null  ¦  lN  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  5  ¦  E  𝄀
+null  ¦  null  ¦  6  ¦  F  𝄀
 1  ¦  a  ¦  null  ¦  null  𝄀
 2  ¦  b  ¦  null  ¦  null  𝄀
 3  ¦  c  ¦  3  ¦  C  𝄀
-4  ¦  d  ¦  4  ¦  D  𝄀
-null  ¦  null  ¦  5  ¦  E  𝄀
-null  ¦  null  ¦  6  ¦  F  𝄀
-null  ¦  null  ¦  null  ¦  rN  𝄀
-null  ¦  lN  ¦  null  ¦  null
+4  ¦  d  ¦  4  ¦  D
 select count(*) as total,
 sum(case when l.k is not null and r.k is not null then 1 else 0 end) as matched,
 sum(case when l.k is null then 1 else 0 end) as unmatched_right_or_lk_null,
@@ -37,20 +37,20 @@ order by lk;
 4  ¦  4
 drop table if exists e;
 create table e (k int);
-select l.k as lk, e.k as ek from e full outer join l on e.k = l.k order by lk nulls last;
+select l.k as lk, e.k as ek from e full outer join l on e.k = l.k order by lk;
 ➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
 1  ¦  null  𝄀
 2  ¦  null  𝄀
 3  ¦  null  𝄀
-4  ¦  null  𝄀
-null  ¦  null
-select l.k as lk, e.k as ek from l full outer join e on l.k = e.k order by lk nulls last;
+4  ¦  null
+select l.k as lk, e.k as ek from l full outer join e on l.k = e.k order by lk;
 ➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
 1  ¦  null  𝄀
 2  ¦  null  𝄀
 3  ¦  null  𝄀
-4  ¦  null  𝄀
-null  ¦  null
+4  ¦  null
 select * from e a full outer join e b on a.k = b.k;
 ➤ k[4,32,0]  ¦  k[4,32,0]
 drop table if exists ld;
@@ -61,7 +61,7 @@ insert into ld values (1,1,10),(1,1,11),(2,2,20),(3,3,30);
 insert into rd values (1,1,100),(1,1,101),(2,2,200),(4,4,400);
 select ld.k1, ld.k2, ld.v, rd.v
 from ld full outer join rd on ld.k1=rd.k1 and ld.k2=rd.k2
-order by coalesce(ld.k1,rd.k1), coalesce(ld.k2,rd.k2), ld.v nulls first, rd.v nulls first;
+order by coalesce(ld.k1,rd.k1), coalesce(ld.k2,rd.k2), ld.v, rd.v;
 ➤ k1[4,32,0]  ¦  k2[4,32,0]  ¦  v[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  1  ¦  10  ¦  100  𝄀
 1  ¦  1  ¦  10  ¦  101  𝄀
@@ -76,16 +76,16 @@ when r.k is null then 'L-only'
 else 'both' end as origin,
 lv, rv
 from l full outer join r on l.k = r.k
-order by key_ nulls last, origin;
+order by key_, origin, lv, rv;
 ➤ key_[4,32,0]  ¦  origin[12,-1,0]  ¦  lv[12,-1,0]  ¦  rv[12,-1,0]  𝄀
+null  ¦  R-only  ¦  null  ¦  rN  𝄀
+null  ¦  R-only  ¦  lN  ¦  null  𝄀
 1  ¦  L-only  ¦  a  ¦  null  𝄀
 2  ¦  L-only  ¦  b  ¦  null  𝄀
 3  ¦  both  ¦  c  ¦  C  𝄀
 4  ¦  both  ¦  d  ¦  D  𝄀
 5  ¦  R-only  ¦  null  ¦  E  𝄀
-6  ¦  R-only  ¦  null  ¦  F  𝄀
-null  ¦  R-only  ¦  null  ¦  rN  𝄀
-null  ¦  R-only  ¦  lN  ¦  null
+6  ¦  R-only  ¦  null  ¦  F
 select origin, count(*) as c
 from (select case when l.k is null then 'R-only'
 when r.k is null then 'L-only'
@@ -98,17 +98,17 @@ R-only  ¦  4  𝄀
 both  ¦  2
 select l.k as lk, r.k as rk, rv
 from l full outer join r on l.k = r.k and r.rv <> 'C'
-order by lk nulls last, rk nulls last;
+order by lk, rk, rv;
 ➤ lk[4,32,0]  ¦  rk[4,32,0]  ¦  rv[12,-1,0]  𝄀
-1  ¦  null  ¦  null  𝄀
-2  ¦  null  ¦  null  𝄀
-3  ¦  null  ¦  null  𝄀
-4  ¦  4  ¦  D  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  rN  𝄀
 null  ¦  3  ¦  C  𝄀
 null  ¦  5  ¦  E  𝄀
 null  ¦  6  ¦  F  𝄀
-null  ¦  null  ¦  rN  𝄀
-null  ¦  null  ¦  null
+1  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  4  ¦  D
 drop table if exists big_l;
 drop table if exists big_r;
 create table big_l (k int);
@@ -134,20 +134,20 @@ from l full outer join r on l.k > r.k;
 9  ¦  1  ¦  5  ¦  5
 select l.k as lk, e.k as ek
 from l full outer join e on l.k > e.k
-order by lk nulls last;
+order by lk;
 ➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
 1  ¦  null  𝄀
 2  ¦  null  𝄀
 3  ¦  null  𝄀
-4  ¦  null  𝄀
-null  ¦  null
+4  ¦  null
 select e.k as ek, l.k as lk
 from e full outer join l on e.k > l.k
-order by lk nulls last;
+order by lk;
 ➤ ek[4,32,0]  ¦  lk[4,32,0]  𝄀
+null  ¦  null  𝄀
 null  ¦  1  𝄀
 null  ¦  2  𝄀
 null  ¦  3  𝄀
-null  ¦  4  𝄀
-null  ¦  null
+null  ¦  4
 drop database fojdb;

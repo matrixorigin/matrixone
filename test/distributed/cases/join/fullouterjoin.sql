@@ -1,6 +1,8 @@
 -- =====================================================================
 -- FULL OUTER JOIN tests
--- Phase 1: hash equi-join only (non-equi rejected; shuffle/spill disabled)
+-- Covers Phase 1 (broadcast hash equi), Phase 2 (shuffle hash equi),
+-- Phase 3 (spill), and Phase 4 (loopjoin non-equi). Each section is
+-- annotated with the path it primarily exercises.
 -- =====================================================================
 drop database if exists fojdb;
 create database fojdb;
@@ -20,7 +22,7 @@ insert into r values (3,'C'),(4,'D'),(5,'E'),(6,'F'),(null,'rN');
 -- unmatched-right (5,6,nullKey). NULL keys never match.
 select l.k as lk, lv, r.k as rk, rv
   from l full outer join r on l.k = r.k
-  order by lk nulls last, rk nulls last;
+  order by lk, rk, lv, rv;
 
 -- Counts cross-check
 select count(*) as total,
@@ -41,9 +43,9 @@ select l.k as lk, r.k as rk
 drop table if exists e;
 create table e (k int);
 -- empty FOJ non-empty: every right row appears with null left
-select l.k as lk, e.k as ek from e full outer join l on e.k = l.k order by lk nulls last;
+select l.k as lk, e.k as ek from e full outer join l on e.k = l.k order by lk;
 -- non-empty FOJ empty: every left row appears with null right
-select l.k as lk, e.k as ek from l full outer join e on l.k = e.k order by lk nulls last;
+select l.k as lk, e.k as ek from l full outer join e on l.k = e.k order by lk;
 -- empty FOJ empty
 select * from e a full outer join e b on a.k = b.k;
 
@@ -59,7 +61,7 @@ insert into rd values (1,1,100),(1,1,101),(2,2,200),(4,4,400);
 -- Matched (1,1) yields 4 rows (2x2), (2,2) yields 1, unmatched (3,3) and (4,4) each yield 1
 select ld.k1, ld.k2, ld.v, rd.v
   from ld full outer join rd on ld.k1=rd.k1 and ld.k2=rd.k2
-  order by coalesce(ld.k1,rd.k1), coalesce(ld.k2,rd.k2), ld.v nulls first, rd.v nulls first;
+  order by coalesce(ld.k1,rd.k1), coalesce(ld.k2,rd.k2), ld.v, rd.v;
 
 -- ---------------------------------------------------------------------
 -- 4. Multi-column projection + expressions referencing both sides
@@ -70,7 +72,7 @@ select coalesce(l.k, r.k) as key_,
             else 'both' end as origin,
        lv, rv
   from l full outer join r on l.k = r.k
-  order by key_ nulls last, origin;
+  order by key_, origin, lv, rv;
 
 -- ---------------------------------------------------------------------
 -- 5. Nested in subquery + aggregation
@@ -88,7 +90,7 @@ select origin, count(*) as c
 -- ---------------------------------------------------------------------
 select l.k as lk, r.k as rk, rv
   from l full outer join r on l.k = r.k and r.rv <> 'C'
-  order by lk nulls last, rk nulls last;
+  order by lk, rk, rv;
 
 -- ---------------------------------------------------------------------
 -- 7. Larger data — exercise multi-batch probe + finalize
@@ -125,11 +127,11 @@ select count(*) as total,
 -- Inequality with empty build: every probe row null-padded right.
 select l.k as lk, e.k as ek
   from l full outer join e on l.k > e.k
-  order by lk nulls last;
+  order by lk;
 
 -- Inequality with empty probe: every build row null-padded left via Finalize.
 select e.k as ek, l.k as lk
   from e full outer join l on e.k > l.k
-  order by lk nulls last;
+  order by lk;
 
 drop database fojdb;
