@@ -1552,18 +1552,17 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+					return
+				}
 				floatflag = true
 				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
 				continue
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)

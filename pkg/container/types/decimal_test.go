@@ -69,6 +69,28 @@ func TestParse64ScientificNotation(t *testing.T) {
 	}
 }
 
+// TestParse64RejectsMalformedScientific verifies Decimal64 mirrors
+// Decimal128/256's strict exponent validation: exactly one `e`/`E`, at most
+// one sign right after it, and no trailing non-digit characters.
+func TestParse64RejectsMalformedScientific(t *testing.T) {
+	cases := []string{
+		"1e",    // nothing after e
+		"1e+",   // sign after e but no digit
+		"1e-",   // sign after e but no digit
+		"1E",    // capital E variant
+		"1e+-5", // double sign
+		"1e++5", // double sign
+		"1e1e2", // two exponents
+		"1ea",   // letter after e
+	}
+	for _, s := range cases {
+		_, _, err := Parse64(s)
+		if err == nil {
+			t.Errorf("Parse64(%q) expected an error, got nil", s)
+		}
+	}
+}
+
 func TestParse128(t *testing.T) {
 	x, y := ParseDecimal128("99999.999999999999999999999999999999999", 12, 6)
 	if y != nil || x.B0_63 != 100000000000 {
