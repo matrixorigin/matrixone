@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package plan
 
 import (
 	"regexp"
@@ -24,18 +24,22 @@ import (
 
 // hiddenDupKeyRe matches duplicate-entry messages whose key name is the
 // internal hidden unique-index column "__mo_index_idx_col". Lower-level engines
-// (e.g. tae DedupSnapByPK) only see the hidden-index table and surface the
-// internal column name; we rewrite the message using the plan-level index
-// definition so users see the original column name.
+// (e.g. tae DedupSnapByPK, the Optimistic commit-time dedup in disttae) only
+// see the hidden-index table and surface the internal column name; we rewrite
+// the message using the plan-level index definition so users see the original
+// column name.
 var hiddenDupKeyRe = regexp.MustCompile(
 	`^Duplicate entry '(.*)' for key '` + catalog.IndexTableIndexColName + `'$`,
 )
 
-// rewriteHiddenIndexDupEntry rewrites duplicate-entry errors that surface the
-// internal __mo_index_idx_col column name. It walks the plan to find the unique
-// index being written, then substitutes the user-visible column name (for a
-// single-column unique index) or the index name (for a composite one).
-func rewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
+// RewriteHiddenIndexDupEntry rewrites duplicate-entry errors that surface the
+// internal __mo_index_idx_col column name. It walks the plan to find the
+// unique index being written, then substitutes the user-visible column name
+// (for a single-column unique index) or the index name (for a composite one).
+// When multiple unique indexes exist on the target table, we cannot tell from
+// the engine-level error which one was hit, so we fall back to the original
+// error to avoid misattributing the key.
+func RewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
 	if err == nil || p == nil {
 		return err
 	}
@@ -51,12 +55,6 @@ func rewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
 		return err
 	}
 
-	// Collect every unique index the target table(s) expose. We only rewrite
-	// when the mapping is unambiguous — i.e. exactly one unique index could
-	// have produced the conflict. If the table has multiple unique indexes
-	// (e.g. UNIQUE(a) and UNIQUE(b)) we cannot tell from the engine-level
-	// error which one was hit, so we prefer leaving the original message
-	// alone over misattributing the key.
 	type uniqueKey struct {
 		parts     []string
 		indexName string
