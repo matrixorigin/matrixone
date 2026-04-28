@@ -50,6 +50,9 @@ count(*)
 0
 alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
 execute task sql_task_cron;
+select sleep(1);
+sleep(1)
+0
 select count(*) from scheduled_events;
 count(*)
 1
@@ -57,6 +60,9 @@ select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and tr
 status
 SUCCESS
 execute task sql_task_manual;
+select sleep(1);
+sleep(1)
+0
 select count(*) from manual_events;
 count(*)
 1
@@ -69,6 +75,9 @@ run_id    task_name    trigger_type    status    started_at    finished_at    du
 alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
+select sleep(1);
+sleep(1)
+0
 select count(*) from scheduled_events;
 count(*)
 2
@@ -84,11 +93,17 @@ select 'gate-ok'
 where not exists (select 1 from gate_sink where tag = 'gate-ok');
 end
 execute task sql_task_gate;
+select sleep(1);
+sleep(1)
+0
 select count(*) from gate_sink;
 count(*)
 0
 insert into gate_source values (1);
 execute task sql_task_gate;
+select sleep(1);
+sleep(1)
+0
 select count(*) from gate_sink;
 count(*)
 1
@@ -108,6 +123,9 @@ insert into ms_target values (2);
 end
 execute task sql_task_multistmt;
 no such table sql_task_case.no_such_table
+select sleep(1);
+sleep(1)
+0
 select count(*), min(v), max(v) from ms_target;
 count(*)    min(v)    max(v)
 1    1    1
@@ -122,6 +140,9 @@ end
 execute task sql_task_timeout;
 context deadline exceeded
 internal error: internal executor exec
+select sleep(2);
+sleep(2)
+0
 select count(*) from timeout_sink;
 count(*)
 0
@@ -136,6 +157,9 @@ insert into no_such_retry_table values (1);
 end
 execute task sql_task_retry;
 no such table sql_task_case.no_such_retry_table
+select sleep(1);
+sleep(1)
+0
 select count(*) from retry_target;
 count(*)
 2
@@ -202,6 +226,9 @@ execute task sql_task_build_silver;
 execute task sql_task_build_gold;
 execute task sql_task_validate;
 execute task sql_task_validate;
+select sleep(2);
+sleep(2)
+0
 select count(*) from silver_orders;
 count(*)
 2
