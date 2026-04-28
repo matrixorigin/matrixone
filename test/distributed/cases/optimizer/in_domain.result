@@ -1,0 +1,99 @@
+drop database if exists d_indomain;
+create database d_indomain;
+use d_indomain;
+create table t1(a int primary key, b int);
+insert into t1 select result, result from generate_series(20) g;
+select a from t1 where a in (1,2,3,4) and a not in (2,3) order by a;
+a
+1
+4
+explain select a from t1 where a in (1,2,3,4) and a not in (2,3);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: t1.a in ([1 4])
+select a from t1 where a in (1,2,3,4) and a != 2 and a != 3 order by a;
+a
+1
+4
+explain select a from t1 where a in (1,2,3,4) and a != 2 and a != 3;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: t1.a in ([1 4])
+select a from t1 where a in (1,2) and a not in (1,2);
+a
+explain select a from t1 where a in (1,2) and a not in (1,2);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: false
+select a from t1 where a = 2 and a in (1,2,3);
+a
+2
+explain select a from t1 where a = 2 and a in (1,2,3);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: (t1.a = 2)
+select a from t1 where a in (1,2) and a in (3,4);
+a
+explain select a from t1 where a in (1,2) and a in (3,4);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: false
+select a from t1 where a in (1,2,3,4) and (a not in (2,3) or a = 99) order by a;
+a
+1
+4
+explain select a from t1 where a in (1,2,3,4) and (a not in (2,3) or a = 99);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: (t1.a in ([1 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6 order by a;
+a
+3
+4
+5
+6
+explain select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: t1.a BETWEEN 3 AND 6, t1.a in ([1 2 3 4 5 6 7 8])
+select a,b from t1 where a in (1,2,3) and b != 99 order by a;
+a    b
+1    1
+2    2
+3    3
+create table t2(a int, b int);
+insert into t2 values (1,1),(2,2),(null,3);
+select * from t2 where a in (1,2,3) and a is null;
+a    b
+explain select * from t2 where a in (1,2,3) and a is null;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t2
+        Filter Cond: false
+select a from t1 where a in (1,2,3,4) and (a <> 2 or a = 99) order by a;
+a
+1
+3
+4
+explain select a from t1 where a in (1,2,3,4) and (a <> 2 or a = 99);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: (t1.a in ([1 3 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) or a = 99) order by a;
+a
+1
+4
+explain select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) or a = 99);
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t1
+        Filter Cond: (t1.a in ([1 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+drop database if exists d_indomain;
