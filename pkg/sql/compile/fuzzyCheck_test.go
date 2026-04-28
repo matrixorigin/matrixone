@@ -214,3 +214,31 @@ func TestRewriteHiddenIndexDupEntryUnchanged(t *testing.T) {
 	rewritten := rewriteHiddenIndexDupEntry(p, src)
 	require.Equal(t, src.Error(), rewritten.Error())
 }
+
+// TestRewriteHiddenIndexDupEntryMultipleUniqueIndexesUnchanged verifies that
+// when the target table has multiple unique indexes, the error is left alone
+// because the rewrite cannot unambiguously pick which column hit the conflict.
+func TestRewriteHiddenIndexDupEntryMultipleUniqueIndexesUnchanged(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "t1",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "a_index", Parts: []string{"a"}},
+								{Unique: true, IndexName: "b_index", Parts: []string{"b"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("1", catalog.IndexTableIndexColName)
+	rewritten := rewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, src.Error(), rewritten.Error(),
+		"with multiple unique indexes we cannot tell which one was hit, so keep the original error")
+}

@@ -51,10 +51,17 @@ func rewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
 		return err
 	}
 
-	// Find the first unique index defined on any table referenced by the
-	// query. For INSERT/UPDATE/REPLACE statements there is exactly one target
-	// table, so this is unambiguous in practice.
-	var indexKey string
+	// Collect every unique index the target table(s) expose. We only rewrite
+	// when the mapping is unambiguous — i.e. exactly one unique index could
+	// have produced the conflict. If the table has multiple unique indexes
+	// (e.g. UNIQUE(a) and UNIQUE(b)) we cannot tell from the engine-level
+	// error which one was hit, so we prefer leaving the original message
+	// alone over misattributing the key.
+	type uniqueKey struct {
+		parts     []string
+		indexName string
+	}
+	var uniques []uniqueKey
 	for _, n := range qry.Query.Nodes {
 		if n == nil || n.TableDef == nil {
 			continue
@@ -63,18 +70,25 @@ func rewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
 			if !idx.Unique {
 				continue
 			}
-			if len(idx.Parts) == 1 {
-				indexKey = catalog.ResolveAlias(idx.Parts[0])
-			} else {
-				indexKey = idx.IndexName
-			}
-			break
+			uniques = append(uniques, uniqueKey{parts: idx.Parts, indexName: idx.IndexName})
 		}
-		if indexKey != "" {
+		// All DML plans share a single target table, so stop after the first
+		// node that carries a TableDef with index definitions.
+		if len(uniques) > 0 {
 			break
 		}
 	}
 
+	if len(uniques) != 1 {
+		return err
+	}
+	u := uniques[0]
+	var indexKey string
+	if len(u.parts) == 1 {
+		indexKey = catalog.ResolveAlias(u.parts[0])
+	} else {
+		indexKey = u.indexName
+	}
 	if indexKey == "" {
 		return err
 	}
