@@ -406,4 +406,8 @@ insert into jt_diff values (2, '{"status": "inactive", "score": 60}');
 insert into jt_diff values (3, '{"status": "active", "score": 85}');
 select id from jt_diff where doc -> '$.status' = '"active"' order by id;
 ➤ id[4,11,0]
+select id from jt_diff where doc -> '$.status' = 'active' order by id;
+➤ id[4,11,0]  𝄀
+1  𝄀
+3
 drop table if exists jt_diff;
