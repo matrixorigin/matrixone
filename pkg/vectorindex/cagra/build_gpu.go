@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -121,7 +122,7 @@ func (b *CagraBuild[T]) SetFilterColumns(colMetaJSON string) {
 // of ceil(nrows/32) entries, or nil when the chunk has no nulls.
 func (b *CagraBuild[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
 	if b.current == nil {
-		return fmt.Errorf("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
+		return moerr.NewInternalErrorNoCtx("CagraBuild.AddFilterChunk: no current sub-index (call AddFloat first)")
 	}
 	return b.current.Index.AddFilterChunk(colIdx, data, nullBitmap, nrows)
 }
