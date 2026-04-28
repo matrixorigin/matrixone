@@ -4403,7 +4403,16 @@ func floatToYear[T constraints.Float](ctx context.Context,
 			}
 			continue
 		}
-		year, err := types.ParseMoYearFromInt(int64(v))
+		// MySQL rounds float values before narrowing to YEAR (e.g. 2155.6
+		// becomes 2156, which is then rejected as out-of-range). A direct
+		// int64(v) conversion truncates toward zero and silently accepts
+		// 2155.6 as YEAR 2155. Round first, then validate.
+		rounded := math.Round(float64(v))
+		if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+			rounded < math.MinInt64 || rounded > math.MaxInt64 {
+			return moerr.NewInvalidInputf(ctx, "year value out of range: %v", v)
+		}
+		year, err := types.ParseMoYearFromInt(int64(rounded))
 		if err != nil {
 			return err
 		}
