@@ -34,9 +34,9 @@ events    exclusive    execute    expansion    expire    extended    extension  
 select 1 as file, 1 as filesystem, 1 as fill, 1 as first, 1 as fixed, 1 as float, 1 as following, 1 as force_quote, 1 as format;
 file    filesystem    fill    first    fixed    float    following    force_quote    format
 1    1    1    1    1    1    1    1    1
-select 1 as full, 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
-full    geometry    geometrycollection    global    grant    grants    handler    hash
-1    1    1    1    1    1    1    1
+select 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
+geometry    geometrycollection    global    grant    grants    handler    hash
+1    1    1    1    1    1    1
 select 1 as header, 1 as history, 1 as hour, 1 as identified, 1 as import, 1 as increment, 1 as indexes, 1 as inline;
 header    history    hour    identified    import    increment    indexes    inline
 1    1    1    1    1    1    1    1

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -549,6 +550,7 @@ type CheckpointChangesHandle struct {
 	duration      time.Duration
 	dataLength    int
 	lastPrintTime time.Time
+	retainRowID   bool
 }
 
 func NewCheckpointChangesHandle(
@@ -558,10 +560,11 @@ func NewCheckpointChangesHandle(
 	mp *mpool.MPool,
 ) (*CheckpointChangesHandle, error) {
 	handle := &CheckpointChangesHandle{
-		end:   end,
-		table: table,
-		fs:    table.getTxn().engine.fs,
-		sid:   table.proc.Load().GetService(),
+		end:         end,
+		table:       table,
+		fs:          table.getTxn().engine.fs,
+		sid:         table.proc.Load().GetService(),
+		retainRowID: engine.RetainRowIDFromContext(ctx),
 	}
 	err := handle.initReader(ctx)
 	return handle, err
@@ -639,10 +642,51 @@ func (h *CheckpointChangesHandle) Next(
 		data.Clean(mp)
 		return
 	}
-	rowidVec := data.Vecs[len(data.Vecs)-1]
-	rowidVec.Free(mp)
-	data.Vecs[len(data.Vecs)-1] = committs
-	data.Attrs[len(data.Attrs)-1] = objectio.DefaultCommitTS_Attr
+	rowIDIdx := -1
+	for i, vec := range data.Vecs {
+		if vec != nil && vec.GetType().Oid == types.T_Rowid {
+			rowIDIdx = i
+			break
+		}
+	}
+	if h.retainRowID {
+		if rowIDIdx < 0 {
+			data.Clean(mp)
+			committs.Free(mp)
+			err = moerr.NewInternalErrorNoCtx("checkpoint changes handle missing rowid vector")
+			return
+		}
+		rowIDVec := data.Vecs[rowIDIdx]
+		rewrittenVecs := make([]*vector.Vector, 0, len(data.Vecs)+1)
+		rewrittenVecs = append(rewrittenVecs, rowIDVec)
+		for i, vec := range data.Vecs {
+			if i == rowIDIdx {
+				continue
+			}
+			rewrittenVecs = append(rewrittenVecs, vec)
+		}
+		rewrittenVecs = append(rewrittenVecs, committs)
+		data.Vecs = rewrittenVecs
+
+		rewrittenAttrs := make([]string, 0, len(data.Attrs)+1)
+		rewrittenAttrs = append(rewrittenAttrs, catalog.Row_ID)
+		for i, attr := range data.Attrs {
+			if i == rowIDIdx {
+				continue
+			}
+			rewrittenAttrs = append(rewrittenAttrs, attr)
+		}
+		rewrittenAttrs = append(rewrittenAttrs, objectio.DefaultCommitTS_Attr)
+		data.Attrs = rewrittenAttrs
+	} else {
+		if rowIDIdx >= 0 {
+			data.Vecs[rowIDIdx].Free(mp)
+			data.Vecs = append(data.Vecs[:rowIDIdx], data.Vecs[rowIDIdx+1:]...)
+			data.Attrs = append(data.Attrs[:rowIDIdx], data.Attrs[rowIDIdx+1:]...)
+		}
+		data.Vecs = append(data.Vecs, committs)
+		data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
+	}
 	h.duration += time.Since(t0)
 	h.dataLength += data.Vecs[0].Length()
 	return

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -641,4 +642,186 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 	buildArg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// makeCaptureFixture constructs a merger container and a ready-to-send
+// WorkerJoinMsg sharing the same bucket layout. Caller owns cleanup of both
+// sides via Free of the returned vectors (merger's via its container, msg's
+// via freeCapturedVecs or merger ownership transfer).
+func makeCaptureFixture(t *testing.T, proc *process.Process, bucketCnt int) (*container, *WorkerJoinMsg) {
+	int32Typ := types.T_int32.ToType()
+	mkVec := func() *vector.Vector {
+		v := vector.NewOffHeapVecWithType(int32Typ)
+		require.NoError(t, vector.AppendMultiFixed(v, int32(0), true, bucketCnt, proc.Mp()))
+		return v
+	}
+	ctr := &container{
+		capturedVecs: []*vector.Vector{mkVec()},
+		captured:     &bitmap.Bitmap{},
+		matched:      &bitmap.Bitmap{},
+	}
+	ctr.captured.InitWithSize(int64(bucketCnt))
+	ctr.matched.InitWithSize(int64(bucketCnt))
+
+	msg := &WorkerJoinMsg{
+		matched:      &bitmap.Bitmap{},
+		captured:     &bitmap.Bitmap{},
+		capturedVecs: []*vector.Vector{mkVec()},
+	}
+	msg.matched.InitWithSize(int64(bucketCnt))
+	msg.captured.InitWithSize(int64(bucketCnt))
+	return ctr, msg
+}
+
+// writeBucketValue sets capturedVecs[0][bucket] = val and records the bucket
+// in the accompanying captured bitmap.
+func writeBucketValue(t *testing.T, vecs []*vector.Vector, captured *bitmap.Bitmap, bucket uint64, val int32, proc *process.Process) {
+	src := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	defer src.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(src, val, false, proc.Mp()))
+	require.NoError(t, vecs[0].Copy(src, int64(bucket), 0, proc.Mp()))
+	captured.Add(bucket)
+}
+
+// TestMergeCaptured_DisjointBuckets covers the common parallel case where
+// merger and non-merger captured different buckets. After merge, the merger
+// owns the union of both sides.
+func TestMergeCaptured_DisjointBuckets(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	ap := &DedupJoin{OldColCapturePlaceholderIdxList: []int32{1}, OldColCaptureProbeIdxList: []int32{1}}
+	ctr, msg := makeCaptureFixture(t, proc, 4)
+
+	writeBucketValue(t, ctr.capturedVecs, ctr.captured, 0, 10, proc)
+	writeBucketValue(t, msg.capturedVecs, msg.captured, 2, 20, proc)
+
+	require.NoError(t, ctr.mergeCaptured(ap, msg, proc))
+
+	require.True(t, ctr.captured.Contains(0))
+	require.True(t, ctr.captured.Contains(2))
+	require.False(t, ctr.captured.Contains(1))
+	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
+	require.Equal(t, int32(10), vals[0])
+	require.Equal(t, int32(20), vals[2])
+
+	freeCapturedVecs(msg.capturedVecs, proc)
+	for _, v := range ctr.capturedVecs {
+		v.Free(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestMergeCaptured_FirstWinsOnConflict verifies that when merger and
+// non-merger both captured the same bucket, the merger's value is retained.
+func TestMergeCaptured_FirstWinsOnConflict(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	ap := &DedupJoin{OldColCapturePlaceholderIdxList: []int32{1}, OldColCaptureProbeIdxList: []int32{1}}
+	ctr, msg := makeCaptureFixture(t, proc, 2)
+
+	writeBucketValue(t, ctr.capturedVecs, ctr.captured, 0, 111, proc)
+	writeBucketValue(t, msg.capturedVecs, msg.captured, 0, 222, proc)
+
+	require.NoError(t, ctr.mergeCaptured(ap, msg, proc))
+
+	require.True(t, ctr.captured.Contains(0))
+	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
+	require.Equal(t, int32(111), vals[0], "merger's existing capture must win")
+
+	freeCapturedVecs(msg.capturedVecs, proc)
+	for _, v := range ctr.capturedVecs {
+		v.Free(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestMergeCaptured_EmptyWorkerMsg verifies a non-merger worker that captured
+// nothing does not corrupt the merger state.
+func TestMergeCaptured_EmptyWorkerMsg(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	ap := &DedupJoin{OldColCapturePlaceholderIdxList: []int32{1}, OldColCaptureProbeIdxList: []int32{1}}
+	ctr, msg := makeCaptureFixture(t, proc, 2)
+
+	writeBucketValue(t, ctr.capturedVecs, ctr.captured, 1, 77, proc)
+
+	require.NoError(t, ctr.mergeCaptured(ap, msg, proc))
+
+	require.True(t, ctr.captured.Contains(1))
+	require.False(t, ctr.captured.Contains(0))
+	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
+	require.Equal(t, int32(77), vals[1])
+
+	freeCapturedVecs(msg.capturedVecs, proc)
+	for _, v := range ctr.capturedVecs {
+		v.Free(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWorkerJoinMsg_ChannelRoundTrip verifies the channel transport:
+// non-merger sends a WorkerJoinMsg that transfers capture ownership; receiver
+// reads it back and folds it in via mergeCaptured with no leaks.
+func TestWorkerJoinMsg_ChannelRoundTrip(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	ap := &DedupJoin{OldColCapturePlaceholderIdxList: []int32{1}, OldColCaptureProbeIdxList: []int32{1}}
+	ctr, msg := makeCaptureFixture(t, proc, 3)
+
+	writeBucketValue(t, ctr.capturedVecs, ctr.captured, 0, 1, proc)
+	writeBucketValue(t, msg.capturedVecs, msg.captured, 1, 2, proc)
+	writeBucketValue(t, msg.capturedVecs, msg.captured, 2, 3, proc)
+
+	ch := make(chan *WorkerJoinMsg, 1)
+	ch <- msg
+	close(ch)
+
+	received := receiveWorkerMsg(context.Background(), ch)
+	require.NotNil(t, received)
+	require.Same(t, msg, received)
+
+	require.NoError(t, ctr.mergeCaptured(ap, received, proc))
+	freeCapturedVecs(received.capturedVecs, proc)
+
+	require.True(t, ctr.captured.Contains(0))
+	require.True(t, ctr.captured.Contains(1))
+	require.True(t, ctr.captured.Contains(2))
+	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
+	require.Equal(t, int32(1), vals[0])
+	require.Equal(t, int32(2), vals[1])
+	require.Equal(t, int32(3), vals[2])
+
+	for _, v := range ctr.capturedVecs {
+		v.Free(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestReceiveWorkerMsg_ContextCancel verifies the receive helper respects
+// context cancellation and returns nil (used to unblock the merger when a
+// worker dies abnormally).
+func TestReceiveWorkerMsg_ContextCancel(t *testing.T) {
+	ch := make(chan *WorkerJoinMsg)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msg := receiveWorkerMsg(ctx, ch)
+	require.Nil(t, msg)
+}
+
+// TestReceiveWorkerMsg_ChannelClose verifies that a closed channel returns nil.
+func TestReceiveWorkerMsg_ChannelClose(t *testing.T) {
+	ch := make(chan *WorkerJoinMsg)
+	close(ch)
+
+	msg := receiveWorkerMsg(context.Background(), ch)
+	require.Nil(t, msg)
 }

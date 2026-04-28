@@ -1,0 +1,151 @@
+drop table if exists t_odku_null;
+create table t_odku_null (
+id int primary key,
+uk_col int unique,
+val varchar(50)
+);
+insert into t_odku_null values (1, NULL, 'first');
+insert into t_odku_null values (2, NULL, 'second');
+select * from t_odku_null order by id;
+➤ id[4,32,0]  ¦  uk_col[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  null  ¦  first  𝄀
+2  ¦  null  ¦  second
+insert into t_odku_null values (1, NULL, 'updated') on duplicate key update val = 'pk_conflict_null_uk';
+select * from t_odku_null order by id;
+➤ id[4,32,0]  ¦  uk_col[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  null  ¦  pk_conflict_null_uk  𝄀
+2  ¦  null  ¦  second
+insert into t_odku_null values (3, NULL, 'third');
+update t_odku_null set uk_col = 100 where id = 1;
+insert into t_odku_null values (99, 100, 'conflict') on duplicate key update val = 'uk_conflict';
+-- @regex("(Duplicate entry '100' for key '.*'|^$)", true)
+Duplicate entry '100' for key 'uk_col'
+select * from t_odku_null order by id;
+-- @regex("(?s)1.*(pk_conflict_null_uk|uk_conflict).*2.*null.*second.*3.*null.*third", true)
+➤ id[4,32,0]  ¦  uk_col[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  100  ¦  pk_conflict_null_uk  𝄀
+2  ¦  null  ¦  second  𝄀
+3  ¦  null  ¦  third
+drop table if exists t_odku_null;
+drop table if exists t_odku_multi_uk;
+create table t_odku_multi_uk (
+id int primary key,
+uk1 int unique,
+uk2 varchar(20) unique,
+val int default 0
+);
+insert into t_odku_multi_uk values (1, 10, 'a', 100);
+insert into t_odku_multi_uk values (2, 20, 'b', 200);
+insert into t_odku_multi_uk values (3, 10, 'c', 300) on duplicate key update val = val + 1;
+-- @regex("(Duplicate entry '10' for key '.*'|^$)", true)
+Duplicate entry '10' for key 'uk1'
+select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*200", true)
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  a  ¦  100  𝄀
+2  ¦  20  ¦  b  ¦  200
+insert into t_odku_multi_uk values (4, 40, 'b', 400) on duplicate key update val = val + 2;
+-- @regex("(Duplicate entry 'b' for key '.*'|^$)", true)
+Duplicate entry 'b' for key 'uk2'
+select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*(200|202)", true)
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  a  ¦  100  𝄀
+2  ¦  20  ¦  b  ¦  200
+insert into t_odku_multi_uk values (5, 10, 'a', 500) on duplicate key update val = val + 10;
+-- @regex("(Duplicate entry '10' for key '.*'|^$)", true)
+Duplicate entry '10' for key 'uk1'
+select * from t_odku_multi_uk order by id;
+-- @regex("(?s)1.*10.*a.*(100|111).*2.*20.*b.*(200|202)", true)
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  a  ¦  100  𝄀
+2  ¦  20  ¦  b  ¦  200
+insert into t_odku_multi_uk values (5, 10, 'b', 500) on duplicate key update val = val + 100;
+-- @regex("Duplicate entry", true)
+Duplicate entry '10' for key 'uk1'
+drop table if exists t_odku_multi_uk;
+drop table if exists t_odku_composite;
+create table t_odku_composite (
+a int,
+b int,
+c varchar(20) unique,
+val int default 0,
+primary key (a, b)
+);
+insert into t_odku_composite values (1, 1, 'x', 10);
+insert into t_odku_composite values (1, 2, 'y', 20);
+insert into t_odku_composite values (1, 1, 'z', 30) on duplicate key update val = val + 100;
+select * from t_odku_composite order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  x  ¦  110  𝄀
+1  ¦  2  ¦  y  ¦  20
+insert into t_odku_composite values (2, 1, 'y', 40) on duplicate key update val = val + 200;
+-- @regex("(Duplicate entry 'y' for key '.*'|^$)", true)
+Duplicate entry 'y' for key 'c'
+select * from t_odku_composite order by a, b;
+-- @regex("(?s)1.*1.*x.*110.*1.*2.*y.*(20|220)", true)
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  x  ¦  110  𝄀
+1  ¦  2  ¦  y  ¦  20
+drop table if exists t_odku_composite;
+drop table if exists t_odku_values;
+create table t_odku_values (
+id int primary key,
+name varchar(50),
+score int
+);
+insert into t_odku_values values (1, 'alice', 80);
+insert into t_odku_values values (1, 'alice_new', 95) on duplicate key update name = values(name), score = values(score);
+select * from t_odku_values;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[4,32,0]  𝄀
+1  ¦  alice_new  ¦  95
+insert into t_odku_values values (1, 'bob', 70), (2, 'carol', 85), (3, 'dave', 90)
+on duplicate key update name = values(name), score = values(score) + 5;
+select * from t_odku_values order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[4,32,0]  𝄀
+1  ¦  bob  ¦  75  𝄀
+2  ¦  carol  ¦  85  𝄀
+3  ¦  dave  ¦  90
+drop table if exists t_odku_values;
+drop table if exists t_odku_expr;
+create table t_odku_expr (
+id int primary key,
+cnt int default 0,
+last_updated timestamp default current_timestamp
+);
+insert into t_odku_expr (id, cnt) values (1, 1);
+insert into t_odku_expr (id, cnt) values (1, 1) on duplicate key update cnt = cnt + values(cnt);
+select id, cnt from t_odku_expr;
+➤ id[4,32,0]  ¦  cnt[4,32,0]  𝄀
+1  ¦  2
+insert into t_odku_expr (id, cnt) values (1, 10), (2, 20), (1, 30)
+on duplicate key update cnt = cnt + values(cnt);
+select id, cnt from t_odku_expr;
+➤ id[4,32,0]  ¦  cnt[4,32,0]  𝄀
+1  ¦  42  𝄀
+2  ¦  20
+drop table if exists t_odku_expr;
+drop table if exists t_odku_auto;
+create table t_odku_auto (
+id int auto_increment primary key,
+uk_val int unique,
+data varchar(50)
+);
+insert into t_odku_auto (uk_val, data) values (1, 'first');
+insert into t_odku_auto (uk_val, data) values (2, 'second');
+insert into t_odku_auto (uk_val, data) values (1, 'conflict') on duplicate key update data = 'updated_first';
+-- @regex("(Duplicate entry '1' for key '.*'|^$)", true)
+Duplicate entry '1' for key 'uk_val'
+select * from t_odku_auto order by id;
+-- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second", true)
+➤ id[4,32,0]  ¦  uk_val[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  1  ¦  first  𝄀
+2  ¦  2  ¦  second
+insert into t_odku_auto (uk_val, data) values (3, 'third');
+select * from t_odku_auto order by id;
+-- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second.*(3|4).*3.*third", true)
+➤ id[4,32,0]  ¦  uk_val[4,32,0]  ¦  data[12,-1,0]  𝄀
+1  ¦  1  ¦  first  𝄀
+2  ¦  2  ¦  second  𝄀
+4  ¦  3  ¦  third
+drop table if exists t_odku_auto;

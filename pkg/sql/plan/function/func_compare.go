@@ -51,6 +51,17 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+// jsonOrderingWithStringNotSupported returns true when one operand is JSON and the other
+// is a MySQL string type, indicating that ordering comparisons (>, <, >=, <=) are not
+// supported for this combination. Only equality/inequality (= and !=) are allowed.
+func jsonOrderingWithStringNotSupported(inputs []types.Type) bool {
+	if len(inputs) != 2 {
+		return false
+	}
+	return (inputs[0].Oid == types.T_json) != (inputs[1].Oid == types.T_json) &&
+		(inputs[0].Oid.IsMySQLString() || inputs[1].Oid.IsMySQLString())
+}
+
 func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
