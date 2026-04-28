@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1089,6 +1090,37 @@ func TestFormat2Or3(t *testing.T) {
 	}
 }
 
+func TestFormatWithNullArgs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Cover the 2-arg null branch.
+	tc2 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456", "12332.1"}, []bool{true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"4", "0"}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", ""}, []bool{true, true}),
+		FormatWith2Args,
+	)
+	ok, info := tc2.Run()
+	require.True(t, ok, fmt.Sprintf("format 2-arg null case failed: %s", info))
+
+	// Cover the 3-arg null locale branch and the null input branch.
+	tc3 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456", "12332.1"}, []bool{false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"4", "0"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "ar_SA"}, []bool{true, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"12,332.1235", ""}, []bool{false, true}),
+		FormatWith3Args,
+	)
+	ok, info = tc3.Run()
+	require.True(t, ok, fmt.Sprintf("format 3-arg null case failed: %s", info))
+}
+
 func initFromUnixTimeTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
 	d2, _ := types.ParseDatetime("2016-01-01 00:00:00", 6)
@@ -1182,6 +1214,137 @@ func TestFromUnixTime(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestFromUnixTimeNullAndRange(t *testing.T) {
+	proc := newTmpProcess(t)
+	d1, _ := types.ParseDatetime("1970-01-01 00:00:00", 6)
+
+	t.Run("int64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -1, 1}, []bool{false, false, true}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1, d1}, []bool{false, true, true}),
+			FromUnixTimeInt64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 null/range case failed: %s", info))
+	})
+
+	t.Run("uint64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, uint64(maxUnixTimestampInt + 1)}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1}, []bool{false, true}),
+			FromUnixTimeUint64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 null/range case failed: %s", info))
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0, float64(maxUnixTimestampInt) + 1}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{d1, d1}, []bool{false, true}),
+			FromUnixTimeFloat64,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 null/range case failed: %s", info))
+	})
+}
+
+func TestFromUnixTimeFormatValidation(t *testing.T) {
+	proc := newTmpProcess(t)
+
+	t.Run("int64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeInt64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 format-null case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeInt64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime int64 dynamic format case failed: %s", info))
+	})
+
+	t.Run("uint64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeUint64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 format-null case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeUint64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime uint64 dynamic format case failed: %s", info))
+	})
+
+	t.Run("float64_format_null_and_dynamic_error", func(t *testing.T) {
+		nullCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info := nullCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 format-null case failed: %s", info))
+
+		validCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d %H:%i:%s"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1970-01-01 00:00:00"}, []bool{false}),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info = validCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 valid format case failed: %s", info))
+
+		errCase := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y"}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			FromUnixTimeFloat64Format,
+		)
+		ok, info = errCase.Run()
+		require.True(t, ok, fmt.Sprintf("from_unixtime float64 dynamic format case failed: %s", info))
+	})
 }
 
 func initStrCmpTestCase() []tcTemp {
@@ -3223,4 +3386,88 @@ func Test_castBinaryArrayToInt(t *testing.T) {
 			require.Equal(t, tc.expect, result)
 		})
 	}
+}
+
+func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
+	testCases := []tcTemp{
+		{
+			info: "elt uint64 overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+		{
+			info: "elt bit overflow returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{1, 2, math.MaxUint64}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"b"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "b", ""}, []bool{false, false, true}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Elt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
+	t.Run("int64 path returns null for null string and out of range indexes", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		tc := tcTemp{
+			info: "elt int64 path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3, -1, 0}, []bool{false, false, false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"b", "b", "b", "b", "b"}, []bool{false, true, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "", "", "", ""}, []bool{false, true, true, true, true}),
+		}
+
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Elt)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	})
+
+	testSelectList := func(t *testing.T, indexType types.Type, indexValues any) {
+		proc := testutil.NewProcess(t)
+		ivecs := []*vector.Vector{
+			newVectorByType(proc.Mp(), indexType, indexValues, nil),
+			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a"}, nil),
+		}
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		err := result.PreExtendAndReset(2)
+		require.NoError(t, err)
+
+		selectList := &FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false},
+		}
+		err = Elt(ivecs, result, proc, 2, selectList)
+		require.NoError(t, err)
+
+		resultVec := result.GetResultVector()
+		strParam := vector.GenerateFunctionStrParameter(resultVec)
+
+		value, isNull := strParam.GetStrValue(0)
+		require.False(t, isNull)
+		require.Equal(t, "a", string(value))
+		require.True(t, resultVec.GetNulls().Contains(1))
+	}
+
+	t.Run("int64 selectList rows return null", func(t *testing.T) {
+		testSelectList(t, types.T_int64.ToType(), []int64{1, 1})
+	})
+
+	t.Run("uint64 selectList rows return null", func(t *testing.T) {
+		testSelectList(t, types.T_uint64.ToType(), []uint64{1, 1})
+	})
 }
