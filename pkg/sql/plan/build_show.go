@@ -192,12 +192,156 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	}
 
 	// FixMe  We need a better escape function
-	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
+	stmtStr := viewData.Stmt
+	// MySQL always shows SQL SECURITY in SHOW CREATE VIEW output.
+	// Legacy views may not have persisted security_type, so default to DEFINER.
+	securityType := strings.TrimSpace(strings.ToUpper(viewData.SecurityType))
+	if securityType == "" {
+		securityType = "DEFINER"
+	}
+	upper := strings.ToUpper(stmtStr)
+	viewIdx := findViewKeyword(upper)
+	if viewIdx > 0 {
+		header := upper[:viewIdx]
+		if !hasSQLSecurityClause(header) {
+			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
+		}
+	}
+	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")
 	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// findViewKeyword finds the position of the VIEW keyword in an uppercased SQL string.
+// It skips comments and quoted segments so VIEW inside them is ignored.
+// Returns -1 if not found.
+func findViewKeyword(upper string) int {
+	viewIdx := -1
+	scanSQLTokens(upper, func(token string, start int) bool {
+		if token == "VIEW" {
+			viewIdx = start
+			return false
+		}
+		return true
+	})
+	return viewIdx
+}
+
+func hasSQLSecurityClause(upper string) bool {
+	lastTokenWasSQL := false
+	hasClause := false
+	scanSQLTokens(upper, func(token string, _ int) bool {
+		if lastTokenWasSQL && token == "SECURITY" {
+			hasClause = true
+			return false
+		}
+		lastTokenWasSQL = token == "SQL"
+		return true
+	})
+	return hasClause
+}
+
+func scanSQLTokens(s string, yield func(token string, start int) bool) {
+	inVersionedComment := false
+	for i := 0; i < len(s); {
+		if inVersionedComment && i+1 < len(s) && s[i] == '*' && s[i+1] == '/' {
+			inVersionedComment = false
+			i += 2
+			continue
+		}
+
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+			continue
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				if i+2 < len(s) && s[i+2] == '!' {
+					inVersionedComment = true
+					i += 3
+					for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+						i++
+					}
+					continue
+				}
+				i = skipBlockComment(s, i+2)
+				continue
+			}
+		case '-':
+			if startsDashComment(s, i) {
+				i = skipLineComment(s, i+2)
+				continue
+			}
+		case '#':
+			i = skipLineComment(s, i+1)
+			continue
+		case '\'', '"', '`':
+			i = skipQuotedSegment(s, i, s[i])
+			continue
+		}
+
+		if isSQLIdentChar(s[i]) {
+			begin := i
+			for i < len(s) && isSQLIdentChar(s[i]) {
+				i++
+			}
+			if !yield(s[begin:i], begin) {
+				return
+			}
+			continue
+		}
+		i++
+	}
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '*' && i+1 < len(s) && s[i+1] == '/' {
+			return i + 2
+		}
+	}
+	return len(s)
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '\n' || s[i] == '\r' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+func skipQuotedSegment(s string, start int, quote byte) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote {
+			i++
+			continue
+		}
+		return i + 1
+	}
+	return len(s)
+}
+
+func startsDashComment(s string, idx int) bool {
+	return idx+1 < len(s) && s[idx+1] == '-' &&
+		(idx+2 == len(s) || s[idx+2] == ' ' || s[idx+2] == '\t' || s[idx+2] == '\n' || s[idx+2] == '\r')
+}
+
+func isSQLIdentChar(ch byte) bool {
+	return ch == '_' ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9')
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {

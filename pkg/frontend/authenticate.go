@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -572,6 +573,7 @@ type objectType int
 const (
 	objectTypeDatabase objectType = iota
 	objectTypeTable
+	objectTypeView
 	objectTypeFunction
 	objectTypeAccount
 	objectTypeNone
@@ -585,6 +587,8 @@ func (ot objectType) String() string {
 		return "database"
 	case objectTypeTable:
 		return "table"
+	case objectTypeView:
+		return "view"
 	case objectTypeFunction:
 		return "function"
 	case objectTypeAccount:
@@ -594,6 +598,11 @@ func (ot objectType) String() string {
 	}
 	panic("unsupported object type")
 }
+
+const (
+	viewSecurityDefiner = "DEFINER"
+	viewSecurityInvoker = "INVOKER"
+)
 
 type privilegeLevelType int
 
@@ -1289,6 +1298,16 @@ const (
 
 	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
 
+	// object-scoped WGO check: filters by obj_type and obj_id in addition to privilege_id
+	checkRoleHasPrivilegeWGOWithObjFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s" and obj_id = %d;`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s" and obj_id = %d;`
+
+	// obj_type-only WGO check: for wildcard grants (db.* / *.*) that still need table vs view distinction
+	checkRoleHasPrivilegeWGOWithObjTypeFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d and obj_type = "%s";`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipWithObjTypeFormat = `select distinct role_id from mo_catalog.mo_role_privs where ((with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d) and obj_type = "%s";`
+
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
 	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
@@ -1306,6 +1325,11 @@ const (
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseTableFormat = `select rel_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
+
+	checkDatabaseViewFormat = `select rel_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+
+	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
 
 	//TODO:fix privilege_level string and obj_type string
 	//For object_type : table, privilege_level : *.*
@@ -1551,6 +1575,9 @@ var (
 		objectTypeDatabase: {privilegeLevelDatabase,
 			privilegeLevelStar, privilegeLevelStarStar},
 		objectTypeTable: {privilegeLevelStarStar,
+			privilegeLevelDatabaseStar, privilegeLevelStar,
+			privilegeLevelDatabaseTable, privilegeLevelTable},
+		objectTypeView: {privilegeLevelStarStar,
 			privilegeLevelDatabaseStar, privilegeLevelStar,
 			privilegeLevelDatabaseTable, privilegeLevelTable},
 	}
@@ -1846,6 +1873,22 @@ func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(privilegeId, allPrivId, ow
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipFormat, privilegeId, allPrivId, ownershipPrivId)
 }
 
+func getSqlForCheckRoleHasPrivilegeWGOWithObj(privilegeId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjFormat, privilegeId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(privilegeId, allPrivId, ownershipPrivId int64, objType objectType, objId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjFormat, privilegeId, allPrivId, ownershipPrivId, objType, objId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOWithObjType(privilegeId int64, objType objectType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOWithObjTypeFormat, privilegeId, objType)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(privilegeId, allPrivId, ownershipPrivId int64, objType objectType) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipWithObjTypeFormat, privilegeId, allPrivId, ownershipPrivId, objType)
+}
+
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
 	return fmt.Sprintf(updateRolePrivsFormat, userId, timestamp, withGrantOption, roleId, objType, objId, privilegeId)
 }
@@ -1858,24 +1901,24 @@ func getSqlForDeleteRolePrivs(roleId int64, objType string, objId, privilegeId i
 	return fmt.Sprintf(deleteRolePrivsFormat, roleId, objType, objId, privilegeId, privilegeLevel)
 }
 
-func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objectTypeTable, roleId, privId, privilegeLevelStarStar)
+func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objType, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName, tableName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
@@ -1898,24 +1941,28 @@ func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeT
 	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName, tableName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName), nil
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName), nil
 }
 
-func getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
+}
+
+func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
+	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
 }
 
-func getSqlForCheckRoleHasTableLevelForStarStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkRoleHasTableLevelForStarStarFormat, objectTypeTable, roleId, privId, privilegeLevelStarStar)
+func getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkRoleHasTableLevelForStarStarFormat, objType, roleId, privId, privilegeLevelStarStar)
 }
 
 func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId PrivilegeType, level privilegeLevelType) string {
@@ -1982,6 +2029,67 @@ func getSqlForCheckDatabaseTable(
 	// we need the account id here to filter out the same dbName and tableName that exist in the
 	// different accounts.
 	return fmt.Sprintf(checkDatabaseTableFormat, tableName, dbName, account), nil
+}
+
+func getSqlForCheckDatabaseView(
+	ctx context.Context,
+	dbName string,
+	viewName string,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, viewName)
+	if err != nil {
+		return "", err
+	}
+
+	var account uint32
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		account = v.(uint32)
+	} else {
+		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
+	}
+
+	return fmt.Sprintf(checkDatabaseViewFormat, viewName, dbName, account), nil
+}
+
+func getSqlForCheckViewMeta(
+	ctx context.Context,
+	dbName string,
+	viewName string,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, viewName)
+	if err != nil {
+		return "", err
+	}
+
+	var account uint32
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		account = v.(uint32)
+	} else {
+		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
+	}
+
+	return fmt.Sprintf(getViewMetaFormat, viewName, dbName, account), nil
+}
+
+func getSqlForCheckViewMetaWithSnapshot(
+	ctx context.Context,
+	dbName string,
+	viewName string,
+	snapshotTs int64,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, viewName)
+	if err != nil {
+		return "", err
+	}
+
+	var account uint32
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		account = v.(uint32)
+	} else {
+		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
+	}
+
+	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs, viewName, dbName, account), nil
 }
 
 func getSqlForDeleteRole(roleId int64) []string {
@@ -2066,6 +2174,16 @@ func isClusterTable(dbName, name string) bool {
 		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {
 			return true
 		}
+	}
+	return false
+}
+
+func isSystemViewDatabase(dbName string) bool {
+	if strings.EqualFold(dbName, sysview.InformationDBConst) {
+		return true
+	}
+	if strings.EqualFold(dbName, sysview.MysqlDBConst) {
+		return true
 	}
 	return false
 }
@@ -2187,6 +2305,10 @@ const (
 // privilegeItem is the item for in the compound entry
 type privilegeItem struct {
 	privilegeTyp          PrivilegeType
+	objType               objectType
+	originViews           []string
+	directView            string
+	scanSnapshot          *plan.Snapshot
 	role                  *tree.Role
 	users                 []*tree.User
 	dbName                string
@@ -2357,6 +2479,13 @@ type privilegeCache struct {
 	storeForTable2 btree.Map[string, *btree.Set[PrivilegeType]]
 	//For objectType table database.table , table
 	storeForTable3 btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
+	//For objectType view
+	//For objectType view *, *.*
+	storeForView [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
+	//For objectType view database.*
+	storeForView2 btree.Map[string, *btree.Set[PrivilegeType]]
+	//For objectType view database.view , view
+	storeForView3 btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
 
 	//For objectType database *, *.*
 	storeForDatabase [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
@@ -2402,6 +2531,32 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 			if !ok2 {
 				privSet = &btree.Set[PrivilegeType]{}
 				tableStore.Set(tableName, privSet)
+			}
+			return privSet
+		default:
+			return nil
+		}
+	case objectTypeView:
+		switch plt {
+		case privilegeLevelStarStar, privilegeLevelStar:
+			return &pc.storeForView[plt]
+		case privilegeLevelDatabaseStar:
+			dbStore, ok1 := pc.storeForView2.Get(dbName)
+			if !ok1 {
+				dbStore = &btree.Set[PrivilegeType]{}
+				pc.storeForView2.Set(dbName, dbStore)
+			}
+			return dbStore
+		case privilegeLevelDatabaseTable, privilegeLevelTable:
+			viewStore, ok1 := pc.storeForView3.Get(dbName)
+			if !ok1 {
+				viewStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
+				pc.storeForView3.Set(dbName, viewStore)
+			}
+			privSet, ok2 := viewStore.Get(tableName)
+			if !ok2 {
+				privSet = &btree.Set[PrivilegeType]{}
+				viewStore.Set(tableName, privSet)
 			}
 			return privSet
 		default:
@@ -2459,11 +2614,14 @@ func (pc *privilegeCache) invalidate() {
 	//hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
 		pc.storeForTable[i].Clear()
+		pc.storeForView[i].Clear()
 		pc.storeForDatabase[i].Clear()
 		pc.storeForAccount[i].Clear()
 	}
 	pc.storeForTable2.Clear()
 	pc.storeForTable3.Clear()
+	pc.storeForView2.Clear()
+	pc.storeForView3.Clear()
 	pc.storeForDatabase2.Clear()
 	//ratio := float64(0)
 	//if total == 0 {
@@ -4782,11 +4940,18 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
 				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
-			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
+			deleteObjTypes := []objectType{objType}
+			if rp.ObjType == tree.OBJECT_TYPE_VIEW {
+				// Legacy upgraded clusters may still store view grants as obj_type='table'.
+				deleteObjTypes = append(deleteObjTypes, objectTypeTable)
+			}
+			for _, deleteObjType := range deleteObjTypes {
+				sql = getSqlForDeleteRolePrivs(role.id, deleteObjType.String(), objId, int64(privType), privLevel.String())
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -4833,12 +4998,232 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	}
 }
 
+func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
+	sql, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
+	if err != nil {
+		return 0, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return 0, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	return 0, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, dbName)
+}
+
+type viewSecurityInfo struct {
+	securityType  string
+	definerRoleId int64
+}
+
+func normalizeViewSecurityType(securityType string) string {
+	securityType = strings.TrimSpace(strings.ToUpper(securityType))
+	if securityType == viewSecurityInvoker {
+		return viewSecurityInvoker
+	}
+	return viewSecurityDefiner
+}
+
+func parseViewKey(key string) (string, string) {
+	if key == "" {
+		return "", ""
+	}
+	if baseKey, _, ok := splitViewSnapshotSuffix(key); ok {
+		key = baseKey
+	}
+	if strings.Contains(key, KeySep) {
+		return splitKey(key)
+	}
+	if dotIdx := strings.LastIndex(key, "."); dotIdx != -1 {
+		return key[:dotIdx], key[dotIdx+1:]
+	}
+	return "", key
+}
+
+func splitViewSnapshotSuffix(key string) (string, int64, bool) {
+	if key == "" {
+		return key, 0, false
+	}
+	idx := strings.LastIndex(key, plan2.ViewSnapshotKeySuffix)
+	if idx == -1 {
+		return key, 0, false
+	}
+	tsStr := key[idx+len(plan2.ViewSnapshotKeySuffix):]
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return key, 0, false
+	}
+	return key[:idx], ts, true
+}
+
+func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbName, viewName string, snapshot *plan.Snapshot) (viewSecurityInfo, bool, error) {
+	var (
+		sql string
+		err error
+	)
+	ctxForSql := ctx
+	if snapshot != nil && snapshot.Tenant != nil {
+		ctxForSql = defines.AttachAccountId(ctxForSql, snapshot.Tenant.TenantID)
+	}
+	if snapshot != nil && snapshot.TS != nil {
+		sql, err = getSqlForCheckViewMetaWithSnapshot(ctxForSql, dbName, viewName, snapshot.TS.PhysicalTime)
+	} else {
+		sql, err = getSqlForCheckViewMeta(ctxForSql, dbName, viewName)
+	}
+	if err != nil {
+		return viewSecurityInfo{}, false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctxForSql, sql)
+	if err != nil {
+		return viewSecurityInfo{}, false, err
+	}
+
+	erArray, err := getResultSet(ctxForSql, bh)
+	if err != nil {
+		return viewSecurityInfo{}, false, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return viewSecurityInfo{}, false, nil
+	}
+
+	viewDef, err := erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return viewSecurityInfo{}, false, err
+	}
+	definerRoleId, err := erArray[0].GetInt64(ctx, 0, 1)
+	if err != nil {
+		return viewSecurityInfo{}, false, err
+	}
+
+	securityType := viewSecurityDefiner
+	if viewDef != "" {
+		var viewData plan2.ViewData
+		if err := json.Unmarshal([]byte(viewDef), &viewData); err != nil {
+			return viewSecurityInfo{}, false, err
+		}
+		securityType = normalizeViewSecurityType(viewData.SecurityType)
+	}
+
+	return viewSecurityInfo{
+		securityType:  securityType,
+		definerRoleId: definerRoleId,
+	}, true, nil
+}
+
+func resolveViewChainPrivilegeContext(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	privType PrivilegeType,
+	viewChain []string,
+	fallbackDb string,
+	snapshot *plan.Snapshot,
+	enableCache bool,
+) (int64, bool, bool, error) {
+	if len(viewChain) == 0 {
+		return roleId, true, false, nil
+	}
+	rootDb, rootView := parseViewKey(viewChain[0])
+	if rootView == "" {
+		return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewChain[0])
+	}
+	if rootDb == "" {
+		rootDb = fallbackDb
+		if rootDb == "" {
+			rootDb = ses.GetDatabaseName()
+		}
+	}
+	if isSystemViewDatabase(rootDb) {
+		return roleId, true, true, nil
+	}
+
+	currentRoleId := roleId
+	for _, viewKey := range viewChain {
+		viewDb, viewName := parseViewKey(viewKey)
+		if viewName == "" {
+			return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewKey)
+		}
+		if viewDb == "" {
+			viewDb = fallbackDb
+			if viewDb == "" {
+				viewDb = ses.GetDatabaseName()
+			}
+		}
+		if isSystemViewDatabase(viewDb) {
+			// Outer user views have already been validated by prior iterations.
+			// Once the chain reaches a system view, stop explicit inner-view checks
+			// and preserve normal base-object authorization semantics.
+			return currentRoleId, true, false, nil
+		}
+
+		useCache := enableCache && cache != nil && currentRoleId == roleId
+		cacheToUse := cache
+		if !useCache {
+			cacheToUse = nil
+		}
+		var viewAllowed bool
+		var err error
+		if currentRoleId != roleId {
+			// DEFINER path: expand role inheritance for the switched role
+			viewAllowed, err = verifyViewPrivilegeWithRoleInheritance(ctx, bh, ses, currentRoleId, privType, viewDb, viewName)
+		} else {
+			viewAllowed, err = verifyViewPrivilegeForRole(ctx, bh, ses, cacheToUse, currentRoleId, privType, viewDb, viewName, useCache)
+		}
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !viewAllowed {
+			return 0, false, false, nil
+		}
+
+		viewInfo, found, err := getViewSecurityInfoWithSnapshot(ctx, bh, viewDb, viewName, snapshot)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !found {
+			if snapshot != nil && snapshot.TS != nil {
+				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+			}
+			if !ses.GetTxnHandler().InActiveTxn() {
+				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+			}
+			viewInfo = viewSecurityInfo{
+				securityType:  viewSecurityDefiner,
+				definerRoleId: currentRoleId,
+			}
+		}
+		if viewInfo.securityType == viewSecurityDefiner {
+			currentRoleId = viewInfo.definerRoleId
+		}
+	}
+
+	return currentRoleId, true, false, nil
+}
+
 // convertAstObjectTypeToObjectType gets the object type from the ast
 func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (objectType, error) {
 	var objType objectType
 	switch ot {
 	case tree.OBJECT_TYPE_TABLE:
 		objType = objectTypeTable
+	case tree.OBJECT_TYPE_VIEW:
+		objType = objectTypeView
 	case tree.OBJECT_TYPE_DATABASE:
 		objType = objectTypeDatabase
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -4859,7 +5244,8 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 	var dbName string
 
 	switch ot {
-	case tree.OBJECT_TYPE_TABLE:
+	case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
+		isView := ot == tree.OBJECT_TYPE_VIEW
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
@@ -4878,13 +5264,21 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 			}
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
 			privLevel = privilegeLevelDatabaseTable
-			objId, err = getDatabaseOrTableId(ctx, bh, false, pl.DbName, pl.TabName)
+			if isView {
+				objId, err = getViewId(ctx, bh, pl.DbName, pl.TabName)
+			} else {
+				objId, err = getDatabaseOrTableId(ctx, bh, false, pl.DbName, pl.TabName)
+			}
 			if err != nil {
 				return 0, 0, err
 			}
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			privLevel = privilegeLevelTable
-			objId, err = getDatabaseOrTableId(ctx, bh, false, ses.GetDatabaseName(), pl.TabName)
+			if isView {
+				objId, err = getViewId(ctx, bh, ses.GetDatabaseName(), pl.TabName)
+			} else {
+				objId, err = getDatabaseOrTableId(ctx, bh, false, ses.GetDatabaseName(), pl.TabName)
+			}
 			if err != nil {
 				return 0, 0, err
 			}
@@ -4949,8 +5343,8 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "database"`, privType)
 		}
 	case PrivilegeScopeTable:
-		if objType != objectTypeTable {
-			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "table"`, privType)
+		if objType != objectTypeTable && objType != objectTypeView {
+			err = moerr.NewInternalErrorf(ctx, `the privilege "%s" can only be granted to the object type "table" or "view"`, privType)
 		}
 	case PrivilegeScopeRoutine:
 		if objType != objectTypeFunction {
@@ -5944,6 +6338,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 // privilege will be done on the table
 type privilegeTips struct {
 	typ                   PrivilegeType
+	objType               objectType
+	originViews           []string
+	directView            string
+	scanSnapshot          *plan.Snapshot
 	databaseName          string
 	tableName             string
 	isClusterTable        bool
@@ -5951,6 +6349,26 @@ type privilegeTips struct {
 }
 
 type privilegeTipsArray []privilegeTips
+
+func privilegeTypeFromQueryStmtType(stmtType plan.Query_StatementType) PrivilegeType {
+	switch stmtType {
+	case plan.Query_UPDATE:
+		return PrivilegeTypeUpdate
+	case plan.Query_DELETE:
+		return PrivilegeTypeDelete
+	case plan.Query_INSERT:
+		return PrivilegeTypeInsert
+	default:
+		return PrivilegeTypeSelect
+	}
+}
+
+func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
+	if objRef.GetSubscriptionName() != "" {
+		return objRef.GetSubscriptionName()
+	}
+	return objRef.GetSchemaName()
+}
 
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
@@ -5967,32 +6385,37 @@ func (pota privilegeTipsArray) String() string {
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
-	//NOTE: the pts may be nil when the plan does operate any table.
+	// NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
-	if p.GetQuery() != nil { //select,insert select, update, delete
+
+	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
 
-		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
 		var clusterTable bool
-		var clusterTableOperation clusterTableOperationType
+		var scanTargetTables map[[2]string]struct{}
 
-		switch q.StmtType {
-		case plan.Query_UPDATE:
-			t = PrivilegeTypeUpdate
-			clusterTableOperation = clusterTableModify
-		case plan.Query_DELETE:
-			t = PrivilegeTypeDelete
-			clusterTableOperation = clusterTableModify
-		case plan.Query_INSERT:
-			t = PrivilegeTypeInsert
-			clusterTableOperation = clusterTableModify
-		default:
-			t = PrivilegeTypeSelect
-			clusterTableOperation = clusterTableSelect
+		t = privilegeTypeFromQueryStmtType(q.StmtType)
+
+		if q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE {
+			scanTargetTables = make(map[[2]string]struct{})
+			for _, node := range q.Nodes {
+				switch node.NodeType {
+				case plan.Node_MULTI_UPDATE:
+					for _, updateCtx := range node.UpdateCtxList {
+						if updateCtx != nil && updateCtx.ObjRef != nil {
+							scanTargetTables[[2]string{updateCtx.ObjRef.GetSchemaName(), updateCtx.ObjRef.GetObjName()}] = struct{}{}
+						}
+					}
+				case plan.Node_DELETE:
+					if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+						scanTargetTables[[2]string{node.DeleteCtx.Ref.GetSchemaName(), node.DeleteCtx.Ref.GetObjName()}] = struct{}{}
+					}
+				}
+			}
 		}
 
 		for _, node := range q.Nodes {
@@ -6005,75 +6428,191 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 
 					var scanTyp PrivilegeType
+					var scanOperation clusterTableOperationType
 					switch q.StmtType {
 					case plan.Query_UPDATE:
-						scanTyp = PrivilegeTypeUpdate
-						clusterTableOperation = clusterTableModify
+						scanTyp = PrivilegeTypeSelect
+						scanOperation = clusterTableSelect
+						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
+							scanTyp = PrivilegeTypeUpdate
+							scanOperation = clusterTableModify
+						}
 					case plan.Query_DELETE:
-						scanTyp = PrivilegeTypeDelete
-						clusterTableOperation = clusterTableModify
+						scanTyp = PrivilegeTypeSelect
+						scanOperation = clusterTableSelect
+						if _, ok := scanTargetTables[[2]string{node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName()}]; ok {
+							scanTyp = PrivilegeTypeDelete
+							scanOperation = clusterTableModify
+						}
 					default:
 						scanTyp = PrivilegeTypeSelect
-						clusterTableOperation = clusterTableSelect
+						scanOperation = clusterTableSelect
 					}
 
-					//do not check the privilege of the index table
+					originViews := node.GetOriginViews()
+					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
-							databaseName:          node.ObjRef.GetSchemaName(),
+							objType:               objectTypeTable,
+							databaseName:          getDbNameForPrivilege(node.ObjRef),
 							tableName:             node.ObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
-							clusterTableOperation: clusterTableOperation,
+							clusterTableOperation: scanOperation,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					} else if node.ParentObjRef != nil {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
-							databaseName:          node.ParentObjRef.GetSchemaName(),
+							objType:               objectTypeTable,
+							databaseName:          getDbNameForPrivilege(node.ParentObjRef),
 							tableName:             node.ParentObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
-							clusterTableOperation: clusterTableOperation,
+							clusterTableOperation: scanOperation,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
+						})
+					}
+				}
+			} else if node.NodeType == plan.Node_PRE_INSERT ||
+				node.NodeType == plan.Node_PRE_INSERT_UK ||
+				node.NodeType == plan.Node_PRE_INSERT_SK {
+				var objRef *plan.ObjectRef
+				var tableDef *plan.TableDef
+				if node.PreInsertCtx != nil {
+					objRef = node.PreInsertCtx.Ref
+					tableDef = node.PreInsertCtx.TableDef
+				}
+				if objRef == nil && node.ObjRef != nil {
+					objRef = node.ObjRef
+				}
+				if objRef != nil {
+					dbName := objRef.GetSchemaName()
+					tableName := objRef.GetObjName()
+					if dbName == "" && tableDef != nil && tableDef.DbName != "" {
+						dbName = tableDef.DbName
+					}
+					if tableName == "" && tableDef != nil && tableDef.Name != "" {
+						tableName = tableDef.Name
+					}
+					originViews := node.GetOriginViews()
+					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
+					if !isIndexTable(tableName) {
+						insertClusterTable := false
+						if tableDef != nil && tableDef.TableType == catalog.SystemClusterRel {
+							insertClusterTable = true
+						} else {
+							insertClusterTable = isClusterTable(dbName, tableName)
+						}
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeInsert,
+							objType:               objectTypeTable,
+							databaseName:          dbName,
+							tableName:             tableName,
+							isClusterTable:        insertClusterTable,
+							clusterTableOperation: clusterTableModify,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
+						})
+					} else if node.ParentObjRef != nil {
+						parentDb := node.ParentObjRef.GetSchemaName()
+						parentTable := node.ParentObjRef.GetObjName()
+						if parentDb == "" && tableDef != nil && tableDef.DbName != "" {
+							parentDb = tableDef.DbName
+						}
+						if parentTable == "" && tableDef != nil && tableDef.Name != "" {
+							parentTable = tableDef.Name
+						}
+						appendPt(privilegeTips{
+							typ:                   PrivilegeTypeInsert,
+							objType:               objectTypeTable,
+							databaseName:          parentDb,
+							tableName:             parentTable,
+							isClusterTable:        isClusterTable(parentDb, parentTable),
+							clusterTableOperation: clusterTableModify,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
+				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
-					objRef := node.InsertCtx.Ref
-					//do not check the privilege of the index table
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					objRef = node.InsertCtx.Ref
+				} else if node.ObjRef != nil {
+					objRef = node.ObjRef
+				}
+				if objRef != nil {
+					dbName := objRef.GetSchemaName()
+					tableName := objRef.GetObjName()
+					if dbName == "" && node.TableDef != nil && node.TableDef.DbName != "" {
+						dbName = node.TableDef.DbName
+					}
+					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
+						tableName = node.TableDef.Name
+					}
+					originViews := node.GetOriginViews()
+					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
+					if !isIndexTable(tableName) {
+						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
-							typ:                   t,
-							databaseName:          objRef.GetSchemaName(),
-							tableName:             objRef.GetObjName(),
-							isClusterTable:        node.InsertCtx.IsClusterTable,
+							typ:                   PrivilegeTypeInsert,
+							objType:               objectTypeTable,
+							databaseName:          dbName,
+							tableName:             tableName,
+							isClusterTable:        insertClusterTable,
 							clusterTableOperation: clusterTableModify,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
 				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
 					objRef := node.DeleteCtx.Ref
-					//do not check the privilege of the index table
+					originViews := node.GetOriginViews()
+					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   t,
+							objType:               objectTypeTable,
 							databaseName:          objRef.GetSchemaName(),
 							tableName:             objRef.GetObjName(),
 							isClusterTable:        node.DeleteCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				for _, updateCtx := range node.UpdateCtxList {
+					originViews := node.GetOriginViews()
+					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(updateCtx.ObjRef.GetObjName()) {
 						isClusterTable := updateCtx.TableDef.TableType == catalog.SystemClusterRel
 						appendPt(privilegeTips{
 							typ:                   t,
+							objType:               objectTypeTable,
 							databaseName:          updateCtx.ObjRef.GetSchemaName(),
 							tableName:             updateCtx.ObjRef.GetObjName(),
 							isClusterTable:        isClusterTable,
 							clusterTableOperation: clusterTableModify,
+							originViews:           originViews,
+							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6084,6 +6623,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			truncateTable := p.GetDdl().GetTruncateTable()
 			appendPt(privilegeTips{
 				typ:                   PrivilegeTypeTruncate,
+				objType:               objectTypeTable,
 				databaseName:          truncateTable.GetDatabase(),
 				tableName:             truncateTable.GetTable(),
 				isClusterTable:        truncateTable.GetClusterTable().GetIsClusterTable(),
@@ -6102,6 +6642,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 					appendPt(privilegeTips{
 						typ:                   PrivilegeTypeDropTable,
+						objType:               objectTypeTable,
 						databaseName:          entry.GetDatabase(),
 						tableName:             entry.GetTable(),
 						isClusterTable:        isCluster,
@@ -6115,6 +6656,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				}
 				appendPt(privilegeTips{
 					typ:                   PrivilegeTypeDropTable,
+					objType:               objectTypeTable,
 					databaseName:          dropTable.GetDatabase(),
 					tableName:             dropTable.GetTable(),
 					isClusterTable:        isCluster,
@@ -6125,6 +6667,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			createIndex := p.GetDdl().GetCreateIndex()
 			appendPt(privilegeTips{
 				typ:                   PrivilegeTypeDropTable,
+				objType:               objectTypeTable,
 				databaseName:          createIndex.GetDatabase(),
 				tableName:             createIndex.GetTable(),
 				clusterTableOperation: clusterTableModify,
@@ -6133,6 +6676,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			dropIndex := p.GetDdl().GetDropIndex()
 			appendPt(privilegeTips{
 				typ:                   PrivilegeTypeDropTable,
+				objType:               objectTypeTable,
 				databaseName:          dropIndex.GetDatabase(),
 				tableName:             dropIndex.GetTable(),
 				clusterTableOperation: clusterTableModify,
@@ -6140,6 +6684,42 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func extractDirectViewPrivilegeTipFromPlan(p *plan2.Plan) (privilegeTips, bool) {
+	if p == nil || p.GetQuery() == nil {
+		return privilegeTips{}, false
+	}
+
+	tipType := privilegeTypeFromQueryStmtType(p.GetQuery().StmtType)
+	for _, node := range p.GetQuery().Nodes {
+		directView := node.GetDirectView()
+		originViews := node.GetOriginViews()
+		if directView == "" {
+			if len(originViews) == 0 {
+				continue
+			}
+			directView = originViews[0]
+		}
+
+		dbName, viewName := parseViewKey(directView)
+		if viewName == "" {
+			continue
+		}
+
+		return privilegeTips{
+			typ:                   tipType,
+			objType:               objectTypeView,
+			originViews:           originViews,
+			directView:            directView,
+			scanSnapshot:          node.GetScanSnapshot(),
+			databaseName:          dbName,
+			tableName:             viewName,
+			clusterTableOperation: clusterTableSelect,
+		}, true
+	}
+
+	return privilegeTips{}, false
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
@@ -6165,6 +6745,10 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
 			privilegeTyp:          tips.typ,
+			objType:               tips.objType,
+			originViews:           tips.originViews,
+			directView:            tips.directView,
+			scanSnapshot:          tips.scanSnapshot,
 			dbName:                tips.databaseName,
 			tableName:             tips.tableName,
 			isClusterTable:        tips.isClusterTable,
@@ -6178,14 +6762,25 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 
 	//optional predefined privilege : tableAll, ownership
+	//put them into compound entries so they go through view-chain verification
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	for _, p := range predefined {
-		for par := range dedup {
-			e := privilegeEntriesMap[p]
-			e.databaseName = par.databaseName
-			e.tableName = par.tableName
-			entries = append(entries, e)
+		predefinedMultiPrivs := make([]privilegeItem, 0, len(arr))
+		for _, tips := range arr {
+			predefinedMultiPrivs = append(predefinedMultiPrivs, privilegeItem{
+				privilegeTyp:          p,
+				objType:               tips.objType,
+				originViews:           tips.originViews,
+				directView:            tips.directView,
+				scanSnapshot:          tips.scanSnapshot,
+				dbName:                tips.databaseName,
+				tableName:             tips.tableName,
+				isClusterTable:        tips.isClusterTable,
+				clusterTableOperation: tips.clusterTableOperation,
+			})
 		}
+		me := &compoundEntry{predefinedMultiPrivs}
+		entries = append(entries, privilegeEntry{privilegeEntryTyp: privilegeEntryTypeCompound, compound: me})
 	}
 
 	priv.entries = entries
@@ -6197,14 +6792,14 @@ func getSqlFromPrivilegeEntry(ctx context.Context, roleId int64, entry privilege
 	var sql string
 	//for object type table, need concrete tableid
 	//TODO: table level check should be done after getting the plan
-	if entry.objType == objectTypeTable {
+	if entry.objType == objectTypeTable || entry.objType == objectTypeView {
 		switch entry.privilegeLevel {
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			sql, err = getSqlForCheckRoleHasTableLevelPrivilege(ctx, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+			sql, err = getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, entry.objType, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
 		case privilegeLevelDatabaseStar, privilegeLevelStar:
-			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx, roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx, entry.objType, roleId, entry.privilegeId, entry.databaseName)
 		case privilegeLevelStarStar:
-			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
+			sql = getSqlForCheckRoleHasTableLevelForStarStarWithObjType(entry.objType, roleId, entry.privilegeId)
 		default:
 			return "", moerr.NewInternalErrorf(ctx, "unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
 		}
@@ -6244,14 +6839,14 @@ func getSqlForPrivilege(ctx context.Context, roleId int64, entry privilegeEntry,
 	var err error
 	//for object type table, need concrete tableid
 	switch entry.objType {
-	case objectTypeTable:
+	case objectTypeTable, objectTypeView:
 		switch pl {
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			sql, err = getSqlForCheckRoleHasTableLevelPrivilege(ctx, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+			sql, err = getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, entry.objType, roleId, entry.privilegeId, entry.databaseName, entry.tableName)
 		case privilegeLevelDatabaseStar, privilegeLevelStar:
-			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx, roleId, entry.privilegeId, entry.databaseName)
+			sql, err = getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx, entry.objType, roleId, entry.privilegeId, entry.databaseName)
 		case privilegeLevelStarStar:
-			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
+			sql = getSqlForCheckRoleHasTableLevelForStarStarWithObjType(entry.objType, roleId, entry.privilegeId)
 		default:
 			return "", moerr.NewInternalErrorf(ctx, "the privilege level %s for the privilege %s is unsupported", pl, entry.privilegeId)
 		}
@@ -6288,6 +6883,73 @@ func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry 
 }
 
 // verifyPrivilegeEntryInMultiPrivilegeLevels checks the privilege
+// verifyPrivilegeWithRoleInheritance expands the role inheritance chain for startRoleId
+// and checks whether any role in the chain has the given privilege entry.
+// This is used for the DEFINER path where the effective role differs from the session role.
+func verifyPrivilegeWithRoleInheritance(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	startRoleId int64,
+	entry privilegeEntry,
+	enableCache bool,
+) (bool, error) {
+	if startRoleId == moAdminRoleID || startRoleId == accountAdminRoleID {
+		return true, nil
+	}
+	pls, err := getPrivilegeLevelsOfObjectType(ctx, entry.objType)
+	if err != nil {
+		return false, err
+	}
+
+	visited := &btree.Set[int64]{}
+	currentSet := &btree.Set[int64]{}
+	currentSet.Insert(startRoleId)
+	visited.Insert(startRoleId)
+
+	for {
+		for _, rid := range currentSet.Keys() {
+			yes, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, nil, rid, entry, pls, false)
+			if err != nil {
+				return false, err
+			}
+			if yes {
+				return true, nil
+			}
+		}
+
+		nextSet := &btree.Set[int64]{}
+		for _, rid := range currentSet.Keys() {
+			bh.ClearExecResultSet()
+			err := bh.Exec(ctx, getSqlForInheritedRoleIdOfRoleId(rid))
+			if err != nil {
+				return false, err
+			}
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return false, err
+			}
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					grantedId, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return false, err
+					}
+					if !visited.Contains(grantedId) {
+						visited.Insert(grantedId)
+						nextSet.Insert(grantedId)
+					}
+				}
+			}
+		}
+
+		if nextSet.Len() == 0 {
+			return false, nil
+		}
+		currentSet = nextSet
+	}
+}
+
 // with multi-privilege levels exists or not
 func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	ctx context.Context,
@@ -6339,6 +7001,135 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	return false, nil
 }
 
+func verifyViewPrivilegeForRole(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	privType PrivilegeType,
+	dbName string,
+	viewName string,
+	enableCache bool,
+) (bool, error) {
+	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+		return true, nil
+	}
+	for _, objType := range []objectType{objectTypeView, objectTypeTable} {
+		yes, err := verifyViewPrivilegeForRoleWithObjectType(
+			ctx, bh, ses, cache, roleId, privType, dbName, viewName, objType, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func verifyViewPrivilegeForRoleWithObjectType(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	privType PrivilegeType,
+	dbName string,
+	viewName string,
+	objType objectType,
+	enableCache bool,
+) (bool, error) {
+	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	seen := make(map[PrivilegeType]struct{}, len(privTypes))
+	for _, p := range privTypes {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		entry := privilegeEntriesMap[p]
+		entry.objType = objType
+		entry.databaseName = dbName
+		entry.tableName = viewName
+		entry.privilegeEntryTyp = privilegeEntryTypeGeneral
+		entry.compound = nil
+		pls, err := getPrivilegeLevelsOfObjectType(ctx, objType)
+		if err != nil {
+			return false, err
+		}
+		yes, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// verifyViewPrivilegeWithRoleInheritance checks view privilege for a role with role inheritance expansion.
+func verifyViewPrivilegeWithRoleInheritance(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	startRoleId int64,
+	privType PrivilegeType,
+	dbName string,
+	viewName string,
+) (bool, error) {
+	if startRoleId == moAdminRoleID || startRoleId == accountAdminRoleID {
+		return true, nil
+	}
+
+	visited := &btree.Set[int64]{}
+	currentSet := &btree.Set[int64]{}
+	currentSet.Insert(startRoleId)
+	visited.Insert(startRoleId)
+
+	for {
+		for _, rid := range currentSet.Keys() {
+			yes, err := verifyViewPrivilegeForRole(ctx, bh, ses, nil, rid, privType, dbName, viewName, false)
+			if err != nil {
+				return false, err
+			}
+			if yes {
+				return true, nil
+			}
+		}
+
+		nextSet := &btree.Set[int64]{}
+		for _, rid := range currentSet.Keys() {
+			bh.ClearExecResultSet()
+			err := bh.Exec(ctx, getSqlForInheritedRoleIdOfRoleId(rid))
+			if err != nil {
+				return false, err
+			}
+			erArray, err := getResultSet(ctx, bh)
+			if err != nil {
+				return false, err
+			}
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					grantedId, err := erArray[0].GetInt64(ctx, i, 0)
+					if err != nil {
+						return false, err
+					}
+					if !visited.Contains(grantedId) {
+						visited.Insert(grantedId)
+						nextSet.Insert(grantedId)
+					}
+				}
+			}
+		}
+
+		if nextSet.Len() == 0 {
+			return false, nil
+		}
+		currentSet = nextSet
+	}
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
 func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, error) {
@@ -6384,8 +7175,6 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
-							//TODO: normalize the name
-							//TODO: simplify the logic
 							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 							if err != nil {
 								return false, err
@@ -6408,6 +7197,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							}
 						} else {
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+							tempEntry.objType = mi.objType
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
 							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -6417,17 +7207,83 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								return false, err
 							}
 
+							yes = false
+							writeDirectly := priv.writeDatabaseAndTableDirectly
+							if (tempEntry.objType == objectTypeTable || tempEntry.objType == objectTypeView) && mi.privilegeTyp == PrivilegeTypeSelect {
+								writeDirectly = false
+							}
 							yes2 = verifyLightPrivilege(ses,
 								tempEntry.databaseName,
-								priv.writeDatabaseAndTableDirectly,
+								writeDirectly,
 								mi.isClusterTable,
 								mi.clusterTableOperation)
 
 							if yes2 {
-								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
-								if err != nil {
-									return false, err
+								viewChain := mi.originViews
+								directView := mi.directView
+								var viewSnapshot *plan.Snapshot
+								if directView != "" {
+									baseKey, ts, ok := splitViewSnapshotSuffix(directView)
+									if ok {
+										viewSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+										if mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil {
+											viewSnapshot.Tenant = mi.scanSnapshot.Tenant
+										}
+										directView = baseKey
+									}
+								}
+								if len(viewChain) == 0 && directView != "" {
+									viewChain = []string{directView}
+								}
+
+								checkRoleId := roleId
+								viewAllowed := true
+								skipBaseCheck := false
+								if len(viewChain) > 0 {
+									checkRoleId, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
+										ctx,
+										bh,
+										ses,
+										cache,
+										roleId,
+										mi.privilegeTyp,
+										viewChain,
+										tempEntry.databaseName,
+										viewSnapshot,
+										enableCache,
+									)
+									if err != nil {
+										return false, err
+									}
+								}
+
+								if viewAllowed {
+									if skipBaseCheck {
+										yes = true
+									} else if len(viewChain) > 0 {
+										if tempEntry.objType == objectTypeView {
+											// Synthetic view-only tips represent the authorization target itself.
+											// Once the chain check passes, there is no separate base object to verify.
+											yes = true
+										} else {
+											// View path: always expand role inheritance for the effective role,
+											// even if checkRoleId == roleId (definer may rely on inherited privileges)
+											yes, err = verifyPrivilegeWithRoleInheritance(ctx, bh, ses, checkRoleId, tempEntry, enableCache)
+											if err != nil {
+												return false, err
+											}
+										}
+									} else {
+										useCache := enableCache && cache != nil && checkRoleId == roleId
+										cacheToUse := cache
+										if !useCache {
+											cacheToUse = nil
+										}
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
+										if err != nil {
+											return false, err
+										}
+									}
 								}
 							}
 						}
@@ -7205,6 +8061,26 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		}
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
+			if ins, ok := stmt.(*tree.Insert); ok {
+				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
+				if ok {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
+			}
+		}
+		if len(arr) == 0 {
+			if viewTip, ok := extractDirectViewPrivilegeTipFromPlan(p); ok {
+				arr = append(arr, viewTip)
+			}
+		}
+		if len(arr) == 0 {
 			return true, stats, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
@@ -7217,6 +8093,29 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		return ok, stats, nil
 	}
 	return true, stats, nil
+}
+
+func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.Table == nil {
+		return "", "", false
+	}
+	var tbl tree.TableExpr = stmt.Table
+	if alias, ok := tbl.(*tree.AliasedTableExpr); ok {
+		tbl = alias.Expr
+	}
+	name, ok := tbl.(*tree.TableName)
+	if !ok || name == nil {
+		return "", "", false
+	}
+	dbName := string(name.SchemaName)
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
 }
 
 func authenticateCreateTableAsSelectSourcePrivilege(
@@ -7237,6 +8136,11 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 		return false, stats, err
 	}
 	arr := extractPrivilegeTipsFromPlan(sourcePlan)
+	if len(arr) == 0 {
+		if viewTip, ok := extractDirectViewPrivilegeTipFromPlan(sourcePlan); ok {
+			arr = append(arr, viewTip)
+		}
+	}
 	if len(arr) == 0 {
 		return true, stats, nil
 	}
@@ -7260,18 +8164,22 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		return "", err
 	}
 	switch gp.ObjType {
-	case tree.OBJECT_TYPE_TABLE:
+	case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
+		objType := objectTypeTable
+		if gp.ObjType == tree.OBJECT_TYPE_VIEW {
+			objType = objectTypeView
+		}
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx, objType, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
-			sql = getSqlForCheckWithGrantOptionForTableStarStar(int64(tenant.GetDefaultRoleID()), privType)
+			sql = getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType, int64(tenant.GetDefaultRoleID()), privType)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
-			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx, objType, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
-			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx, objType, int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
-			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
+			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx, objType, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
 		default:
 			return "", moerr.NewInternalErrorf(ctx, "in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
@@ -7425,6 +8333,170 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	return rset, err
 }
 
+// getRoleSetThatPrivilegeGrantedToWGOScoped is like getRoleSetThatPrivilegeGrantedToWGO but
+// for table/view-level privileges with a specific object target, it adds obj_type/obj_id filtering.
+// For non-table/view privileges, it falls back to the unscoped version.
+func getRoleSetThatPrivilegeGrantedToWGOScoped(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	scope := privType.Scope()
+	if scope != PrivilegeScopeTable ||
+		(astObjType != tree.OBJECT_TYPE_TABLE && astObjType != tree.OBJECT_TYPE_VIEW) {
+		return getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+	}
+
+	if astObjType == tree.OBJECT_TYPE_VIEW {
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+			ctx, ses, bh, privType, astObjType, objectTypeView, level)
+		if err != nil {
+			return nil, err
+		}
+		legacyRoleSet, err := getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+			ctx, ses, bh, privType, astObjType, objectTypeTable, level)
+		if err != nil {
+			return nil, err
+		}
+		mergeRoleSets(roleSet, legacyRoleSet)
+		return roleSet, nil
+	}
+
+	objType, err := convertAstObjectTypeToObjectType(ctx, astObjType)
+	if err != nil {
+		return nil, err
+	}
+	return getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(ctx, ses, bh, privType, astObjType, objType, level)
+}
+
+func getRoleSetThatPrivilegeGrantedToWGOScopedWithObjectType(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	astObjType tree.ObjectType,
+	objType objectType,
+	level tree.PrivilegeLevel,
+) (*btree.Set[int64], error) {
+	// For specific named objects (db.table, table) and database-scoped wildcards (db.*),
+	// keep the resolved object id so WGO cannot leak across databases.
+	if level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR ||
+		level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR {
+		_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, astObjType, level)
+		if err != nil {
+			// If we can't resolve the object, fall back to obj_type-only check
+			return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+		}
+		return getRoleSetThatPrivilegeGrantedToWGOWithObj(ctx, bh, privType, objType, objId)
+	}
+
+	// For truly global wildcard levels (*.*), filter by obj_type only.
+	return getRoleSetThatPrivilegeGrantedToWGOWithObjType(ctx, bh, privType, objType)
+}
+
+func mergeRoleSets(dst, src *btree.Set[int64]) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, id := range src.Keys() {
+		dst.Insert(id)
+	}
+}
+
+// getRoleSetThatPrivilegeGrantedToWGOWithObj gets roles with WGO on a specific object.
+func getRoleSetThatPrivilegeGrantedToWGOWithObj(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+	objId int64,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
+	case PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType, objId)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(privType), objType, objId)
+	default:
+		// fallback for non-table privileges
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
+// getRoleSetThatPrivilegeGrantedToWGOWithObjType gets roles with WGO filtered by obj_type only (for wildcard grants).
+func getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+	ctx context.Context,
+	bh BackgroundExec,
+	privType PrivilegeType,
+	objType objectType,
+) (*btree.Set[int64], error) {
+	var sql string
+	switch privType {
+	case PrivilegeTypeSelect, PrivilegeTypeInsert, PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate, PrivilegeTypeDelete, PrivilegeTypeReference,
+		PrivilegeTypeIndex, PrivilegeTypeValues, PrivilegeTypeTableAll:
+		sql = getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership), objType)
+	case PrivilegeTypeTableOwnership:
+		sql = getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(privType), objType)
+	default:
+		sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+	}
+
+	rset := &btree.Set[int64]{}
+	bh.ClearExecResultSet()
+	err := bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if execResultArrayHasData(erArray) {
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			id, err := erArray[0].GetInt64(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+	return rset, err
+}
+
 // setIsIntersected decides the A is intersecting the B.
 func setIsIntersected(A, B *btree.Set[int64]) bool {
 	if A.Len() > B.Len() {
@@ -7493,7 +8565,8 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 		}
 
 		//call the algorithm 3.
-		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		// For table/view-level privileges with a specific object, use object-scoped WGO check
+		roleSetOfPrivilegeGrantedToWGO, err = getRoleSetThatPrivilegeGrantedToWGOScoped(ctx, ses, bh, privType, gp.ObjType, *gp.Level)
 		if err != nil {
 			return false, stats, err
 		}
@@ -7578,7 +8651,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 			privType = PrivilegeTypeAccountAll
 		case tree.OBJECT_TYPE_DATABASE:
 			privType = PrivilegeTypeDatabaseAll
-		case tree.OBJECT_TYPE_TABLE:
+		case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 			privType = PrivilegeTypeTableAll
 		default:
 			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
@@ -7587,7 +8660,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		switch ot {
 		case tree.OBJECT_TYPE_DATABASE:
 			privType = PrivilegeTypeDatabaseOwnership
-		case tree.OBJECT_TYPE_TABLE:
+		case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 			privType = PrivilegeTypeTableOwnership
 		default:
 			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
