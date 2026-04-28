@@ -64,17 +64,17 @@ cuVS supports **pre-filtering via a predicate bitset**, and we wired it directly
 
 The bitset itself stays in host RAM; only the index data lives on the GPU. The combination — RAM-resident filter columns plus CPU-computed bitsets driving GPU pre-filtering — sidesteps both disk I/O and wasted GPU work. The 88M numbers below show the payoff concretely: under SQL pre-filtering, GPU-enhanced IVF-Flat (which has to filter on the CPU *after* search) drops to **~3 QPS at high recall (0.97)** and tops out at ~12 QPS at lower recall, while pure-GPU IVF-PQ with bitset pre-filtering holds **~67 QPS** essentially flat across `nprobe`.
 
-## Head-to-Head: GPU-Enhanced IVF-Flat vs. Pure-GPU IVF-PQ
+## Head-to-Head: CPU IVF-Flat vs. GPU-Enhanced IVF-Flat vs. Pure-GPU IVF-PQ
 
 To quantify the value of pushing *both build and search* onto the GPU (IVF-PQ) versus only accelerating the build pipeline (IVF-Flat with CPU-side search), we benchmarked both on AWS `g6e` instances using NVIDIA L40S GPUs across three scales of the `wiki_all` dataset (1M, 10M, 88M @ 768-D, top-10, concurrency = 100, n = 10000 queries).
 
 ### Build Time
 
-| Dataset | IVF-Flat (GPU build, CPU search) | IVF-PQ (Pure GPU) | Speedup |
+| Dataset | IVF-Flat (CPU build) | IVF-Flat (GPU build, CPU search) | IVF-PQ (Pure GPU) | Speedup |
 |---|---|---|---|
-| 1M | 21 s | 45 s | 0.5x |
-| 10M | 5 min 46 s | 4 min 21 s | 1.3x |
-| **88M** | **4 h 8 min** | **32 min 8 s** | **~7.7x** |
+| 1M | 58 s | 29 s | 45 s | 0.6x |
+| 10M | 19 min | 4 min 26s | 4 min 21 s | 4.2x |
+| **88M** | **4 h 8 min** | **62 min** | **32 min 8 s** | **~7.7x** |
 
 At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-PQ builds nearly 8× faster** — turning an overnight job into a coffee break.
 
