@@ -651,6 +651,35 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 		}
 
+	case tree.NULL_SAFE_EQUAL:
+		op = "<=>"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := 0; i < len(leftexpr.Exprs); i++ {
+						expr2, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						if i == 0 {
+							expr1 = expr2
+							continue
+						}
+						expr1, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				}
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+			}
+		}
+
 	case tree.LESS_THAN:
 		op = "<"
 		switch leftexpr := astExpr.Left.(type) {

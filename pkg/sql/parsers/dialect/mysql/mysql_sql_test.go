@@ -2109,6 +2109,18 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		}, {
+			input:  `select a->'$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select a->>'$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
+			input:  `select 1 + a->'$.b' from t`,
+			output: `select 1 + json_extract(a, $.b) from t`,
+		}, {
+			input:  `select 2 * a->>'$.b' from t`,
+			output: `select 2 * json_unquote(json_extract(a, $.b)) from t`,
+		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
