@@ -807,7 +807,6 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 	}
 	return true
 }
-
 // func (c *Compile) compileAttachedScope(attachedPlan *plan.Plan) ([]*Scope, error) {
 // 	query := attachedPlan.Plan.(*plan.Plan_Query)
 // 	attachedScope, err := c.compileQuery(ctx, query.Query)
