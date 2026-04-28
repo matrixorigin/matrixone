@@ -253,9 +253,10 @@ const (
 	SystemRelAttr_LogicalID      = "rel_logical_id"
 
 	// 'mo_indexes' table
-	IndexAlgoName      = "algo"
-	IndexAlgoTableType = "algo_table_type"
-	IndexAlgoParams    = "algo_params"
+	IndexAlgoName        = "algo"
+	IndexAlgoTableType   = "algo_table_type"
+	IndexAlgoParams      = "algo_params"
+	IndexIncludedColumns = "included_columns"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -385,6 +386,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
 

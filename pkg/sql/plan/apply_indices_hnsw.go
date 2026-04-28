@@ -40,6 +40,29 @@ type hnswIndexContext struct {
 	nThread      int64
 }
 
+func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr, filterPayload string) []*plan.Expr {
+	args := []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: tblCfgStr,
+					},
+				},
+			},
+		},
+		DeepCopyExpr(vecLitArg),
+	}
+
+	if filterPayload != "" {
+		args = append(args, makePlan2StringConstExprWithType(filterPayload))
+	}
+	return args
+}
+
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -80,7 +103,11 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
-	keyPart := idxDef.Parts[0]
+	keyParts := getVectorIndexLogicalParts(multiTableIndex)
+	if len(keyParts) == 0 {
+		return nil, nil
+	}
+	keyPart := keyParts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
 	if !found {
@@ -136,6 +163,31 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		hnswCtx.nThread,
 		hnswCtx.origFuncName)
 
+	filterPayload := ""
+	if len(scanNode.FilterList) > 0 {
+		includeColumns := getVectorIndexIncludedColumns(multiTableIndex)
+		coveragePushdownFilters, coverageResidualFilters := splitFiltersByVectorIndexCoverage(
+			scanNode.FilterList,
+			scanNode,
+			includeColumns,
+			hnswCtx.partPos,
+		)
+		var loweredPushdownFilters, loweringResidualFilters []*plan.Expr
+		filterPayload, loweredPushdownFilters, loweringResidualFilters, err = lowerFiltersToHnswPayload(
+			coveragePushdownFilters,
+			scanNode,
+			hnswCtx.partPos,
+		)
+		if err != nil {
+			return 0, err
+		}
+		// TODO(vector-index phase 2): once the HNSW runtime enforces predicate
+		// filtering, rebuild scanNode.FilterList from coverageResidualFilters and
+		// loweringResidualFilters so loweredPushdownFilters no longer execute on
+		// the outer scan.
+		_, _, _ = coverageResidualFilters, loweredPushdownFilters, loweringResidualFilters
+	}
+
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
@@ -150,22 +202,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			},
 			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
 		},
-		BindingTags: []int32{tableFuncTag},
-		TblFuncExprList: []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id: int32(types.T_varchar),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
-						},
-					},
-				},
-			},
-			DeepCopyExpr(hnswCtx.vecLitArg),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg, filterPayload),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

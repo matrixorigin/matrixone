@@ -1499,7 +1499,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', or 'auto'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', or 'include'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -1511,6 +1511,26 @@ func TestParseRankOption(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rankOption)
 		require.Equal(t, "force", rankOption.Mode)
+	})
+
+	t.Run("valid mode include", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "include",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "include", rankOption.Mode)
+	})
+
+	t.Run("valid mode auto", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "auto",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "auto", rankOption.Mode)
 	})
 
 	t.Run("empty options map", func(t *testing.T) {

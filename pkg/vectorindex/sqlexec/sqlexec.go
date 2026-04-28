@@ -76,6 +76,10 @@ type SqlProcess struct {
 
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	// Optional raw runtime-filter payload from the build side for IVF probe path.
+	// This contains serialized unique join keys and must be converted by IVF code
+	// before it is exposed to entries table scans.
+	IvfRuntimeFilterData []byte
 	// Optional BloomFilter bytes for ivf entries scan.
 	IvfBloomFilter []byte
 	// Optional BloomFilter bytes for fulltext index scan.

@@ -31,6 +31,36 @@ import (
 // Tests for prepareIvfIndexContext
 // ============================================================================
 
+func makeConsistentIvfMultiTableIndexForTest(indexName, idxAlgoParams string, parts []string) *MultiTableIndex {
+	clonedParts := append([]string(nil), parts...)
+	return &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*plan.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexName:          indexName,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              append([]string(nil), clonedParts...),
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
+				IndexName:          indexName,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              append([]string(nil), clonedParts...),
+			},
+			catalog.SystemSI_IVFFLAT_TblType_Entries: {
+				IndexName:          indexName,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexAlgoParams:    idxAlgoParams,
+				Parts:              append([]string(nil), clonedParts...),
+			},
+		},
+	}
+}
+
 // TestPrepareIvfIndexContext_NilVecCtx tests the case where vecCtx is nil
 func TestPrepareIvfIndexContext_NilVecCtx(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -257,17 +287,11 @@ func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
 		scanNode: scanNode,
 	}
 
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts: []string{"vec_col"},
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_args_not_found",
+		`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.NoError(t, err)
@@ -342,17 +366,11 @@ func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
 		scanNode: scanNode,
 	}
 
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts: []string{"vec_col"},
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_resolve_threads",
+		`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.Error(t, err)
@@ -431,17 +449,11 @@ func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
 		scanNode: scanNode,
 	}
 
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts: []string{"vec_col"},
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_resolve_probe",
+		`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.Error(t, err)
@@ -520,17 +532,11 @@ func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
 		scanNode: scanNode,
 	}
 
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts: []string{"vec_col"},
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_probe_type",
+		`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.Error(t, err)
@@ -610,18 +616,11 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts:           []string{"vec_col"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_success",
+		idxAlgoParams,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	require.NoError(t, err)
@@ -784,18 +783,11 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 
 	// 1. Adaptive nprobe enabled (auto mode, selectivity 0.25, totalLists 100)
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts:           []string{"vec_col"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_auto_adaptive",
+		idxAlgoParams,
+		[]string{"vec_col"},
+	)
 
 	// Case 1: Adaptive mode enabled, compensation applied
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
@@ -806,18 +798,11 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 
 	// Case 2: Adaptive mode disabled because totalLists is missing
 	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	multiTableIndexNoLists := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: idxAlgoParamsNoLists,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts:           []string{"vec_col"},
-				IndexAlgoParams: idxAlgoParamsNoLists,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndexNoLists := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_auto_no_lists",
+		idxAlgoParamsNoLists,
+		[]string{"vec_col"},
+	)
 	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndexNoLists)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -901,18 +886,11 @@ func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *tes
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts:           []string{"vec_col"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_desc_implicit",
+		idxAlgoParams,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	require.NoError(t, err)
@@ -985,18 +963,11 @@ func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {
-				Parts:           []string{"vec_col"},
-				IndexAlgoParams: idxAlgoParams,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Entries: {},
-		},
-	}
+	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_desc_explicit",
+		idxAlgoParams,
+		[]string{"vec_col"},
+	)
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	require.NoError(t, err)

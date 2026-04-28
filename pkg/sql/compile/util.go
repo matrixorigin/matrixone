@@ -109,6 +109,11 @@ var (
 	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
 )
 
+func escapeSQLStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
 var (
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
 )
@@ -260,8 +265,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
 
 					//8. algorithm_params
-					var algorithm_params = indexDef.IndexAlgoParams
-					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+					var algorithmParams = indexDef.IndexAlgoParams
+					fmt.Fprintf(buffer, "'%s', ", escapeSQLStringLiteral(algorithmParams))
 
 					// 9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
@@ -289,7 +294,18 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
+						fmt.Fprintf(buffer, "'%s', ", indexDef.IndexTableName)
+					} else {
+						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+					}
+
+					// 16. index vec_included_columns
+					includedColumns, err := catalog.MarshalIncludeColumnsValue(indexDef.IncludedColumns)
+					if err != nil {
+						return "", err
+					}
+					if includedColumns != "" {
+						fmt.Fprintf(buffer, "'%s')", escapeSQLStringLiteral(includedColumns))
 					} else {
 						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 					}
@@ -352,6 +368,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
 					// 15. index vec_index_table
+					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
+
+					// 16. index vec_included_columns
 					fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 				}
 			}

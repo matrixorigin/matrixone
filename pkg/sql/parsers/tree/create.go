@@ -2121,6 +2121,8 @@ type IndexOption struct {
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
+	HnswQuantization         string
+	IncludeColumns           []*UnresolvedName
 }
 
 // Must follow the following sequence when test
@@ -2129,7 +2131,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
-		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
+		node.HnswEfSearch != 0 || node.HnswQuantization != "" ||
+		len(node.IncludeColumns) > 0 || node.AutoUpdate || node.Day != 0 ||
 		node.Hour != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2168,10 +2171,25 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.HnswEfSearch, 10))
 		ctx.WriteByte(' ')
 	}
+	if node.HnswQuantization != "" {
+		ctx.WriteString("QUANTIZATION ")
+		ctx.WriteString(node.HnswQuantization)
+		ctx.WriteByte(' ')
+	}
 	if node.AlgoParamVectorOpType != "" {
 		ctx.WriteString("OP_TYPE ")
 		ctx.WriteString(node.AlgoParamVectorOpType)
 		ctx.WriteByte(' ')
+	}
+	if len(node.IncludeColumns) > 0 {
+		ctx.WriteString("INCLUDE (")
+		for i, col := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			col.Format(ctx)
+		}
+		ctx.WriteString(") ")
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
 		ctx.WriteString(node.Visible.ToString())

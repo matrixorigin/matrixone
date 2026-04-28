@@ -287,6 +287,7 @@ func init() {
 		"linestring":                 LINESTRING,
 		"load":                       LOAD,
 		"import":                     IMPORT,
+		"include":                    INCLUDE,
 		"discard":                    DISCARD,
 		"localtime":                  LOCALTIME,
 		"localtimestamp":             LOCALTIMESTAMP,

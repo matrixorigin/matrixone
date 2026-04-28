@@ -378,7 +378,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE QUANTIZATION INCLUDE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -7942,18 +7942,22 @@ index_option_list:
 	    } else if opt2.HnswM > 0 {
 	      opt1.HnswM = opt2.HnswM
 	    } else if opt2.HnswEfConstruction > 0 {
- 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
-            } else if opt2.HnswEfSearch > 0 {
+	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+	    } else if len(opt2.HnswQuantization) > 0 {
+	      opt1.HnswQuantization = opt2.HnswQuantization
+	    } else if opt2.HnswEfSearch > 0 {
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
- 	    } else if opt2.Async {
+	    } else if len(opt2.IncludeColumns) > 0 {
+	      opt1.IncludeColumns = opt2.IncludeColumns
+	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    } else if opt2.ForceSync {
+	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
- 	    } else if opt2.AutoUpdate {
+	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
- 	    } else if opt2.Day > 0 {
+	    } else if opt2.Day > 0 {
 	      opt1.Day = opt2.Day
- 	    } else if opt2.Hour > 0 {
+	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
 	    }
             $$ = opt1
@@ -8088,7 +8092,18 @@ index_option:
 	io.Hour = val
 	$$ = io
      }
-
+|    QUANTIZATION equal_opt STRING
+	     {
+		io := tree.NewIndexOption()
+		io.HnswQuantization = $3
+		$$ = io
+	     }
+|   INCLUDE '(' column_name_list ')'
+	    {
+		io := tree.NewIndexOption()
+		io.IncludeColumns = $3
+		$$ = io
+	    }
 
 index_column_list:
     index_column
@@ -13559,6 +13574,7 @@ non_reserved_keyword:
 |   GEOMETRYCOLLECTION
 |   GLOBAL
 |   HNSW
+|   INCLUDE
 |   PERSIST
 |   GRANT
 |   INT

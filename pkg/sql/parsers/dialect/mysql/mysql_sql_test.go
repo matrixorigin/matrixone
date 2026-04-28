@@ -1711,6 +1711,12 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
+		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {

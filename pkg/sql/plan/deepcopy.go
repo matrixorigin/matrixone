@@ -409,6 +409,7 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
 		Parts:              slices.Clone(indexDef.Parts),
+		IncludedColumns:    slices.Clone(indexDef.IncludedColumns),
 	}
 	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
 	return newindexDef

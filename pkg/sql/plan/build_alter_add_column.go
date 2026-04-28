@@ -427,6 +427,7 @@ func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dro
 func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *TableDef) error {
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
+		includeAffected := indexIncludesColumn(indexInfo, colName)
 		indexInfo.Parts = RemoveIf[string](indexInfo.Parts, func(t string) bool {
 			return catalog.ResolveAlias(t) == colName
 		})
@@ -455,9 +456,11 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				}
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				// ivf index
-				if len(indexInfo.Parts) == 0 {
-					// remove 3 index records: metadata, centroids, entries
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
+				if len(indexInfo.Parts) == 0 || includeAffected {
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
@@ -469,9 +472,11 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
 			case catalog.MoIndexHnswAlgo.ToString():
-				if len(indexInfo.Parts) == 0 {
-					// remove 2 index records: metadata, storage
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+2:]...)
+				if len(indexInfo.Parts) == 0 || includeAffected {
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			}
 		}

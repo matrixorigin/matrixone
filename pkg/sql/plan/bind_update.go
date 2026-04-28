@@ -67,6 +67,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					resolvedColName := catalog.ResolveAlias(part)
 					irregularIndexCols[resolvedColName] = true
 				}
+				for _, colName := range idxDef.IncludedColumns {
+					irregularIndexCols[catalog.ResolveAlias(colName)] = true
+				}
+			}
+		}
+		if hasIrregularIndex && tableDef.Pkey != nil {
+			for _, colName := range tableDef.Pkey.Names {
+				irregularIndexCols[catalog.ResolveAlias(colName)] = true
 			}
 		}
 

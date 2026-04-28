@@ -488,6 +488,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"ordinal_position", types.T_uint32, false, 50, 0},
 			{"options", types.T_text, true, 50, 0},
 			{"index_table_name", types.T_varchar, true, 50, 0},
+			{"included_columns", types.T_text, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},

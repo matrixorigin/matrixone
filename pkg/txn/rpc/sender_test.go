@@ -455,6 +455,19 @@ func TestSendStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 	assert.Less(t, time.Since(start), oldWait)
 }
 
+func TestGetBackendAutoCreateWaitTimeoutFailsFastWhenRetryBudgetDisabled(t *testing.T) {
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendSend = 0
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+		defaultMaxWaitTimeOnRetryBackendSend = oldBudget
+	}()
+
+	assert.Equal(t, minBackendAutoCreateWaitTimeout, getBackendAutoCreateWaitTimeout())
+}
+
 func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
 
