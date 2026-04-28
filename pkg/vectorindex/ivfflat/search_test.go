@@ -74,6 +74,37 @@ func TestIvfflatSearchFloat32(t *testing.T) {
 	// But we've verified it doesn't crash on nil keys and calls the underlying Search.
 }
 
+func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
+	runSql = mock_runSql
+
+	var idxcfg vectorindex.IndexConfig
+	var tblcfg vectorindex.IndexTableConfig
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Dimensions = 3
+
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	s := &IvfflatSearch[float32]{
+		Idxcfg: idxcfg,
+		Tblcfg: tblcfg,
+		Index:  &IvfflatSearchIndex[float32]{},
+	}
+
+	// non-[]float32 query → Search returns error and SearchFloat32 propagates it
+	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestIvfflatUpdateConfig(t *testing.T) {
+	s := &IvfflatSearch[float32]{}
+	require.NoError(t, s.UpdateConfig(nil))
+}
+
 func TestIvfSearchRace(t *testing.T) {
 
 	runSql = mock_runSql

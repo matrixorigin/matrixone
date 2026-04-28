@@ -214,6 +214,180 @@ func TestSearchFloat32(t *testing.T) {
 	}
 }
 
+func TestNewUsearchBruteForceIndexFlattened(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dimension := uint(3)
+	count := uint(2)
+	flat := []float32{1, 2, 3, 3, 4, 5}
+	elemsz := uint(4)
+	limit := uint(2)
+
+	idx, err := NewUsearchBruteForceIndexFlattened[float32](flat, count, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+	require.NotNil(t, idx)
+
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	query := [][]float32{{1, 2, 3}}
+	keys, dists, err := idx.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	require.NotNil(t, keys)
+	require.Equal(t, 2, len(dists))
+}
+
+func TestNewBruteForceIndexHelpers(t *testing.T) {
+	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
+	dimension := uint(3)
+	elemsz := uint(4)
+
+	// CPU helper -> Go index
+	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz, 1)
+	require.NoError(t, err)
+	require.NotNil(t, idx)
+
+	// Adhoc -> Usearch
+	idx2, err := NewAdhocBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+	require.NotNil(t, idx2)
+
+	// Adhoc flattened
+	flat := []float32{1, 2, 3, 3, 4, 5}
+	idx3, err := NewAdhocBruteForceIndexFlattened[float32](flat, 2, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+	require.NotNil(t, idx3)
+
+	// Cpu helper directly
+	idx4, err := NewCpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+	require.NotNil(t, idx4)
+}
+
+func TestGetUsearchQuantizationFromType(t *testing.T) {
+	q, err := GetUsearchQuantizationFromType(float32(0))
+	require.NoError(t, err)
+	_ = q
+	q2, err := GetUsearchQuantizationFromType(float64(0))
+	require.NoError(t, err)
+	_ = q2
+	_, err = GetUsearchQuantizationFromType(int32(0))
+	require.Error(t, err)
+}
+
+func TestUsearchBruteForceSearchFlattenedQuery(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
+	dimension := uint(3)
+	elemsz := uint(4)
+
+	idx, err := NewUsearchBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+
+	// Pass flattened []T as queries (covers the []T branch in Search)
+	flat := []float32{1, 2, 3}
+	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
+	keys, dists, err := idx.Search(sqlproc, flat, rt)
+	require.NoError(t, err)
+	require.NotNil(t, keys)
+	require.Equal(t, 1, len(dists))
+}
+
+func TestUsearchBruteForceSearchEmptyQuery(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
+	idx, err := NewUsearchBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	rt := vectorindex.RuntimeConfig{Limit: 2, NThreads: 1}
+	queries := [][]float32{}
+	keys, dists, err := idx.Search(sqlproc, queries, rt)
+	require.NoError(t, err)
+	require.Nil(t, keys)
+	require.Nil(t, dists)
+}
+
+func TestUsearchBruteForceSearchBadType(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dataset := [][]float32{{1, 2, 3}}
+	idx, err := NewUsearchBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
+	_, _, err = idx.Search(sqlproc, "wrong type", rt)
+	require.Error(t, err)
+}
+
+func TestGoBruteForceSearchFloat32_BadType(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dataset := [][]float32{{1, 2, 3}}
+	idx, err := NewGoBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
+	err = idx.SearchFloat32(sqlproc, "wrong type", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestGoBruteForceSearch_LimitZero(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	dataset := [][]float32{{1, 2, 3}}
+	queries := [][]float32{{1, 2, 3}}
+	idx, err := NewGoBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	rt := vectorindex.RuntimeConfig{Limit: 0, NThreads: 1}
+	keys, dists, err := idx.Search(sqlproc, queries, rt)
+	require.NoError(t, err)
+	require.Equal(t, []int64{}, keys)
+	require.Equal(t, []float64{}, dists)
+
+	// SearchFloat32 limit==0 returns nil error w/o writing
+	err = idx.SearchFloat32(sqlproc, queries, rt, nil, nil)
+	require.NoError(t, err)
+}
+
+func TestUsearchBruteForceLifecycle(t *testing.T) {
+	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
+	idx, err := NewUsearchBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	bf := idx.(*UsearchBruteForceIndex[float32])
+	require.NoError(t, bf.Load(nil))
+	require.NoError(t, bf.UpdateConfig(nil))
+
+	// Destroy with allocator
+	bf.Destroy()
+	// Calling again is safe
+	bf.Destroy()
+}
+
+func TestGoBruteForceLifecycle(t *testing.T) {
+	dataset := [][]float32{{1, 2, 3}}
+	idx, err := NewGoBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	bf := idx.(*GoBruteForceIndex[float32])
+	require.NoError(t, bf.Load(nil))
+	require.NoError(t, bf.UpdateConfig(nil))
+	bf.Destroy()
+}
+
 func TestGoBruteForceHeapLogic(t *testing.T) {
 	// Generate random dataset
 	dsize := 1000

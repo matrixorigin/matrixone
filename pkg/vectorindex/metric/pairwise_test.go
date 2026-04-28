@@ -85,3 +85,61 @@ func TestGoPairWiseDistance(t *testing.T) {
 	// (0,1) to (1,1) -> 1
 	require.InDelta(t, 1.0, float64(dist[3]), 1e-5)
 }
+
+func TestPairwiseDistanceLaunchWaitCPU_Float32(t *testing.T) {
+	x := [][]float32{{1, 0}, {0, 1}}
+	y := [][]float32{{1, 0}, {1, 1}}
+
+	dist := make([]float32, 4)
+	h, err := PairwiseDistanceLaunchCPU(x, y, Metric_L2sqDistance, dist)
+	require.NoError(t, err)
+	require.True(t, h.IsValid())
+
+	out, err := PairwiseDistanceWaitCPU(h, Metric_L2sqDistance)
+	require.NoError(t, err)
+	require.Equal(t, 4, len(out))
+	require.InDelta(t, 0.0, float64(out[0]), 1e-5)
+	require.InDelta(t, 1.0, float64(out[1]), 1e-5)
+	require.InDelta(t, 2.0, float64(out[2]), 1e-5)
+	require.InDelta(t, 1.0, float64(out[3]), 1e-5)
+}
+
+func TestPairwiseDistanceLaunchWaitCPU_Float64_L2(t *testing.T) {
+	x := [][]float64{{1, 0}, {0, 1}}
+	y := [][]float64{{1, 0}, {1, 1}}
+
+	// dist with insufficient capacity -> internal allocation path
+	dist := make([]float32, 0)
+	h, err := PairwiseDistanceLaunchCPU(x, y, Metric_L2Distance, dist)
+	require.NoError(t, err)
+	require.True(t, h.IsValid())
+
+	out, err := PairwiseDistanceWaitCPU(h, Metric_L2Distance)
+	require.NoError(t, err)
+	require.Equal(t, 4, len(out))
+	// L2 takes sqrt of squared distance
+	require.InDelta(t, 0.0, float64(out[0]), 1e-5)
+	require.InDelta(t, 1.0, float64(out[1]), 1e-5)
+	require.InDelta(t, math.Sqrt(2.0), float64(out[2]), 1e-5)
+	require.InDelta(t, 1.0, float64(out[3]), 1e-5)
+}
+
+func TestPairwiseDistanceWaitCPU_InvalidHandle(t *testing.T) {
+	_, err := PairwiseDistanceWaitCPU(PairwiseJobHandle(0), Metric_L2sqDistance)
+	require.Error(t, err)
+	// arbitrary handle that wasn't issued
+	_, err = PairwiseDistanceWaitCPU(PairwiseJobHandle(0xdeadbeef), Metric_L2sqDistance)
+	require.Error(t, err)
+}
+
+func TestPairwiseJobHandleIsValid(t *testing.T) {
+	require.False(t, PairwiseJobHandle(0).IsValid())
+	require.True(t, PairwiseJobHandle(1).IsValid())
+}
+
+func TestPairwiseDistanceLaunchCPU_BadMetric(t *testing.T) {
+	x := [][]float32{{1, 0}}
+	y := [][]float32{{1, 0}}
+	_, err := PairwiseDistanceLaunchCPU(x, y, MetricType(9999), nil)
+	require.Error(t, err)
+}

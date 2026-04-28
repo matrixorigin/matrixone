@@ -402,6 +402,83 @@ func TestBuildFilterPredicateJSON_PKVarcharLiteralFallsThrough(t *testing.T) {
 	require.Equal(t, []*plan.Expr{f}, res)
 }
 
+func TestFilterFlipCmpOp(t *testing.T) {
+	require.Equal(t, ">", filterFlipCmpOp("<"))
+	require.Equal(t, ">=", filterFlipCmpOp("<="))
+	require.Equal(t, "<", filterFlipCmpOp(">"))
+	require.Equal(t, "<=", filterFlipCmpOp(">="))
+	// Non-orderable operators flow through unchanged.
+	require.Equal(t, "=", filterFlipCmpOp("="))
+	require.Equal(t, "!=", filterFlipCmpOp("!="))
+}
+
+func TestFilterCmpOpFromFnName(t *testing.T) {
+	cases := []struct {
+		in   string
+		op   string
+		want bool
+	}{
+		{"=", "=", true},
+		{"!=", "!=", true},
+		{"<>", "!=", true},
+		{"<", "<", true},
+		{"<=", "<=", true},
+		{">", ">", true},
+		{">=", ">=", true},
+		{"like", "", false},
+		{"and", "", false},
+	}
+	for _, tc := range cases {
+		op, ok := filterCmpOpFromFnName(tc.in)
+		require.Equal(t, tc.want, ok, "in=%s", tc.in)
+		require.Equal(t, tc.op, op, "in=%s", tc.in)
+	}
+}
+
+func TestFilterLiteralToJSONValue_AllNumericTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		lit  *plan.Literal
+		want any
+	}{
+		{"i8", &plan.Literal{Value: &plan.Literal_I8Val{I8Val: -1}}, int64(-1)},
+		{"i16", &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 1024}}, int64(1024)},
+		{"i32", &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 7}}, int64(7)},
+		{"i64", &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 9}}, int64(9)},
+		{"u8", &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 5}}, uint64(5)},
+		{"u16", &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 6}}, uint64(6)},
+		{"u32", &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 7}}, uint64(7)},
+		{"u64", &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 8}}, uint64(8)},
+		{"f32", &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}, float64(float32(1.5))},
+		{"f64", &plan.Literal{Value: &plan.Literal_Dval{Dval: 2.25}}, 2.25},
+		{"true", &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}, int64(1)},
+		{"false", &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}, int64(0)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := filterLiteralToJSONValue(tc.lit)
+			require.True(t, ok)
+			require.Equal(t, tc.want, v)
+		})
+	}
+}
+
+func TestFilterLiteralToJSONValue_NilOrNull(t *testing.T) {
+	v, ok := filterLiteralToJSONValue(nil)
+	require.False(t, ok)
+	require.Nil(t, v)
+
+	v, ok = filterLiteralToJSONValue(&plan.Literal{Isnull: true})
+	require.False(t, ok)
+	require.Nil(t, v)
+}
+
+func TestFilterLiteralToJSONValue_StringFallsThrough(t *testing.T) {
+	v, ok := filterLiteralToJSONValue(&plan.Literal{Value: &plan.Literal_Sval{Sval: "x"}})
+	require.False(t, ok)
+	require.Nil(t, v)
+}
+
 // parseIncludedColumnsFromParams ---------------------------------------------
 
 func TestParseIncludedColumnsFromParams(t *testing.T) {

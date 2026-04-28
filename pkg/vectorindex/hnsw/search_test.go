@@ -138,6 +138,30 @@ func TestHnswSearchFloat32(t *testing.T) {
 	}
 }
 
+func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	// pass non-[]float32 query — Search returns error, SearchFloat32 propagates it
+	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestHnswSearchUpdateConfig(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{}
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	require.NoError(t, s.UpdateConfig(nil))
+}
+
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
