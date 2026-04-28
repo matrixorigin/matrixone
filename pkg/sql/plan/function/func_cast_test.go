@@ -2724,6 +2724,28 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
+// i.e. JSON strings lose their outer double-quotes (MySQL-compatible behavior).
+func TestCastJsonToVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	jsonTexts := []string{`"active"`, `42`, `true`, `null`, `[1,2,3]`, `{"k":"v"}`}
+	// After unquote: JSON strings lose outer quotes; other types keep their JSON text representation.
+	expected := []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`}
+	nulls := []bool{false, false, false, false, false, false}
+	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+
+	toType := types.New(types.T_varchar, 256, 0)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+		NewFunctionTestInput(toType, []string{}, []bool{}),
+	}
+	expect := NewFunctionTestResult(toType, false, expected, nulls)
+	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+}
+
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
