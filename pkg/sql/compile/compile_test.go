@@ -145,6 +145,37 @@ func NewMockCompile(t *testing.T) *Compile {
 	}
 }
 
+func TestShouldPrePipelineLockTable(t *testing.T) {
+	c := NewMockCompile(t)
+	target := &plan.LockTarget{LockTable: true}
+
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_INSERT},
+		},
+	}
+	require.False(t, c.shouldPrePipelineLockTable(target))
+	require.True(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{StmtType: plan.Query_UPDATE},
+		},
+	}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: true}
+	c.pn = &plan.Plan{}
+	require.True(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+
+	target = &plan.LockTarget{LockTable: false, LockTableAtTheEnd: true}
+	require.False(t, c.shouldPrePipelineLockTable(target))
+	require.False(t, target.LockTableAtTheEnd)
+}
+
 func TestCompile(t *testing.T) {
 	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
 	require.NoError(t, err)
