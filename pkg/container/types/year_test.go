@@ -55,6 +55,11 @@ func TestParseMoYear(t *testing.T) {
 		{"invalid string", "abc", 0, true},
 		{"below range", "1900", 0, true},
 		{"above range", "2156", 0, true},
+		{"plus sign zero", "+0", 0, true},
+		{"minus sign zero", "-0", 0, true},
+		{"plus sign four digit", "+1990", 0, true},
+		{"three digit zeros", "000", 0, true},
+		{"three digit", "123", 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

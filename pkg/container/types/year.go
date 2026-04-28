@@ -32,12 +32,14 @@ func ParseMoYear(s string) (MoYear, error) {
 	if s == "" {
 		return 0, moerr.NewInvalidInputNoCtx("invalid year format: empty string")
 	}
+	// Reject signed forms like "+0" / "-0" / "+1990" — MySQL's YEAR literal
+	// syntax never accepts a leading sign.
+	if s[0] == '+' || s[0] == '-' {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid year value: %s", s)
+	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid year format: %s", s)
-	}
-	if v == 0 {
-		return 0, nil
 	}
 	if len(s) == 4 {
 		if s == "0000" {
@@ -49,13 +51,19 @@ func ParseMoYear(s string) (MoYear, error) {
 		return ParseMoYearFromInt(v)
 	}
 	if len(s) <= 2 {
-		if v >= 0 && v <= 69 {
+		// "0" and "00" both map to 0000 to match legacy MatrixOne behavior.
+		if v == 0 {
+			return 0, nil
+		}
+		if v >= 1 && v <= 69 {
 			return MoYear(2000 + v), nil
 		}
 		if v >= 70 && v <= 99 {
 			return MoYear(1900 + v), nil
 		}
 	}
+	// Anything else (3-digit strings, 4+ digit strings not handled above, etc.)
+	// is rejected.
 	return 0, moerr.NewInvalidInputNoCtxf("invalid year value: %s", s)
 }
 
