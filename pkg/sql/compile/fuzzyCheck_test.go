@@ -26,7 +26,8 @@ import (
 // TestNewFuzzyCheckAttrUsesParentUniqueColName verifies that when a hidden
 // unique-index table dispatches fuzzy check via Fuzzymessage.ParentUniqueCols,
 // the duplicate-entry error reports the original user-visible column name
-// (e.g. "a") instead of the hidden index column ("__mo_index_idx_col").
+// (e.g. "a") in displayAttr while attr stays as the hidden index column so the
+// background dedup SQL keeps hitting a real column of the hidden table.
 func TestNewFuzzyCheckAttrUsesParentUniqueColName(t *testing.T) {
 	n := &plan.Node{
 		ObjRef: &plan.ObjectRef{SchemaName: "db"},
@@ -51,13 +52,17 @@ func TestNewFuzzyCheckAttrUsesParentUniqueColName(t *testing.T) {
 	require.NoError(t, err)
 	defer f.release()
 
-	require.Equal(t, "a", f.attr, "attr should be the user-visible column name, not the hidden index column")
+	require.Equal(t, catalog.IndexTableIndexColName, f.attr,
+		"attr should stay as the hidden index column name so backgroundSQLCheck queries a real column")
+	require.Equal(t, "a", f.displayAttr,
+		"displayAttr should be the user-visible column name used in duplicate-entry errors")
 	require.NotNil(t, f.col)
 	require.Equal(t, "a", f.col.Name)
 }
 
 // TestNewFuzzyCheckAttrFallsBackToPkeyColName verifies the non-hidden-index
-// insertion path still uses the primary-key column name for the error.
+// insertion path still uses the primary-key column name for both the SQL and
+// the error message.
 func TestNewFuzzyCheckAttrFallsBackToPkeyColName(t *testing.T) {
 	n := &plan.Node{
 		ObjRef: &plan.ObjectRef{SchemaName: "db"},
@@ -77,6 +82,7 @@ func TestNewFuzzyCheckAttrFallsBackToPkeyColName(t *testing.T) {
 	defer f.release()
 
 	require.Equal(t, "id", f.attr)
+	require.Equal(t, "id", f.displayAttr)
 }
 
 // TestConstructFuzzyFilterUsesParentUniqueColName verifies the fuzzy filter

@@ -51,6 +51,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f.tbl = tblName
 	f.db = dbName
 	f.attr = n.TableDef.Pkey.PkeyColName
+	f.displayAttr = n.TableDef.Pkey.PkeyColName
 
 	for _, c := range n.TableDef.Cols {
 		if c.Name == n.TableDef.Pkey.PkeyColName {
@@ -80,7 +81,10 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
 		} else {
 			f.col = n.Fuzzymessage.ParentUniqueCols[0]
-			f.attr = n.Fuzzymessage.ParentUniqueCols[0].Name
+			// attr is the hidden __mo_index_idx_col used to run the background
+			// dedup SQL against the hidden table; displayAttr is the original
+			// user-facing column used when reporting the duplicate entry.
+			f.displayAttr = n.Fuzzymessage.ParentUniqueCols[0].Name
 		}
 	}
 
@@ -100,6 +104,7 @@ func (f *fuzzyCheck) clear() {
 	f.db = ""
 	f.tbl = ""
 	f.attr = ""
+	f.displayAttr = ""
 	f.condition = ""
 	f.isCompound = false
 	f.onlyInsertHidden = false
@@ -246,9 +251,9 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 		if cnt > 1 {
 			ds, e := strconv.Unquote(k)
 			if e != nil {
-				return moerr.NewDuplicateEntry(ctx, k, f.attr)
+				return moerr.NewDuplicateEntry(ctx, k, f.displayAttr)
 			} else {
-				return moerr.NewDuplicateEntry(ctx, ds, f.attr)
+				return moerr.NewDuplicateEntry(ctx, ds, f.displayAttr)
 			}
 		}
 	}
@@ -338,9 +343,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				} else {
 					ds, e := strconv.Unquote(dupKey[0])
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.displayAttr)
 					} else {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.displayAttr)
 					}
 				}
 			} else {
@@ -355,7 +360,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 							scales[i] = 0
 						}
 					}
-					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.attr)
+					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.displayAttr)
 				}
 			}
 		}
