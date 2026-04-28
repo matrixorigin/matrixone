@@ -414,22 +414,23 @@ const (
 	STARLARK     = 345
 	TRY_STARLARK = 346
 	DAYOFWEEK    = 347
+	ELT          = 348
 
 	// function `current_time`, `curtime`
-	CURRENT_TIME = 348
+	CURRENT_TIME = 349
 
 	// function `timestampadd`
-	TIMESTAMPADD = 349
+	TIMESTAMPADD = 350
 
 	// function `subtime`
-	SUBTIME = 350
+	SUBTIME = 351
 
 	// function `get_format`
-	GET_FORMAT = 351
+	GET_FORMAT = 352
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 352
+	FUNCTION_END_NUMBER = 353
 )
 
 // functionIdRegister is what function we have registered already.
@@ -514,9 +515,11 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank":       RANK,
-	"row_number": ROW_NUMBER,
-	"dense_rank": DENSE_RANK,
+	"rank":         RANK,
+	"row_number":   ROW_NUMBER,
+	"dense_rank":   DENSE_RANK,
+	"cume_dist":    CUME_DIST,
+	"percent_rank": PERCENT_RANK,
 	// value window functions
 	"lag":         LAG,
 	"lead":        LEAD,
@@ -526,6 +529,8 @@ var functionIdRegister = map[string]int32{
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
+	"aes_decrypt": AES_DECRYPT,
+	"aes_encrypt": AES_ENCRYPT,
 	"endswith":    ENDSWITH,
 	"findinset":   FINDINSET,
 	"find_in_set": FINDINSET,
@@ -694,6 +699,7 @@ var functionIdRegister = map[string]int32{
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
+	"elt":                            ELT,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,

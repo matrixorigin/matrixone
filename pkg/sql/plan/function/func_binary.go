@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/aes"
-	"crypto/sha1"
+
+	"crypto/cipher"
+
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -4181,13 +4183,59 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
+func eltCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// ELT accepts numeric and string-convertible indexes.
+	// Keep uint64/bit as-is so values greater than math.MaxInt64 can still be treated as out-of-range and return NULL.
+	if inputs[0].Oid == types.T_int64 || inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit || inputs[0].Oid == types.T_any {
+		castTypes[0] = inputs[0]
+	} else if inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
+		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 {
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
+	} else {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		shouldCast = true
+		castTypes[0] = types.T_int64.ToType()
+	}
+
+	// Rest arguments must be strings
+	for i := 1; i < len(inputs); i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
 func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	// First argument is the index N
-	nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 
 	// Rest arguments are strings
 	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
@@ -4195,33 +4243,63 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null || n < 1 || n > int64(len(strParams)) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Get the string at position n (1-based, so index is n-1)
-		str, null := strParams[n-1].GetStrValue(i)
+	appendNull := func() error {
+		return rs.AppendBytes(nil, true)
+	}
+	appendValue := func(row uint64, idx uint64) error {
+		str, null := strParams[idx].GetStrValue(row)
 		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			return appendNull()
+		}
+		return rs.AppendBytes(str, false)
+	}
+
+	maxIndex := uint64(len(strParams))
+	switch ivecs[0].GetType().Oid {
+	case types.T_uint64, types.T_bit:
+		nParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > maxIndex {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, n-1); err != nil {
 				return err
 			}
-			continue
 		}
+	default:
+		nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			if selectList != nil && selectList.Contains(i) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
 
-		if err := rs.AppendBytes(str, false); err != nil {
-			return err
+			n, null := nParam.GetValue(i)
+			if null || n < 1 || n > int64(maxIndex) {
+				if err := appendNull(); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := appendValue(i, uint64(n-1)); err != nil {
+				return err
+			}
+
 		}
 	}
 	return nil
@@ -7207,11 +7285,17 @@ func castBinaryArrayToInt(array []uint8) int64 {
 	return result
 }
 
-// generateAESKey generates a 16-byte AES key from the input key using SHA1
-// MySQL's AES_ENCRYPT uses SHA1 hash of the key, taking the first 16 bytes
-func generateAESKey(key []byte) []byte {
-	hash := sha1.Sum(key)
-	return hash[:16] // AES-128 requires 16-byte key
+// generateAESKey generates an AES key using MySQL-style XOR folding.
+func generateAESKey(key []byte, keyLen int) ([]byte, error) {
+	if keyLen != 16 && keyLen != 32 {
+		return nil, moerr.NewInvalidInputNoCtx("unsupported aes key length")
+	}
+	out := make([]byte, keyLen)
+	for i, b := range key {
+		out[i%keyLen] ^= b
+	}
+	return out, nil
+
 }
 
 // pkcs7Padding adds PKCS7 padding to the data
@@ -7283,11 +7367,79 @@ func decryptECB(ciphertext, key []byte) ([]byte, error) {
 	return pkcs7Unpadding(plaintext)
 }
 
+// encryptCBC encrypts data using AES-CBC mode
+func encryptCBC(plaintext, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) < aes.BlockSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
+	}
+	padded := pkcs7Padding(plaintext, aes.BlockSize)
+	ciphertext := make([]byte, len(padded))
+	mode := cipher.NewCBCEncrypter(block, iv[:aes.BlockSize])
+	mode.CryptBlocks(ciphertext, padded)
+	return ciphertext, nil
+}
+
+// decryptCBC decrypts data using AES-CBC mode
+func decryptCBC(ciphertext, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) < aes.BlockSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
+	}
+	plaintext := make([]byte, len(ciphertext))
+	mode := cipher.NewCBCDecrypter(block, iv[:aes.BlockSize])
+	mode.CryptBlocks(plaintext, ciphertext)
+	return pkcs7Unpadding(plaintext)
+}
+
+type aesModeInfo struct {
+	keyLen  int
+	needsIV bool
+	useCBC  bool
+}
+
+func getAESMode(proc *process.Process) (aesModeInfo, error) {
+	mode := "aes-128-ecb"
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("block_encryption_mode", true, false); err == nil && v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				mode = s
+			}
+		}
+	}
+	mode = strings.ToLower(mode)
+	switch mode {
+	case "aes-128-ecb":
+		return aesModeInfo{keyLen: 16, needsIV: false, useCBC: false}, nil
+	case "aes-256-cbc":
+		return aesModeInfo{keyLen: 32, needsIV: true, useCBC: true}, nil
+	default:
+		return aesModeInfo{}, moerr.NewInvalidInputNoCtx("unsupported block_encryption_mode")
+	}
+}
+
 // AESEncrypt: AES_ENCRYPT(str, key_str) - Encrypts a string using AES encryption
 func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
 	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	var ivParam vector.FunctionParameterWrapper[types.Varlena]
+	hasIV := len(ivecs) >= 3
+	if hasIV {
+		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	modeInfo, modeErr := getAESMode(proc)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -7300,19 +7452,43 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		str, nullStr := strParam.GetStrValue(i)
 		key, nullKey := keyParam.GetStrValue(i)
 
-		if nullStr || nullKey {
+		var iv []byte
+		var nullIV bool
+		if hasIV {
+			iv, nullIV = ivParam.GetStrValue(i)
+		}
+
+		if nullStr || nullKey || modeErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
+
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Generate AES key from the key string
-		aesKey := generateAESKey(key)
+		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
+		if keyErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 
-		// Encrypt using AES-128-ECB
-		ciphertext, err := encryptECB(str, aesKey)
-		if err != nil {
+		var ciphertext []byte
+		var encErr error
+		if modeInfo.useCBC {
+			ciphertext, encErr = encryptCBC(str, aesKey, iv)
+		} else {
+			ciphertext, encErr = encryptECB(str, aesKey)
+		}
+		if encErr != nil {
+
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -7334,6 +7510,14 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	cryptParam := vector.GenerateFunctionStrParameter(ivecs[0])
 	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
 
+	var ivParam vector.FunctionParameterWrapper[types.Varlena]
+	hasIV := len(ivecs) >= 3
+	if hasIV {
+		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
+	}
+
+	modeInfo, modeErr := getAESMode(proc)
+
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -7345,19 +7529,43 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		crypt, nullCrypt := cryptParam.GetStrValue(i)
 		key, nullKey := keyParam.GetStrValue(i)
 
-		if nullCrypt || nullKey {
+		var iv []byte
+		var nullIV bool
+		if hasIV {
+			iv, nullIV = ivParam.GetStrValue(i)
+		}
+
+		if nullCrypt || nullKey || modeErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if modeInfo.needsIV && (!hasIV || nullIV || len(iv) < aes.BlockSize) {
+
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Generate AES key from the key string
-		aesKey := generateAESKey(key)
+		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
+		if keyErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 
-		// Decrypt using AES-128-ECB
-		plaintext, err := decryptECB(crypt, aesKey)
-		if err != nil {
+		var plaintext []byte
+		var decErr error
+		if modeInfo.useCBC {
+			plaintext, decErr = decryptCBC(crypt, aesKey, iv)
+		} else {
+			plaintext, decErr = decryptECB(crypt, aesKey)
+		}
+		if decErr != nil {
+
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err

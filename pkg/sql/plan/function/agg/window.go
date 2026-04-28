@@ -47,3 +47,11 @@ func RegisterLastValue(id int64) {
 func RegisterNthValue(id int64) {
 	aggexec.RegisterNthValueWin(id)
 }
+
+func RegisterCumeDist(id int64) {
+	aggexec.RegisterCumeDistWin(id)
+}
+
+func RegisterPercentRank(id int64) {
+	aggexec.RegisterPercentRankWin(id)
+}
