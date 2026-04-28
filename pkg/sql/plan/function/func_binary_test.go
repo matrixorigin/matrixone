@@ -160,6 +160,107 @@ func TestYearWeekStringReturnsNullForNullMode(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestYearWeekRegisteredOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	date, err := types.ParseDateCast("2003-12-30")
+	require.NoError(t, err)
+	dt, err := types.ParseDatetime("2003-12-30 13:11:10", 6)
+	require.NoError(t, err)
+	ts, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, "2003-12-30 13:11:10", 6)
+	require.NoError(t, err)
+
+	dateMode0Year, dateMode0Week := date.YearWeek(0)
+	dateMode1Year, dateMode1Week := date.YearWeek(1)
+	dtMode0Year, dtMode0Week := dt.YearWeek(0)
+	dtMode1Year, dtMode1Week := dt.YearWeek(1)
+	tsMode0Year, tsMode0Week := ts.ToDatetime(proc.GetSessionInfo().TimeZone).YearWeek(0)
+	tsMode1Year, tsMode1Week := ts.ToDatetime(proc.GetSessionInfo().TimeZone).YearWeek(1)
+
+	cases := []struct {
+		name     string
+		args     []types.Type
+		inputs   []FunctionTestInput
+		expected int64
+	}{
+		{
+			name: "date",
+			args: []types.Type{types.T_date.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			},
+			expected: int64(dateMode0Year)*100 + int64(dateMode0Week),
+		},
+		{
+			name: "date with mode",
+			args: []types.Type{types.T_date.ToType(), types.T_int64.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expected: int64(dateMode1Year)*100 + int64(dateMode1Week),
+		},
+		{
+			name: "datetime",
+			args: []types.Type{types.T_datetime.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt}, []bool{false}),
+			},
+			expected: int64(dtMode0Year)*100 + int64(dtMode0Week),
+		},
+		{
+			name: "datetime with mode",
+			args: []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expected: int64(dtMode1Year)*100 + int64(dtMode1Week),
+		},
+		{
+			name: "timestamp",
+			args: []types.Type{types.T_timestamp.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, []bool{false}),
+			},
+			expected: int64(tsMode0Year)*100 + int64(tsMode0Week),
+		},
+		{
+			name: "timestamp with mode",
+			args: []types.Type{types.T_timestamp.ToType(), types.T_int64.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expected: int64(tsMode1Year)*100 + int64(tsMode1Week),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "yearweek", tc.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(YEARWEEK), fn.fid)
+			require.Equal(t, types.T_int64, fn.retType.Oid)
+
+			ov, err := GetFunctionById(proc.Ctx, EncodeOverloadID(fn.fid, fn.overloadId))
+			require.NoError(t, err)
+			exec, _, execFree := ov.GetExecuteMethod()
+			if execFree != nil {
+				defer func() { require.NoError(t, execFree()) }()
+			}
+
+			fcTC := NewFunctionTestCase(
+				proc,
+				tc.inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.expected}, []bool{false}),
+				fEvalFn(exec),
+			)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func initCeilTestCase() []tcTemp {
 	rfs := []float64{1, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
 		0, 2, 5, 9, 17, 33, 65, math.MaxInt64, math.MaxFloat64, 0}
