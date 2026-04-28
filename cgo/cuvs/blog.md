@@ -71,7 +71,7 @@ To quantify the value of pushing *both build and search* onto the GPU (IVF-PQ) v
 ### Build Time
 
 | Dataset | IVF-Flat (CPU build) | IVF-Flat (GPU build, CPU search) | IVF-PQ (Pure GPU) | Speedup |
-|---|---|---|---|
+|---|---|---|---|---|
 | 1M | 58 s | 29 s | 45 s | 0.6x |
 | 10M | 19 min | 4 min 26s | 4 min 21 s | 4.2x |
 | **88M** | **4 h 8 min** | **62 min** | **32 min 8 s** | **~7.7x** |
