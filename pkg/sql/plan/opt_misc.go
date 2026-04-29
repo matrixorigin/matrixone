@@ -1119,6 +1119,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.mergeFiltersOnCompositeKey(rootID)
+	builder.rewriteInDomainNotInFilters(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
