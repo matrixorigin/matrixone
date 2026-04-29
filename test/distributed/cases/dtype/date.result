@@ -20,16 +20,16 @@ select cast(cast(0x13488c5 as signed) as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
 DATE_ADD(2017-06-15, INTERVAL(10, day))
-2017-06-25 00:00:00
+2017-06-25
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
 DATE_ADD(2017-06-15, INTERVAL(10, month))
-2018-04-15 00:00:00
+2018-04-15
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
 DATE_ADD(2017-06-15, INTERVAL(1, year))
-2018-06-15 00:00:00
+2018-06-15
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
 DATE_ADD(20200215, INTERVAL(14, day))
-2020-02-29 00:00:00
+2020-02-29
 drop table if exists t1;
 create table t1 (a date not null, primary key(a));
 insert into t1 values ('2022-01-01'), ('20220102'),('2022-01-03'),('20220104');

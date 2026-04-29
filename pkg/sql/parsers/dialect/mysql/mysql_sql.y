@@ -354,6 +354,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
+%left <str> ARROW LONG_ARROW
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
@@ -456,7 +457,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR TIMESTAMPDIFF
+%token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -484,14 +485,14 @@ func sqlTaskInt64(v any) int64 {
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
+%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE CUME_DIST PERCENT_RANK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
+%token <str> GET_FORMAT
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
 
-//JSON function
-%token <str> ARROW
+// JSON function: ARROW and LONG_ARROW declared via %left for precedence
 
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
@@ -830,6 +831,7 @@ func sqlTaskInt64(v any) int64 {
 %type <assignment> set_value
 %type <str> row_opt substr_option
 %type <str> time_unit time_stamp_unit
+%type <str> get_format_type
 %type <whenClause> when_clause
 %type <whenClauseList> when_clause_list
 %type <withClause> with_clause
@@ -3408,13 +3410,20 @@ alter_sequence_stmt:
     }
 
 alter_view_stmt:
-    ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
+    ALTER view_list_opt VIEW exists_opt table_name column_list_opt AS select_stmt
     {
-        var ifExists = $3
-        var name = $4
-        var colNames = $5
-        var asSource = $7
-        $$ = tree.NewAlterView(ifExists, name, colNames, asSource)
+        var ifExists = $4
+        var name = $5
+        var colNames = $6
+        var asSource = $8
+        secType := ""
+        viewListStr := strings.ToUpper($2)
+        if strings.Contains(viewListStr, "SQL SECURITY INVOKER") {
+            secType = "INVOKER"
+        } else if strings.Contains(viewListStr, "SQL SECURITY DEFINER") {
+            secType = "DEFINER"
+        }
+        $$ = tree.NewAlterView(ifExists, name, colNames, asSource, secType)
     }
 
 alter_table_stmt:
@@ -7006,34 +7015,27 @@ func_handler:
     }
 
 create_view_stmt:
-    CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
-    {
-        var Replace bool
-        var Name = $5
-        var ColNames = $6
-        var AsSource = $8
-        var IfNotExists = $4
-        $$ = tree.NewCreateView(
-            Replace,
-            Name,
-            ColNames,
-            AsSource,
-            IfNotExists,
-        )
-    }
-|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+    CREATE replace_opt view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         var Replace = $2
-        var Name = $5
-        var ColNames = $6
-        var AsSource = $8
-        var IfNotExists = $4
+        var Name = $6
+        var ColNames = $7
+        var AsSource = $9
+        var IfNotExists = $5
+        secType := ""
+        viewListStr := strings.ToUpper($3)
+        if strings.Contains(viewListStr, "SQL SECURITY INVOKER") {
+            secType = "INVOKER"
+        } else if strings.Contains(viewListStr, "SQL SECURITY DEFINER") {
+            secType = "DEFINER"
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
             ColNames,
             AsSource,
             IfNotExists,
+            secType,
         )
     }
 
@@ -7055,13 +7057,12 @@ create_account_stmt:
     }
 
 view_list_opt:
-    view_opt
     {
-        $$ = $1
+        $$ = ""
     }
 |   view_list_opt view_opt
     {
-        $$ = $$ + $2
+        $$ = $1 + $2
     }
 
 view_opt:
@@ -7094,7 +7095,13 @@ algorithm_type_2:
 
 security_opt:
     DEFINER
+    {
+        $$ = "DEFINER"
+    }
 |   INVOKER
+    {
+        $$ = "INVOKER"
+    }
 
 check_type:
     {
@@ -10302,6 +10309,30 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
     }
+|   bit_expr ARROW simple_expr %prec ARROW
+    {
+        name := tree.NewUnresolvedColName("json_extract")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
+|   bit_expr LONG_ARROW simple_expr %prec LONG_ARROW
+    {
+        extractName := tree.NewUnresolvedColName("json_extract")
+        inner := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(extractName),
+            FuncName: tree.NewCStr("json_extract", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+        unquoteName := tree.NewUnresolvedColName("json_unquote")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(unquoteName),
+            FuncName: tree.NewCStr("json_unquote", 1),
+            Exprs: tree.Exprs{inner},
+        }
+    }
 |   simple_expr
     {
         $$ = $1
@@ -10499,6 +10530,24 @@ function_call_window:
         }
     }
 |	DENSE_RANK '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
+|	CUME_DIST '(' ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            WindowSpec: $4,
+        }
+    }
+|	PERCENT_RANK '(' ')' window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -11497,6 +11546,12 @@ time_stamp_unit:
 |    SQL_TSI_QUARTER
 |    SQL_TSI_YEAR
 
+get_format_type:
+    DATE
+|   TIME
+|   DATETIME
+|   TIMESTAMP
+
 function_call_nonkeyword:
     CURTIME datetime_scale
     {
@@ -11533,6 +11588,28 @@ function_call_nonkeyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	TIMESTAMPADD '(' time_stamp_unit ',' expression ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	GET_FORMAT '(' get_format_type ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToUpper($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5},
         }
 	}
 function_call_keyword:
@@ -13640,6 +13717,8 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|	TIMESTAMPADD
+|	GET_FORMAT
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL

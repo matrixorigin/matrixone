@@ -210,25 +210,19 @@ insert into t2 values(8,"1998-01-01","1998-01-01 00:00:00","1998-01-01 00:00:00.
 insert into t2 values(9,"1998-01-01","1998-01-01 00:00:00","1998-01-01 00:00:00.000001","1998-01-01 00:00:00","1997-12-31 23:59:59.000002");
 insert into t2 values(10,NULL,NULL,NULL,NULL,NULL);
 
--- @bvt:issue#3254
 select * from t1 where a = "1997-12-29" + INTERVAL 1 DAY;
 select * from t1 where a > "1997-12-29" + INTERVAL 1 DAY;
 select * from t1 where (a + INTERVAL 1 DAY) > "1997-12-31";
 select * from t1 where (a + INTERVAL 1 DAY) <> ("1997-12-30" + INTERVAL 1 DAY);
--- @bvt:issue
 
 select date_add(b,INTERVAL 1 DAY),date_add(c,INTERVAL 1 SECOND) from t1;
 
--- @bvt:issue#3254
 select distinct(a) from t1 where c > "1998-01-01 00:59:59";
--- @bvt:issue
 
 select count(a),c + INTERVAL 1 DAY as c1 from t1 group by (c + INTERVAL 1 DAY) having c1 > "1998-01-01 00:59:59";
 
--- @bvt:issue#3254
 select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-01 00:00:00.000001" order by c + INTERVAL 1 MINUTE DESC;
 select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-01 00:00:00.000001" order by c + INTERVAL 1 MINUTE ASC;
--- @bvt:issue
 
 select t1.i,t2.i,t1.c + INTERVAL 1 MINUTE,t2.b + INTERVAL 1 YEAR from t1 join t2 where (t1.a + INTERVAL 1 DAY) = (t2.c -INTERVAL 1 DAY );
 

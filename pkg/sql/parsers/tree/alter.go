@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
@@ -505,18 +506,20 @@ func (node *AlterAccount) reset() {
 
 type AlterView struct {
 	statementImpl
-	IfExists bool
-	Name     *TableName
-	ColNames IdentifierList
-	AsSource *Select
+	IfExists     bool
+	Name         *TableName
+	ColNames     IdentifierList
+	AsSource     *Select
+	SecurityType string // "DEFINER", "INVOKER", or "" (not specified)
 }
 
-func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select) *AlterView {
+func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select, securityType string) *AlterView {
 	a := reuse.Alloc[AlterView](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.ColNames = colNames
 	a.AsSource = asSource
+	a.SecurityType = securityType
 	return a
 }
 
@@ -524,6 +527,11 @@ func (node *AlterView) Free() { reuse.Free[AlterView](node, nil) }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
+	if node.SecurityType != "" {
+		ctx.WriteString("sql security ")
+		ctx.WriteString(strings.ToLower(node.SecurityType))
+		ctx.WriteByte(' ')
+	}
 
 	ctx.WriteString("view ")
 
