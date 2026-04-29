@@ -9,10 +9,10 @@ select cast(addtime(cast('2024-01-01 00:00:00' as datetime), '24:00:00') as char
 2024-01-02 00:00:00
 select addtime(null, '01:00:00') is null q4;
 ➤ q4[12,4,0]  𝄀
-true
+1
 select addtime(cast('9999-12-31 23:59:59.999998' as datetime(6)), '00:00:00.000002') is null q5;
 ➤ q5[12,4,0]  𝄀
-true
+1
 select addtime(cast('9999-12-31 23:59:59.999998' as timestamp(6)), '00:00:00.000002') is null q6;
 ➤ q6[12,4,0]  𝄀
-true
+1

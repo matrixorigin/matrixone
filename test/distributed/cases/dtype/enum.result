@@ -419,14 +419,14 @@ engine ***
 engine ***
 select startswith(col2,'eng') from builtin01;
 startswith(col2, eng)
-false
-true
-true
+0
+1
+1
 select endswith(col1,'数据表') from builtin01;
 endswith(col1, 数据表)
-false
-false
-false
+0
+0
+0
 select reverse(col1),reverse(col2) from builtin01;
 reverse(col1)    reverse(col2)
   库据数生原云      esabatad 
@@ -446,9 +446,9 @@ bit_length(col2)
 56
 select empty(col2) from builtin01;
 empty(col2)
-false
-false
-false
+0
+0
+0
 select count(col1) as count_col1 from builtin01;
 count_col1
 3

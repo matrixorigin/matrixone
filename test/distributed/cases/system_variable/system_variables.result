@@ -6,6 +6,12 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
+show variables like 'server_id';
+Variable_name    Value
+server_id    uuid
+select @@server_id;
+@@server_id
+uuid
 show variables like 'auto%';
 Variable_name    Value
 auto_generate_certs    on
@@ -79,7 +85,7 @@ show variables where variable_name like 'system%' and variable_name != 'system_t
 Variable_name    Value
 select @@system_time_zone != '';
 @@system_time_zone != 
-true
+1
 show variables like 'trans%';
 Variable_name    Value
 transaction_alloc_block_size    8192

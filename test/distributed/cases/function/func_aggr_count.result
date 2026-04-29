@@ -83,7 +83,7 @@ BBBBBBBBBBBBB - generic		0
 TestComponent2		2
 SELECT COUNT(t1.bug_id) >= COUNT(t2.value) from t1 join t2 on t1.bug_file_loc = t2.value;
 COUNT(t1.bug_id) >= COUNT(t2.value)
-true
+1
 drop table t1;
 drop table t2;
 create table t1 (grp int, a bigint unsigned, c char(10) not null);

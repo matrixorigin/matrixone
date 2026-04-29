@@ -10,9 +10,9 @@ sleep(10)
 0
 select count(*) > 0 from mo_locks() l;
 count(*) > 0
-true
+1
 select count(*) > 0 from mo_transactions() t join mo_locks() l where t.txn_id = l.txn_id;
 count(*) > 0
-true
+1
 commit;
 drop database if exists sv_db1;

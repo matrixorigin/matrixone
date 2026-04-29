@@ -239,11 +239,11 @@ b datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
 insert into t1(id) values(1);
 select a is null from t1;
 a is null
-true
+1
 update t1 set id = 2 where id = 1;
 select a is not null from t1;
 a is not null
-true
+1
 update t1  set id = 3,  a = '20121212' where id = 2;
 select id from t1 where a = '20121212';
 id
@@ -301,7 +301,7 @@ insert into t1(a) values(1);
 update t1 set a = 2 where a = 1;
 select c is not null from t1;
 c is not null
-true
+1
 drop table if exists t1;
 create table t1 (a int primary key, b int);
 insert into t1 values (1,100);
