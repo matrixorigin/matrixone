@@ -34,6 +34,7 @@ import (
 
 var (
 	defaultRPCTimeout          = time.Second * 10
+	defaultRPCWriteTimeout     = time.Second * 3
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
 )
@@ -442,6 +443,17 @@ func writeResponse(
 	err error,
 	cs morpc.ClientSession,
 ) {
+	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout)
+}
+
+func writeResponseWithDeadline(
+	logger *log.MOLogger,
+	cancel context.CancelFunc,
+	resp *pb.Response,
+	err error,
+	cs morpc.ClientSession,
+	timeout time.Duration,
+) error {
 	if cancel != nil {
 		defer cancel()
 	}
@@ -455,12 +467,20 @@ func writeResponse(
 		logger.Debug("handle request completed",
 			zap.String("response", detail))
 	}
-	// after write, response will be released by rpc
-	if err := cs.AsyncWrite(resp); err != nil {
+
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), timeout)
+	defer writeCancel()
+	if sessionCtx := cs.SessionCtx(); sessionCtx != nil {
+		stop := context.AfterFunc(sessionCtx, writeCancel)
+		defer stop()
+	}
+	if err := cs.Write(writeCtx, resp); err != nil {
 		logger.Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))
+		return err
 	}
+	return nil
 }
 
 func (s *server) setupRemoteHandles(
