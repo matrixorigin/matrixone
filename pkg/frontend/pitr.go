@@ -781,18 +781,22 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		return err
 	}
 
+	// check pitr exists or not
+	tenantInfo := ses.GetTenantInfo()
+	if isReservedPitrName(string(stmt.Name)) {
+		// Reserved PITRs are maintained internally; IF EXISTS keeps cleanup SQL idempotent.
+		if stmt.IfExists {
+			return nil
+		}
+		return moerr.NewInternalError(ctx, "pitr name is reserved")
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
 		return err
-	}
-
-	// check pitr exists or not
-	tenantInfo := ses.GetTenantInfo()
-	if isReservedPitrName(string(stmt.Name)) {
-		return moerr.NewInternalError(ctx, "pitr name is reserved")
 	}
 	pitrExist, err = checkPitrExistOrNot(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID()))
 	if err != nil {

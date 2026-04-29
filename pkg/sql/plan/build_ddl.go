@@ -4856,9 +4856,7 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 	}
 
 	// check pitr exists or not
-	if string(stmt.Name) == SYSMOCATALOGPITR ||
-		string(stmt.Name) == DATA_BRANCH_PITR_NAME_PREFIX ||
-		strings.HasPrefix(string(stmt.Name), DATA_BRANCH_PITR_NAME_PREFIX+"_") {
+	if isReservedPitrName(string(stmt.Name)) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "pitr name is reserved")
 	}
 
@@ -4932,9 +4930,7 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_DROP_PITR
 	// Remove privilege check, no account ID validation
-	if string(stmt.Name) == SYSMOCATALOGPITR ||
-		string(stmt.Name) == DATA_BRANCH_PITR_NAME_PREFIX ||
-		strings.HasPrefix(string(stmt.Name), DATA_BRANCH_PITR_NAME_PREFIX+"_") {
+	if isReservedPitrName(string(stmt.Name)) && !stmt.IfExists {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "pitr name is reserved")
 	}
 
@@ -4954,4 +4950,10 @@ func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+func isReservedPitrName(pitrName string) bool {
+	return pitrName == SYSMOCATALOGPITR ||
+		pitrName == DATA_BRANCH_PITR_NAME_PREFIX ||
+		strings.HasPrefix(pitrName, DATA_BRANCH_PITR_NAME_PREFIX+"_")
 }

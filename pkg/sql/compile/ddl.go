@@ -4486,7 +4486,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
-	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
+	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", dataBranchSysMoCatalogPitrName)
 	otherRes, err := c.runSqlWithResultAndOptions(checkOtherSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4494,7 +4494,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	defer otherRes.Close()
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
-		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
+		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", dataBranchSysMoCatalogPitrName, sysAccountId)
 		err = c.runSqlWithAccountIdAndOptions(deleteSysSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
