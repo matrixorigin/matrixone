@@ -1802,6 +1802,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		}
+		// FULL OUTER JOIN reuses the right-join code path in hashjoin to emit
+		// unmatched build (right) rows. Compile-time logic (e.g. forceOneCN)
+		// keys off node.IsRightJoin for full outer too.
+		if node.JoinType == plan.Node_OUTER {
+			node.IsRightJoin = true
+		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 		//right joins does not support non equal join for now

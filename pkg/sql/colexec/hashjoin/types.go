@@ -366,6 +366,21 @@ func (hashJoin *HashJoin) IsRightSingle() bool {
 	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
 }
 
+// EmitUnmatchedProbe reports whether the join must emit unmatched rows from
+// the probe (left) side. True for LEFT OUTER, LEFT SINGLE, LEFT ANTI, and
+// FULL OUTER joins.
+func (hashJoin *HashJoin) EmitUnmatchedProbe() bool {
+	return hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti() || hashJoin.IsFullOuter()
+}
+
+// EmitUnmatchedBuild reports whether the join must emit unmatched rows from
+// the build (right) side. True when IsRightJoin is set (RIGHT-flavoured joins,
+// including RIGHT OUTER / RIGHT SEMI / RIGHT ANTI / RIGHT SINGLE / RIGHT
+// DEDUP), or for FULL OUTER which always needs both sides.
+func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
+	return hashJoin.IsRightJoin || hashJoin.IsFullOuter()
+}
+
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
 		// 0 means auto config

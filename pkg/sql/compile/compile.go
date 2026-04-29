@@ -2513,7 +2513,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
@@ -2618,7 +2618,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				} else {
-					op := constructLoopJoin(node, rightTypes, c.proc)
+					op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
@@ -2661,7 +2661,28 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 		} else {
 			for i := range rs {
-				op := constructLoopJoin(node, rightTypes, c.proc)
+				op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+		}
+		c.anal.isFirst = false
+	case plan.Node_OUTER:
+		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
+		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
+		// the probe scope through forceOneCN, avoiding distributed
+		// double-emission of unmatched-build rows.
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		currentFirstFlag := c.anal.isFirst
+		if isEq {
+			for i := range rs {
+				op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+		} else {
+			for i := range rs {
+				op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2692,7 +2713,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructLoopJoin(node, rightTypes, c.proc)
+			op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
