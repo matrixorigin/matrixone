@@ -894,3 +894,201 @@ func TestRewriteInDomainCastSkippedForAmbiguousStringIntegralDomain(t *testing.T
 	require.Equal(t, "in", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
 	require.Equal(t, "=", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
 }
+
+// makeInt64InWithNullExpr builds an IN list containing a NULL literal. The
+// binder converts this into `or(in(col, non_null_values), =(col, NULL))`, so
+// the returned expression is an `or`, not a plain `in` — tests exercising the
+// 3-valued-logic guard must not assume plain IN shape.
+func makeInt64InWithNullExpr(t *testing.T, ctx *MockCompilerContext, colExpr *planpb.Expr, values ...int64) *planpb.Expr {
+	t.Helper()
+
+	listValues := make([]*planpb.Expr, 0, len(values)+1)
+	for _, value := range values {
+		listValues = append(listValues, MakePlan2Int64ConstExprWithType(value))
+	}
+	listValues = append(listValues, makePlan2NullConstExprWithType())
+	listExpr := &planpb.Expr{
+		Typ: colExpr.Typ,
+		Expr: &planpb.Expr_List{
+			List: &planpb.ExprList{List: listValues},
+		},
+	}
+	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		listExpr,
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+// TestRewriteInDomainOuterInWithNullSkipped locks the invariant that when the
+// outer IN list contains NULL (e.g. `a IN (1, NULL, 2)`) the rewriter does NOT
+// build a normalized domain that excludes 3-valued-logic UNKNOWN rows. After
+// the binder's NULL-list expansion the conjunct is an `or`, so
+// classifyDomainConjunct classifies it as domainOther — the guard relies on
+// that and on NOT doing any point-set arithmetic over the nullable list.
+func TestRewriteInDomainOuterInWithNullSkipped(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	nullableIn := makeInt64InWithNullExpr(t, ctx, colExpr, 1, 2)
+	neqExpr := makeInt64NotEqualExpr(t, ctx, colExpr, 1)
+	setSingleScanFilters(builder, tag, nullableIn, neqExpr)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	// outer nullable IN must remain an `or` of (in, =NULL); the rewriter must
+	// not collapse the `<>` against that nullable domain.
+	require.Equal(t, "or", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
+	require.Equal(t, "!=", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
+}
+
+// TestRewriteInDomainOuterInWithNullSkipsNotIn covers the same invariant when
+// the second conjunct is a NOT IN instead of a bare `<>`. The binder keeps
+// NOT IN as `not_in` (no OR expansion on the right-hand side without NULL);
+// the rewriter must not use the nullable outer IN as an exclusion domain.
+func TestRewriteInDomainOuterInWithNullSkipsNotIn(t *testing.T) {
+	ctx, builder, tag, colExpr := setupInDomainRewriteTest(t)
+
+	nullableIn := makeInt64InWithNullExpr(t, ctx, colExpr, 1, 2)
+	// Use a 2-element NOT IN so the binder keeps a real `not_in` (single-value
+	// lists collapse to `!=` during binding).
+	notInExpr := makeInt64NotInFuncExpr(t, ctx, colExpr, 1, 3)
+	setSingleScanFilters(builder, tag, nullableIn, notInExpr)
+
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	require.Equal(t, "or", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
+	require.Equal(t, "not_in", builder.qry.Nodes[0].FilterList[1].GetF().Func.ObjName)
+}
+
+// setupUint8InDomainRewriteTest builds a bind context rooted on a uint8
+// column, used to probe cast-aware rewrites against out-of-range values.
+func setupUint8InDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder, int32, *planpb.Expr) {
+	t.Helper()
+
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	colExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_uint8)},
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: tag, ColPos: 0, Name: "u"},
+		},
+	}
+	return ctx, builder, tag, colExpr
+}
+
+func makeUint8InExpr(t *testing.T, ctx *MockCompilerContext, colExpr *planpb.Expr, values ...uint8) *planpb.Expr {
+	t.Helper()
+
+	listValues := make([]*planpb.Expr, 0, len(values))
+	for _, v := range values {
+		listValues = append(listValues, &planpb.Expr{
+			Typ: colExpr.Typ,
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: uint32(v)}},
+			},
+		})
+	}
+	listExpr := &planpb.Expr{
+		Typ: colExpr.Typ,
+		Expr: &planpb.Expr_List{
+			List: &planpb.ExprList{List: listValues},
+		},
+	}
+	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		listExpr,
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+// TestRewriteInDomainCastUint8OverflowSkipped covers a value that overflows
+// the column's native range (`cast(u as int64) <> 256` where u is uint8). The
+// cast-aware rewriter must treat 256 as outside the uint8 universe and leave
+// the predicate alone — collapsing it into IN(0,1,2) \ {256} = IN(0,1,2) is
+// also fine; what's NOT fine is wrapping the wrong-type literal back into the
+// uint8 domain set (wrap-around to 0).
+func TestRewriteInDomainCastUint8OverflowSkipped(t *testing.T) {
+	ctx, builder, tag, colExpr := setupUint8InDomainRewriteTest(t)
+
+	domainExpr := makeUint8InExpr(t, ctx, colExpr, 0, 1, 2)
+	int64Typ := planpb.Type{Id: int32(types.T_int64)}
+	castExpr, err := appendCastBeforeExpr(ctx.GetContext(), DeepCopyExpr(colExpr), int64Typ)
+	require.NoError(t, err)
+	neqExpr := makeInt64NotEqualExpr(t, ctx, castExpr, 256)
+
+	setSingleScanFilters(builder, tag, domainExpr, neqExpr)
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	require.Equal(t, "in", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
+	// `<>` may remain OR may be const-folded to TRUE; what must NOT happen is
+	// collapsing into a narrower IN(0) / IN(1) because 256 wrapped around to 0.
+	second := builder.qry.Nodes[0].FilterList[1]
+	if second.GetF() != nil && second.GetF().Func.ObjName == "in" {
+		list := second.GetF().Args[1].GetList()
+		require.NotNil(t, list)
+		require.Len(t, list.List, 3, "overflow must not shrink the uint8 IN domain")
+	}
+}
+
+// TestRewriteInDomainCastUint8NegativeFoldsFalse covers a negative literal
+// compared to an unsigned column. `cast(u as int64) = -1` is unsatisfiable —
+// the constant-fold path should reduce the predicate to FALSE, and the outer
+// IN domain on u must not absorb -1 into its point set.
+func TestRewriteInDomainCastUint8NegativeFoldsFalse(t *testing.T) {
+	ctx, builder, tag, colExpr := setupUint8InDomainRewriteTest(t)
+
+	domainExpr := makeUint8InExpr(t, ctx, colExpr, 0, 1)
+	int64Typ := planpb.Type{Id: int32(types.T_int64)}
+	castExpr, err := appendCastBeforeExpr(ctx.GetContext(), DeepCopyExpr(colExpr), int64Typ)
+	require.NoError(t, err)
+	eqExpr := makeInt64EqualExpr(t, ctx, castExpr, -1)
+
+	setSingleScanFilters(builder, tag, domainExpr, eqExpr)
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	// Two acceptable outcomes: the whole FilterList collapses to FALSE, or the
+	// original IN is kept with the second conjunct folded to FALSE. Either way,
+	// IN(0,1) must not be expanded to contain -1 (which would happen on buggy
+	// sign-wrap). Verify no filter mentions -1.
+	for _, f := range builder.qry.Nodes[0].FilterList {
+		require.False(t, exprMentionsInt64Value(f, -1), "no filter should carry -1 after rewrite")
+	}
+}
+
+// exprMentionsInt64Value walks the expression tree and returns true if any
+// literal (possibly cast-wrapped) equals the given int64.
+func exprMentionsInt64Value(expr *planpb.Expr, target int64) bool {
+	if expr == nil {
+		return false
+	}
+	if v, ok := int64ConstValue(expr); ok && v == target {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		if lst := expr.GetList(); lst != nil {
+			for _, e := range lst.List {
+				if exprMentionsInt64Value(e, target) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, arg := range fn.Args {
+		if exprMentionsInt64Value(arg, target) {
+			return true
+		}
+	}
+	return false
+}
