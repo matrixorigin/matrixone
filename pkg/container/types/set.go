@@ -26,6 +26,11 @@ import (
 const MaxSetMembers = 64
 const encodedSetValuesPrefix = "\x00setjson:"
 
+// setDescriptorCache memoizes parsed SET descriptors keyed by the encoded
+// enum-values string. It is intentionally unbounded; the cardinality is
+// bounded by the number of distinct SET column definitions in the catalog
+// (one entry per unique member-list), which is very small in practice.
+// If this ever becomes a concern, swap in an LRU.
 var setDescriptorCache sync.Map
 
 func NormalizeSetValues(values []string) ([]string, error) {

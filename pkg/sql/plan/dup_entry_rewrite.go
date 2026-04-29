@@ -78,6 +78,11 @@ func RewriteHiddenIndexDupEntry(p *plan.Plan, err error) error {
 	}
 
 	if len(uniques) != 1 {
+		// TODO: when multiple unique indexes exist, extract the duplicated
+		// value from the error and match it against each index's declared
+		// column type so we can pick the right key name. For now we
+		// deliberately keep the raw __mo_index_idx_col message because
+		// misattribution is worse than a leaked internal name.
 		return err
 	}
 	u := uniques[0]
