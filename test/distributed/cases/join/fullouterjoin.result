@@ -199,6 +199,30 @@ null  ¦  4  𝄀
 1  ¦  null  𝄀
 2  ¦  2  𝄀
 3  ¦  3
+select id from u1 inner join u2 using(id) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from (u1 full outer join u2 using(id)) inner join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+select id from (u1 full outer join u2 using(id)) left join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  B  ¦  null  𝄀
+3  ¦  c  ¦  C  ¦  x  𝄀
+4  ¦  null  ¦  D  ¦  y  𝄀
+5  ¦  null  ¦  null  ¦  z
 drop table u1;
 drop table u2;
 drop table u3;

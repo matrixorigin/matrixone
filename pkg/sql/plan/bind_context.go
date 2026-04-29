@@ -283,6 +283,10 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 // If the side has been merged through a prior FULL OUTER JOIN ... USING(col),
 // the operand is COALESCE(arm1.col, arm2.col, ...); otherwise it is just
 // binding.col.
+// buildUsingEqOperand returns the operand for one side of a USING equality.
+// If the side has been merged through a prior FULL OUTER JOIN ... USING(col),
+// the operand is COALESCE(arm1.col, arm2.col, ...); otherwise it is just
+// binding.col.
 func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesceArms []string) (*plan.Expr, error) {
 	if len(coalesceArms) < 2 {
 		colPos := binding.colIdByName[col]
@@ -299,18 +303,6 @@ func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesc
 	args := make([]*plan.Expr, 0, len(coalesceArms))
 	for _, t := range coalesceArms {
 		b := bc.bindingByTable[t]
-		if b == nil {
-			colPos := binding.colIdByName[col]
-			return &plan.Expr{
-				Typ: *binding.types[colPos],
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: binding.tag,
-						ColPos: colPos,
-					},
-				},
-			}, nil
-		}
 		colPos := b.colIdByName[col]
 		args = append(args, &plan.Expr{
 			Typ: *b.types[colPos],
@@ -647,24 +639,15 @@ func makeCoalesceUsingExprFromList(tables []string, col string, lower int64) tre
 }
 
 // buildOuterUsingColRefPlan resolves an unqualified column reference `col`
-// against the bindContext's outer-using coalesce list, returning a plan.Expr
-// whose value follows FULL-OUTER USING coalesce semantics. Returns
-// (nil, nil) if `col` has no coalesce list (caller falls through).
+// against the bindContext's outer-using coalesce list (length must be >= 2),
+// returning a plan.Expr whose value follows FULL-OUTER USING coalesce
+// semantics: COALESCE(arm1.col, arm2.col, ...).
 func (bc *BindContext) buildOuterUsingColRefPlan(ctx context.Context, col string) (*plan.Expr, error) {
 	list := bc.outerUsingCols[col]
-	if len(list) < 2 {
-		return nil, nil
-	}
 	args := make([]*plan.Expr, 0, len(list))
 	for _, t := range list {
 		b := bc.bindingByTable[t]
-		if b == nil {
-			return nil, nil
-		}
-		colPos, ok := b.colIdByName[col]
-		if !ok {
-			return nil, nil
-		}
+		colPos := b.colIdByName[col]
 		args = append(args, &plan.Expr{
 			Typ: *b.types[colPos],
 			Expr: &plan.Expr_Col{

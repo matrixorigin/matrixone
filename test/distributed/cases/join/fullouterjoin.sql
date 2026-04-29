@@ -174,6 +174,25 @@ select u1.id as l_id, u2.id as r_id
   from u1 full outer join u2 using(id)
   order by l_id, r_id;
 
+-- INNER JOIN ... USING(col): merged column resolves to the chosen
+-- (left) side, NOT a coalesce. This exercises the non-OUTER USING path.
+select id from u1 inner join u2 using(id) order by id;
+
+-- Nested: (FOJ ... USING) INNER JOIN ... USING(col). The outer INNER USING
+-- inherits the inner FOJ's coalesce list, so id resolves through the FOJ
+-- arms and the equality predicate compares against u3.id.
+select id from (u1 full outer join u2 using(id)) inner join u3 using(id)
+  order by id;
+
+-- LEFT JOIN ... USING(col) on top of FOJ ... USING preserves the inner
+-- coalesce list on the chosen left side.
+select id from (u1 full outer join u2 using(id)) left join u3 using(id)
+  order by id;
+
+-- Star-expand on nested FOJ-USING: merged column appears once, via coalesce.
+select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+  order by id;
+
 drop table u1;
 drop table u2;
 drop table u3;
