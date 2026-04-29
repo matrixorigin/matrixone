@@ -1696,7 +1696,7 @@ func TestHandleLockConflictLockedLogOnMissingRangeKey(t *testing.T) {
 		func(rt runtime.Runtime) {
 			reuse.RunReuseTests(func() {
 				logger := getLogger("")
-				events := newWaiterEvents(1, nil, nil, nil, logger)
+				events := newWaiterEvents(1, nil, nil, time.Second, nil, logger)
 				defer events.close()
 
 				lt := newLocalLockTable(
