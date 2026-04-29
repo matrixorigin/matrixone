@@ -202,6 +202,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*loopjoin.LoopJoin)
 		op := loopjoin.NewArgument()
 		op.ResultCols = t.ResultCols
+		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
 		op.NonEqCond = t.NonEqCond
 		op.JoinMapTag = t.JoinMapTag
@@ -1515,13 +1516,14 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 	return arg
 }
 
-func constructLoopJoin(node *plan.Node, rightTypes []types.Type, proc *process.Process) *loopjoin.LoopJoin {
+func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *loopjoin.LoopJoin {
 	result := make([]colexec.ResultPos, len(node.ProjectList))
 	for i, expr := range node.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
 	arg.ResultCols = result
+	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
 	arg.JoinType = node.JoinType
