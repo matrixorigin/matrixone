@@ -129,38 +129,58 @@ func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 // INTERVAL +(expr) % n uses the existing expression grammar, while INTERVAL (expr) % n
 // is reduced before the trailing time unit. Normalize only that narrow shape.
 func normalizeIntervalParenthesizedModulo(sql string) string {
-	var out strings.Builder
-	changed := false
+	var out *strings.Builder
 	for i := 0; i < len(sql); {
 		if next := skipSQLLiteralOrComment(sql, i); next > i {
-			out.WriteString(sql[i:next])
+			if out != nil {
+				out.WriteString(sql[i:next])
+			}
 			i = next
 			continue
 		}
 		if !isKeywordAt(sql, i, "interval") {
-			out.WriteByte(sql[i])
+			if out != nil {
+				out.WriteByte(sql[i])
+			}
 			i++
 			continue
 		}
 		afterInterval := i + len("interval")
-		open := skipSpaces(sql, afterInterval)
+		open := skipSpacesAndComments(sql, afterInterval)
 		if open >= len(sql) || sql[open] != '(' {
-			out.WriteString(sql[i:afterInterval])
+			if out != nil {
+				out.WriteString(sql[i:afterInterval])
+			}
 			i = afterInterval
 			continue
 		}
 		close := findMatchingParen(sql, open)
-		if close < 0 || skipSpaces(sql, close+1) >= len(sql) || sql[skipSpaces(sql, close+1)] != '%' {
-			out.WriteString(sql[i:open])
+		if close < 0 {
+			if out != nil {
+				out.WriteString(sql[i:open])
+			}
 			i = open
 			continue
+		}
+		modulo := skipSpacesAndComments(sql, close+1)
+		if modulo >= len(sql) || sql[modulo] != '%' {
+			if out != nil {
+				out.WriteString(sql[i:open])
+			}
+			i = open
+			continue
+		}
+		if out == nil {
+			var builder strings.Builder
+			builder.Grow(len(sql) + 1)
+			builder.WriteString(sql[:i])
+			out = &builder
 		}
 		out.WriteString(sql[i:open])
 		out.WriteByte('+')
 		i = open
-		changed = true
 	}
-	if !changed {
+	if out == nil {
 		return sql
 	}
 	return out.String()
@@ -194,6 +214,23 @@ func skipSpaces(sql string, pos int) int {
 		pos++
 	}
 	return pos
+}
+
+func skipSpacesAndComments(sql string, pos int) int {
+	for {
+		next := skipSpaces(sql, pos)
+		if next >= len(sql) {
+			return next
+		}
+		if skipped := skipSQLLiteralOrComment(sql, next); skipped > next {
+			switch sql[next] {
+			case '#', '/', '-':
+				pos = skipped
+				continue
+			}
+		}
+		return next
+	}
 }
 
 func findMatchingParen(sql string, open int) int {
