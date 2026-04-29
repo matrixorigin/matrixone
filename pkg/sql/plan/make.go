@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -82,6 +83,14 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			NotNullable: true,
 		}
 	} else {
+		// Only retry with Decimal256 when Parse128 failed because the value
+		// overflowed Decimal128's width (message contains "beyond the
+		// range"). For malformed inputs like "abc" or "1.2.3" the 128-bit
+		// error is already the right diagnostic — returning the 256-bit
+		// "beyond the range" message would mislead the user.
+		if !strings.Contains(err.Error(), "beyond the range") {
+			return nil, err
+		}
 		_, scale, err = types.Parse256(v)
 		if err != nil {
 			return nil, err

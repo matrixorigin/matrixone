@@ -120,6 +120,20 @@ func TestMakePlan2DecimalExprWithTypeUsesDecimal256(t *testing.T) {
 	require.Equal(t, int32(0), expr.Typ.Scale)
 }
 
+// TestMakePlan2DecimalExprWithTypeMalformedInputNotRecovered verifies that
+// when Parse128 fails for a non-range reason (e.g. malformed input), we do
+// NOT silently fall through to Parse256 and present its "beyond the range"
+// error to the user. The original Decimal128 "illegal string" error is the
+// right diagnostic.
+func TestMakePlan2DecimalExprWithTypeMalformedInputNotRecovered(t *testing.T) {
+	_, err := makePlan2DecimalExprWithType(context.Background(), "not-a-number")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "illegal string",
+		"malformed decimal literal should surface the parser's illegal-string error, not a Decimal256 range error; got %v", err)
+	require.NotContains(t, err.Error(), "Decimal256",
+		"malformed decimal literal should not have been retried against Decimal256")
+}
+
 func TestDefaultBinderUntypedDecimalLiteralUsesDecimal256(t *testing.T) {
 	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
 	decimal := "123456789012345678901234567890123456789"
