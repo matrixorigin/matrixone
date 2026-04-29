@@ -256,6 +256,7 @@ func runIvfpqSearch[T types.RealNumbers](proc *process.Process, u *ivfpqSearchSt
 
 	rt := vectorindex.RuntimeConfig{
 		Limit:        uint(u.limit),
+		Probe:        uint(u.tblcfg.Nprobe),
 		OrigFuncName: u.tblcfg.OrigFuncName,
 		FilterJSON:   u.predsJSON,
 	}

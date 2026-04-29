@@ -60,7 +60,15 @@ func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 
 	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
 	sp := cuvs.DefaultIvfPqSearchParams()
-	if s.Tblcfg.Nprobe > 0 {
+	// Prefer the per-query Probe from RuntimeConfig (set from session
+	// `probe_limit` by the planner / table function on every call) over
+	// the cached Tblcfg.Nprobe, which only reflects the value that was
+	// in effect when this IvfpqSearch was first inserted into the
+	// VectorIndexCache. UpdateConfig is a no-op on this type, so without
+	// reading rt.Probe here, changes to `probe_limit` would not propagate.
+	if rt.Probe > 0 {
+		sp.NProbes = uint32(rt.Probe)
+	} else if s.Tblcfg.Nprobe > 0 {
 		sp.NProbes = uint32(s.Tblcfg.Nprobe)
 	}
 	var (
