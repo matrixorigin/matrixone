@@ -737,14 +737,12 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			}
 			schema = T_decimal64
 			el, off = decodeDecimal64(b[i+1:])
-			off += 1
 		case decimal128Code:
 			if err = checkBytes(i, 17); err != nil {
 				return nil, 0, err
 			}
 			schema = T_decimal128
 			el, off = decodeDecimal128(b[i+1:])
-			off += 1
 		case stringTypeCode:
 			if err = checkBytes(i, 2); err != nil {
 				return nil, 0, err

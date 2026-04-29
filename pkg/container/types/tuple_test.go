@@ -1134,4 +1134,22 @@ func TestUnpackNthElement(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, T_int64, schema2)
 	require.Equal(t, int64(99), el2)
+
+	// Decimal128 followed by nil (regression: decodeDecimal128 offset was double-counted)
+	packer4 := NewPacker()
+	packer4.EncodeDecimal128(Decimal128{1, 0})
+	packer4.EncodeNull()
+	el3, schema3, err := UnpackNthElement(packer4.GetBuf(), 1)
+	require.NoError(t, err)
+	require.Equal(t, T_any, schema3)
+	require.Nil(t, el3)
+
+	// Decimal64 followed by string
+	packer5 := NewPacker()
+	packer5.EncodeDecimal64(Decimal64(42))
+	packer5.EncodeStringType([]byte("after_decimal"))
+	el4, schema4, err := UnpackNthElement(packer5.GetBuf(), 1)
+	require.NoError(t, err)
+	require.Equal(t, T_varchar, schema4)
+	require.Equal(t, []byte("after_decimal"), el4)
 }
