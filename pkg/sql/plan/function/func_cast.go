@@ -4215,14 +4215,21 @@ func decimal128ToFloat[T constraints.Float](
 			}
 		} else {
 			xStr := v.Format(fromType.Scale)
-			// Parse once at the target precision: for float32 we want the
-			// float32-rounded value, not a widened float64. The old version
-			// re-parsed at bitSize 64 after validating at 32, which threw
-			// away the float32 quantization and gave a slightly different
-			// rounding than a direct float32 conversion would produce.
+			// First parse at the target bitSize to reject values that do not
+			// fit into float32's magnitude range. Then, if bitSize==32, re-parse
+			// at 64 so that floatNumToFixFloat below sees the full-precision
+			// decimal literal when comparing against the (Width,Scale) range.
+			// Without this widening, floatNumToFixFloat gets the float32-
+			// quantized value and a boundary case like cast
+			// decimal(30,3)=999.995 -> float(5,2) would be treated as 999.99
+			// (in-range) instead of 1000 (out-of-range). to.Append(T(result))
+			// still applies the float32 rounding for storage.
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
+			}
+			if bitSize == 32 {
+				result, _ = strconv.ParseFloat(xStr, 64)
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				if err = to.Append(T(result), false); err != nil {
@@ -4257,11 +4264,13 @@ func decimal256ToFloat[T constraints.Float](
 			}
 		} else {
 			xStr := v.Format(fromType.Scale)
-			// Parse once at the target precision — see decimal128ToFloat for
-			// why we do not widen to float64 after a float32 validation.
+			// See decimal128ToFloat for why we re-parse at 64 when bitSize==32.
 			result, err := strconv.ParseFloat(xStr, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
+			}
+			if bitSize == 32 {
+				result, _ = strconv.ParseFloat(xStr, 64)
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				if err = to.Append(T(result), false); err != nil {

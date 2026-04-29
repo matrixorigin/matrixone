@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2283,71 +2282,61 @@ func TestFloatToYearRoundsBeforeRangeCheck(t *testing.T) {
 	require.Equal(t, types.MoYear(0), nullYears[0])
 }
 
-// TestDecimalToFloatSinglePrecisionParse asserts decimal128ToFloat and
-// decimal256ToFloat parse the textual form exactly once at the target float
-// precision. The previous implementation parsed at float32, then re-parsed
-// the same string at float64 and widened — defeating the float32 quantization
-// the caller asked for. We verify by matching the result against a direct
-// strconv.ParseFloat at the matching bitSize.
-func TestDecimalToFloatSinglePrecisionParse(t *testing.T) {
+// TestDecimalToFloatRangeCheckUsesFullPrecision exercises the boundary case
+// where a decimal literal rounds to a float(W,S) range violation only when
+// compared at full precision. 999.995 stored in decimal(30,3) must be
+// rejected when cast to float(5,2) — but if the fixed-range check sees the
+// float32-quantized value (~999.9949951) it will truncate to 999.99 and let
+// it through. This guards the intentional re-parse-at-64 that
+// decimal128ToFloat / decimal256ToFloat do when bitSize==32.
+func TestDecimalToFloatRangeCheckUsesFullPrecision(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 
-	// Use a string whose float32 vs float64 parses differ at the double
-	// level: at float32 precision 3.14159265 rounds to approximately
-	// 3.1415927, at float64 it stays at 3.14159265. Widening a float32
-	// parse back to float64 gives 3.1415927... instead of 3.14159265.
-	str := "3.14159265"
-	wantParsed32, err := strconv.ParseFloat(str, 32)
-	require.NoError(t, err)
-	wantParsed64, err := strconv.ParseFloat(str, 64)
-	require.NoError(t, err)
-	// Sanity: the float32 parse (held in a float64) is not equal to the
-	// float64 parse. Without this the test can't distinguish the old and
-	// new behaviors.
-	require.NotEqual(t, wantParsed32, wantParsed64,
-		"test input should parse to different float64 values at the two precisions")
+	// Custom-Width/Scale float types can't be used at vector allocation time
+	// (PreExtend trips a div-by-zero), so we create the result wrapper with
+	// the default float32 type and override with SetType before the cast.
+	floatTyp := types.Type{Oid: types.T_float32, Width: 5, Scale: 2}
 
-	// decimal128 -> float32
+	// decimal128 -> float32(5,2): 999.995 must raise out-of-range
 	d128Vec := vector.NewVec(types.T_decimal128.ToType())
 	defer d128Vec.Free(mp)
-	d128, err := types.ParseDecimal128(str, 38, 8)
+	d128, err := types.ParseDecimal128("999.995", 30, 3)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendFixedList(d128Vec, []types.Decimal128{d128}, nil, mp))
-	// Override the scale so Format picks up the right number of fractional
-	// digits; the vec Oid must match what the helper expects.
-	d128Vec.SetType(types.Type{Oid: types.T_decimal128, Width: 38, Scale: 8})
+	d128Vec.SetType(types.Type{Oid: types.T_decimal128, Width: 30, Scale: 3})
 
-	f32Result := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
-	defer f32Result.Free()
-	require.NoError(t, f32Result.PreExtendAndReset(1))
-	require.NoError(t, decimal128ToFloat[float32](
+	f32Res := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
+	defer f32Res.Free()
+	require.NoError(t, f32Res.PreExtendAndReset(1))
+	f32Res.GetResultVector().SetType(floatTyp)
+	err = decimal128ToFloat[float32](
 		ctx,
 		vector.GenerateFunctionFixedTypeParameter[types.Decimal128](d128Vec),
-		f32Result, 1, 32))
-	got := vector.MustFixedColNoTypeCheck[float32](f32Result.GetResultVector())[0]
-	require.Equal(t, float32(wantParsed32), got,
-		"decimal128ToFloat(bitSize=32) should match ParseFloat(str, 32); got %v, wantParsed32=%v, wantParsed64=%v",
-		got, wantParsed32, wantParsed64)
+		f32Res, 1, 32)
+	require.Error(t, err, "decimal128(30,3)=999.995 must overflow float(5,2)")
+	require.Contains(t, err.Error(), "999.995",
+		"range-check error should reference the original decimal literal")
 
-	// decimal256 -> float32
+	// decimal256 -> float32(5,2): same guard
 	d256Vec := vector.NewVec(types.T_decimal256.ToType())
 	defer d256Vec.Free(mp)
-	d256, err := types.ParseDecimal256(str, 65, 8)
+	d256, err := types.ParseDecimal256("999.995", 65, 3)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendFixedList(d256Vec, []types.Decimal256{d256}, nil, mp))
-	d256Vec.SetType(types.Type{Oid: types.T_decimal256, Width: 65, Scale: 8})
+	d256Vec.SetType(types.Type{Oid: types.T_decimal256, Width: 65, Scale: 3})
 
-	f32Result2 := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
-	defer f32Result2.Free()
-	require.NoError(t, f32Result2.PreExtendAndReset(1))
-	require.NoError(t, decimal256ToFloat[float32](
+	f32Res2 := vector.NewFunctionResultWrapper(types.T_float32.ToType(), mp).(*vector.FunctionResult[float32])
+	defer f32Res2.Free()
+	require.NoError(t, f32Res2.PreExtendAndReset(1))
+	f32Res2.GetResultVector().SetType(floatTyp)
+	err = decimal256ToFloat[float32](
 		ctx,
 		vector.GenerateFunctionFixedTypeParameter[types.Decimal256](d256Vec),
-		f32Result2, 1, 32))
-	got2 := vector.MustFixedColNoTypeCheck[float32](f32Result2.GetResultVector())[0]
-	require.Equal(t, float32(wantParsed32), got2,
-		"decimal256ToFloat(bitSize=32) should match ParseFloat(str, 32)")
+		f32Res2, 1, 32)
+	require.Error(t, err, "decimal256(65,3)=999.995 must overflow float(5,2)")
+	require.Contains(t, err.Error(), "999.995",
+		"range-check error should reference the original decimal literal")
 }
 
 // TestDecimal256ToOthersRouting sanity-checks the cast-target matrix wired
