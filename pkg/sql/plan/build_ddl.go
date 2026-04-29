@@ -2322,8 +2322,9 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		// This means indexParts only contains the primary key column
 		keyName = catalog.IndexTableIndexColName
 		colDef := &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
+			Name:    keyName,
+			Alg:     plan.CompressType_Lz4,
+			Primary: true,
 			Typ: plan.Type{
 				// don't copy auto increment
 				Id:    colMap[pkeyName].Typ.Id,
@@ -2351,9 +2352,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			idxColType = colMap[indexParts[0]].Typ
 		}
 		colDef := &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  idxColType,
+			Name:    keyName,
+			Alg:     plan.CompressType_Lz4,
+			Primary: true,
+			Typ:     idxColType,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
