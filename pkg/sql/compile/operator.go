@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -752,10 +753,25 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 
 	// When the fuzzy filter target is a hidden unique-index table, report the
 	// user-visible column name (e.g. "a") in the duplicate-entry error instead
-	// of the hidden index column ("__mo_index_idx_col").
+	// of the hidden index column ("__mo_index_idx_col"). For composite unique
+	// indexes we fall back to a "(col1,col2)" tuple because the plan message
+	// does not carry the user-declared index name.
 	displayPkName := pkName
-	if n.Fuzzymessage != nil && len(n.Fuzzymessage.ParentUniqueCols) == 1 {
-		displayPkName = n.Fuzzymessage.ParentUniqueCols[0].Name
+	if n.Fuzzymessage != nil {
+		if len(n.Fuzzymessage.ParentUniqueCols) == 1 {
+			displayPkName = n.Fuzzymessage.ParentUniqueCols[0].Name
+		} else if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
+			names := make([]string, 0, len(n.Fuzzymessage.ParentUniqueCols))
+			for _, c := range n.Fuzzymessage.ParentUniqueCols {
+				if c == nil {
+					continue
+				}
+				names = append(names, catalog.ResolveAlias(c.Name))
+			}
+			if len(names) > 0 {
+				displayPkName = "(" + strings.Join(names, ",") + ")"
+			}
+		}
 	}
 
 	op := fuzzyfilter.NewArgument()

@@ -79,6 +79,19 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 			f.isCompound = true
 			f.tbl = n.Fuzzymessage.ParentTableName
 			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
+			// Build a composite display key like "(col1,col2)" — the plan
+			// message does not carry the user-declared index name, so mirror
+			// what bind_insert.go emits as DedupColName for compound uniques.
+			names := make([]string, 0, len(n.Fuzzymessage.ParentUniqueCols))
+			for _, c := range n.Fuzzymessage.ParentUniqueCols {
+				if c == nil {
+					continue
+				}
+				names = append(names, catalog.ResolveAlias(c.Name))
+			}
+			if len(names) > 0 {
+				f.displayAttr = "(" + strings.Join(names, ",") + ")"
+			}
 		} else {
 			f.col = n.Fuzzymessage.ParentUniqueCols[0]
 			// attr is the hidden __mo_index_idx_col used to run the background

@@ -84,6 +84,38 @@ func TestNewFuzzyCheckAttrFallsBackToPkeyColName(t *testing.T) {
 	require.Equal(t, "id", f.displayAttr)
 }
 
+// TestNewFuzzyCheckCompositeUniqueIndexDisplayAttr verifies that when the
+// hidden unique-index plan node carries a multi-column ParentUniqueCols,
+// displayAttr is set to a "(c1,c2)" tuple so the duplicate-entry error
+// reports a user-recognizable key name instead of __mo_index_idx_col.
+func TestNewFuzzyCheckCompositeUniqueIndexDisplayAttr(t *testing.T) {
+	n := &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Name: "__mo_index_unique_composite",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.IndexTableIndexColName,
+			},
+			Cols: []*plan.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: plan.Type{}},
+			},
+		},
+		Fuzzymessage: &plan.OriginTableMessageForFuzzy{
+			ParentTableName: "t1",
+			ParentUniqueCols: []*plan.ColDef{
+				{Name: "col1", Typ: plan.Type{}},
+				{Name: "col2", Typ: plan.Type{}},
+			},
+		},
+	}
+	f, err := newFuzzyCheck(n)
+	require.NoError(t, err)
+	defer f.release()
+	require.True(t, f.isCompound)
+	require.Equal(t, "(col1,col2)", f.displayAttr,
+		"composite hidden unique must surface a user-visible tuple key, not the internal hidden column")
+}
+
 // TestNewFuzzyCheckCompoundKeyPath covers the compound primary key path —
 // when the hidden PkeyColName is CPrimaryKeyColName, the helper must flip
 // isCompound and populate compoundCols from Pkey.Names.
@@ -230,4 +262,35 @@ func TestConstructFuzzyFilterFallsBackToPkeyColName(t *testing.T) {
 	op := constructFuzzyFilter(n, tableScan, sinkScan)
 	require.NotNil(t, op)
 	require.Equal(t, "id", op.PkName)
+}
+
+// TestConstructFuzzyFilterCompositeParentUniqueCols verifies the composite
+// unique-index path surfaces a "(col1,col2)" tuple as PkName so runtime
+// duplicate errors do not leak __mo_index_idx_col.
+func TestConstructFuzzyFilterCompositeParentUniqueCols(t *testing.T) {
+	idxColType := plan.Type{Id: 27}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "__mo_index_unique_composite",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.IndexTableIndexColName,
+			},
+			Cols: []*plan.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: idxColType},
+			},
+		},
+		Fuzzymessage: &plan.OriginTableMessageForFuzzy{
+			ParentTableName: "t1",
+			ParentUniqueCols: []*plan.ColDef{
+				{Name: "col1", Typ: idxColType},
+				{Name: "col2", Typ: idxColType},
+			},
+		},
+	}
+	tableScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+	sinkScan := &plan.Node{Stats: &plan.Stats{Cost: 100}}
+
+	op := constructFuzzyFilter(n, tableScan, sinkScan)
+	require.NotNil(t, op)
+	require.Equal(t, "(col1,col2)", op.PkName)
 }
