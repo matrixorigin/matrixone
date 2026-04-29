@@ -100,8 +100,14 @@ func ConstructCreateTableSQL(
 		}
 
 		typeStr := FormatColType(col.Typ)
+		// SET and ENUM carry case-sensitive member names in their type string
+		// (e.g. SET('Read','Write')); lower-casing the whole thing would
+		// change the members themselves, which is a correctness bug. Only
+		// lower-case the leading type keyword.
 		if strings.HasPrefix(typeStr, "ENUM") {
 			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		} else if strings.HasPrefix(typeStr, "SET") {
+			typeStr = strings.ToLower(typeStr[:3]) + typeStr[3:]
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
@@ -646,7 +652,11 @@ func formatStr(str string) string {
 	if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
-	return strings.Replace(tmp, "'", "''", -1)
+	// Not a string literal — e.g. a function/expression default like
+	// concat('read',''). Escaping interior quotes here would corrupt the
+	// expression (they are already correctly placed by the producer), so
+	// emit it verbatim (modulo the backtick escaping above).
+	return tmp
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

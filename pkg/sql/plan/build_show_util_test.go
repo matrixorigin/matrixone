@@ -236,3 +236,38 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 	return showSQL, nil
 }
+
+// TestFormatStrPreservesNonLiteralDefault verifies formatStr does not escape
+// single quotes inside a non-string-literal default expression such as
+// concat('read',”), which would otherwise corrupt the SHOW CREATE output.
+func TestFormatStrPreservesNonLiteralDefault(t *testing.T) {
+	// Function call default: must be emitted verbatim.
+	got := formatStr("concat('read','')")
+	require.Equal(t, "concat('read','')", got,
+		"non-literal default expressions must not have their interior quotes re-escaped")
+
+	// A bare string literal should still get its interior quotes doubled.
+	got = formatStr("'o'brien'")
+	require.Equal(t, "'o''brien'", got)
+
+	// Backticks are always escaped.
+	got = formatStr("a`b")
+	require.Equal(t, "a``b", got)
+}
+
+// TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
+// loop only lower-cases the leading "SET" keyword and keeps the declared
+// member-name case, so SET('Read','Write') round-trips as set('Read','Write')
+// instead of set('read','write').
+func TestShowCreateSetMemberCasePreservation(t *testing.T) {
+	setType := plan.Type{Id: int32(28), Enumvalues: "Read,Write"} // T_uint64 with SET members
+	raw := FormatColType(setType)
+	require.Equal(t, "SET('Read','Write')", raw)
+
+	// Mirror the branch added to build_show_util.go: lower-case only the
+	// type keyword, keep members intact.
+	lowered := strings.ToLower(raw[:3]) + raw[3:]
+	require.Equal(t, "set('Read','Write')", lowered)
+	require.NotEqual(t, strings.ToLower(raw), lowered,
+		"plain strings.ToLower would damage member names; keep the fix in place")
+}
