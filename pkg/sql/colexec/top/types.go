@@ -68,9 +68,9 @@ type container struct {
 	spillCmpPoses []int32 // remapped poses for spill mode (0-based into key-only bat)
 
 	// streaming eval state for spill mode
-	orderedRefs  []rowRef // sorted output order, populated once at eval start
-	evalCursor   int      // next row index to output in orderedRefs
-	spillOutBat  *batch.Batch // current chunk output batch, freed on next call
+	orderedRefs []rowRef     // sorted output order, populated once at eval start
+	evalCursor  int          // next row index to output in orderedRefs
+	spillOutBat *batch.Batch // current chunk output batch, freed on next call
 }
 
 type Top struct {
