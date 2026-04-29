@@ -137,7 +137,7 @@ func ScanSnapshotWithCurrentRanges(
 		zap.Int("disk-block-cnt", diskBlockCnt),
 	)
 
-	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	tombstones, err := tbl.collectTombstonesAtSnapshot(ctx, 0, engine.Policy_CollectCommittedTombstones, snapshotTS)
 	if err != nil {
 		return err
 	}
