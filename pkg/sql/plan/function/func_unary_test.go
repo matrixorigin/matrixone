@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -3224,6 +3225,7 @@ func initDateToWeekTestCase() []tcTemp {
 	d12, _ := types.ParseDateCast("2004-01-02")
 	d13, _ := types.ParseDateCast("2004-12-31")
 	d14, _ := types.ParseDateCast("2005-01-01")
+	d15, _ := types.ParseDateCast("2000-01-01")
 
 	d21, _ := types.ParseDateCast("2001-02-16")
 	d22, _ := types.ParseDateCast("2012-06-18")
@@ -3240,6 +3242,17 @@ func initDateToWeekTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test date to week - legacy default",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d15},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{52},
+				[]bool{false}),
 		},
 		{
 			info: "test date to week - normal",
@@ -3278,11 +3291,87 @@ func TestDateToWeek(t *testing.T) {
 	}
 }
 
+func TestDateToWeekUsesModePerRow(t *testing.T) {
+	dates := make([]types.Date, 5)
+	for i, value := range []string{"2003-12-30", "2003-12-30", "2003-12-30", "1999-01-03", "1999-01-03"} {
+		var err error
+		dates[i], err = types.ParseDateCast(value)
+		require.NoError(t, err)
+	}
+	modes := []int64{0, 1, 4, 8, -1}
+	expected := make([]uint8, len(dates))
+	for i, date := range dates {
+		expected[i] = uint8(date.Week(int(modes[i])))
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, []bool{false, false, false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, expected, []bool{false, false, false, false, false}),
+		DateToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.NotEqual(t, expected[0], expected[1])
+	require.NotEqual(t, expected[3], expected[4])
+}
+
+func TestDateToWeekReturnsNullForNullMode(t *testing.T) {
+	dates := make([]types.Date, 2)
+	for i, value := range []string{"2003-12-30", "2003-12-30"} {
+		var err error
+		dates[i], err = types.ParseDateCast(value)
+		require.NoError(t, err)
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(dates[0].Week(0)), 0}, []bool{false, true}),
+		DateToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestDateToWeekSelectListRowsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	dates := make([]types.Date, 2)
+	for i, value := range []string{"2003-12-30", "2003-12-30"} {
+		var err error
+		dates[i], err = types.ParseDateCast(value)
+		require.NoError(t, err)
+	}
+
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_date.ToType(), dates, nil),
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{1, 1}, nil),
+	}
+	result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	require.NoError(t, DateToWeek(ivecs, result, proc, 2, selectList))
+
+	resultVec := result.GetResultVector()
+	values := vector.GenerateFunctionFixedTypeParameter[uint8](resultVec)
+	value, isNull := values.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, uint8(dates[0].Week(1)), value)
+	require.True(t, resultVec.GetNulls().Contains(1))
+}
+
 func initDateTimeToWeekTestCase() []tcTemp {
 	d11, _ := types.ParseDatetime("2003-12-30 13:11:10", 6)
 	d12, _ := types.ParseDatetime("2004-01-02 19:22:10", 6)
 	d13, _ := types.ParseDatetime("2004-12-31 00:00:00", 6)
 	d14, _ := types.ParseDatetime("2005-01-01 04:05:06", 6)
+	d15, _ := types.ParseDatetime("2000-01-01 00:00:00", 6)
 
 	d21, _ := types.ParseDatetime("2001-02-16 13:11:10", 6)
 	d22, _ := types.ParseDatetime("2012-06-18 19:22:10", 6)
@@ -3299,6 +3388,17 @@ func initDateTimeToWeekTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test datetime to week - legacy default",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d15},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{52},
+				[]bool{false}),
 		},
 		{
 			info: "test datetime to week - normal",
@@ -3319,7 +3419,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1},
+				[]uint8{52},
 				[]bool{true}),
 		},
 	}
@@ -3335,6 +3435,155 @@ func TestDateTimeToWeek(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+}
+
+func TestDatetimeToWeekUsesModePerRow(t *testing.T) {
+	datetimes := make([]types.Datetime, 3)
+	for i, value := range []string{"2003-12-30 13:11:10", "2003-12-30 13:11:10", "2003-12-30 13:11:10"} {
+		var err error
+		datetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+	modes := []int64{0, 1, 4}
+	expected := make([]uint8, len(datetimes))
+	for i, dt := range datetimes {
+		expected[i] = uint8(dt.ToDate().Week(int(modes[i])))
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), datetimes, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, expected, []bool{false, false, false}),
+		DatetimeToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.NotEqual(t, expected[0], expected[1])
+}
+
+func TestDatetimeToWeekReturnsNullForNullMode(t *testing.T) {
+	datetimes := make([]types.Datetime, 2)
+	for i, value := range []string{"2003-12-30 13:11:10", "2003-12-30 13:11:10"} {
+		var err error
+		datetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+
+	tc := NewFunctionTestCase(
+		testutil.NewProcess(t),
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), datetimes, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(datetimes[0].ToDate().Week(0)), 0}, []bool{false, true}),
+		DatetimeToWeek,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestDatetimeToWeekSelectListRowsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	datetimes := make([]types.Datetime, 2)
+	for i, value := range []string{"2003-12-30 13:11:10", "2003-12-30 13:11:10"} {
+		var err error
+		datetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+
+	ivecs := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_datetime.ToType(), datetimes, nil),
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{1, 1}, nil),
+	}
+	result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(2))
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	require.NoError(t, DatetimeToWeek(ivecs, result, proc, 2, selectList))
+
+	resultVec := result.GetResultVector()
+	values := vector.GenerateFunctionFixedTypeParameter[uint8](resultVec)
+	value, isNull := values.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, uint8(datetimes[0].ToDate().Week(1)), value)
+	require.True(t, resultVec.GetNulls().Contains(1))
+}
+
+func TestWeekRegisteredOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	date, err := types.ParseDateCast("2003-12-30")
+	require.NoError(t, err)
+	dt, err := types.ParseDatetime("2003-12-30 13:11:10", 6)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		args     []types.Type
+		inputs   []FunctionTestInput
+		expected uint8
+	}{
+		{
+			name: "date",
+			args: []types.Type{types.T_date.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			},
+			expected: uint8(date.WeekOfYear2()),
+		},
+		{
+			name: "date with mode",
+			args: []types.Type{types.T_date.ToType(), types.T_int64.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expected: uint8(date.Week(1)),
+		},
+		{
+			name: "datetime",
+			args: []types.Type{types.T_datetime.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt}, []bool{false}),
+			},
+			expected: uint8(dt.ToDate().WeekOfYear2()),
+		},
+		{
+			name: "datetime with mode",
+			args: []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			expected: uint8(dt.ToDate().Week(1)),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, "week", tc.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(WEEK), fn.fid)
+			require.Equal(t, types.T_uint8, fn.retType.Oid)
+
+			ov, err := GetFunctionById(proc.Ctx, EncodeOverloadID(fn.fid, fn.overloadId))
+			require.NoError(t, err)
+			exec, _, execFree := ov.GetExecuteMethod()
+			if execFree != nil {
+				defer func() { require.NoError(t, execFree()) }()
+			}
+
+			fcTC := NewFunctionTestCase(
+				proc,
+				tc.inputs,
+				NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{tc.expected}, []bool{false}),
+				fEvalFn(exec),
+			)
+			ok, info := fcTC.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 // Week day
