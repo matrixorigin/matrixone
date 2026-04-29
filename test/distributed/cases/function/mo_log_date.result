@@ -60,34 +60,34 @@ mo_log_date(2022-12-{})
 null
 select mo_log_date('2021/01/01') between '2021-01-01' and '2021-01-02' as val;
 val
-true
+1
 select mo_log_date('1998/01/01') between '2021-01-01' and '2021-01-02' as val;
 val
-false
+0
 select mo_log_date('1999/01/13') between '1970-01-01' and '2020-12-13' as val;
 val
-true
+1
 select mo_log_date('2023/1/13') between '2023-01-13' and '2023-12-13' as val;
 val
-true
+1
 select mo_log_date('2023/11/9') between '2023-1-9' and '2025-12-19' as val;
 val
-true
+1
 select mo_log_date('2023/01/03') > '2023-01-01' as val;
 val
-true
+1
 select mo_log_date('1997/12/12') < '2023-12-12' as val;
 val
-true
+1
 select mo_log_date('1995/12/30') > '1996-12-30' as val;
 val
-false
+0
 select mo_log_date('2001/05/06') < '1997-07-03' as val;
 val
-false
+0
 select mo_log_date('2020/01/06') > '2020-01-05' and mo_log_date('2020/01/06') < '2021-01-05';
 mo_log_date(2020/01/06) > 2020-01-05 and mo_log_date(2020/01/06) < 2021-01-05
-true
+1
 select mo_log_date('2021-01-13') between '2020-01-13' and '2022-11-12';
 mo_log_date(2021-01-13) between 2020-01-13 and 2022-11-12
 null

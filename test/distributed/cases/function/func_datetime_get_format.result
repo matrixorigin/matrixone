@@ -12,4 +12,4 @@ select get_format(timestamp, 'JIS') q4;
 null
 select get_format(date, 'BAD') is null q5;
 ➤ q5[12,4,0]  𝄀
-true
+1

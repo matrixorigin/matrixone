@@ -14,5 +14,5 @@ user    VARCHAR(1024)    NO        null
 type    VARCHAR(1024)    NO        null        
 select count(1) >= 0 as checked from system.sql_statement_hotspot;
 checked
-true
+1
 drop account `sql_statement_hotspot`;
