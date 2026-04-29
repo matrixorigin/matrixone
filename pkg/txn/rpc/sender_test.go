@@ -40,6 +40,32 @@ var (
 	testTN5Addr = "unix:///tmp/test-dn5.sock"
 )
 
+type backendRetryErrorClient struct {
+	sendErr   error
+	sendCalls atomic.Int32
+}
+
+func (c *backendRetryErrorClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	c.sendCalls.Add(1)
+	return nil, c.sendErr
+}
+
+func (c *backendRetryErrorClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
+	return nil, c.sendErr
+}
+
+func (c *backendRetryErrorClient) Ping(ctx context.Context, backend string) error {
+	return nil
+}
+
+func (c *backendRetryErrorClient) Close() error {
+	return nil
+}
+
+func (c *backendRetryErrorClient) CloseBackend() error {
+	return nil
+}
+
 func TestSendWithSingleRequest(t *testing.T) {
 	s := newTestTxnServer(t, testTN1Addr, nil)
 	defer func() {
@@ -456,8 +482,6 @@ func TestSendStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 }
 
 func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
-	assert.NoError(t, os.RemoveAll(testTN5Addr[7:]))
-
 	oldWait := defaultWaitTimeOnRetryBackendSend
 	oldBudget := defaultMaxWaitTimeOnRetryBackendSend
 	defaultWaitTimeOnRetryBackendSend = 50 * time.Millisecond
@@ -472,8 +496,13 @@ func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 		newTestRuntime(newTestClock(), nil),
 	)
 	assert.NoError(t, err)
+	sender := sd.(*sender)
+	originalClient := sender.client
+	fakeClient := &backendRetryErrorClient{sendErr: moerr.NewBackendClosedNoCtx()}
+	sender.client = fakeClient
 	defer func() {
-		assert.NoError(t, sd.Close())
+		assert.NoError(t, originalClient.Close())
+		assert.NoError(t, sender.Close())
 	}()
 
 	req := txn.TxnRequest{
@@ -486,7 +515,6 @@ func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 		},
 	}
 
-	start := time.Now()
 	result, err := sd.Send(context.Background(), []txn.TxnRequest{req})
 	assert.Nil(t, result)
 	assert.Error(t, err)
@@ -494,7 +522,7 @@ func TestSendFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 			moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
-	assert.Less(t, time.Since(start), 2*defaultWaitTimeOnRetryBackendSend)
+	assert.Equal(t, int32(1), fakeClient.sendCalls.Load())
 }
 
 func TestSendWithMultiRequestStopsWhenBackendRetryBudgetExceeded(t *testing.T) {

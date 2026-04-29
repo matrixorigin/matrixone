@@ -62,13 +62,13 @@ type snapshotScanReaderConfig struct {
 // ScanSnapshotWithCurrentRanges reads rows at snapshotTS by reusing the current
 // relation handle and its current-view ranges.
 //
-// Serial path (parallelism ≤ 1): Uses LocalDataSource which reads both
-// in-memory partition-state rows and persisted S3 blocks, ensuring newly
-// created catalog entries that have not been flushed are still visible.
+// Snapshot scan reuses current-view disk ranges, but materializes the latest
+// committed in-memory rows separately so reader fallback does not need to lazily
+// consult historical pState state during scan execution.
 //
-// Parallel path (parallelism > 1): Uses RemoteDataSource for disk blocks
-// only.  In-memory rows are typically flushed for the large tables that
-// trigger parallelism.
+// Serial path uses a hybrid source that emits committed in-memory rows first,
+// then reads persisted blocks through RemoteDataSource. Parallel path emits the
+// same committed in-memory rows once, then scans persisted shards concurrently.
 func ScanSnapshotWithCurrentRanges(
 	ctx context.Context,
 	caller string,
@@ -113,6 +113,7 @@ func ScanSnapshotWithCurrentRanges(
 	if err != nil {
 		return err
 	}
+	currentTS := types.TimestampToTS(tbl.db.op.SnapshotTS())
 
 	// Strip the EmptyBlockInfo marker that Ranges() may prepend.
 	if relData != nil && relData.DataCnt() > 0 {
@@ -137,7 +138,7 @@ func ScanSnapshotWithCurrentRanges(
 		zap.Int("disk-block-cnt", diskBlockCnt),
 	)
 
-	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectCommittedTombstones)
 	if err != nil {
 		return err
 	}
@@ -157,12 +158,27 @@ func ScanSnapshotWithCurrentRanges(
 	}
 
 	actualParallelism := normalizeSnapshotScanParallelism(relData, scanParallelism)
+	// Attach tombstones BEFORE splitting: BlockListRelData.DataSlice copies
+	// the parent's tombstones pointer at split time, so shards created from a
+	// relData without tombstones would later read GetTombstones()==nil even if
+	// we attached to the parent afterwards. That would silently skip tombstone
+	// filtering in the parallel snapshot scan and surface deleted rows.
+	if relData != nil && relData.DataCnt() > 0 {
+		if err = relData.AttachTombstones(tombstones); err != nil {
+			return err
+		}
+	}
 	shards := splitSnapshotScanShards(relData, actualParallelism)
 
 	if len(shards) > 1 {
-		// Parallel path: disk-only via RemoteDataSource.
-		if err = relData.AttachTombstones(tombstones); err != nil {
+		if err = scanSnapshotCommittedInMem(
+			ctx, eng.fs, pState, currentTS, snapshotTS, tombstones,
+			readerCfg, mp, onBatch,
+		); err != nil {
 			return err
+		}
+		if relData == nil || relData.DataCnt() == 0 {
+			return nil
 		}
 		logutil.Info(
 			"SnapshotScan-Parallel-Start",
@@ -196,10 +212,9 @@ func ScanSnapshotWithCurrentRanges(
 		return nil
 	}
 
-	// Serial path: LocalDataSource reads in-memory rows + disk blocks.
-	return scanSnapshotShardLocal(
-		ctx, eng.fs, tbl, pState, tombstones,
-		snapshotTS, relData, readerCfg, mp, onBatch,
+	return scanSnapshotShardWithCommittedInMem(
+		ctx, eng.fs, pState, currentTS, snapshotTS, relData, tombstones,
+		readerCfg, mp, onBatch,
 	)
 }
 
@@ -351,41 +366,43 @@ func scanSnapshotShard(
 	return readSnapshotWithSource(ctx, fs, source, snapshotTS, cfg, mp, onBatch)
 }
 
-// scanSnapshotShardLocal uses LocalDataSource to read both in-memory
-// partition-state rows and persisted S3 blocks in a single serial pass.
-// The snapshotTS overrides the transaction's own snapshot so the reader
-// applies the correct visibility window.
-func scanSnapshotShardLocal(
+func scanSnapshotCommittedInMem(
 	ctx context.Context,
 	fs fileservice.FileService,
-	tbl *txnTable,
 	pState *logtailreplay.PartitionState,
-	tombstones engine.Tombstoner,
+	currentTS types.TS,
 	snapshotTS types.TS,
-	relData engine.RelData,
+	tombstones engine.Tombstoner,
 	cfg snapshotScanReaderConfig,
 	mp *mpool.MPool,
 	onBatch func(*batch.Batch) error,
 ) error {
-	var rangesSlice objectio.BlockInfoSlice
-	if relData != nil {
-		rangesSlice = relData.GetBlockInfoSlice()
-	}
-
-	source, err := NewLocalDataSource(
-		ctx, tbl,
-		0, // txnOffset: committed data only
-		pState,
-		rangesSlice,
-		tombstones,
-		false, // skipReadMem: include in-memory rows
-		0,     // tombstonePolicy: apply all
-		engine.ShardingRemoteDataSource,
+	source := newMaterializedSnapshotDataSource(
+		ctx, fs, pState, currentTS, snapshotTS, nil, tombstones,
 	)
-	if err != nil {
-		return err
+	return readSnapshotWithSource(ctx, fs, source, snapshotTS, cfg, mp, onBatch)
+}
+
+func scanSnapshotShardWithCommittedInMem(
+	ctx context.Context,
+	fs fileservice.FileService,
+	pState *logtailreplay.PartitionState,
+	currentTS types.TS,
+	snapshotTS types.TS,
+	relData engine.RelData,
+	tombstones engine.Tombstoner,
+	cfg snapshotScanReaderConfig,
+	mp *mpool.MPool,
+	onBatch func(*batch.Batch) error,
+) error {
+	if relData != nil && relData.DataCnt() > 0 {
+		if err := relData.AttachTombstones(tombstones); err != nil {
+			return err
+		}
 	}
-	source.snapshotTS = snapshotTS
+	source := newMaterializedSnapshotDataSource(
+		ctx, fs, pState, currentTS, snapshotTS, relData, tombstones,
+	)
 	return readSnapshotWithSource(ctx, fs, source, snapshotTS, cfg, mp, onBatch)
 }
 
