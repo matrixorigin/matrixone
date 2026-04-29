@@ -15,6 +15,7 @@
 package loopjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +33,7 @@ var _ vm.Operator = new(LoopJoin)
 const (
 	Build = iota
 	Probe
+	Finalize
 	End
 )
 
@@ -45,10 +47,21 @@ type container struct {
 	expr     colexec.ExpressionExecutor
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 	mp       *message.JoinMap
+
+	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
+	// all build rows; bit i is set when build row i matched at least one
+	// probe row. rightBatchOffset[k] is the flat index of build batch k's
+	// first row. After probe drains, Negate() makes set bits = unmatched
+	// build rows; finalize() walks the iterator to emit them.
+	rightRowsMatched *bitmap.Bitmap
+	rightBatchOffset []uint64
+	rightMatchedIter bitmap.Iterator
+	rightMatchedBat  int // monotonically advancing batIdx during finalize
 }
 
 type LoopJoin struct {
 	ctr        container
+	LeftTypes  []types.Type
 	RightTypes []types.Type
 	NonEqCond  *plan.Expr
 	ResultCols []colexec.ResultPos
@@ -97,6 +110,10 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.inBat = nil
+	ctr.rightRowsMatched = nil
+	ctr.rightBatchOffset = nil
+	ctr.rightMatchedIter = nil
+	ctr.rightMatchedBat = 0
 }
 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -6,13 +6,14 @@ package plan
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
+	io "io"
+	math "math"
+	math_bits "math/bits"
+
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	io "io"
-	math "math"
-	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
