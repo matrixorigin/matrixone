@@ -271,7 +271,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
-		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s",
+		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s AND `kind` = 'user' AND `pitr_name` not like '__mo_data_branch_pitr_%%'",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -286,6 +286,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	if err = c.cleanupDataBranchInternalPitrsAfterDDL(); err != nil {
+		return err
 	}
 
 	// 5.unregister iscp jobs
@@ -1851,6 +1855,250 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 	)
 }
 
+const (
+	dataBranchInternalPitrNamePrefix     = "__mo_data_branch_pitr"
+	dataBranchInternalTablePitrPrefix    = dataBranchInternalPitrNamePrefix + "_table_"
+	dataBranchInternalDatabasePitrPrefix = dataBranchInternalPitrNamePrefix + "_database_"
+	dataBranchInternalPitrKind           = "internal"
+	dataBranchSysMoCatalogPitrName       = "sys_mo_catalog_pitr"
+)
+
+type dataBranchTablePitrForCleanup struct {
+	accountID uint64
+	tableID   uint64
+}
+
+type dataBranchDatabasePitrForCleanup struct {
+	accountID  uint64
+	databaseID uint64
+	database   string
+	createTime int64
+}
+
+func (c *Compile) cleanupDataBranchInternalPitrsAfterDDL() error {
+	if err := c.cleanupDataBranchTablePitrsAfterDDL(); err != nil {
+		return err
+	}
+	if err := c.cleanupDataBranchDatabasePitrsAfterDDL(); err != nil {
+		return err
+	}
+	return c.cleanupDataBranchMoCatalogPitrAfterDDL()
+}
+
+func (c *Compile) cleanupDataBranchTablePitrsAfterDDL() error {
+	pitrs, err := c.getDataBranchTablePitrsForCleanup()
+	if err != nil {
+		return err
+	}
+	for _, pitr := range pitrs {
+		if err = c.cleanupDataBranchTablePitrAfterDDL(pitr.accountID, pitr.tableID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) getDataBranchTablePitrsForCleanup() ([]dataBranchTablePitrForCleanup, error) {
+	sql := fmt.Sprintf(
+		"select create_account, obj_id from mo_catalog.mo_pitr where (kind = '%s' or pitr_name like '%s_%%') and level = '%s' and pitr_name like '%s%%'",
+		dataBranchInternalPitrKind,
+		dataBranchInternalPitrNamePrefix,
+		tree.PITRLEVELTABLE.String(),
+		dataBranchInternalTablePitrPrefix,
+	)
+	rs, err := c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	pitrs := make([]dataBranchTablePitrForCleanup, 0)
+	rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		accountIDs := executor.GetFixedRows[uint64](cols[0])
+		tableIDs := executor.GetFixedRows[uint64](cols[1])
+		for i := range accountIDs {
+			pitrs = append(pitrs, dataBranchTablePitrForCleanup{
+				accountID: accountIDs[i],
+				tableID:   tableIDs[i],
+			})
+		}
+		return true
+	})
+	return pitrs, nil
+}
+
+func (c *Compile) cleanupDataBranchTablePitrAfterDDL(accountID uint64, tableID uint64) error {
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_pitr where create_account = %d and pitr_name = '%s%d' and (kind = '%s' or pitr_name like '%s_%%') and not exists (select 1 from mo_catalog.mo_branch_metadata where table_deleted = false and (table_id = %d or p_table_id = %d))",
+		accountID,
+		dataBranchInternalTablePitrPrefix,
+		tableID,
+		dataBranchInternalPitrKind,
+		dataBranchInternalPitrNamePrefix,
+		tableID,
+		tableID,
+	)
+	return c.runSqlWithSystemTenant(sql)
+}
+
+func (c *Compile) cleanupDataBranchDatabasePitrsAfterDDL() error {
+	pitrs, err := c.getDataBranchDatabasePitrsForCleanup()
+	if err != nil {
+		return err
+	}
+	for _, pitr := range pitrs {
+		tableIDs, err := c.dataBranchDatabaseTableIDsAt(pitr.accountID, pitr.database, pitr.createTime)
+		if err != nil {
+			return err
+		}
+		if err = c.cleanupDataBranchDatabasePitrAfterDDL(pitr.accountID, pitr.databaseID, tableIDs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compile) getDataBranchDatabasePitrsForCleanup() ([]dataBranchDatabasePitrForCleanup, error) {
+	sql := fmt.Sprintf(
+		"select create_account, obj_id, database_name, create_time from mo_catalog.mo_pitr where (kind = '%s' or pitr_name like '%s_%%') and level = '%s' and pitr_name like '%s%%'",
+		dataBranchInternalPitrKind,
+		dataBranchInternalPitrNamePrefix,
+		tree.PITRLEVELDATABASE.String(),
+		dataBranchInternalDatabasePitrPrefix,
+	)
+	rs, err := c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	pitrs := make([]dataBranchDatabasePitrForCleanup, 0)
+	rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		accountIDs := executor.GetFixedRows[uint64](cols[0])
+		databaseIDs := executor.GetFixedRows[uint64](cols[1])
+		createTimes := executor.GetFixedRows[int64](cols[3])
+		for i := range accountIDs {
+			pitrs = append(pitrs, dataBranchDatabasePitrForCleanup{
+				accountID:  accountIDs[i],
+				databaseID: databaseIDs[i],
+				database:   cols[2].GetStringAt(i),
+				createTime: createTimes[i],
+			})
+		}
+		return true
+	})
+	return pitrs, nil
+}
+
+func (c *Compile) cleanupDataBranchDatabasePitrAfterDDL(accountID uint64, databaseID uint64, tableIDs []uint64) error {
+	if len(tableIDs) > 0 {
+		hasRef, err := c.dataBranchTablesHaveActiveReference(tableIDs)
+		if err != nil {
+			return err
+		}
+		if hasRef {
+			return nil
+		}
+	}
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_pitr where create_account = %d and pitr_name = '%s%d' and (kind = '%s' or pitr_name like '%s_%%')",
+		accountID,
+		dataBranchInternalDatabasePitrPrefix,
+		databaseID,
+		dataBranchInternalPitrKind,
+		dataBranchInternalPitrNamePrefix,
+	)
+	return c.runSqlWithSystemTenant(sql)
+}
+
+func (c *Compile) dataBranchDatabaseTableIDsAt(accountID uint64, databaseName string, ts int64) ([]uint64, error) {
+	sql := fmt.Sprintf(
+		"select rel_id from mo_catalog.mo_tables {MO_TS = %d} where account_id = %d and reldatabase = %s",
+		ts,
+		accountID,
+		quoteCompileSQLStringLiteral(databaseName),
+	)
+	rs, err := c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	tableIDs := make([]uint64, 0)
+	rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
+		return true
+	})
+	return tableIDs, nil
+}
+
+func (c *Compile) dataBranchTablesHaveActiveReference(tableIDs []uint64) (bool, error) {
+	if len(tableIDs) == 0 {
+		return false, nil
+	}
+	const batchSize = 512
+	for start := 0; start < len(tableIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(tableIDs) {
+			end = len(tableIDs)
+		}
+		idList := dataBranchUintListSQL(tableIDs[start:end])
+		sql := fmt.Sprintf(
+			"select table_id from mo_catalog.mo_branch_metadata where table_deleted = false and (table_id in (%s) or p_table_id in (%s)) limit 1",
+			idList,
+			idList,
+		)
+		rs, err := c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return false, err
+		}
+		hasRef := false
+		rs.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			hasRef = rows > 0
+			return false
+		})
+		rs.Close()
+		if hasRef {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (c *Compile) cleanupDataBranchMoCatalogPitrAfterDDL() error {
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = 0 and kind = '%s' and not exists (select 1 from mo_catalog.mo_pitr where pitr_name != '%s')",
+		dataBranchSysMoCatalogPitrName,
+		dataBranchInternalPitrKind,
+		dataBranchSysMoCatalogPitrName,
+	)
+	return c.runSqlWithSystemTenant(sql)
+}
+
+func dataBranchUintListSQL(ids []uint64) string {
+	var sqlBuilder strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			sqlBuilder.WriteByte(',')
+		}
+		sqlBuilder.WriteString(strconv.FormatUint(id, 10))
+	}
+	return sqlBuilder.String()
+}
+
+func quoteCompileSQLStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
 func (s *Scope) CreateView(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -3117,7 +3365,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		updatePitrSql := fmt.Sprintf(
-			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d and `kind` = 'user' and `pitr_name` not like '__mo_data_branch_pitr_%%'",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -3155,6 +3403,10 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			)
 			return err
 		}
+	}
+
+	if err = c.cleanupDataBranchInternalPitrsAfterDDL(); err != nil {
+		return err
 	}
 
 	ps := partitionservice.GetService(c.proc.GetService())
@@ -4182,6 +4434,9 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	createPitr := s.Plan.GetDdl().GetCreatePitr()
 	pitrName := createPitr.GetName()
 	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
+	if pitrName == "__mo_data_branch_pitr" || strings.HasPrefix(pitrName, "__mo_data_branch_pitr_") {
+		return moerr.NewInternalError(c.proc.Ctx, "pitr name is reserved")
+	}
 
 	// Get current account info
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
@@ -4374,6 +4629,9 @@ func (s *Scope) DropPitr(c *Compile) error {
 	if pitrName == "" {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "pitr name is empty")
 	}
+	if pitrName == "__mo_data_branch_pitr" || strings.HasPrefix(pitrName, "__mo_data_branch_pitr_") {
+		return moerr.NewInternalError(c.proc.Ctx, "pitr name is reserved")
+	}
 	const sysMoCatalogPitr = "sys_mo_catalog_pitr"
 	const sysAccountId = 0
 
@@ -4384,7 +4642,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user'", pitrName, accountId)
 	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4398,7 +4656,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user'", pitrName, accountId)
 	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4440,7 +4698,7 @@ func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
-	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d"
+	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%'"
 	switch tree.PitrLevel(createPitr.GetLevel()) {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
@@ -4459,7 +4717,7 @@ func getSqlForCheckPitrDup(
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
-	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
+	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%';`, accountId, objId)
 }
 
 func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
@@ -4527,7 +4785,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%' ORDER BY pitr_id", pitrName, accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -5284,7 +5542,7 @@ func (c *Compile) checkPitrGranularity(
 		return err
 	}
 
-	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
+	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d AND pitr_status = 1 AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%'`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
@@ -5319,20 +5577,20 @@ func (c *Compile) checkPitrGranularity(
 		}
 
 		checkDBByName := func(nameLower string) (bool, error) {
-			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
+			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, nameLower, accountId)
 			if ok, err := checkQuery(qDB); err != nil {
 				return false, err
 			} else if ok {
 				return true, nil
 			}
-			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
+			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, nameLower)
 			return checkQuery(qDB2)
 		}
 
 		// 1) account level always checked first for any pattern
-		qAcc := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='account' and account_id = %d`,
+		qAcc := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='account' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
 			catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 		if ok, err := checkQuery(qAcc); err != nil {
 			return err
@@ -5364,7 +5622,7 @@ func (c *Compile) checkPitrGranularity(
 
 		// 3) table level only for table pattern
 		if !isDB {
-			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
+			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, dbNameLower, tblNameLower, accountId)
 			if ok, err := checkQuery(qTbl); err != nil {
 				return err

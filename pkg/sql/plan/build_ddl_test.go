@@ -657,6 +657,19 @@ func TestBuildCreatePitr(t *testing.T) {
 		assert.Contains(t, err.Error(), "pitr name is reserved")
 	})
 
+	t.Run("reserved data branch pitr name", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		stmt := baseStmt()
+		for _, name := range []string{"__mo_data_branch_pitr", "__mo_data_branch_pitr_table_123"} {
+			stmt.Name = tree.Identifier(name)
+			_, err := buildCreatePitr(stmt, ctx)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "pitr name is reserved")
+		}
+	})
+
 	t.Run("database level pitr, database not exist", func(t *testing.T) {
 		ctx := &MockCompilerContext{}
 		ctx.GetAccountNameFunc = func() string { return "sys" }
