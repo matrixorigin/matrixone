@@ -403,8 +403,9 @@ var predefinedFunids = map[int]int{
 	TIMESTAMPADD:    351,
 	SUBTIME:         352,
 	GET_FORMAT:      353,
+	YEARWEEK:        354,
 
-	FUNCTION_END_NUMBER: 354,
+	FUNCTION_END_NUMBER: 355,
 }
 
 func Test_funids(t *testing.T) {

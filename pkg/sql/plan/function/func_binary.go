@@ -5380,17 +5380,9 @@ var validDatetimeUnit = map[string]struct{}{
 func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -5409,10 +5401,17 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			continue
 		}
 
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		year, week := date.YearWeek(mode)
-		// YEARWEEK returns year*100 + week
-		result := int64(year)*100 + int64(week)
-		if err := rs.Append(result, false); err != nil {
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
 			return err
 		}
 	}
@@ -5423,17 +5422,9 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -5452,10 +5443,17 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		year, week := dt.YearWeek(mode)
-		// YEARWEEK returns year*100 + week
-		result := int64(year)*100 + int64(week)
-		if err := rs.Append(result, false); err != nil {
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
 			return err
 		}
 	}
@@ -5470,17 +5468,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	if loc == nil {
 		loc = time.Local
 	}
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -5499,11 +5489,18 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		dt := ts.ToDatetime(loc)
 		year, week := dt.YearWeek(mode)
-		// YEARWEEK returns year*100 + week
-		result := int64(year)*100 + int64(week)
-		if err := rs.Append(result, false); err != nil {
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
 			return err
 		}
 	}
@@ -5515,17 +5512,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	dateParam := vector.GenerateFunctionStrParameter(ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	scale := int32(6) // Use max scale for string inputs
@@ -5548,6 +5537,14 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 		dateStrVal := functionUtil.QuickBytesToStr(dateStr)
 
+		mode, null := getYearWeekMode(modes, i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		// Try to parse as datetime first
 		dt, err := types.ParseDatetime(dateStrVal, scale)
 		if err != nil {
@@ -5562,8 +5559,8 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			}
 			// Use date for YEARWEEK calculation
 			year, week := date.YearWeek(mode)
-			result := int64(year)*100 + int64(week)
-			if err := rs.Append(result, false); err != nil {
+			res := int64(year)*100 + int64(week)
+			if err := rs.Append(res, false); err != nil {
 				return err
 			}
 			continue
@@ -5571,8 +5568,8 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 		// Use datetime for YEARWEEK calculation
 		year, week := dt.YearWeek(mode)
-		result := int64(year)*100 + int64(week)
-		if err := rs.Append(result, false); err != nil {
+		res := int64(year)*100 + int64(week)
+		if err := rs.Append(res, false); err != nil {
 			return err
 		}
 	}
@@ -7579,4 +7576,15 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}
 
 	return nil
+}
+
+func getYearWeekMode(modes vector.FunctionParameterWrapper[int64], row uint64) (int, bool) {
+	if modes == nil {
+		return 0, false
+	}
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0, true
+	}
+	return int(mode & 7), false
 }
