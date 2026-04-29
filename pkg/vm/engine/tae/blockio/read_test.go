@@ -428,6 +428,132 @@ func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {
 	require.Equal(t, []int32{11, 22, 33}, vals)
 }
 
+func TestReadBlockDataSkipsCommitTSFilterWhenSnapshotCoversBlock(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS},
+		-1,
+		false,
+		false,
+		fs,
+	)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	for _, row := range []struct {
+		val int32
+		ts  types.TS
+	}{
+		{val: 11, ts: types.BuildTS(10, 0)},
+		{val: 22, ts: types.BuildTS(11, 0)},
+		{val: 33, ts: types.BuildTS(12, 0)},
+	} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
+	}
+	input.SetRowCount(3)
+
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
+	require.False(t, info.IsAppendable())
+
+	cacheVectors := containers.NewVectors(1)
+	deleteMask, release, err := readBlockData(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_int32.ToType()},
+		-1,
+		&info,
+		nil,
+		types.BuildTS(20, 0),
+		0,
+		cacheVectors,
+		mp,
+		fs,
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	defer release()
+
+	require.False(t, deleteMask.IsValid())
+	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
+	require.Equal(t, []int32{11, 22, 33}, vals)
+}
+
+func TestReadBlockDataDoesNotTreatVisibleTSColumnAsCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, 1},
+		-1,
+		false,
+		false,
+		fs,
+	)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	for _, row := range []struct {
+		val int32
+		ts  types.TS
+	}{
+		{val: 11, ts: types.BuildTS(20, 0)},
+		{val: 22, ts: types.BuildTS(10, 0)},
+		{val: 33, ts: types.BuildTS(30, 0)},
+	} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], row.val, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.ts, false, mp))
+	}
+	input.SetRowCount(3)
+
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	info := blocks[0].GenerateBlockInfo(writer.GetName(), false)
+	require.False(t, info.IsAppendable())
+
+	cacheVectors := containers.NewVectors(1)
+	deleteMask, release, err := readBlockData(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_int32.ToType()},
+		-1,
+		&info,
+		nil,
+		types.BuildTS(15, 0),
+		0,
+		cacheVectors,
+		mp,
+		fs,
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	defer release()
+
+	require.False(t, deleteMask.IsValid())
+	vals := vector.MustFixedColWithTypeCheck[int32](&cacheVectors[0])
+	require.Equal(t, []int32{11, 22, 33}, vals)
+}
+
 func TestReadBlockDataNonAppendableWithoutCommitTS(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
