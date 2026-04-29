@@ -786,7 +786,7 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 		i += off
 	}
 
-	return nil, 0, moerr.NewInternalErrorNoCtxf("index %d out of range", n)
+	return nil, 0, moerr.NewInternalErrorNoCtx("index out of range")
 }
 
 func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
