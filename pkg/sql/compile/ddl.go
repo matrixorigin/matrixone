@@ -1863,6 +1863,12 @@ const (
 	dataBranchSysMoCatalogPitrName       = "sys_mo_catalog_pitr"
 )
 
+func isReservedPitrName(pitrName string) bool {
+	return pitrName == dataBranchSysMoCatalogPitrName ||
+		pitrName == dataBranchInternalPitrNamePrefix ||
+		strings.HasPrefix(pitrName, dataBranchInternalPitrNamePrefix+"_")
+}
+
 type dataBranchTablePitrForCleanup struct {
 	accountID uint64
 	tableID   uint64
@@ -4629,10 +4635,13 @@ func (s *Scope) DropPitr(c *Compile) error {
 	if pitrName == "" {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "pitr name is empty")
 	}
-	if pitrName == "__mo_data_branch_pitr" || strings.HasPrefix(pitrName, "__mo_data_branch_pitr_") {
+	if isReservedPitrName(pitrName) {
+		// Reserved PITRs are maintained internally; IF EXISTS keeps cleanup SQL idempotent.
+		if dropPitr.GetIfExists() {
+			return nil
+		}
 		return moerr.NewInternalError(c.proc.Ctx, "pitr name is reserved")
 	}
-	const sysMoCatalogPitr = "sys_mo_catalog_pitr"
 	const sysAccountId = 0
 
 	// Get current account
@@ -4663,7 +4672,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
-	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
+	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", dataBranchSysMoCatalogPitrName)
 	otherRes, err := c.runSqlWithResultAndOptions(checkOtherSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4671,7 +4680,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	defer otherRes.Close()
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
-		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
+		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", dataBranchSysMoCatalogPitrName, sysAccountId)
 		err = c.runSqlWithAccountIdAndOptions(deleteSysSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
