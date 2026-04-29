@@ -420,14 +420,14 @@ func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 }
 
 func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
-v := &MultiUpdateCtx{
-InsertCols:    ctx.InsertCols,
-DeleteCols:    ctx.DeleteCols,
-PartitionCols: ctx.PartitionCols,
-}
-objRef := *ctx.ObjRef
-def := *ctx.TableDef
-v.ObjRef = &objRef
-v.TableDef = &def
-return v
+	v := &MultiUpdateCtx{
+		InsertCols:    ctx.InsertCols,
+		DeleteCols:    ctx.DeleteCols,
+		PartitionCols: ctx.PartitionCols,
+	}
+	objRef := *ctx.ObjRef
+	def := *ctx.TableDef
+	v.ObjRef = &objRef
+	v.TableDef = &def
+	return v
 }

@@ -3251,4 +3251,3 @@ func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
 	result.vec.ToConst()
 	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
 }
-

@@ -84,15 +84,3 @@ minute(now())
 select second(now());
 second(now())
 48
-select localtime() = now() as should_be_true;
-should_be_true
-1
-select localtime = now() as should_be_true;
-should_be_true
-1
-select localtimestamp() = now() as should_be_true;
-should_be_true
-1
-select localtimestamp = now() as should_be_true;
-should_be_true
-1

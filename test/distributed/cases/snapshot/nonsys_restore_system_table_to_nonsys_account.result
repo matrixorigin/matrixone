@@ -439,7 +439,7 @@ role_account_priv_3    11    1
 role_account_priv_3    12    1
 role_account_priv_3    13    1
 role_account_priv_3    30    0
-restore account acc01{snapshot="grant_sp02"};
+restore account acc01 from snapshot grant_sp02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
