@@ -4604,7 +4604,7 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 
 	case *tree.JoinTableExpr:
 		var err, err0 error
-		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_FULL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport LEFT, RIGHT or OUTER JOIN in recursive CTE: %T", stmt)
 		}
 		c1, err1 := builder.checkRecursiveTable(tbl.Left, name)
@@ -5245,7 +5245,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
 		joinType = plan.Node_RIGHT
-	case tree.JOIN_TYPE_FULL:
+	case tree.JOIN_TYPE_FULL, tree.JOIN_TYPE_NATURAL_FULL:
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
@@ -5316,7 +5316,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
-		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
 				for i, col := range binding.cols {

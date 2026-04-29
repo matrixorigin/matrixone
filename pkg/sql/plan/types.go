@@ -329,6 +329,11 @@ type BindContext struct {
 	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
+	// outerUsingCols maps an unqualified column name to the ordered list of
+	// leaf tables whose values must be COALESCEd to produce the merged value.
+	// Only populated when the column has been merged through at least one
+	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
+	outerUsingCols map[string][]string
 
 	// for join tables
 	bindingTree *BindingTreeNode

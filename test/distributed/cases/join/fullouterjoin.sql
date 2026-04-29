@@ -134,4 +134,67 @@ select e.k as ek, l.k as lk
   from e full outer join l on e.k > l.k
   order by lk;
 
+-- ---------------------------------------------------------------------
+-- 8. FULL OUTER JOIN ... USING(col): merged column must coalesce both
+--    sides (issue #24247). Null-padded rows must surface the value from
+--    the non-padded side.
+-- ---------------------------------------------------------------------
+drop table if exists u1;
+drop table if exists u2;
+drop table if exists u3;
+create table u1(id int, v varchar(4));
+create table u2(id int, v varchar(4));
+create table u3(id int, v varchar(4));
+insert into u1 values (1,'a'),(2,'b'),(3,'c');
+insert into u2 values (2,'B'),(3,'C'),(4,'D');
+insert into u3 values (3,'x'),(4,'y'),(5,'z');
+
+-- Bare USING column is COALESCE(left.id, right.id): never NULL on a row
+-- that exists on either side.
+select id from u1 full outer join u2 using(id) order by id;
+
+-- SELECT * exposes the merged column once and then each side's other cols.
+select * from u1 full outer join u2 using(id) order by id;
+
+-- WHERE on the merged column resolves to coalesce; predicate must hit
+-- right-only and left-only rows.
+select id from u1 full outer join u2 using(id) where id = 4;
+select id from u1 full outer join u2 using(id) where id = 1;
+
+-- GROUP BY / aggregate over the merged column.
+select id, count(*) from u1 full outer join u2 using(id) group by id order by id;
+
+-- Nested FOJ ... USING: inner merged id propagates as coalesce into the
+-- outer USING comparison, so id=4 matches across all three tables once.
+select id from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+  order by id;
+
+-- Qualified column references keep the per-side value (NULL on padded side).
+select u1.id as l_id, u2.id as r_id
+  from u1 full outer join u2 using(id)
+  order by l_id, r_id;
+
+drop table u1;
+drop table u2;
+drop table u3;
+
+-- ---------------------------------------------------------------------
+-- 9. NATURAL FULL [OUTER] JOIN (issue #24250). Grammar must reduce both
+--    `natural full outer join` and `natural full join` to FULL OUTER,
+--    not silently to RIGHT.
+-- ---------------------------------------------------------------------
+drop table if exists n1;
+drop table if exists n2;
+create table n1(id int, v varchar(4));
+create table n2(id int, v varchar(4));
+insert into n1 values (1,'a'),(2,'b');
+insert into n2 values (2,'B'),(3,'C');
+
+select id from n1 natural full outer join n2 order by id;
+select id from n1 natural full join n2 order by id;
+select * from n1 natural full outer join n2 order by id;
+
+drop table n1;
+drop table n2;
+
 drop database fojdb;

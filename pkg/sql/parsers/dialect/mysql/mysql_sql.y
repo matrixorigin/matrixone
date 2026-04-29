@@ -6388,10 +6388,13 @@ natural_join:
     }
 |   NATURAL outer_join
     {
-        if $2 == tree.JOIN_TYPE_LEFT {
+        switch $2 {
+        case tree.JOIN_TYPE_LEFT:
             $$ = tree.JOIN_TYPE_NATURAL_LEFT
-        } else {
+        case tree.JOIN_TYPE_RIGHT:
             $$ = tree.JOIN_TYPE_NATURAL_RIGHT
+        case tree.JOIN_TYPE_FULL:
+            $$ = tree.JOIN_TYPE_NATURAL_FULL
         }
     }
 

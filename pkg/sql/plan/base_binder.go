@@ -344,6 +344,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				if len(b.ctx.outerUsingCols[col]) >= 2 {
+					if expr, err := b.ctx.buildOuterUsingColRefPlan(b.GetContext(), col); err != nil {
+						return nil, err
+					} else if expr != nil {
+						return expr, nil
+					}
+				}
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
