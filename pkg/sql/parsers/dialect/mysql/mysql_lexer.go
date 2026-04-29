@@ -34,6 +34,7 @@ type MySQLParser struct {
 }
 
 func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	sql = normalizeIntervalParenthesizedModulo(sql)
 	p.scanner.setSql(sql)
 	p.lexer.setScanner(&p.scanner, lower)
 
@@ -117,11 +118,204 @@ type Lexer struct {
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
+	sql = normalizeIntervalParenthesizedModulo(sql)
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
 	}
+}
+
+// INTERVAL +(expr) % n uses the existing expression grammar, while INTERVAL (expr) % n
+// is reduced before the trailing time unit. Normalize only that narrow shape.
+func normalizeIntervalParenthesizedModulo(sql string) string {
+	var out *strings.Builder
+	for i := 0; i < len(sql); {
+		if next := skipSQLLiteralOrComment(sql, i); next > i {
+			if out != nil {
+				out.WriteString(sql[i:next])
+			}
+			i = next
+			continue
+		}
+		if !isKeywordAt(sql, i, "interval") {
+			if out != nil {
+				out.WriteByte(sql[i])
+			}
+			i++
+			continue
+		}
+		afterInterval := i + len("interval")
+		open := skipSpacesAndComments(sql, afterInterval)
+		if open >= len(sql) || sql[open] != '(' {
+			if out != nil {
+				out.WriteString(sql[i:afterInterval])
+			}
+			i = afterInterval
+			continue
+		}
+		close := findMatchingParen(sql, open)
+		if close < 0 {
+			if out != nil {
+				out.WriteString(sql[i:open])
+			}
+			i = open
+			continue
+		}
+		modulo := skipSpacesAndComments(sql, close+1)
+		if modulo >= len(sql) || sql[modulo] != '%' {
+			if out != nil {
+				out.WriteString(sql[i:open])
+			}
+			i = open
+			continue
+		}
+		if out == nil {
+			var builder strings.Builder
+			builder.Grow(len(sql) + 1)
+			builder.WriteString(sql[:i])
+			out = &builder
+		}
+		out.WriteString(sql[i:open])
+		out.WriteByte('+')
+		i = open
+	}
+	if out == nil {
+		return sql
+	}
+	return out.String()
+}
+
+func isKeywordAt(sql string, pos int, keyword string) bool {
+	if pos > 0 && isIdentChar(sql[pos-1]) {
+		return false
+	}
+	if pos+len(keyword) > len(sql) {
+		return false
+	}
+	for i := 0; i < len(keyword); i++ {
+		c := sql[pos+i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != keyword[i] {
+			return false
+		}
+	}
+	return pos+len(keyword) == len(sql) || !isIdentChar(sql[pos+len(keyword)])
+}
+
+func isIdentChar(c byte) bool {
+	return c == '_' || c == '$' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+func skipSpaces(sql string, pos int) int {
+	for pos < len(sql) && (sql[pos] == ' ' || sql[pos] == '\t' || sql[pos] == '\n' || sql[pos] == '\r') {
+		pos++
+	}
+	return pos
+}
+
+func skipSpacesAndComments(sql string, pos int) int {
+	for {
+		next := skipSpaces(sql, pos)
+		if next >= len(sql) {
+			return next
+		}
+		if skipped := skipSQLLiteralOrComment(sql, next); skipped > next {
+			switch sql[next] {
+			case '#', '/', '-':
+				pos = skipped
+				continue
+			}
+		}
+		return next
+	}
+}
+
+func findMatchingParen(sql string, open int) int {
+	depth := 0
+	for i := open; i < len(sql); i++ {
+		if next := skipSQLLiteralOrComment(sql, i); next > i {
+			i = next - 1
+			continue
+		}
+		switch sql[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func skipSQLLiteralOrComment(sql string, pos int) int {
+	switch sql[pos] {
+	case '\'', '"':
+		if next := skipQuotedString(sql, pos); next >= 0 {
+			return next + 1
+		}
+	case '`':
+		if next := skipBacktickIdentifier(sql, pos); next >= 0 {
+			return next + 1
+		}
+	case '#':
+		return skipLineComment(sql, pos)
+	case '-':
+		if pos+2 < len(sql) && sql[pos+1] == '-' && (sql[pos+2] == ' ' || sql[pos+2] == '\t' || sql[pos+2] == '\n' || sql[pos+2] == '\r') {
+			return skipLineComment(sql, pos)
+		}
+	case '/':
+		if pos+1 < len(sql) && sql[pos+1] == '*' {
+			if next := strings.Index(sql[pos+2:], "*/"); next >= 0 {
+				return pos + 2 + next + len("*/")
+			}
+			return len(sql)
+		}
+	}
+	return pos
+}
+
+func skipLineComment(sql string, pos int) int {
+	for pos < len(sql) && sql[pos] != '\n' && sql[pos] != '\r' {
+		pos++
+	}
+	return pos
+}
+
+func skipQuotedString(sql string, quote int) int {
+	q := sql[quote]
+	for i := quote + 1; i < len(sql); i++ {
+		if sql[i] == '\\' {
+			i++
+			continue
+		}
+		if sql[i] == q {
+			if i+1 < len(sql) && sql[i+1] == q {
+				i++
+				continue
+			}
+			return i
+		}
+	}
+	return -1
+}
+
+func skipBacktickIdentifier(sql string, quote int) int {
+	for i := quote + 1; i < len(sql); i++ {
+		if sql[i] == '`' {
+			if i+1 < len(sql) && sql[i+1] == '`' {
+				i++
+				continue
+			}
+			return i
+		}
+	}
+	return -1
 }
 
 func (l *Lexer) setScanner(s *Scanner, lower int64) {
