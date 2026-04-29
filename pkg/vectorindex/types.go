@@ -37,6 +37,8 @@ const (
 const (
 	HNSW    = "HNSW"
 	IVFFLAT = "IVFFLAT"
+	IVFPQ   = "IVFPQ"
+	CAGRA   = "CAGRA"
 )
 
 const (
@@ -44,6 +46,33 @@ const (
 	CDC_UPSERT = "U"
 	CDC_DELETE = "D"
 )
+
+type DistributionMode uint16
+
+const (
+	DistributionMode_SINGLE_GPU DistributionMode = iota
+	DistributionMode_SHARDED
+	DistributionMode_REPLICATED
+)
+
+const (
+	DistributionMode_SINGLE_GPU_Str = "single"
+	DistributionMode_SHARDED_Str    = "sharded"
+	DistributionMode_REPLICATED_Str = "replicated"
+)
+
+func ValidDistributionMode(val string) bool {
+	lists := []string{DistributionMode_SINGLE_GPU_Str,
+		DistributionMode_SHARDED_Str,
+		DistributionMode_REPLICATED_Str}
+
+	for _, mode := range lists {
+		if mode == val {
+			return true
+		}
+	}
+	return false
+}
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
 // can use the same IndexTableConfig struct
@@ -72,6 +101,9 @@ type IndexTableConfig struct {
 	LowerBound         float64 `json:"lower_bound"`
 	UpperBoundType     int8    `json:"upper_bound_type"`
 	UpperBound         float64 `json:"upper_bound"`
+
+	// GPU related
+	BatchWindow int64 `json:"batch_window"`
 }
 
 // HNSW specified parameters
@@ -85,9 +117,37 @@ type HnswParam struct {
 
 // IVF specified parameters
 type IvfParam struct {
-	Lists  string `json:"lists"`
-	OpType string `json:"op_type"`
-	Async  string `json:"async"`
+	Lists        string `json:"lists"`
+	OpType       string `json:"op_type"`
+	Async        string `json:"async"`
+	Quantization string `json:"quantization"`
+	Distribution string `json:"distribution_mode"`
+}
+
+// IVF-PQ specified parameters
+type IvfpqParam struct {
+	Lists           string `json:"lists"`
+	M               string `json:"m"`
+	BitsPerCode     string `json:"bits_per_code"`
+	OpType          string `json:"op_type"`
+	Quantization    string `json:"quantization"`
+	Distribution    string `json:"distribution_mode"`
+	IncludedColumns string `json:"included_columns"`
+}
+
+// CAGRA specified parameters
+type CagraParam struct {
+	M                      string `json:"m"`
+	EfConstruction         string `json:"ef_construction"`
+	OpType                 string `json:"op_type"`
+	EfSearch               string `json:"ef_search"`
+	Async                  string `json:"async"`
+	Quantization           string `json:"quantization"`
+	Distribution           string `json:"distribution_mode"`
+	IntermediateGraphDegee string `json:"intermediate_graph_degree"`
+	GraphDegee             string `json:"graph_degree"`
+	ITopkSize              string `json:"itopk_size"`
+	IncludedColumns        string `json:"included_columns"`
 }
 
 type IvfflatIndexConfig struct {
@@ -100,12 +160,53 @@ type IvfflatIndexConfig struct {
 	VectorType int32
 }
 
+type CuvsIvfIndexConfig struct {
+	Lists            uint
+	Metric           uint16
+	InitType         uint16
+	Dimensions       uint
+	Spherical        bool
+	Version          int64
+	VectorType       int32
+	Quantization     uint16
+	DistributionMode uint16
+}
+
+type CuvsCagraIndexConfig struct {
+	IntermediateGraphDegree uint64
+	GraphDegree             uint64
+	ITopkSize               uint64
+	Metric                  uint16
+	Dimensions              uint
+	Version                 int64
+	VectorType              int32
+	Quantization            uint16
+	DistributionMode        uint16
+	IncludedColumns         []string
+}
+
+type CuvsIvfpqIndexConfig struct {
+	Lists                  uint
+	M                      uint
+	BitsPerCode            uint
+	Metric                 uint16
+	Dimensions             uint
+	Quantization           uint16
+	DistributionMode       uint16
+	Version                int64
+	KmeansTrainsetFraction float64
+	IncludedColumns        []string
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
-	Type    string
-	OpType  string
-	Usearch usearch.IndexConfig
-	Ivfflat IvfflatIndexConfig
+	Type      string
+	OpType    string
+	Usearch   usearch.IndexConfig
+	Ivfflat   IvfflatIndexConfig
+	CuvsIvf   CuvsIvfIndexConfig
+	CuvsCagra CuvsCagraIndexConfig
+	CuvsIvfpq CuvsIvfpqIndexConfig
 }
 
 type RuntimeConfig struct {
@@ -114,6 +215,12 @@ type RuntimeConfig struct {
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 	NThreads          uint // Brute Force Index
+
+	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
+	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
+	// Go never parses this payload; it's produced by the SQL layer and
+	// consumed by the C++ eval_filter_bitmap_cpu.
+	FilterJSON string
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

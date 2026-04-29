@@ -2082,6 +2082,10 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_HNSW:
 			indexDef, tableDef, err = buildHnswSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+		case tree.INDEX_TYPE_CAGRA:
+			indexDef, tableDef, err = buildCagraSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+		case tree.INDEX_TYPE_IVFPQ:
+			indexDef, tableDef, err = buildIvfpqSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -3033,6 +3037,587 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 	return indexDefs, tableDefs, nil
 }
 
+// validateIncludeColumns enforces DDL-time rules for INCLUDE columns on GPU
+// vector (CAGRA / IVF-PQ) indexes. The execute-time path in
+// filter_helper_gpu.go validates types lazily, so without this check a bogus
+// CREATE INDEX ... INCLUDE (...) only breaks at the first INSERT. Failing up
+// front gives users a clear, immediate error.
+//
+// Rules:
+//   - each INCLUDE column must exist on the base table
+//   - column type must be one the GPU FilterStore accepts: int32, int64,
+//     float32, float64. VARCHAR is NOT accepted — the executor path expects a
+//     pre-hashed uint64 and the DDL-side hashing pipeline is not wired in
+//     yet, so reject it here until that support lands.
+//   - INCLUDE columns must not duplicate each other or the indexed vector
+//     column.
+//   - INCLUDE must not contain the primary key column. PK predicates are
+//     pushed down automatically via the reserved __mo_pk_host_id virtual
+//     column (pkg/sql/plan/filter_predicate.go), which evaluates against the
+//     index's host_ids array. Listing the PK as an INCLUDE column would
+//     duplicate the PK values in filter_host_ for no benefit — the planner
+//     would route the predicate to host_ids anyway.
+func validateIncludeColumns(ctx CompilerContext,
+	includeCols []*tree.UnresolvedName,
+	colMap map[string]*ColDef,
+	vecColName string,
+	pkeyName string) error {
+	if len(includeCols) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(includeCols))
+	for _, uc := range includeCols {
+		name := uc.ColName()
+		origin := uc.ColNameOrigin()
+		if name == "" {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "INCLUDE column name cannot be empty")
+		}
+		if name == vecColName {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' cannot be the indexed vector column", origin)
+		}
+		if pkeyName != "" && name == pkeyName {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' must not be the primary key; "+
+					"predicates on the pk are pushed down automatically via the "+
+					"__mo_pk_host_id virtual column, so listing it here only "+
+					"duplicates storage", origin)
+		}
+		if _, dup := seen[name]; dup {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"duplicate INCLUDE column '%s'", origin)
+		}
+		seen[name] = struct{}{}
+
+		col, ok := colMap[name]
+		if !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"INCLUDE column '%s' is not exist", origin)
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+			// supported
+		default:
+			return moerr.NewNotSupportedf(ctx.GetContext(),
+				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
+				origin, types.T(col.Typ.Id).String())
+		}
+	}
+	return nil
+}
+
+func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for ivfpq index")
+	}
+
+	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
+	}
+
+	indexParts := make([]string, 1)
+
+	// Validate: only 1 column of VECF32
+	{
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column IVFPQ vector index")
+		}
+
+		name := indexInfo.KeyParts[0].ColName.ColName()
+		indexParts[0] = name
+
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
+		}
+		if colMap[name].Typ.Id != int32(types.T_array_float32) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
+		}
+
+		if len(existedIndexes) > 0 {
+			for _, existedIndex := range existedIndexes {
+				if existedIndex.IndexAlgo == "ivfpq" && existedIndex.Parts[0] == name {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFPQ indexes are not allowed to use the same column")
+				}
+			}
+		}
+	}
+
+	if indexInfo.IndexOption != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	indexDefs := make([]*plan.IndexDef, 2)
+	tableDefs := make([]*TableDef, 2)
+
+	// 1. create ivfpq metadata table
+	{
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Ivfpq_TblType_Metadata,
+			Cols:      make([]*ColDef, 4),
+		}
+
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Metadata_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Metadata_Checksum,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[2] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Metadata_Timestamp,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[3] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Metadata_Filesize,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.Ivfpq_TblCol_Metadata_Index_Id},
+			PkeyColName: catalog.Ivfpq_TblCol_Metadata_Index_Id,
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Ivfpq_TblType_Metadata,
+			},
+		}
+		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+
+	// 2. create ivfpq storage table
+	{
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Ivfpq_TblType_Storage,
+			Cols:      make([]*ColDef, 5),
+		}
+
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Storage, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Storage_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Storage_Chunk_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Storage_Data,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_blob),
+				Width: 65536,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[3] = &ColDef{
+			Name: catalog.Ivfpq_TblCol_Storage_Tag,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
+		tableDefs[1].Cols[4].Primary = true
+
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.Ivfpq_TblCol_Storage_Index_Id,
+				catalog.Ivfpq_TblCol_Storage_Chunk_Id},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: tableDefs[1].Cols[3],
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Ivfpq_TblType_Storage,
+			},
+		}
+		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+	return indexDefs, tableDefs, nil
+}
+
+// buildCagraSecondaryIndexDef will create two internal tables
+//
+// with the following schemas:
+//
+// create __mo_secondary_metadata (
+//
+//	index_id varchar,
+//	checksum varchar,
+//	timestamp int64,
+//	filesize int64,
+//	primary key index_id
+//
+// )
+//
+// create __mo_secondary_index (
+//
+//	index_id varchar,
+//	chunk_id int64,
+// 	data blob,
+//	tag int64,
+//	primary key (index_id, chunk_id)
+// )
+
+func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+
+	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
+	}
+
+	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
+	}
+
+	indexParts := make([]string, 1)
+
+	// 0. Validate: We only support 1 column of VECF32
+	{
+		if len(indexInfo.KeyParts) != 1 {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  CAGRA vector index")
+		}
+
+		name := indexInfo.KeyParts[0].ColName.ColName()
+		indexParts[0] = name
+
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
+		}
+		if colMap[name].Typ.Id != int32(types.T_array_float32) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Cagra only supports VECF32 column types")
+		}
+
+		if len(existedIndexes) > 0 {
+			for _, existedIndex := range existedIndexes {
+				if existedIndex.IndexAlgo == "cagra" && existedIndex.Parts[0] == name {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple CAGRA indexes are not allowed to use the same column")
+				}
+			}
+		}
+
+	}
+
+	if indexInfo.IndexOption != nil {
+		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	indexDefs := make([]*plan.IndexDef, 2)
+	tableDefs := make([]*TableDef, 2)
+
+	// 1. create hnsw `metadata` table
+	{
+		// 1.a tableDef1 init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[0] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Cagra_TblType_Metadata,
+			Cols:      make([]*ColDef, 4),
+		}
+
+		// 1.b indexDef1 init
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key (PK), val
+		tableDefs[0].Cols[0] = &ColDef{
+			Name: catalog.Cagra_TblCol_Metadata_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Primary: true,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[1] = &ColDef{
+			Name: catalog.Cagra_TblCol_Metadata_Checksum,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: types.MaxVarcharLen,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[2] = &ColDef{
+			Name: catalog.Cagra_TblCol_Metadata_Timestamp,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[0].Cols[3] = &ColDef{
+			Name: catalog.Cagra_TblCol_Metadata_Filesize,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		// 1.d PK def
+		tableDefs[0].Pkey = &PrimaryKeyDef{
+			Names:       []string{catalog.Cagra_TblCol_Metadata_Index_Id},
+			PkeyColName: catalog.Cagra_TblCol_Metadata_Index_Id,
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Cagra_TblType_Metadata,
+			},
+		}
+		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+
+	// 2. create cagra storage table
+	// colName := indexInfo.KeyParts[0].ColName.ColName()
+	{
+		// 1.a tableDef1 init
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDefs[1] = &TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Cagra_TblType_Storage,
+			Cols:      make([]*ColDef, 5),
+		}
+
+		// 1.b indexDef1 init
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// 1.c columns: key (PK), val
+		tableDefs[1].Cols[0] = &ColDef{
+			Name: catalog.Cagra_TblCol_Storage_Index_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_varchar),
+				Width: 128,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[1] = &ColDef{
+			Name: catalog.Cagra_TblCol_Storage_Chunk_Id,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[2] = &ColDef{
+			Name: catalog.Cagra_TblCol_Storage_Data,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_blob),
+				Width: 65536,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDefs[1].Cols[3] = &ColDef{
+			Name: catalog.Cagra_TblCol_Storage_Tag,
+			Alg:  plan.CompressType_Lz4,
+			Typ: Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
+		tableDefs[1].Cols[4].Primary = true
+
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.Cagra_TblCol_Storage_Index_Id,
+				catalog.Cagra_TblCol_Storage_Chunk_Id},
+			PkeyColName: catalog.CPrimaryKeyColName,
+			CompPkeyCol: tableDefs[1].Cols[3],
+		}
+
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.Cagra_TblType_Storage,
+			},
+		}
+		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	}
+	return indexDefs, tableDefs, nil
+}
+
 func CreateIndexDef(indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -3076,6 +3661,12 @@ func CreateIndexDef(indexInfo *tree.Index,
 				return nil, err
 			}
 		case catalog.MoIndexHnswAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
+		case catalog.MoIndexCagraAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
+		case catalog.MoIndexIvfpqAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		}
@@ -3171,6 +3762,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				} else if indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsCagraIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if indexdef.TableExist && catalog.IsIvfpqIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}

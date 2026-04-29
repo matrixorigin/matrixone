@@ -1,4 +1,4 @@
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS builder
+FROM nvidia/cuda:13.2.0-cudnn-devel-ubuntu24.04 AS builder
 RUN apt-get update
 RUN apt-get install -y locales
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -8,7 +8,7 @@ RUN export LANG=en_US.utf8
 ARG DEBIAN_FRONTEND=noninteractive
 ENV MOHOME=/matrixone
 ENV PATH="/usr/local/cuda/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${MOHOME}/cgo:${LD_LIBRARY_PATH}"
 
 WORKDIR /matrixone
 COPY . .
@@ -47,11 +47,12 @@ ENV MO_CL_CUDA=1
 RUN make clean && make
 
 # build runtime docker image
-FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.2.0-cudnn-runtime-ubuntu24.04
 
 COPY --from=builder /matrixone/mo-service /mo-service
 COPY --from=builder /matrixone/etc /etc
 COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib
+COPY --from=builder /matrixone/cgo/*.so /usr/local/lib
 COPY --from=builder /root/miniconda/envs/go/lib /root/miniconda/envs/go/lib
 
 ENV PATH="/usr/local/cuda/bin:${PATH}"

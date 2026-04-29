@@ -1268,7 +1268,7 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 	objectio.ForeachBlkInObjStatsList(true, nil,
 		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 			loc := blk.MetaLocation()
-			_, release, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
+			_, release, _, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
 			if err != nil {
 				loadErr = err
 				return false // stop and propagate error

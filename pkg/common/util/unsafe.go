@@ -115,3 +115,7 @@ func UnsafeSizeOf[T any]() uintptr {
 	var zero T
 	return unsafe.Sizeof(zero)
 }
+
+func UnsafeSlice[T any](ptr unsafe.Pointer, len int) []T {
+	return unsafe.Slice((*T)(ptr), len)
+}

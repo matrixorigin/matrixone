@@ -17,31 +17,225 @@
 package brute_force
 
 import (
-	//	"fmt"
+	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	cuvs "github.com/rapidsai/cuvs/go"
-	"github.com/rapidsai/cuvs/go/brute_force"
 )
 
-type GpuBruteForceIndex[T cuvs.TensorNumberType] struct {
-	Resource    *cuvs.Resource // shared resource for read-only index
-	Dataset     *cuvs.Tensor[T]
-	Index       *brute_force.BruteForceIndex
-	Metric      cuvs.Distance
-	Dimension   uint
-	Count       uint
-	ElementSize uint
+// gpuSearchF32Pool pools temporary float32 distance buffers used by Search when
+// converting from the native float32 GPU output to the float64 interface return type.
+var gpuSearchF32Pool = sync.Pool{New: func() any { s := make([]float32, 0); return &s }}
+
+type GpuAdhocBruteForceIndex[T cuvs.VectorType] struct {
+	dataset   []T
+	dimension uint
+	count     uint
+	metric    metric.MetricType
+}
+
+var _ cache.VectorIndexSearchIf = &GpuAdhocBruteForceIndex[float32]{}
+
+func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	// Threshold for switching between CPU and GPU for adhoc search.
+	// For small datasets, CPU (usearch) is much faster due to lower overhead.
+	const cpuThreshold = 5000
+	if len(dataset) < cpuThreshold {
+		return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+
+	switch dset := any(dataset).(type) {
+	case [][]float32:
+		return NewGpuAdhocBruteForceIndex[float32](dset, dimension, m, elemsz)
+	case [][]uint16:
+		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuAdhocBruteForceIndex
+		f16dset := make([][]cuvs.Float16, len(dset))
+		for i, v := range dset {
+			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+		}
+		return NewGpuAdhocBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz)
+	default:
+		return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+	}
+}
+
+func NewAdhocBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
+	count uint,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	const cpuThreshold = 5000
+	if count < cpuThreshold {
+		return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
+	}
+
+	switch dset := any(dataset).(type) {
+	case []float32:
+		return &GpuAdhocBruteForceIndex[float32]{
+			dataset:   dset,
+			dimension: dimension,
+			count:     count,
+			metric:    m,
+		}, nil
+	case []cuvs.Float16:
+		return &GpuAdhocBruteForceIndex[cuvs.Float16]{
+			dataset:   dset,
+			dimension: dimension,
+			count:     count,
+			metric:    m,
+		}, nil
+	default:
+		return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
+	}
+}
+
+func NewGpuAdhocBruteForceIndex[T cuvs.VectorType](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	if len(dataset) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty dataset")
+	}
+
+	dim := int(dimension)
+	reqSize := len(dataset) * dim
+	flattened := make([]T, reqSize)
+
+	for i, v := range dataset {
+		copy(flattened[i*dim:(i+1)*dim], v)
+	}
+
+	return &GpuAdhocBruteForceIndex[T]{
+		dataset:   flattened,
+		dimension: dimension,
+		count:     uint(len(dataset)),
+		metric:    m,
+	}, nil
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	return nil
+}
+
+// SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
+func (idx *GpuAdhocBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	var flattenedQueries []T
+	var nQueries uint64
+
+	switch queries := _queries.(type) {
+	case []T:
+		flattenedQueries = queries
+		nQueries = uint64(len(queries) / int(idx.dimension))
+	case [][]T:
+		if len(queries) == 0 {
+			return nil
+		}
+		dim := int(idx.dimension)
+		reqSize := len(queries) * dim
+		flattenedQueries = make([]T, reqSize)
+		for i, v := range queries {
+			copy(flattenedQueries[i*dim:(i+1)*dim], v)
+		}
+		nQueries = uint64(len(queries))
+	default:
+		return moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+
+	if nQueries == 0 {
+		return nil
+	}
+
+	return cuvs.AdhocBruteForceSearchInto[T](
+		idx.dataset, uint64(idx.count), uint32(idx.dimension),
+		flattenedQueries, nQueries, uint32(rt.Limit),
+		resolveCuvsDistance(idx.metric),
+		outKeys, outDists,
+	)
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
+	var nQueries uint64
+	switch queries := _queries.(type) {
+	case []T:
+		nQueries = uint64(len(queries) / int(idx.dimension))
+	case [][]T:
+		nQueries = uint64(len(queries))
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+	if nQueries == 0 {
+		return nil, nil, nil
+	}
+
+	n := nQueries * uint64(rt.Limit)
+	keys := make([]int64, n)
+
+	f32Ptr := gpuSearchF32Pool.Get().(*[]float32)
+	if uint64(cap(*f32Ptr)) < n {
+		*f32Ptr = make([]float32, n)
+	} else {
+		*f32Ptr = (*f32Ptr)[:n]
+	}
+	defer gpuSearchF32Pool.Put(f32Ptr)
+
+	if err = idx.SearchFloat32(proc, _queries, rt, keys, *f32Ptr); err != nil {
+		return nil, nil, err
+	}
+
+	retdistances = make([]float64, n)
+	for i, d := range *f32Ptr {
+		retdistances[i] = float64(d)
+	}
+	retkeys = keys
+	return
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
+	return nil
+}
+
+func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
+	idx.dataset = nil
+}
+
+type GpuBruteForceIndex[T cuvs.VectorType] struct {
+	index     *cuvs.GpuBruteForce[T]
+	dimension uint
+	count     uint
 }
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
 
-// cuvs library has bug.  comment out the GPU version until cuvs fix the bug
+func resolveCuvsDistance(m metric.MetricType) cuvs.DistanceType {
+	switch m {
+	case metric.Metric_L2sqDistance:
+		return cuvs.L2Expanded
+	case metric.Metric_L2Distance:
+		return cuvs.L2Expanded
+	case metric.Metric_InnerProduct:
+		return cuvs.InnerProduct
+	case metric.Metric_CosineDistance:
+		return cuvs.CosineSimilarity
+	case metric.Metric_L1Distance:
+		return cuvs.L1
+	default:
+		return cuvs.L2Expanded
+	}
+}
+
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
@@ -52,57 +246,131 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
-		return NewCpuBruteForceIndex[float32](dset, dimension, m, elemsz)
-		//return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
+		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
+	case [][]uint16:
+		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuBruteForceIndex
+		f16dset := make([][]cuvs.Float16, len(dset))
+		for i, v := range dset {
+			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+		}
+		return NewGpuBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz, nthread)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
-
 }
 
-func NewGpuBruteForceIndex[T cuvs.TensorNumberType](dataset [][]T,
+func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
 	nthread uint) (cache.VectorIndexSearchIf, error) {
 
-	idx := &GpuBruteForceIndex[T]{}
-	resource, _ := cuvs.NewResource(nil)
-	idx.Resource = &resource
-	tensor, err := cuvs.NewTensor(dataset)
+	if len(dataset) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty dataset")
+	}
+
+	dim := int(dimension)
+	reqSize := len(dataset) * dim
+	var flattened []T
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		allocator := malloc.NewCAllocator()
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*4), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[float32](slice)).([]T)
+	case cuvs.Float16:
+		allocator := malloc.NewCAllocator()
+		slice, deallocator, err := allocator.Allocate(uint64(reqSize*2), malloc.NoClear)
+		if err != nil {
+			return nil, err
+		}
+		defer deallocator.Deallocate()
+		flattened = any(util.UnsafeSliceCast[cuvs.Float16](slice)).([]T)
+	default:
+		ds := make([]T, reqSize)
+		flattened = ds
+	}
+
+	for i, v := range dataset {
+		copy(flattened[i*dim:(i+1)*dim], v)
+	}
+
+	deviceID := cuvs.GetNextGpuDeviceId()
+	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err
 	}
-	idx.Dataset = &tensor
-	idx.Metric = metric.MetricTypeToCuvsMetric[m]
-	idx.Dimension = dimension
-	idx.Count = uint(len(dataset))
 
-	idx.ElementSize = elemsz
-	return idx, nil
-
+	km.Start()
+	return &GpuBruteForceIndex[T]{
+		index:     km,
+		dimension: dimension,
+		count:     uint(len(dataset)),
+	}, nil
 }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
-		return err
+	if idx.index == nil {
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce not initialized")
+	}
+	return idx.index.Build()
+}
+
+// SearchFloat32 implements VectorIndexSearchIf — writes results into caller-provided slices.
+// This is the hot path: no intermediate allocations for the output buffers.
+func (idx *GpuBruteForceIndex[T]) SearchFloat32(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	queriesvec, ok := _queries.([][]T)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+	if len(queriesvec) == 0 {
+		return nil
 	}
 
-	idx.Index, err = brute_force.CreateIndex()
-	if err != nil {
-		return
+	dim := int(idx.dimension)
+	reqSize := len(queriesvec) * dim
+
+	var flattenedQueries []T
+	var queryDeallocator malloc.Deallocator
+
+	var _t T
+	switch any(_t).(type) {
+	case float32:
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*4, malloc.NoClear)
+		if err2 != nil {
+			return err2
+		}
+		queryDeallocator = dealloc
+		f32Slice := util.UnsafeSliceCastToLength[float32](slice, reqSize)
+		flattenedQueries = any(f32Slice).([]T)
+	case cuvs.Float16:
+		allocator := malloc.NewCAllocator()
+		slice, dealloc, err2 := allocator.Allocate(uint64(reqSize)*2, malloc.NoClear)
+		if err2 != nil {
+			return err2
+		}
+		queryDeallocator = dealloc
+		f16Slice := util.UnsafeSliceCastToLength[cuvs.Float16](slice, reqSize)
+		flattenedQueries = any(f16Slice).([]T)
+	default:
+		flattenedQueries = make([]T, reqSize)
 	}
 
-	err = brute_force.BuildIndex[T](*idx.Resource, idx.Dataset, idx.Metric, 0, idx.Index)
-	if err != nil {
-		return
+	for i, v := range queriesvec {
+		copy(flattenedQueries[i*dim:(i+1)*dim], v)
 	}
 
-	if err = idx.Resource.Sync(); err != nil {
-		return
+	if queryDeallocator != nil {
+		defer queryDeallocator.Deallocate()
 	}
 
-	return
+	return idx.index.SearchInto(flattenedQueries, uint64(len(queriesvec)), uint32(idx.dimension), uint32(rt.Limit), outKeys, outDists)
 }
 
 func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
@@ -110,76 +378,28 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
-
-	// local resource for concurrent search
-	resource, err := cuvs.NewResource(nil)
-	if err != nil {
-		return nil, nil, err
+	if len(queriesvec) == 0 {
+		return nil, nil, nil
 	}
-	defer resource.Close()
 
-	queries, err := cuvs.NewTensor(queriesvec)
-	if err != nil {
-		return nil, nil, err
+	n := uint64(len(queriesvec)) * uint64(rt.Limit)
+	keys := make([]int64, n)
+
+	f32Ptr := gpuSearchF32Pool.Get().(*[]float32)
+	if uint64(cap(*f32Ptr)) < n {
+		*f32Ptr = make([]float32, n)
+	} else {
+		*f32Ptr = (*f32Ptr)[:n]
 	}
-	defer queries.Close()
+	defer gpuSearchF32Pool.Put(f32Ptr)
 
-	neighbors, err := cuvs.NewTensorOnDevice[int64](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
-	if err != nil {
-		return nil, nil, err
-	}
-	defer neighbors.Close()
-
-	distances, err := cuvs.NewTensorOnDevice[float32](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
-	if err != nil {
-		return nil, nil, err
-	}
-	defer distances.Close()
-
-	if _, err = queries.ToDevice(&resource); err != nil {
+	if err = idx.SearchFloat32(proc, _queries, rt, keys, *f32Ptr); err != nil {
 		return nil, nil, err
 	}
 
-	err = brute_force.SearchIndex(resource, *idx.Index, &queries, &neighbors, &distances)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if _, err = neighbors.ToHost(&resource); err != nil {
-		return nil, nil, err
-	}
-
-	if _, err = distances.ToHost(&resource); err != nil {
-		return nil, nil, err
-	}
-
-	if err = resource.Sync(); err != nil {
-		return nil, nil, err
-	}
-
-	neighborsSlice, err := neighbors.Slice()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	distancesSlice, err := distances.Slice()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	//fmt.Printf("flattened %v\n", flatten)
-	retdistances = make([]float64, len(distancesSlice)*int(rt.Limit))
-	for i := range distancesSlice {
-		for j, dist := range distancesSlice[i] {
-			retdistances[i*int(rt.Limit)+j] = float64(dist)
-		}
-	}
-
-	keys := make([]int64, len(neighborsSlice)*int(rt.Limit))
-	for i := range neighborsSlice {
-		for j, key := range neighborsSlice[i] {
-			keys[i*int(rt.Limit)+j] = int64(key)
-		}
+	retdistances = make([]float64, n)
+	for i, d := range *f32Ptr {
+		retdistances[i] = float64(d)
 	}
 	retkeys = keys
 	return
@@ -190,13 +410,7 @@ func (idx *GpuBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) er
 }
 
 func (idx *GpuBruteForceIndex[T]) Destroy() {
-	if idx.Dataset != nil {
-		idx.Dataset.Close()
-	}
-	if idx.Resource != nil {
-		idx.Resource.Close()
-	}
-	if idx.Index != nil {
-		idx.Index.Close()
+	if idx.index != nil {
+		idx.index.Destroy()
 	}
 }

@@ -310,7 +310,7 @@ func CopyBlockData(
 		cacheVectors = containers.NewVectors(len(seqnums))
 	)
 
-	if release, err = ioutil.LoadColumns(
+	if release, _, err = ioutil.LoadColumns(
 		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
 	); err != nil {
 		return
@@ -865,7 +865,7 @@ func readBlockData(
 			return
 		}
 
-		release2, err2 = ioutil.LoadColumns(
+		release2, _, err2 = ioutil.LoadColumns(
 			ctx, cols, typs2, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		if err2 != nil {

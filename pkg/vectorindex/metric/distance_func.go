@@ -457,6 +457,7 @@ func ResolveKmeansDistanceFnForDense[T types.RealNumbers](metric MetricType) (Di
 		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_L2sqDistance:
+		// Elkans Kmeans always uses true L2Distance regardless of user metric.
 		distanceFunction = L2Distance[T]
 		normalize = false
 	case Metric_InnerProduct:
@@ -503,12 +504,14 @@ func ResolveKmeansDistanceFnForSparse[T types.RealNumbers](metric MetricType) (D
 }
 
 // ResolveDistanceFn is used for similarity score for search and assign vector to centroids (CENTROIDX JOIN / ProductL2).
-// IMPORTANT: Don't use it for Elkans Kmeans
+// IMPORTANT: Don't use it for Elkans Kmeans.
+// NOTE: Metric_L2Distance returns L2DistanceSq (squared distance). Callers that need true L2
+// must apply sqrt to each result afterwards (as GoPairWiseDistance does).
 func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction[T], error) {
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceSq[T]
+		distanceFunction = L2DistanceSq[T] // caller must sqrt; see function doc above
 	case Metric_L2sqDistance:
 		distanceFunction = L2DistanceSq[T]
 	case Metric_InnerProduct:
@@ -521,4 +524,36 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
 	return distanceFunction, nil
+}
+
+func GoPairWiseDistance[T types.RealNumbers](
+	x [][]T,
+	y [][]T,
+	metric MetricType,
+) ([]float32, error) {
+	distFn, err := ResolveDistanceFn[T](metric)
+	if err != nil {
+		return nil, err
+	}
+
+	nX := len(x)
+	nY := len(y)
+	res := make([]float32, nX*nY)
+	for i := 0; i < nX; i++ {
+		for j := 0; j < nY; j++ {
+			d, err := distFn(x[i], y[j])
+			if err != nil {
+				return nil, err
+			}
+			res[i*nY+j] = float32(d)
+		}
+	}
+
+	if metric == Metric_L2Distance {
+		for i := range res {
+			res[i] = float32(math.Sqrt(float64(res[i])))
+		}
+	}
+
+	return res, nil
 }

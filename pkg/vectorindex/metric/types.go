@@ -52,6 +52,38 @@ const (
 	Metric_TypeCount
 )
 
+type QuantizationType uint16
+
+const (
+	Quantization_F32 QuantizationType = iota
+	Quantization_F16
+	Quantization_INT8
+	Quantization_UINT8
+	Quantization_F64
+)
+
+const (
+	Quantization_F32_Str   = "float32"
+	Quantization_F16_Str   = "float16"
+	Quantization_INT8_Str  = "int8"
+	Quantization_UINT8_Str = "uint8"
+	Quantization_F64_Str   = "float64"
+)
+
+func ValidQuantization(val string) bool {
+	qlists := []string{Quantization_F32_Str,
+		Quantization_F16_Str,
+		Quantization_INT8_Str,
+		Quantization_UINT8_Str}
+
+	for _, q := range qlists {
+		if val == q {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
@@ -104,6 +136,13 @@ var (
 		DistFn_InnerProduct:   Metric_InnerProduct,
 		DistFn_CosineDistance: Metric_CosineDistance,
 		DistFn_L1Distance:     Metric_L1Distance,
+	}
+
+	QuantizationNameToType = map[string]QuantizationType{
+		Quantization_F32_Str:   Quantization_F32,
+		Quantization_F64_Str:   Quantization_F64,
+		Quantization_INT8_Str:  Quantization_INT8,
+		Quantization_UINT8_Str: Quantization_UINT8,
 	}
 )
 

@@ -1436,7 +1436,7 @@ func buildIndexMap(stmt *tree.CreateTable) map[string]*indexInfo {
 				// Extract vector index parameters from IndexOption
 				info.algoParamList = idx.IndexOption.AlgoParamList
 				info.algoParamVectorOpType = idx.IndexOption.AlgoParamVectorOpType
-				info.hnswM = idx.IndexOption.HnswM
+				info.hnswM = idx.IndexOption.AlgoParamM
 				info.hnswEfConstruction = idx.IndexOption.HnswEfConstruction
 			}
 		case *tree.UniqueIndex:

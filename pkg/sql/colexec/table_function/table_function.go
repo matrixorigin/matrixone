@@ -190,6 +190,14 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":
 		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
+	case "cagra_create":
+		tblArg.ctr.state, err = cagraCreatePrepare(proc, tblArg)
+	case "cagra_search":
+		tblArg.ctr.state, err = cagraSearchPrepare(proc, tblArg)
+	case "ivfpq_create":
+		tblArg.ctr.state, err = ivfpqCreatePrepare(proc, tblArg)
+	case "ivfpq_search":
+		tblArg.ctr.state, err = ivfpqSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))

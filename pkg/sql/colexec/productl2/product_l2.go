@@ -221,6 +221,10 @@ var (
 	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
 	pool2DF32 = sync.Pool{New: func() any { x := make([][]float32, 0); return &x }}
 	pool2DF64 = sync.Pool{New: func() any { x := make([][]float64, 0); return &x }}
+
+	// Pooled output buffers for SearchFloat32 in probeRun.
+	bruteForceKeysPool  = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
+	bruteForceDistsPool = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
 )
 
 func get1D[T any](pool *sync.Pool, n int) *[]T {
@@ -365,13 +369,16 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: uint(ncpu)}
 
-	anykeys, distances, err := ctr.brute_force.Search(ctr.sqlproc, probes, rt)
-	if err != nil {
+	keysPtr := get1D[int64](&bruteForceKeysPool, probeCount)
+	distsPtr := get1D[float32](&bruteForceDistsPool, probeCount)
+	defer put1D(&bruteForceKeysPool, keysPtr)
+	defer put1D(&bruteForceDistsPool, distsPtr)
+
+	if err := ctr.brute_force.SearchFloat32(ctr.sqlproc, probes, rt, *keysPtr, *distsPtr); err != nil {
 		return err
 	}
-	_ = distances
 
-	leastClusterIndex := anykeys.([]int64)
+	leastClusterIndex := *keysPtr
 	// BCE Hint
 	if len(leastClusterIndex) != probeCount {
 		return moerr.NewInternalErrorNoCtx("leastClusterIndex size != probeCount")

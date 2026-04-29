@@ -17,8 +17,8 @@
 package device
 
 import (
-	//"fmt"
 	"context"
+	//"fmt"
 	"math/rand/v2"
 	"sync"
 	"testing"
@@ -33,7 +33,7 @@ import (
 )
 
 func TestGpu(t *testing.T) {
-
+	ctx := context.Background()
 	dim := 128
 	dsize := 1024
 	nlist := 128
@@ -48,7 +48,11 @@ func TestGpu(t *testing.T) {
 	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
 	require.NoError(t, err)
 
-	centers, err := c.Cluster(context.Background())
+	defer c.Close()
+
+	c.InitCentroids(ctx)
+
+	centers, err := c.Cluster(ctx)
 	require.NoError(t, err)
 
 	_, ok := centers.([][]float32)
@@ -63,6 +67,7 @@ func TestGpu(t *testing.T) {
 
 func TestIVFAndBruteForce(t *testing.T) {
 
+	ctx := context.Background()
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -83,8 +88,10 @@ func TestIVFAndBruteForce(t *testing.T) {
 
 	c, err := NewKMeans[float32](vecs, nlist, 10, 0, metric.Metric_L2Distance, 0, false, 0)
 	require.NoError(t, err)
+	defer c.Close()
 
-	centers, err := c.Cluster(context.Background())
+	c.InitCentroids(ctx)
+	centers, err := c.Cluster(ctx)
 	require.NoError(t, err)
 
 	centroids, ok := centers.([][]float32)
@@ -97,7 +104,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 	*/
 
 	queries := vecs[:8192]
-	idx, err := mobf.NewBruteForceIndex[float32](centroids, dimension, metric.Metric_L2sqDistance, elemsz)
+	idx, err := mobf.NewBruteForceIndex[float32](centroids, dimension, metric.Metric_L2sqDistance, elemsz, ncpu)
 	require.NoError(t, err)
 	defer idx.Destroy()
 
@@ -116,21 +123,9 @@ func TestIVFAndBruteForce(t *testing.T) {
 			for i := 0; i < 1000; i++ {
 				_, _, err := idx.Search(sqlproc, queries, rt)
 				require.NoError(t, err)
-				/*
-
-					keys_i64, ok := keys.([]int64)
-					require.Equal(t, ok, true)
-
-					for j, key := range keys_i64 {
-						require.Equal(t, key, int64(j))
-						require.Equal(t, distances[j], float64(0))
-					}
-				*/
-				// fmt.Printf("keys %v, dist %v\n", keys, distances)
 			}
 		}()
 	}
 
 	wg.Wait()
-
 }

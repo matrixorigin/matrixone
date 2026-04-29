@@ -296,6 +296,8 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		logutil.Infof("IVFFLAT END: pick sample")
 
 		if len(res.Batches) == 0 {
+			u.batch = tf.createResultBatch()
+			u.inited = true
 			return nil
 		}
 

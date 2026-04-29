@@ -339,6 +339,8 @@ const (
 	UniqueIndexSuffix             = "unique_"
 	FullTextIndexSuffix           = "fulltext_"
 	HnswIndexSuffix               = "hnsw_"
+	CagraIndexSuffix              = "cagra_"
+	IvfpqIndexSuffix              = "ivfpq_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
@@ -346,6 +348,8 @@ const (
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
 	HnswIndexTableNamePrefix      = PrefixIndexTableName + HnswIndexSuffix
+	CagraIndexTableNamePrefix     = PrefixIndexTableName + CagraIndexSuffix
+	IvfpqIndexTableNamePrefix     = PrefixIndexTableName + IvfpqIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -413,6 +417,44 @@ const (
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ Cagra Index *************/
+
+	// CAGRA Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
+	Cagra_TblType_Metadata = "cagra_meta"
+	Cagra_TblType_Storage  = "cagra_index"
+
+	// CAGRA Storage - Column names
+	Cagra_TblCol_Storage_Index_Id = "index_id"
+	Cagra_TblCol_Storage_Chunk_Id = "chunk_id"
+	Cagra_TblCol_Storage_Data     = "data"
+	Cagra_TblCol_Storage_Tag      = "tag"
+
+	// CAGRA Metadata - Column names
+	Cagra_TblCol_Metadata_Index_Id  = "index_id"
+	Cagra_TblCol_Metadata_Timestamp = "timestamp"
+	Cagra_TblCol_Metadata_Checksum  = "checksum"
+	Cagra_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ IVF-PQ Index *************/
+
+	// IVF-PQ Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT, CAGRA or other index
+	Ivfpq_TblType_Metadata = "ivfpq_meta"
+	Ivfpq_TblType_Storage  = "ivfpq_index"
+
+	// IVF-PQ Storage - Column names
+	Ivfpq_TblCol_Storage_Index_Id = "index_id"
+	Ivfpq_TblCol_Storage_Chunk_Id = "chunk_id"
+	Ivfpq_TblCol_Storage_Data     = "data"
+	Ivfpq_TblCol_Storage_Tag      = "tag"
+
+	// IVF-PQ Metadata - Column names
+	Ivfpq_TblCol_Metadata_Index_Id  = "index_id"
+	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
+	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
+	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
 
 	/************ 5. Logical ID Index (mo_tables) ************/
 
