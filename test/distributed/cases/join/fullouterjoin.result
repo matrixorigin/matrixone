@@ -150,4 +150,26 @@ null  ¦  1  𝄀
 null  ¦  2  𝄀
 null  ¦  3  𝄀
 null  ¦  4
+create table fj_o1(s int, v varchar(5));
+create table fj_o2(s int, v varchar(5));
+insert into fj_o1 values (1,'a'),(5,'b'),(NULL,'x');
+insert into fj_o2 values (13,'c'),(14,NULL);
+select fj_o1.s, fj_o1.v, fj_o2.s, fj_o2.v
+from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+order by fj_o1.s, fj_o2.s, fj_o1.v, fj_o2.v;
+➤ s[4,32,0]  ¦  v[12,-1,0]  ¦  s[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  x  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  c  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+5  ¦  b  ¦  null  ¦  null
+select fj_o1.s, fj_o2.s
+from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+order by fj_o1.s, fj_o2.s desc;
+➤ s[4,32,0]  ¦  s[4,32,0]  𝄀
+null  ¦  14  𝄀
+null  ¦  13  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+5  ¦  null
 drop database fojdb;
