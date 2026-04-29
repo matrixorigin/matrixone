@@ -1,0 +1,488 @@
+drop database if exists fulljoin_db;
+create database fulljoin_db;
+use fulljoin_db;
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (S1 INT, S2 varchar(10));
+CREATE TABLE t2 (S1 INT, S2 varchar(10));
+INSERT INTO t1 VALUES (1,'aaa'),(2,'bbb'),(3,'ccc'),(4,NULL),(5,'eee'),(6,'fff'),(NULL,'aaa'),(9,'bbb'),(10,'ccc'),(11,'ddd'),(12,'abc'),(NULL,NULL);
+INSERT INTO t2 VALUES (11,'aaa'),(12,'bbb'),(13,'ccc'),(14,NULL),(1,'aaa'),(2,'bbb'),(3,'ccc'),(4,'ddd'),(NULL,'abc'),(NULL,NULL);
+SELECT * FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1 ORDER BY t1.S1, t2.S1, t1.S2, t2.S2;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+SELECT * FROM t1 FULL JOIN t2 ON t1.S1 = t2.S1 ORDER BY t1.S1, t2.S1, t1.S2, t2.S2;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+SELECT * FROM t1 FULL OUTER JOIN t2 ON t1.S2 = t2.S2 ORDER BY t1.S1, t2.S1, t1.S2, t2.S2;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  aaa  ¦  1  ¦  aaa  𝄀
+null  ¦  aaa  ¦  11  ¦  aaa  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+1  ¦  aaa  ¦  11  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+2  ¦  bbb  ¦  12  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+3  ¦  ccc  ¦  13  ¦  ccc  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+9  ¦  bbb  ¦  2  ¦  bbb  𝄀
+9  ¦  bbb  ¦  12  ¦  bbb  𝄀
+10  ¦  ccc  ¦  3  ¦  ccc  𝄀
+10  ¦  ccc  ¦  13  ¦  ccc  𝄀
+11  ¦  ddd  ¦  4  ¦  ddd  𝄀
+12  ¦  abc  ¦  null  ¦  abc
+SELECT * FROM t1 LEFT  JOIN t2 ON t1.S1 = t2.S1
+UNION
+SELECT * FROM t1 RIGHT JOIN t2 ON t1.S1 = t2.S1
+ORDER BY 1,3,2,4;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+SELECT t1.S1 a, t1.S2 b, t2.S1 c, t2.S2 d FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1 ORDER BY a,c,b,d;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  ¦  d[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+SELECT t1.S1 a, t1.S2 b, t2.S1 c, t2.S2 d FROM t2 FULL OUTER JOIN t1 ON t1.S1 = t2.S1 ORDER BY a,c,b,d;
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  ¦  d[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+drop table if exists t3;
+CREATE TABLE t3 (S1 INT, S2 varchar(10));
+SELECT * FROM t1 FULL OUTER JOIN t3 ON t1.S1 = t3.S1 ORDER BY t1.S1, t1.S2;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+1  ¦  aaa  ¦  null  ¦  null  𝄀
+2  ¦  bbb  ¦  null  ¦  null  𝄀
+3  ¦  ccc  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  null  ¦  null  𝄀
+12  ¦  abc  ¦  null  ¦  null
+SELECT * FROM t3 FULL OUTER JOIN t1 ON t1.S1 = t3.S1 ORDER BY t1.S1, t1.S2;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  aaa  𝄀
+null  ¦  null  ¦  1  ¦  aaa  𝄀
+null  ¦  null  ¦  2  ¦  bbb  𝄀
+null  ¦  null  ¦  3  ¦  ccc  𝄀
+null  ¦  null  ¦  4  ¦  null  𝄀
+null  ¦  null  ¦  5  ¦  eee  𝄀
+null  ¦  null  ¦  6  ¦  fff  𝄀
+null  ¦  null  ¦  9  ¦  bbb  𝄀
+null  ¦  null  ¦  10  ¦  ccc  𝄀
+null  ¦  null  ¦  11  ¦  ddd  𝄀
+null  ¦  null  ¦  12  ¦  abc
+drop table if exists t4;
+CREATE TABLE t4 (S1 INT, S2 varchar(10));
+SELECT * FROM t3 FULL OUTER JOIN t4 ON t3.S1 = t4.S1;
+➤ s1[4,32,0]  ¦  s2[12,-1,0]  ¦  s1[4,32,0]  ¦  s2[12,-1,0]
+drop table if exists a_nomatch;
+drop table if exists b_nomatch;
+create table a_nomatch(x int, y varchar(10));
+create table b_nomatch(x int, y varchar(10));
+insert into a_nomatch values (1,'a'),(2,'b'),(3,'c');
+insert into b_nomatch values (10,'x'),(20,'y'),(30,'z');
+SELECT * FROM a_nomatch FULL OUTER JOIN b_nomatch ON a_nomatch.x = b_nomatch.x ORDER BY a_nomatch.x, b_nomatch.x;
+➤ x[4,32,0]  ¦  y[12,-1,0]  ¦  x[4,32,0]  ¦  y[12,-1,0]  𝄀
+null  ¦  null  ¦  10  ¦  x  𝄀
+null  ¦  null  ¦  20  ¦  y  𝄀
+null  ¦  null  ¦  30  ¦  z  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+3  ¦  c  ¦  null  ¦  null
+drop table if exists a_allmatch;
+drop table if exists b_allmatch;
+create table a_allmatch(x int primary key, y varchar(10));
+create table b_allmatch(x int primary key, y varchar(10));
+insert into a_allmatch values (1,'a'),(2,'b'),(3,'c');
+insert into b_allmatch values (1,'A'),(2,'B'),(3,'C');
+SELECT * FROM a_allmatch FULL OUTER JOIN b_allmatch ON a_allmatch.x = b_allmatch.x ORDER BY a_allmatch.x;
+➤ x[4,32,0]  ¦  y[12,-1,0]  ¦  x[4,32,0]  ¦  y[12,-1,0]  𝄀
+1  ¦  a  ¦  1  ¦  A  𝄀
+2  ¦  b  ¦  2  ¦  B  𝄀
+3  ¦  c  ¦  3  ¦  C
+drop table if exists a_dup;
+drop table if exists b_dup;
+create table a_dup(k int, v varchar(10));
+create table b_dup(k int, v varchar(10));
+insert into a_dup values (1,'a1'),(1,'a2'),(2,'a3'),(4,'a4');
+insert into b_dup values (1,'b1'),(1,'b2'),(3,'b3'),(4,'b4');
+SELECT * FROM a_dup FULL OUTER JOIN b_dup ON a_dup.k = b_dup.k ORDER BY a_dup.k, a_dup.v, b_dup.k, b_dup.v;
+➤ k[4,32,0]  ¦  v[12,-1,0]  ¦  k[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  3  ¦  b3  𝄀
+1  ¦  a1  ¦  1  ¦  b1  𝄀
+1  ¦  a1  ¦  1  ¦  b2  𝄀
+1  ¦  a2  ¦  1  ¦  b1  𝄀
+1  ¦  a2  ¦  1  ¦  b2  𝄀
+2  ¦  a3  ¦  null  ¦  null  𝄀
+4  ¦  a4  ¦  4  ¦  b4
+drop table if exists orders;
+drop table if exists payments;
+create table orders  (order_id int, user_id int, amount decimal(10,2));
+create table payments(order_id int, user_id int, paid   decimal(10,2));
+insert into orders   values (1,100,50.00),(2,100,25.00),(3,200,10.00),(4,300,5.00);
+insert into payments values (1,100,50.00),(2,100,20.00),(5,400,8.00);
+SELECT o.order_id, o.user_id, o.amount, p.order_id, p.user_id, p.paid
+FROM orders o FULL OUTER JOIN payments p
+ON o.order_id = p.order_id AND o.user_id = p.user_id
+ORDER BY o.order_id, p.order_id;
+➤ order_id[4,32,0]  ¦  user_id[4,32,0]  ¦  amount[3,10,2]  ¦  order_id[4,32,0]  ¦  user_id[4,32,0]  ¦  paid[3,10,2]  𝄀
+null  ¦  null  ¦  null  ¦  5  ¦  400  ¦  8.00  𝄀
+1  ¦  100  ¦  50.00  ¦  1  ¦  100  ¦  50.00  𝄀
+2  ¦  100  ¦  25.00  ¦  2  ¦  100  ¦  20.00  𝄀
+3  ¦  200  ¦  10.00  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  300  ¦  5.00  ¦  null  ¦  null  ¦  null
+drop table if exists u1;
+drop table if exists u2;
+create table u1(id int, name varchar(10));
+create table u2(id int, score int);
+insert into u1 values (1,'alice'),(2,'bob'),(3,'carol');
+insert into u2 values (2,90),(3,85),(4,70);
+SELECT * FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
+[unknown result because it is related to issue#24247]
+SELECT id, name, score FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
+[unknown result because it is related to issue#24247]
+drop table if exists r1;
+drop table if exists r2;
+create table r1(x int);
+create table r2(y int);
+insert into r1 values (1),(5),(10);
+insert into r2 values (3),(6),(12);
+SELECT * FROM r1 FULL OUTER JOIN r2 ON r1.x < r2.y ORDER BY r1.x, r2.y;
+➤ x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  3  𝄀
+1  ¦  6  𝄀
+1  ¦  12  𝄀
+5  ¦  6  𝄀
+5  ¦  12  𝄀
+10  ¦  12
+SELECT t1.S1, t1.S2 FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+WHERE t2.S1 IS NULL ORDER BY t1.S1, t1.S2;
+➤ S1[4,32,0]  ¦  S2[12,-1,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  aaa  𝄀
+5  ¦  eee  𝄀
+6  ¦  fff  𝄀
+9  ¦  bbb  𝄀
+10  ¦  ccc
+SELECT t2.S1, t2.S2 FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+WHERE t1.S1 IS NULL ORDER BY t2.S1, t2.S2;
+➤ S1[4,32,0]  ¦  S2[12,-1,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  abc  𝄀
+13  ¦  ccc  𝄀
+14  ¦  null
+SELECT t1.S1, t1.S2, t2.S1, t2.S2
+FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+WHERE t1.S1 IS NULL OR t2.S1 IS NULL
+ORDER BY t1.S1, t2.S1, t1.S2, t2.S2;
+➤ S1[4,32,0]  ¦  S2[12,-1,0]  ¦  S1[4,32,0]  ¦  S2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null
+SELECT t1.S1, t2.S1 FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+WHERE t2.S1 > 5 ORDER BY t1.S1, t2.S1;
+➤ S1[4,32,0]  ¦  S1[4,32,0]  𝄀
+null  ¦  13  𝄀
+null  ¦  14  𝄀
+11  ¦  11  𝄀
+12  ¦  12
+SELECT COALESCE(t1.S1, t2.S1) AS k, t1.S2 AS left_s2, t2.S2 AS right_s2
+FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+ORDER BY k, left_s2, right_s2;
+➤ k[4,32,0]  ¦  left_s2[12,-1,0]  ¦  right_s2[12,-1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  abc  𝄀
+null  ¦  aaa  ¦  null  𝄀
+1  ¦  aaa  ¦  aaa  𝄀
+2  ¦  bbb  ¦  bbb  𝄀
+3  ¦  ccc  ¦  ccc  𝄀
+4  ¦  null  ¦  ddd  𝄀
+5  ¦  eee  ¦  null  𝄀
+6  ¦  fff  ¦  null  𝄀
+9  ¦  bbb  ¦  null  𝄀
+10  ¦  ccc  ¦  null  𝄀
+11  ¦  ddd  ¦  aaa  𝄀
+12  ¦  abc  ¦  bbb  𝄀
+14  ¦  null  ¦  null  𝄀
+13  ¦  null  ¦  ccc
+SELECT COUNT(*) AS total_rows,
+COUNT(t1.S1) AS left_side_rows,
+COUNT(t2.S1) AS right_side_rows,
+SUM(CASE WHEN t1.S1 IS NULL THEN 1 ELSE 0 END) AS right_only,
+SUM(CASE WHEN t2.S1 IS NULL THEN 1 ELSE 0 END) AS left_only
+FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1;
+➤ total_rows[-5,64,0]  ¦  left_side_rows[-5,64,0]  ¦  right_side_rows[-5,64,0]  ¦  right_only[-5,64,0]  ¦  left_only[-5,64,0]  𝄀
+16  ¦  10  ¦  8  ¦  6  ¦  8
+SELECT COALESCE(t1.S1, t2.S1) AS k, COUNT(*) AS c
+FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1
+GROUP BY COALESCE(t1.S1, t2.S1)
+ORDER BY k;
+➤ k[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  4  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  1  𝄀
+6  ¦  1  𝄀
+9  ¦  1  𝄀
+10  ¦  1  𝄀
+11  ¦  1  𝄀
+12  ¦  1  𝄀
+13  ¦  1  𝄀
+14  ¦  1
+SELECT * FROM
+(SELECT S1, S2 FROM t1 WHERE S1 IS NOT NULL) l
+FULL OUTER JOIN
+(SELECT S1, S2 FROM t2 WHERE S1 IS NOT NULL) r
+ON l.S1 = r.S1
+ORDER BY l.S1, r.S1, l.S2, r.S2;
+➤ S1[4,32,0]  ¦  S2[12,-1,0]  ¦  S1[4,32,0]  ¦  S2[12,-1,0]  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  ccc  𝄀
+1  ¦  aaa  ¦  1  ¦  aaa  𝄀
+2  ¦  bbb  ¦  2  ¦  bbb  𝄀
+3  ¦  ccc  ¦  3  ¦  ccc  𝄀
+4  ¦  null  ¦  4  ¦  ddd  𝄀
+9  ¦  bbb  ¦  null  ¦  null  𝄀
+10  ¦  ccc  ¦  null  ¦  null  𝄀
+5  ¦  eee  ¦  null  ¦  null  𝄀
+6  ¦  fff  ¦  null  ¦  null  𝄀
+11  ¦  ddd  ¦  11  ¦  aaa  𝄀
+12  ¦  abc  ¦  12  ¦  bbb
+drop table if exists tA;
+drop table if exists tB;
+drop table if exists tC;
+create table tA(id int, va varchar(5));
+create table tB(id int, vb varchar(5));
+create table tC(id int, vc varchar(5));
+insert into tA values (1,'a1'),(2,'a2'),(3,'a3');
+insert into tB values (2,'b2'),(3,'b3'),(4,'b4');
+insert into tC values (3,'c3'),(4,'c4'),(5,'c5');
+SELECT COALESCE(tA.id, tB.id, tC.id) AS id, va, vb, vc
+FROM tA FULL OUTER JOIN tB ON tA.id = tB.id
+FULL OUTER JOIN tC ON COALESCE(tA.id, tB.id) = tC.id
+ORDER BY id;
+➤ id[4,32,0]  ¦  va[12,-1,0]  ¦  vb[12,-1,0]  ¦  vc[12,-1,0]  𝄀
+1  ¦  a1  ¦  null  ¦  null  𝄀
+2  ¦  a2  ¦  b2  ¦  null  𝄀
+3  ¦  a3  ¦  b3  ¦  c3  𝄀
+4  ¦  null  ¦  b4  ¦  c4  𝄀
+5  ¦  null  ¦  null  ¦  c5
+drop table if exists emp;
+create table emp(id int, mgr_id int, name varchar(10));
+insert into emp values (1,NULL,'root'),(2,1,'alice'),(3,1,'bob'),(4,2,'carol'),(5,NULL,'orphan');
+SELECT e.id, e.name, m.id AS mgr_id, m.name AS mgr_name
+FROM emp e FULL OUTER JOIN emp m ON e.mgr_id = m.id
+ORDER BY e.id, m.id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  mgr_id[4,32,0]  ¦  mgr_name[12,-1,0]  𝄀
+null  ¦  null  ¦  3  ¦  bob  𝄀
+null  ¦  null  ¦  4  ¦  carol  𝄀
+null  ¦  null  ¦  5  ¦  orphan  𝄀
+1  ¦  root  ¦  null  ¦  null  𝄀
+2  ¦  alice  ¦  1  ¦  root  𝄀
+3  ¦  bob  ¦  1  ¦  root  𝄀
+4  ¦  carol  ¦  2  ¦  alice  𝄀
+5  ¦  orphan  ¦  null  ¦  null
+SELECT tA.id AS a_id, tB.id AS b_id, tC.id AS c_id
+FROM tA INNER JOIN tB ON tA.id = tB.id
+FULL OUTER JOIN tC ON tB.id = tC.id
+ORDER BY a_id, b_id, c_id;
+➤ a_id[4,32,0]  ¦  b_id[4,32,0]  ¦  c_id[4,32,0]  𝄀
+null  ¦  null  ¦  4  𝄀
+null  ¦  null  ¦  5  𝄀
+2  ¦  2  ¦  null  𝄀
+3  ¦  3  ¦  3
+SELECT tA.id AS a_id, tB.id AS b_id, tC.id AS c_id
+FROM tA FULL OUTER JOIN tB ON tA.id = tB.id
+LEFT JOIN tC ON tB.id = tC.id
+ORDER BY a_id, b_id, c_id;
+➤ a_id[4,32,0]  ¦  b_id[4,32,0]  ¦  c_id[4,32,0]  𝄀
+null  ¦  4  ¦  4  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  2  ¦  null  𝄀
+3  ¦  3  ¦  3
+drop table if exists dec_a;
+drop table if exists dec_b;
+create table dec_a(k decimal(10,2), v varchar(5));
+create table dec_b(k decimal(10,2), v varchar(5));
+insert into dec_a values (1.10,'a'),(2.20,'b'),(3.30,'c'),(NULL,'n');
+insert into dec_b values (2.20,'B'),(3.30,'C'),(4.40,'D'),(NULL,'N');
+SELECT * FROM dec_a FULL OUTER JOIN dec_b ON dec_a.k = dec_b.k ORDER BY dec_a.k, dec_b.k;
+➤ k[3,10,2]  ¦  v[12,-1,0]  ¦  k[3,10,2]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  N  𝄀
+null  ¦  n  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  4.40  ¦  D  𝄀
+1.10  ¦  a  ¦  null  ¦  null  𝄀
+2.20  ¦  b  ¦  2.20  ¦  B  𝄀
+3.30  ¦  c  ¦  3.30  ¦  C
+drop table if exists dt_a;
+drop table if exists dt_b;
+create table dt_a(d date, v varchar(5));
+create table dt_b(d date, v varchar(5));
+insert into dt_a values ('2024-01-01','a'),('2024-02-02','b'),('2024-03-03','c');
+insert into dt_b values ('2024-02-02','B'),('2024-03-03','C'),('2024-04-04','D');
+SELECT * FROM dt_a FULL OUTER JOIN dt_b ON dt_a.d = dt_b.d ORDER BY dt_a.d, dt_b.d;
+➤ d[91,64,0]  ¦  v[12,-1,0]  ¦  d[91,64,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  2024-04-04  ¦  D  𝄀
+2024-01-01  ¦  a  ¦  null  ¦  null  𝄀
+2024-02-02  ¦  b  ¦  2024-02-02  ¦  B  𝄀
+2024-03-03  ¦  c  ¦  2024-03-03  ¦  C
+drop table if exists str_a;
+drop table if exists str_b;
+create table str_a(k varchar(10), v int);
+create table str_b(k char(10),    v int);
+insert into str_a values ('abc',1),('def',2),('ghi',3);
+insert into str_b values ('abc',10),('def',20),('xyz',30);
+SELECT * FROM str_a FULL OUTER JOIN str_b ON str_a.k = str_b.k ORDER BY str_a.k, str_b.k;
+➤ k[12,-1,0]  ¦  v[4,32,0]  ¦  k[1,10,0]  ¦  v[4,32,0]  𝄀
+null  ¦  null  ¦  xyz  ¦  30  𝄀
+abc  ¦  1  ¦  abc  ¦  10  𝄀
+def  ¦  2  ¦  def  ¦  20  𝄀
+ghi  ¦  3  ¦  null  ¦  null
+drop table if exists n1;
+drop table if exists n2;
+create table n1(x int);
+create table n2(x int);
+insert into n1 values (1),(NULL),(2),(NULL);
+insert into n2 values (1),(NULL),(3),(NULL);
+SELECT * FROM n1 FULL OUTER JOIN n2 ON n1.x = n2.x ORDER BY n1.x, n2.x;
+➤ x[4,32,0]  ¦  x[4,32,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  3  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+SELECT * FROM n1 FULL OUTER JOIN n2 ON n1.x <=> n2.x ORDER BY n1.x, n2.x;
+➤ x[4,32,0]  ¦  x[4,32,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  3  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+explain SELECT * FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: FULL OUTER  𝄀
+        Join Cond: (t2.s1 = t1.s1)  𝄀
+        ->  Table Scan on fulljoin_db.t2  𝄀
+        ->  Table Scan on fulljoin_db.t1
+explain SELECT COALESCE(t1.S1, t2.S1) FROM t1 FULL OUTER JOIN t2 ON t1.S1 = t2.S1;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: FULL OUTER  𝄀
+        Join Cond: (t2.s1 = t1.s1)  𝄀
+        ->  Table Scan on fulljoin_db.t2  𝄀
+        ->  Table Scan on fulljoin_db.t1
+drop table if exists big_a;
+drop table if exists big_b;
+create table big_a(k int primary key, v int);
+create table big_b(k int primary key, v int);
+insert into big_a select result, result*10 from generate_series(1,1000) g;
+insert into big_b select result, result*20 from generate_series(500,1500) g;
+SELECT
+(SELECT COUNT(*) FROM big_a FULL OUTER JOIN big_b ON big_a.k = big_b.k) AS full_cnt,
+(SELECT COUNT(*) FROM big_a LEFT  JOIN big_b ON big_a.k = big_b.k WHERE big_b.k IS NULL) AS left_only,
+(SELECT COUNT(*) FROM big_a INNER JOIN big_b ON big_a.k = big_b.k) AS matched,
+(SELECT COUNT(*) FROM big_a RIGHT JOIN big_b ON big_a.k = big_b.k WHERE big_a.k IS NULL) AS right_only;
+➤ full_cnt[-5,64,0]  ¦  left_only[-5,64,0]  ¦  matched[-5,64,0]  ¦  right_only[-5,64,0]  𝄀
+1500  ¦  499  ¦  501  ¦  500
+drop database if exists fulljoin_db;
