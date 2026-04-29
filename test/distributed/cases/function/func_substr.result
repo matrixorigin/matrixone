@@ -200,32 +200,32 @@ ol.Berkly.the.book
 ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
 endswith(c, a)	endswith(vc, a)
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
 null	null
-false	false
+0	0
 select endswith(c,'y'),endswith(vc,'e') from t1;
 endswith(c, y)	endswith(vc, e)
-true	true
-true	true
-false	true
-true	true
-false	false
-false	false
-false	false
-false	false
-false	true
-false	false
+1	1
+1	1
+0	1
+1	1
+0	0
+0	0
+0	0
+0	0
+0	1
+0	0
 null	null
-false	false
+0	0
 select * from t1 where endswith(c,'y');
 id	c	vc
 1	Daffy	Aducklife
@@ -236,32 +236,32 @@ id	c	vc
 3	Cowboy	Lifeontherange
 select startswith(c,'B'),startswith(vc,'A') from t1;
 startswith(c, B)	startswith(vc, A)
-false	true
-false	true
-true	true
-false	false
-false	false
-true	false
-true	false
-false	false
-false	false
-true	false
+0	1
+0	1
+1	1
+0	0
+0	0
+1	0
+1	0
+0	0
+0	0
+1	0
 null	null
-false	false
+0	0
 select startswith(c,'y'),startswith(vc,'e') from t1;
 startswith(c, y)	startswith(vc, e)
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
+0	0
 null	null
-false	false
+0	0
 select * from t1 where startswith(c,'B');
 id	c	vc
 2	Bugs	Arabbitlife

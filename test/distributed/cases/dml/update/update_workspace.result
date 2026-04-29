@@ -46,6 +46,6 @@ min(a)
 33
 select max(a)=min(a)+81920-1 from hhh;
 max(a)=min(a)+81920-1
-true
+1
 drop table if exists hhh;
 drop database if exists test;

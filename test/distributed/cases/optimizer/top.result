@@ -3,17 +3,17 @@ create database d1;
 use d1;
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int primary key, c2 int, c3 int);
 create table t2(c1 int primary key, c2 int, c3 int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'d1.t1');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, d1.t1)
-true
+1
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'d1.t2');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, d1.t2)
-true
+1
 insert into t1 select *,*,* from generate_series(100000) g;
 insert into t2 select *,*,* from generate_series(90000) g;
 explain select * from t1 order by c1 limit 100 offset 200;
@@ -204,4 +204,4 @@ a
 drop database if exists d1;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
