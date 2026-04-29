@@ -214,7 +214,7 @@ func TestPostEvictRunsOutsideQueueLock(t *testing.T) {
 // postEvict runs, so concurrent callers don't inherit slow callback latency.
 func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
 	slowDuration := 200 * time.Millisecond
-	evictStarted := make(chan struct{})
+	evictStarted := make(chan struct{}, 1)
 	cache := New(
 		fscache.ConstCapacity(2),
 		ShardInt[int],
@@ -232,7 +232,11 @@ func TestSetLatencyUnderSlowPostEvict(t *testing.T) {
 	cache.Set(ctx, 2, 2, 1)
 	// Trigger slow eviction in background
 	go cache.Set(ctx, 3, 3, 1) // evicts key=1, postEvict sleeps 200ms
-	<-evictStarted
+	select {
+	case <-evictStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for postEvict to start")
+	}
 	// queueLock should be released now; used() only needs RLock.
 	start := time.Now()
 	_ = cache.used()

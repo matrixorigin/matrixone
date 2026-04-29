@@ -190,7 +190,11 @@ id    key    index    value
 18    m2    null    2
 20    m2    null    2
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and u.value > 2;
-invalid argument operator cast, bad value [JSON BIGINT]
+id    key    index    value
+2    m2    null    22
+3    m2    null    23
+12    m2    null    22
+13    m2    null    23
 select id, u.`key`, u.`index`, u.value from jt cross apply unnest(metrics, '$') u where u.`key` = 'm2' and json_extract_float64(u.value, '$') > 2;
 id    key    index    value
 2    m2    null    22
@@ -294,15 +298,15 @@ create table t_apply_prepare_fault(a int, b int);
 insert into t_apply_prepare_fault values(1,3);
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 select add_fault_point('fj/cn/generate_series_partial_prepare', ':::', 'echo', 0, 'apply teardown repro');
 add_fault_point(fj/cn/generate_series_partial_prepare, :::, echo, 0, apply teardown repro)
-true
+1
 prepare s_apply_fault from select * from t_apply_prepare_fault cross apply generate_series(t_apply_prepare_fault.a, t_apply_prepare_fault.b) g;
 execute s_apply_fault;
 invalid state generate_series partial prepare fault: apply teardown repro
 deallocate prepare s_apply_fault;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
 drop table t_apply_prepare_fault;

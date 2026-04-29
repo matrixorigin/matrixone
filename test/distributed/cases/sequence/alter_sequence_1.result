@@ -22,7 +22,7 @@ nextval(alter_seq_01)    currval(alter_seq_01)
 alter sequence alter_seq_01 cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-5    1    100    4    1    true    false
+5    1    100    4    1    1    0
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 5    5
@@ -57,7 +57,7 @@ drop sequence alter_seq_01;
 create sequence if not exists alter_seq_01 as bigint increment by 100 minvalue 20  start with 50 cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-50    20    9223372036854775807    50    100    true    false
+50    20    9223372036854775807    50    100    1    0
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 50    50
@@ -70,7 +70,7 @@ nextval(alter_seq_01)    currval(alter_seq_01)
 alter sequence if exists alter_seq_01 as int increment by 200 minvalue 10 no cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-450    10    2147483647    250    200    false    false
+450    10    2147483647    250    200    0    0
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 450    450
@@ -90,7 +90,7 @@ nextval(alter_seq_02)    currval(alter_seq_02)
 4    4
 select * from alter_seq_02;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-4    1    9223372036854775807    1    3    false    true
+4    1    9223372036854775807    1    3    0    1
 alter sequence alter_seq_02 increment 10;
 select nextval('alter_seq_02'),currval('alter_seq_02');
 nextval(alter_seq_02)    currval(alter_seq_02)
@@ -138,7 +138,7 @@ alter sequence alter_seq_04 minvalue 10 maxvalue 10 no cycle;
 invalid input: MAXVALUE (10) of sequence must be bigger than MINVALUE (10) of it
 select * from alter_seq_04;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-10    1    9223372036854775807    9    1    false    true
+10    1    9223372036854775807    9    1    0    1
 select nextval('alter_seq_04'),currval('alter_seq_04');
 nextval(alter_seq_04)    currval(alter_seq_04)
 11    11
@@ -162,7 +162,7 @@ nextval(alter_seq_05)    currval(alter_seq_05)
 3    3
 select * from alter_seq_05;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-3    1    6    3    2    true    true
+3    1    6    3    2    1    1
 create sequence alter_seq_06 increment 20 minvalue 140 maxvalue 200 no cycle;
 select nextval('alter_seq_06'),currval('alter_seq_06');
 nextval(alter_seq_06)    currval(alter_seq_06)

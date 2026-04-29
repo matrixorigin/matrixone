@@ -16,8 +16,11 @@ package util
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 type kase struct {
@@ -72,5 +75,26 @@ func Test_SplitNameOfPartitionTable(t *testing.T) {
 			require.Equal(t, a, k.a)
 			require.Equal(t, b, k.b)
 		}
+	}
+}
+
+func TestBuildSysLogFilters(t *testing.T) {
+	cases := []struct {
+		name        string
+		accountName string
+		buildExpr   func(string) tree.Expr
+		want        string
+	}{
+		{name: "statement tenant1", accountName: "tenant1", buildExpr: BuildSysStatementInfoFilter, want: "account = tenant1"},
+		{name: "statement hash in account", accountName: "a#b", buildExpr: BuildSysStatementInfoFilter, want: "account = a#b"},
+		{name: "metric tenant1", accountName: "tenant1", buildExpr: BuildSysMetricFilter, want: "account = tenant1"},
+		{name: "metric hash in account", accountName: "a#b", buildExpr: BuildSysMetricFilter, want: "account = a#b"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := tc.buildExpr(tc.accountName)
+			require.Equal(t, tc.want, tree.String(expr, dialect.MYSQL))
+		})
 	}
 }

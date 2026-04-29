@@ -153,6 +153,13 @@ func checkChangeTypeCompatible(
 
 	oTy := types.T(origin.GetId())
 	nTy := types.T(to.GetId())
+	if oTy == types.T_json && isDDLNumericType(nTy) {
+		return moerr.NewNotSupportedf(ctx,
+			"currently unsupport change from original type %v to %v ",
+			oTy.String(),
+			nTy.String(),
+		)
+	}
 	if supported := function.IfTypeCastSupported(oTy, nTy); !supported {
 		return moerr.NewNotSupportedf(ctx,
 			"currently unsupport change from original type %v to %v ",
@@ -161,6 +168,18 @@ func checkChangeTypeCompatible(
 		)
 	}
 	return nil
+}
+
+func isDDLNumericType(t types.T) bool {
+	switch t {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkColumnForeignkeyConstraint check for table column foreign key dependencies, including

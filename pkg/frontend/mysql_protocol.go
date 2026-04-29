@@ -77,7 +77,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
-const boolColumnLength = 12
+const boolColumnLength = 1
 
 func init() {
 	serverVersion.Store("1.3.0")
@@ -751,6 +751,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -781,12 +782,22 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
+	if stmt.getFromSendLongData == nil {
+		stmt.getFromSendLongData = make(map[int]struct{})
+	}
+	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
+		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
+	}
+	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+		return err
+	}
 	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx))
+	return nil
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -826,8 +837,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		}
 
 		// new param bound flag
-		if data[pos] == 1 {
-			pos++
+		var newParamBoundFlag uint8
+		newParamBoundFlag, pos, ok = mp.io.ReadUint8(data, pos)
+		if !ok {
+			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+		}
+		if newParamBoundFlag == 1 {
 
 			// Just the first StmtExecute packet contain parameters type,
 			// we need save it for further use.
@@ -836,8 +851,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
-		} else {
-			pos++
 		}
 
 		// get paramters and set value to session variables
@@ -958,7 +971,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				pos = newPos
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
-			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
+			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
@@ -2159,11 +2172,11 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 
 	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
 		//int<2>              character set
-		pos = mp.io.WriteUint16(data, pos, charsetVarchar)
+		pos = mp.io.WriteUint16(data, pos, charsetBinary)
 		//int<4>              column length
 		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
 		//int<1>              type
-		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
+		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_TINY))
 	} else {
 		//int<2>              character set
 		pos = mp.io.WriteUint16(data, pos, column.Charset())
@@ -2334,10 +2347,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err := mrs.GetString(mp.ctx, rowIdx, i); err != nil {
+			if value, err := mrs.GetInt64(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendUint8(uint8(value))
 				if err != nil {
 					return err
 				}
@@ -2558,10 +2571,10 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			if value, err2 := mrs.GetInt64(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEncOfInt64(value)
 				if err != nil {
 					return err
 				}
@@ -2708,35 +2721,90 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
-				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-				if err != nil {
-					return err
+				if d, ok := value.(types.Date); ok {
+					var date types.Date = d
+					mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+					err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+					if err != nil {
+						return err
+					}
+				} else {
+					return moerr.NewInternalErrorf(mp.ctx, "unsupported type %T for MYSQL_TYPE_DATE", value)
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if val != nil {
+				if dt, ok := val.(types.Datetime); ok {
+					valueStr := dt.String2(scale)
+					err = AppendStringLenEnc(mp, valueStr)
+					if err != nil {
+						return err
+					}
+				} else {
+					value, err3 := mrs.GetString(mp.ctx, r, i)
+					if err3 != nil {
+						return err3
+					}
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if t, ok := val.(types.Time); ok {
+				value := t.String2(scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if ts, ok := val.(types.Timestamp); ok {
+				value := ts.String2(mp.ses.GetTimeZone(), scale)
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			} else if dt, ok := val.(types.Datetime); ok {
+				valueStr := dt.String2(scale)
+				err = AppendStringLenEnc(mp, valueStr)
+				if err != nil {
+					return err
+				}
 			} else {
-				err = mp.appendStringLenEnc(value)
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2798,7 +2866,11 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
+			value := uint8(0)
+			if b {
+				value = 1
+			}
+			err = mp.appendUint8(value)
 			if err != nil {
 				return err
 			}
@@ -2999,6 +3071,12 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
+			case types.T_date:
+				d, err := GetDate(colSlices, rowIdx, i)
+				if err != nil {
+					return err
+				}
+				value = d.String()
 			default:
 				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
 			}
@@ -3062,7 +3140,11 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
+			value := int64(0)
+			if b {
+				value = 1
+			}
+			err = mp.appendStringLenEncOfInt64(value)
 			if err != nil {
 				return err
 			}

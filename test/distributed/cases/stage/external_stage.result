@@ -14,8 +14,8 @@ set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
@@ -29,8 +29,8 @@ truncate t1;
 load data infile 'stage://stage01/local_stage_table01.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
 col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `col1` date NOT NULL,\n  `col2` datetime DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` bool DEFAULT NULL\n)

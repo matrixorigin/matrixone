@@ -186,13 +186,21 @@ func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
 
+	if !s.task.runnerReady.Load() {
+		return
+	}
+
 	if s.task.runner != nil {
+		return
+	}
+
+	if s.task.holder == nil {
 		return
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
-		panic("task service must created")
+		return
 	}
 
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,

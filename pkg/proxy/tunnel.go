@@ -123,6 +123,10 @@ type tunnel struct {
 	// more proactive.
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
+	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
+	// for connection caching, so the follow-up client EOF should not tear down
+	// the backend session that is being cached.
+	expectedCacheQuit atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -248,6 +252,42 @@ func (t *tunnel) getServerConn() ServerConn {
 	return t.mu.sc
 }
 
+func (t *tunnel) markExpectedCacheQuit() {
+	if t != nil {
+		t.expectedCacheQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedCacheQuit() bool {
+	return t != nil && t.expectedCacheQuit.Load()
+}
+
+func wrapPipeSendError(name string, err error) error {
+	wrapped := errors.Join(
+		moerr.NewInternalErrorNoCtxf("send message error: %v", err),
+		err,
+	)
+	if name == pipeServerToClient && isConnEndErr(err) {
+		return withCode(wrapped, codeClientDisconnect)
+	}
+	return wrapped
+}
+
+func (t *tunnel) reportPipeError(err error, defaultCode errorCode) {
+	code := getErrorCode(err)
+	if code == codeNone {
+		code = defaultCode
+		err = withCode(err, code)
+	}
+	switch code {
+	case codeClientDisconnect:
+		v2.ProxyClientDisconnectCounter.Inc()
+	case codeServerDisconnect:
+		v2.ProxyServerDisconnectCounter.Inc()
+	}
+	t.setError(err)
+}
+
 // setError tries to set the tunnel error if there is no error.
 func (t *tunnel) setError(err error) {
 	select {
@@ -262,14 +302,12 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx, scp); err != nil {
-			v2.ProxyClientDisconnectCounter.Inc()
-			t.setError(withCode(err, codeClientDisconnect))
+			t.reportPipeError(err, codeClientDisconnect)
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx, csp); err != nil {
-			v2.ProxyServerDisconnectCounter.Inc()
-			t.setError(withCode(err, codeServerDisconnect))
+			t.reportPipeError(err, codeServerDisconnect)
 		}
 	}()
 	if err := csp.waitReady(t.ctx); err != nil {
@@ -728,7 +766,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
+			return wrapPipeSendError(p.name, err)
 		}
 	}
 	return ctx.Err()

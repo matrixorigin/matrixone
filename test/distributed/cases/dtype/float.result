@@ -169,19 +169,19 @@ CREATE TABLE t_float(id float(2,1));
 INSERT INTO t_float VALUES (1),(1.1), (2);
 SELECT id, id >= 1.1 FROM t_float;
 id	id >= 1.1
-1.0	false	
-1.1	true	
-2.0	true	
+1.0	0	
+1.1	1	
+2.0	1	
 SELECT id, 1.1 <= id FROM t_float;
 id	1.1 <= id
-1.0	false	
-1.1	true	
-2.0	true	
+1.0	0	
+1.1	1	
+2.0	1	
 SELECT id, id = 1.1 FROM t_float;
 id	id = 1.1
-1.0	false	
-1.1	true	
-2.0	false	
+1.0	0	
+1.1	1	
+2.0	0	
 SELECT * from t_float WHERE id = 1.1;
 id
 1.1
@@ -253,34 +253,34 @@ count(*)
 drop table t1;
 SELECT (1234.0 BETWEEN 0 AND 1234);
 (1234.0 BETWEEN 0 AND 1234)
-true
+1
 SELECT 0.000 >= 0;
 0.000 >= 0
-true
+1
 SELECT 00.000 <= 0.00001;
 00.000 <= 0.00001
-true
+1
 SELECT CAST(1.00 AS UNSIGNED) BETWEEN 1 AND -1;
 CAST(1.00 AS UNSIGNED) BETWEEN 1 AND -1
-false
+0
 SELECT CAST(1.00 AS UNSIGNED) NOT BETWEEN 1 AND -1;
 CAST(1.00 AS UNSIGNED) NOT BETWEEN 1 AND -1
-true
+1
 SELECT CAST(0.00 AS UNSIGNED) BETWEEN 0 AND -1;
 CAST(0.00 AS UNSIGNED) BETWEEN 0 AND -1
-false
+0
 SELECT CAST(0.00 AS UNSIGNED) NOT BETWEEN 0 AND -1;
 CAST(0.00 AS UNSIGNED) NOT BETWEEN 0 AND -1
-true
+1
 SELECT ( -1 BETWEEN 0 AND 1 );
 ( -1 BETWEEN 0 AND 1 )
-false
+0
 SELECT ( 0 BETWEEN  0.000000001 AND 1 );
 ( 0 BETWEEN  0.000000001 AND 1 )
-false
+0
 SELECT ( 1 BETWEEN 1.0000001 and 0);
 ( 1 BETWEEN 1.0000001 and 0)
-false
+0
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

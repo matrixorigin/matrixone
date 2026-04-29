@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"hash/crc64"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -114,7 +116,7 @@ func NewLockService(
 	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
-	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.Unlock, s.logger)
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.cfg.RemoteLockTimeout.Duration, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
@@ -652,6 +654,9 @@ type activeTxnHolder interface {
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	keepRemoteActiveTxn(remoteService string)
+	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
+	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
+	canUnlockRemoteTxn(pb.WaitTxn) bool
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
@@ -670,6 +675,8 @@ type mapBasedTxnHolder struct {
 		sync.RWMutex
 		// remoteServices known remote service
 		remoteServices map[string]*list.Element[remote]
+		// remoteLockBinds records the last heartbeat seen for a specific remote service + bind.
+		remoteLockBinds map[string]time.Time
 		// head(oldest) -> tail (newest)
 		dequeue           list.Deque[remote]
 		activeTxns        map[string]*activeTxn
@@ -695,6 +702,7 @@ func newMapBasedTxnHandler(
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
 	h.mu.remoteServices = make(map[string]*list.Element[remote])
+	h.mu.remoteLockBinds = make(map[string]time.Time)
 	h.mu.dequeue = list.New[remote]()
 	return h
 }
@@ -795,6 +803,28 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 	}
 }
 
+func (h *mapBasedTxnHolder) keepRemoteLockBindActive(remoteService string, bind pb.LockTable) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.mu.remoteLockBinds[getRemoteLockBindKey(remoteService, bind)] = time.Now()
+}
+
+func (h *mapBasedTxnHolder) hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool {
+	if remoteService == h.serviceID {
+		return true
+	}
+	h.mu.RLock()
+	lastSeen, ok := h.mu.remoteLockBinds[getRemoteLockBindKey(remoteService, bind)]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if maxKeepInterval <= 0 {
+		return true
+	}
+	return time.Since(lastSeen) < maxKeepInterval
+}
+
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
 	needRemoved [][]byte,
@@ -806,6 +836,11 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	}
 	h.mu.Lock()
 	now := time.Now()
+	for key, lastSeen := range h.mu.remoteLockBinds {
+		if now.Sub(lastSeen) >= maxKeepInterval {
+			delete(h.mu.remoteLockBinds, key)
+		}
+	}
 	h.mu.dequeue.Iter(0, func(r remote) bool {
 		v := now.Sub(r.time)
 		if v < maxKeepInterval {
@@ -901,7 +936,13 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 	if isRetryError(err) {
 		return true
 	}
+	return !h.canUnlockRemoteTxn(txn)
+}
 
+func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
+	if txn.CreatedOn == h.serviceID {
+		return false
+	}
 	cannotCommit := []pb.OrphanTxn{
 		{
 			Service: txn.CreatedOn,
@@ -911,11 +952,11 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
-		// any error, we cannot make txn as a invalid txn
-		return true
+		// any error, we cannot determine that the txn is safe to unlock.
+		return false
 	}
-	// the target txn is committing, valid
-	return len(committing) != 0
+	// the target txn is safe to unlock only when TN confirms it is not committing.
+	return len(committing) == 0
 }
 
 func (h *mapBasedTxnHolder) close() {
@@ -951,6 +992,25 @@ func getUUIDFromServiceIdentifier(id string) string {
 		return id
 	}
 	return id[19:]
+}
+
+func getRemoteLockBindKey(remoteService string, bind pb.LockTable) string {
+	var b strings.Builder
+	b.Grow(len(remoteService) + len(bind.ServiceID) + 64)
+	b.WriteString(remoteService)
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(uint64(bind.Group), 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.Table, 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.OriginTable, 10))
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(uint64(bind.Sharding), 10))
+	b.WriteByte('/')
+	b.WriteString(bind.ServiceID)
+	b.WriteByte('/')
+	b.WriteString(strconv.FormatUint(bind.Version, 10))
+	return b.String()
 }
 
 func ShardingByRow(row []byte) uint64 {
