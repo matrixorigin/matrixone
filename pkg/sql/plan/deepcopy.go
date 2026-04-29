@@ -228,6 +228,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupColTypes:   slices.Clone(node.DedupColTypes),
 		UpdateCtxList:   DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:    DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		OriginViews:     slices.Clone(node.OriginViews),
+		DirectView:      node.DirectView,
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -697,17 +699,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_DropTable:
 		newDf.Definition = &plan.DataDefinition_DropTable{
-			DropTable: &plan.DropTable{
-				IfExists:        df.DropTable.IfExists,
-				Database:        df.DropTable.Database,
-				Table:           df.DropTable.Table,
-				IndexTableNames: slices.Clone(df.DropTable.GetIndexTableNames()),
-				ClusterTable:    DeepCopyClusterTable(df.DropTable.GetClusterTable()),
-				TableId:         df.DropTable.GetTableId(),
-				ForeignTbl:      slices.Clone(df.DropTable.GetForeignTbl()),
-				IsView:          df.DropTable.IsView,
-				TableDef:        DeepCopyTableDef(df.DropTable.GetTableDef(), true),
-			},
+			DropTable: DeepCopyDropTable(df.DropTable),
 		}
 
 	case *plan.DataDefinition_CreateIndex:
@@ -1019,6 +1011,32 @@ func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
 		ColumnIndexOfAccountId: cluster.GetColumnIndexOfAccountId(),
 	}
 	return newClusterTable
+}
+
+func DeepCopyDropTable(src *plan.DropTable) *plan.DropTable {
+	if src == nil {
+		return nil
+	}
+	dst := &plan.DropTable{
+		IfExists:             src.IfExists,
+		Database:             src.Database,
+		Table:                src.Table,
+		IndexTableNames:      slices.Clone(src.GetIndexTableNames()),
+		ClusterTable:         DeepCopyClusterTable(src.GetClusterTable()),
+		TableId:              src.GetTableId(),
+		ForeignTbl:           slices.Clone(src.GetForeignTbl()),
+		IsView:               src.IsView,
+		TableDef:             DeepCopyTableDef(src.GetTableDef(), true),
+		UpdateFkSqls:         slices.Clone(src.GetUpdateFkSqls()),
+		FkChildTblsReferToMe: slices.Clone(src.GetFkChildTblsReferToMe()),
+	}
+	if len(src.GetTables()) > 0 {
+		dst.Tables = make([]*plan.DropTable, len(src.GetTables()))
+		for i, t := range src.GetTables() {
+			dst.Tables[i] = DeepCopyDropTable(t)
+		}
+	}
+	return dst
 }
 
 func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {

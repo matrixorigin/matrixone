@@ -9,12 +9,12 @@ insert into t1 values
 (6,'Tapan Samanta', 'X');
 select a,startswith(b,'An') from t1;
 a    startswith(b, An)
-1    true
-2    true
-3    true
-4    true
-5    false
-6    false
+1    1
+2    1
+3    1
+4    1
+5    0
+6    0
 select a,b,c from t1 where startswith(b,'An')=1 and startswith(c,'I')=1;
 a    b    c
 1    Ananya Majumdar    IX
@@ -30,12 +30,12 @@ insert into t1 values
 (6,'Tapan Samanta', 'XI');
 select a,endsWith(b,'a') from t1;
 a    endswith(b, a)
-1    false
-2    true
-3    true
-4    false
-5    false
-6    true
+1    0
+2    1
+3    1
+4    0
+5    0
+6    1
 select a,b,c from t1 where endswith(b,'a')=1 and endswith(c,'I')=1;
 a    b    c
 3    Aniket Sharma    XI
@@ -65,16 +65,16 @@ null
 drop table t1;
 select endsWith('a', 'a') from dual;
 endswith(a, a)
-true
+1
 select endsWith('a', 'b') from dual;
 endswith(a, b)
-false
+0
 select endsWith('aaaa', 'a') from dual;
 endswith(aaaa, a)
-true
+1
 select endsWith('xsdfsdf', 'fsdf') from dual;
 endswith(xsdfsdf, fsdf)
-true
+1
 select endsWith('xsdfsdf', 'fsdfx') from dual;
 endswith(xsdfsdf, fsdfx)
-false
+0

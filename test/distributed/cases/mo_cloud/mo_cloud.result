@@ -254,16 +254,16 @@ Table    Create Table
 metric    CREATE TABLE `metric` (\n  `metric_name` varchar(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n  `collecttime` datetime(6) NOT NULL COMMENT 'metric data collect time',\n  `value` double DEFAULT '0.0' COMMENT 'metric value',\n  `node` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n  `role` varchar(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n  `account` varchar(1024) DEFAULT 'sys' COMMENT 'account name',\n  `type` varchar(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) COMMENT='metric data' CLUSTER BY (`account`, `metric_name`, `collecttime`)
 SHOW CREATE TABLE system_metrics.server_connections;
 View    Create View    character_set_client    collation_connection
-server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
+server_connections    CREATE SQL SECURITY DEFINER VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.server_storage_usage;
 View    Create View    character_set_client    collation_connection
-server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"    utf8mb4    utf8mb4_general_ci
+server_storage_usage    CREATE SQL SECURITY DEFINER VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_statement_errors;
 View    Create View    character_set_client    collation_connection
-sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"    utf8mb4    utf8mb4_general_ci
+sql_statement_errors    CREATE SQL SECURITY DEFINER VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_transaction_total;
 View    Create View    character_set_client    collation_connection
-sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"    utf8mb4    utf8mb4_general_ci
+sql_transaction_total    CREATE SQL SECURITY DEFINER VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"    utf8mb4    utf8mb4_general_ci
 SHOW GLOBAL VARIABLES LIKE 'save_query_result';
 Variable_name    Value
 save_query_result    off

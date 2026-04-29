@@ -49,9 +49,9 @@ internal error: do not have privilege to execute the statement
 drop table revoke_db_01.revoke_table_1;
 internal error: do not have privilege to execute the statement
 revoke create table,select,insert on database * from revoke_role_2,revoke_role_3;
-internal error: the privilege "select" can only be granted to the object type "table"
+internal error: the privilege "select" can only be granted to the object type "table" or "view"
 revoke if exists create table,select,insert on database * from revoke_role_2,revoke_role_3;
-internal error: the privilege "select" can only be granted to the object type "table"
+internal error: the privilege "select" can only be granted to the object type "table" or "view"
 revoke all on account * from revoke_role_2,revoke_role_3;
 revoke if exists all on account * from revoke_role_2,revoke_role_3;
 grant all on table *.* to revoke_role_4,revoke_role_5 with grant option;
