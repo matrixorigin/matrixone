@@ -136,9 +136,9 @@ Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster
 |---|---|---|---|---|
 | 1M | 58 s | 29 s | 45 s | 0.6x |
 | 10M | 19 min | 4 min 26s | 4 min 21 s | 4.2x |
-| **88M** | **4 h 8 min** | **62 min** | **32 min 8 s** | **~7.7x** |
+| **88M** | **4 h 8 min** | **62 min** | **1 h 12 min** | **~4x** |
 
-At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-PQ builds nearly 8× faster** — turning an overnight job into a coffee break.
+At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-Flat (GPUI) and VF-PQ builds nearly 4× faster tha CPU build** — turning an overnight job into a coffee break.
 
 ### Search Throughput (no filter, top-10)
 
