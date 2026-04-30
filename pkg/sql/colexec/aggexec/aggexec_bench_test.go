@@ -58,6 +58,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("SumInt64/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newSumAvgExec[int64, int64](mp, int64OfCheck, true, AggIdOfSum, false, types.T_int64.ToType())
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -81,6 +82,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		dec64Vec := testutil.NewDecimal64Vector(rows, types.New(types.T_decimal64, 15, 2), mp, false, nil, dec64Vals)
 		defer dec64Vec.Free(mp)
 		vectors := []*vector.Vector{dec64Vec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newSumAvgDecExec[types.Decimal64, types.Decimal128](mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -104,6 +106,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		dec64Vec := testutil.NewDecimal64Vector(rows, types.New(types.T_decimal64, 15, 2), mp, false, nil, dec64Vals)
 		defer dec64Vec.Free(mp)
 		vectors := []*vector.Vector{dec64Vec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newSumAvgDecExec[types.Decimal64, types.Decimal128](mp, false, AggIdOfAvg, false, types.New(types.T_decimal64, 15, 2))
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -127,6 +130,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		f64Vec := testutil.NewFloat64Vector(rows, types.T_float64.ToType(), mp, false, nil, f64Vals)
 		defer f64Vec.Free(mp)
 		vectors := []*vector.Vector{f64Vec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newSumAvgExec[float64, float64](mp, float64OfCheck, true, AggIdOfSum, false, types.T_float64.ToType())
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -144,6 +148,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("AvgInt64/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newSumAvgExec[int64, int64](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int64.ToType())
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -161,6 +166,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("CountColumn/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
 			if err := exec.GroupGrow(groupSize); err != nil {
@@ -191,6 +197,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 			mergeGroups[i] = uint64(i + 1)
 		}
 
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			target := newSumAvgExec[int64, int64](mp, int64OfCheck, true, AggIdOfSum, false, types.T_int64.ToType())
 			if err := target.GroupGrow(groupSize); err != nil {
@@ -221,6 +228,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 			mergeGroups[i] = uint64(i + 1)
 		}
 
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			target := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
 			if err := target.GroupGrow(groupSize); err != nil {
@@ -238,6 +246,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("MedianDistinct/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec, err := newMedianExec(mp, AggIdOfMedian, true, types.T_int64.ToType())
 			if err != nil {
@@ -265,6 +274,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 			emptyNull: true,
 		}
 		vectors := []*vector.Vector{strVec, intVec}
+		b.StopTimer()
 		for i := 0; i < b.N; i++ {
 			exec := newGroupConcatExec(mp, info, ",")
 			if err := exec.GroupGrow(groupSize); err != nil {

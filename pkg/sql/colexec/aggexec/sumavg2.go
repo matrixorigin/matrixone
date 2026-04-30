@@ -138,13 +138,13 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 		return nil
 	}
 	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
 
-	// Phase 1: accumulate into L1-resident local buffer.
-	// slotOf maps group IDs to local slots via open-addressing (uint8 index, 256 capacity).
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localSums [256]T
-	var localGrps [256]uint64
+	var localSums [maxSlots]T
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -162,13 +162,33 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 		}
 
 		g := grp - 1
-		val := T(vals[i+offset])
+		var val T
+		if isConst {
+			val = T(vals[0])
+		} else {
+			val = T(vals[i+offset])
+		}
 
-		// Open-addressing lookup in local slot table.
 		h := uint8(g) ^ uint8(g>>8)
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					// Local table full — direct scatter for this row.
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+					old := sums[y]
+					result := old + val
+					if err := exec.ofCheck(old, val, result); err != nil {
+						return err
+					}
+					sums[y] = result
+					if exec.state[x].vecs[0].IsNull(y) {
+						exec.state[x].vecs[0].UnsetNull(y)
+					}
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g
@@ -177,14 +197,18 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 				break
 			}
 			if localGrps[s] == g {
-				localSums[s] += val
+				old := localSums[s]
+				result := old + val
+				if err := exec.ofCheck(old, val, result); err != nil {
+					return err
+				}
+				localSums[s] = result
 				break
 			}
 			h++
 		}
 	}
 
-	// Phase 2: scatter-back local results into chunked state.
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
@@ -214,12 +238,14 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 		return nil
 	}
 	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localSums [256]T
-	var localCnts [256]int64
-	var localGrps [256]uint64
+	var localSums [maxSlots]T
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -237,12 +263,32 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 		}
 
 		g := grp - 1
-		val := T(vals[i+offset])
+		var val T
+		if isConst {
+			val = T(vals[0])
+		} else {
+			val = T(vals[i+offset])
+		}
 
 		h := uint8(g) ^ uint8(g>>8)
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+					old := sums[y]
+					result := old + val
+					if err := exec.ofCheck(old, val, result); err != nil {
+						return err
+					}
+					sums[y] = result
+					cntPtr := exec.state[x].vecs[1].GetData()
+					cnts := (*[AggBatchSize]int64)(unsafe.Pointer(&cntPtr[0]))
+					cnts[y]++
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g
@@ -252,7 +298,12 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 				break
 			}
 			if localGrps[s] == g {
-				localSums[s] += val
+				old := localSums[s]
+				result := old + val
+				if err := exec.ofCheck(old, val, result); err != nil {
+					return err
+				}
+				localSums[s] = result
 				localCnts[s]++
 				break
 			}
@@ -274,7 +325,6 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 		}
 		sums[y] = result
 
-		// AVG uses a second state vector for counts.
 		cntPtr := exec.state[x].vecs[1].GetData()
 		cnts := (*[AggBatchSize]int64)(unsafe.Pointer(&cntPtr[0]))
 		cnts[y] += localCnts[s]
@@ -524,11 +574,13 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 	}
 	argScale := exec.aggInfo.argTypes[0].Scale
 	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localSums [256]S
-	var localGrps [256]uint64
+	var localSums [maxSlots]S
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -546,11 +598,33 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 		}
 
 		g := grp - 1
-		val := decimalStateFromArg[A, S](args[i+offset], argScale)
+		var raw A
+		if isConst {
+			raw = args[0]
+		} else {
+			raw = args[i+offset]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
 		h := uint8(g) ^ uint8(g>>8)
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := (*[AggBatchSize]S)(exec.chunkPtrs[x])
+					sumVec := exec.state[x].vecs[0]
+					if sumVec.IsNull(y) {
+						sumVec.UnsetNull(y)
+						sums[y] = val
+					} else {
+						var err error
+						if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
+							return err
+						}
+					}
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g
@@ -559,6 +633,9 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 				break
 			}
 			if localGrps[s] == g {
+				// Unchecked add is safe: Decimal128 has 38 digits of range,
+				// local buffer holds at most 4096 values (one batch), so overflow
+				// requires individual values near 10^34 which exceeds DECIMAL(15,2).
 				localSums[s] = decimalStateAddUnchecked(localSums[s], val)
 				break
 			}
@@ -593,12 +670,14 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 	}
 	argScale := exec.aggInfo.argTypes[0].Scale
 	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localSums [256]S
-	var localCnts [256]int64
-	var localGrps [256]uint64
+	var localSums [maxSlots]S
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -616,11 +695,29 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 		}
 
 		g := grp - 1
-		val := decimalStateFromArg[A, S](args[i+offset], argScale)
+		var raw A
+		if isConst {
+			raw = args[0]
+		} else {
+			raw = args[i+offset]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
 		h := uint8(g) ^ uint8(g>>8)
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := (*[AggBatchSize]S)(exec.chunkPtrs[x])
+					var err error
+					if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
+						return err
+					}
+					cnts := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[0]))
+					cnts[y]++
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g

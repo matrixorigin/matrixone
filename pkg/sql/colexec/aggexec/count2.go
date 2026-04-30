@@ -49,9 +49,10 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 	}
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localCnts [256]int64
-	var localGrps [256]uint64
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -68,6 +69,13 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					vals := (*[AggBatchSize]int64)(exec.chunkPtrs[x])
+					vals[y]++
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g
@@ -165,9 +173,10 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 	}
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localCnts [256]int64
-	var localGrps [256]uint64
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -189,6 +198,13 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					vals := (*[AggBatchSize]int64)(exec.chunkPtrs[x])
+					vals[y]++
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g

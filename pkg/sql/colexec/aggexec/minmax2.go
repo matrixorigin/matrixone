@@ -53,12 +53,14 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		return nil
 	}
 	vals := vector.MustFixedColNoTypeCheck[T](vec)
+	isConst := vec.IsConst()
 
 	const slotEmpty = 0xFF
+	const maxSlots = 255
 	var slotOf [256]uint8
-	var localVals [256]T
-	var localInit [256]bool
-	var localGrps [256]uint64
+	var localVals [maxSlots]T
+	var localInit [maxSlots]bool
+	var localGrps [maxSlots]uint64
 	nSlots := 0
 
 	for i := range slotOf {
@@ -76,12 +78,30 @@ func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors [
 		}
 
 		g := grp - 1
-		value := vals[i+offset]
+		var value T
+		if isConst {
+			value = vals[0]
+		} else {
+			value = vals[i+offset]
+		}
 
 		h := uint8(g) ^ uint8(g>>8)
 		for {
 			s := slotOf[h]
 			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					aggs := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+					aggVec := exec.state[x].vecs[0]
+					if aggVec.IsNull(y) {
+						aggVec.UnsetNull(y)
+						aggs[y] = value
+					} else if exec.comp(value, aggs[y]) < 0 {
+						aggs[y] = value
+					}
+					break
+				}
 				s = uint8(nSlots)
 				slotOf[h] = s
 				localGrps[nSlots] = g

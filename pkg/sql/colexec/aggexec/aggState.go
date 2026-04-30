@@ -29,14 +29,17 @@ import (
 )
 
 const (
-	AggBatchSize        = 8192
-	aggBatchSizeShift   = 13 // log2(AggBatchSize)
-	aggBatchSizeMask    = AggBatchSize - 1
-	kAggArgArenaSize    = 512 * 1024
-	kAggArgPrefixSz     = 2
-	kAggArgOrdinalSz = 4
-	magicNumber      = uint64(0xdeadbeefbeefdead)
+	AggBatchSize     = 8192
+	aggBatchSizeShift = 13 // log2(AggBatchSize)
+	aggBatchSizeMask  = AggBatchSize - 1
+	kAggArgArenaSize  = 512 * 1024
+	kAggArgPrefixSz   = 2
+	kAggArgOrdinalSz  = 4
+	magicNumber       = uint64(0xdeadbeefbeefdead)
 )
+
+var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}  // mask == size-1
+var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
 
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
