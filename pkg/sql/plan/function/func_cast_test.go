@@ -2851,3 +2851,75 @@ func TestCastJsonStringNumeric(t *testing.T) {
 	}, bad, proc, 1, nil)
 	require.Error(t, err)
 }
+
+// TestFloatCastNegativeOverflowAndNaN asserts that float32/float64 -> float32
+// rejects both positive and negative magnitude overflow, and that float ->
+// integer rejects NaN, +/-Inf, and negative overflow (not just positive).
+// Prior to this fix only the positive bound was checked.
+func TestFloatCastNegativeOverflowAndNaN(t *testing.T) {
+	ctx := context.Background()
+
+	// float64 -> float32: negative overflow must be rejected symmetrically.
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, float32](ctx, []float64{-math.MaxFloat32 * 2}, nil),
+		"float64=-large must not silently narrow to -Inf")
+	require.NoError(t,
+		OverflowForNumericToNumeric[float64, float32](ctx, []float64{math.MaxFloat32}, nil))
+
+	// float64 -> int8: NaN, +/-Inf, and negative overflow must all fail.
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, int8](ctx, []float64{math.NaN()}, nil),
+		"NaN must not be converted to an integer silently")
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, int8](ctx, []float64{math.Inf(1)}, nil))
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, int8](ctx, []float64{math.Inf(-1)}, nil))
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, int8](ctx, []float64{-1e9}, nil),
+		"negative overflow must be caught, not only positive")
+	require.NoError(t,
+		OverflowForNumericToNumeric[float64, int8](ctx, []float64{-128}, nil))
+
+	// float64 -> uint8: negative values must fail.
+	require.Error(t,
+		OverflowForNumericToNumeric[float64, uint8](ctx, []float64{-1}, nil),
+		"negative float must not fit into unsigned integer")
+
+	// float32 versions (smaller ranges exercise the helper the same way).
+	require.Error(t,
+		OverflowForNumericToNumeric[float32, int16](ctx, []float32{float32(math.Inf(1))}, nil))
+	require.Error(t,
+		OverflowForNumericToNumeric[float32, int16](ctx, []float32{-40000}, nil))
+}
+
+// TestNumericToBitRejectsInvalidFloat ensures cast(x as bit(n)) for a
+// float source rejects NaN, Inf, negative values, and values above
+// uint64's range — previously uint64(math.Round(...)) silently produced
+// 0 or a bit-wrapped value for those inputs.
+func TestNumericToBitRejectsInvalidFloat(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	run := func(t *testing.T, val float64, wantErr bool, description string) {
+		vec := vector.NewVec(types.T_float64.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, vector.AppendFixedList(vec, []float64{val}, nil, mp))
+		from := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		bitRes := vector.NewFunctionResultWrapper(types.T_bit.ToType(), mp).(*vector.FunctionResult[uint64])
+		defer bitRes.Free()
+		require.NoError(t, bitRes.PreExtendAndReset(1))
+		err := numericToBit[float64](ctx, from, bitRes, 64, 1, nil)
+		if wantErr {
+			require.Error(t, err, description)
+		} else {
+			require.NoError(t, err, description)
+		}
+	}
+
+	run(t, math.NaN(), true, "NaN -> bit must be rejected")
+	run(t, math.Inf(1), true, "+Inf -> bit must be rejected")
+	run(t, math.Inf(-1), true, "-Inf -> bit must be rejected")
+	run(t, -1.0, true, "negative float -> bit must be rejected")
+	run(t, 1e30, true, "above uint64 range -> bit must be rejected")
+	run(t, 3.0, false, "valid small float rounds to 3")
+}

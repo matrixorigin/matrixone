@@ -2554,7 +2554,25 @@ func numericToBit[T constraints.Integer | constraints.Float](
 			var val uint64
 			switch any(v).(type) {
 			case float32, float64:
-				val = uint64(math.Round(float64(v)))
+				// uint64(NaN)/uint64(+Inf)/uint64(negative) produce
+				// platform-specific garbage (NaN -> 0, Inf -> MaxUint64,
+				// negative -> bit-wrapped). Reject them explicitly so
+				// cast(<bad> as bit(n)) matches integer-cast semantics
+				// instead of silently writing a magic value.
+				f := float64(v)
+				if math.IsNaN(f) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value 'NaN'")
+				}
+				if math.IsInf(f, 0) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", f)
+				}
+				if f < 0 {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", f)
+				}
+				if math.Round(f) > math.MaxUint64 {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", f)
+				}
+				val = uint64(math.Round(f))
 			default:
 				val = uint64(v)
 			}
@@ -5996,50 +6014,66 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		switch ri.(type) {
 		case *int8:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), math.MinInt8, math.MaxInt8, "int8"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int16:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), math.MinInt16, math.MaxInt16, "int16"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int32:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), math.MinInt32, math.MaxInt32, "int32"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int64:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), math.MinInt64, math.MaxInt64, "int64"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), 0, math.MaxUint8, "uint8"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), 0, math.MaxUint16, "uint16"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), 0, math.MaxUint32, "uint32"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, float64(x), 0, math.MaxUint64, "uint64"); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -6048,61 +6082,94 @@ func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float]
 		switch ri.(type) {
 		case *int8:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt8 {
-					return moerr.NewOutOfRangef(ctx, "int8", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, math.MinInt8, math.MaxInt8, "int8"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int16:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt16 {
-					return moerr.NewOutOfRangef(ctx, "int16", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, math.MinInt16, math.MaxInt16, "int16"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int32:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxInt32 {
-					return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, math.MinInt32, math.MaxInt32, "int32"); err != nil {
+						return err
+					}
 				}
 			}
 		case *int64:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) &&
-					(math.Round(x) > math.MaxInt64 || math.Round(x) < math.MinInt64) {
-					return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, math.MinInt64, math.MaxInt64, "int64"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint8:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint8 {
-					return moerr.NewOutOfRangef(ctx, "uint8", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, 0, math.MaxUint8, "uint8"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint16:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint16 {
-					return moerr.NewOutOfRangef(ctx, "uint16", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, 0, math.MaxUint16, "uint16"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint32:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint32 {
-					return moerr.NewOutOfRangef(ctx, "uint32", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, 0, math.MaxUint32, "uint32"); err != nil {
+						return err
+					}
 				}
 			}
 		case *uint64:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && math.Round(x) > math.MaxUint64 {
-					return moerr.NewOutOfRangef(ctx, "uint64", "value '%v'", x)
+				if !nsp.Contains(uint64(i)) {
+					if err := checkFloatForInteger(ctx, x, 0, math.MaxUint64, "uint64"); err != nil {
+						return err
+					}
 				}
 			}
 		case *float32:
 			for i, x := range slice {
-				if !nsp.Contains(uint64(i)) && x > math.MaxFloat32 {
+				if !nsp.Contains(uint64(i)) && (x > math.MaxFloat32 || x < -math.MaxFloat32) {
 					return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", x)
 				}
 			}
 		}
 
+	}
+	return nil
+}
+
+// checkFloatForInteger rejects NaN, Inf, and values that round outside the
+// target integer range. maxV is passed as float64 because the caller uses
+// typed constants (math.MaxUint64 fits in float64 exactly up to the cast's
+// rounding point — the comparison is done in float64 anyway).
+func checkFloatForInteger(ctx context.Context, x, minV, maxV float64, typeName string) error {
+	if math.IsNaN(x) {
+		return moerr.NewOutOfRangef(ctx, typeName, "value 'NaN'")
+	}
+	if math.IsInf(x, 0) {
+		return moerr.NewOutOfRangef(ctx, typeName, "value '%v'", x)
+	}
+	rounded := math.Round(x)
+	if rounded > maxV || rounded < minV {
+		return moerr.NewOutOfRangef(ctx, typeName, "value '%v'", x)
 	}
 	return nil
 }
