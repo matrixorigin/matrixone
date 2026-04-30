@@ -496,8 +496,13 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
+		// hide file path. INFILE{} option values must be single-quote-escaped
+		// per MySQL string-literal rules; users can legitimately put a quote
+		// in CompressType/Format/JsonData metadata.
+		createStr += " INFILE{'FILEPATH'=''," +
+			"'COMPRESSION'=" + formatStrLit(param.CompressType) + "," +
+			"'FORMAT'=" + formatStrLit(param.Format) + "," +
+			"'JSONDATA'=" + formatStrLit(param.JsonData) + "}"
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -505,10 +510,13 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+					fields += " TERMINATED BY " + formatStrLit(param.Tail.Fields.Terminated.Value)
 				}
 			}
 
+			// escape only handles the two byte-level specials (NUL, backslash)
+			// from the original encoding; single-quote escaping is done by
+			// formatStrLit when we wrap the result.
 			escape := func(value byte) string {
 				if value == byte(0) {
 					return ""
@@ -518,23 +526,23 @@ func ConstructCreateTableSQL(
 				return fmt.Sprintf("%c", value)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
-				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
+				fields += " ENCLOSED BY " + formatStrLit(escape(param.Tail.Fields.EnclosedBy.Value))
 			}
 			if param.Tail.Fields.EscapedBy != nil {
-				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+				fields += " ESCAPED BY " + formatStrLit(escape(param.Tail.Fields.EscapedBy.Value))
 			}
 		}
 
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+				line += " STARTING BY " + formatStrLit(param.Tail.Lines.StartingBy)
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
 				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
 					line += " TERMINATED BY '\\\\n'"
 				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+					line += " TERMINATED BY " + formatStrLit(param.Tail.Lines.TerminatedBy.Value)
 				}
 			}
 		}
