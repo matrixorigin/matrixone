@@ -16,13 +16,13 @@ package status
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -292,7 +292,7 @@ func (s *Server) selectCNInstance(cnUUID string) (string, *CNInstance, error) {
 	if cnUUID != "" {
 		instance, ok := s.mu.CNInstances[cnUUID]
 		if !ok {
-			return "", nil, fmt.Errorf("cn %q not found", cnUUID)
+			return "", nil, moerr.NewInternalErrorNoCtxf("cn %q not found", cnUUID)
 		}
 		copy := *instance
 		return cnUUID, &copy, nil
@@ -300,7 +300,7 @@ func (s *Server) selectCNInstance(cnUUID string) (string, *CNInstance, error) {
 
 	switch len(s.mu.CNInstances) {
 	case 0:
-		return "", nil, fmt.Errorf("no CN instances registered")
+		return "", nil, moerr.NewInternalErrorNoCtxf("no CN instances registered")
 	case 1:
 		for uuid, instance := range s.mu.CNInstances {
 			copy := *instance
@@ -313,7 +313,7 @@ func (s *Server) selectCNInstance(cnUUID string) (string, *CNInstance, error) {
 		uuids = append(uuids, uuid)
 	}
 	sort.Strings(uuids)
-	return "", nil, fmt.Errorf("multiple CN instances registered, specify ?cn= (%s)", strings.Join(uuids, ", "))
+	return "", nil, moerr.NewInternalErrorNoCtxf("multiple CN instances registered, specify ?cn= (%s)", strings.Join(uuids, ", "))
 }
 
 func optionalUint32Param(r *http.Request, key string) (*uint32, error) {
@@ -323,7 +323,7 @@ func optionalUint32Param(r *http.Request, key string) (*uint32, error) {
 	}
 	parsed, err := strconv.ParseUint(value, 10, 32)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", key, err)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid %s: %v", key, err)
 	}
 	result := uint32(parsed)
 	return &result, nil
@@ -336,7 +336,7 @@ func optionalUint64Param(r *http.Request, key string) (*uint64, error) {
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", key, err)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid %s: %v", key, err)
 	}
 	return &parsed, nil
 }
@@ -344,11 +344,11 @@ func optionalUint64Param(r *http.Request, key string) (*uint64, error) {
 func requiredUint32Param(r *http.Request, key string) (uint32, error) {
 	value := r.URL.Query().Get(key)
 	if value == "" {
-		return 0, fmt.Errorf("%s is required", key)
+		return 0, moerr.NewInternalErrorNoCtxf("%s is required", key)
 	}
 	parsed, err := strconv.ParseUint(value, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %w", key, err)
+		return 0, moerr.NewInternalErrorNoCtxf("invalid %s: %v", key, err)
 	}
 	return uint32(parsed), nil
 }
@@ -361,22 +361,22 @@ func optionalTimestampParam(r *http.Request, key string) (*timestamp.Timestamp, 
 
 	parts := strings.Split(value, ":")
 	if len(parts) > 2 {
-		return nil, fmt.Errorf("invalid %s: expected physical[:logical]", key)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid %s: expected physical[:logical]", key)
 	}
 
 	physical, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s physical time: %w", key, err)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid %s physical time: %v", key, err)
 	}
 	if physical < 0 {
-		return nil, fmt.Errorf("%s physical time must be non-negative", key)
+		return nil, moerr.NewInternalErrorNoCtxf("%s physical time must be non-negative", key)
 	}
 
 	ts := &timestamp.Timestamp{PhysicalTime: physical}
 	if len(parts) == 2 {
 		logical, err := strconv.ParseUint(parts[1], 10, 32)
 		if err != nil {
-			return nil, fmt.Errorf("invalid %s logical time: %w", key, err)
+			return nil, moerr.NewInternalErrorNoCtxf("invalid %s logical time: %v", key, err)
 		}
 		ts.LogicalTime = uint32(logical)
 	}
@@ -390,10 +390,10 @@ func intParam(r *http.Request, key string, defaultValue int) (int, error) {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, fmt.Errorf("invalid %s: %w", key, err)
+		return 0, moerr.NewInternalErrorNoCtxf("invalid %s: %v", key, err)
 	}
 	if parsed <= 0 {
-		return 0, fmt.Errorf("%s must be greater than zero", key)
+		return 0, moerr.NewInternalErrorNoCtxf("%s must be greater than zero", key)
 	}
 	return parsed, nil
 }
