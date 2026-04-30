@@ -777,7 +777,7 @@ func (s *LogtailServer) sendActivation(ctx context.Context, p1 *catalogActivatio
 	allowedAccounts := newLazyCatalogAllowedAccounts(act.accountID)
 
 	var responseTails []logtail.TableLogtail
-	var allCloseCBs []func()
+	allCloseCBs := make([]func(), 0, len(lazyCatalogTableIDs))
 	sent := false
 
 	defer func() {

@@ -532,33 +532,6 @@ func (c *PushClient) TryToSubscribeTable(
 	return
 }
 
-// this method will ignore lock check, subscribe a table and block until subscribe succeed.
-// developer should use this method carefully.
-// in most time, developer should use TryToSubscribeTable instead.
-func (c *PushClient) forcedSubscribeTable(
-	ctx context.Context,
-	dbId, tblId uint64) error {
-	s := c.subscriber
-
-	if err := s.sendSubscribe(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		return err
-	}
-	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
-	defer ticker.Stop()
-
-	for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if ok := c.subscribed.isSubscribed(dbId, tblId); ok {
-				return nil
-			}
-		}
-	}
-	return moerr.NewInternalError(ctx, "forced subscribe table timeout")
-}
-
 func (c *PushClient) forcedSubscribeCatalogTable(
 	ctx context.Context,
 	dbId, tblId uint64,
