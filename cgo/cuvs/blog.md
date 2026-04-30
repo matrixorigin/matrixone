@@ -11,6 +11,7 @@ Our target was an IVF index with thousands of clusters holding tens of millions 
 1. **Clustering Latency**: Standard K-Means was slow and often produced unbalanced clusters, leading to "hotspots" that slowed down search.
 2. **Assignment Overhead**: Mapping 50M+ vectors to their nearest centroids is computationally expensive. On CPUs, this task competed for resources with data loading and decompression, dragging the process out to a full day.
 3. **The GPU "Single Query" Trap**: Databases typically process one query at a time. GPUs, however, only show their true strength when processing large batches.
+4. **Filtered Search Penalty**: Real SQL workloads rarely query a vector index in isolation — they look like *"top-10 nearest passages **where `file_id = X`**"*. The straightforward implementation is **file-based filtering**: for every incoming query, re-read the filter columns from object storage to evaluate the predicate. At tens of millions of rows, that turns each query into a storage-bound job — disk/network I/O dominates and GPU search throughput collapses long before the index itself is the bottleneck. Compounding this, the "search first, filter later" pattern wastes GPU cycles ranking rows the predicate will discard and forces deeper `nprobe` sweeps to refill `top-k` after filtering.
 
 ## Hardware & Methodology
 
@@ -116,6 +117,52 @@ At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-PQ builds n
 | 100 | 0.97 | 3 | 0.86 | 66.4 |
 
 This is the bitset pre-filtering payoff: IVF-PQ stays flat at ~67 QPS across `nprobe`, while IVF-Flat must push `nprobe` up to recover the recall it loses to post-search filtering — and pays for it. At the high-recall setting (`nprobe=100`, recall 0.97), pure-GPU IVF-PQ delivers **~22× higher QPS** because the GPU never spends a cycle on rows the SQL predicate already rejected.
+
+### Parameter Tuning: How We Chose `nprobe` and `pq_bits`
+
+Before declaring head-to-head winners, two questions need answers for each index family: *how do we pick `nprobe`*, and (for IVF-PQ) *how aggressive can the quantization be*? We tuned on the 10M slice — large enough to be representative, cheap enough to sweep — targeting **recall ≈ 0.80 @ top-10**, then validated the chosen setting at 88M.
+
+#### IVF-PQ: `pq_bits = 8`, `nprobe = 16`
+
+We ran a Pareto sweep over `nprobe ∈ {1, 8, 16, 32, 64, 128, 256}`:
+
+![10M IVF-PQ: Recall vs. Latency across nprobe](pareto_10m.png)
+
+The curve shows a classic IVF knee: recall climbs steeply until `nprobe = 16` (0.79), then flattens — beyond that, each doubling of `nprobe` adds at most ~1 point of recall but latency starts to drift up. **`nprobe = 16` is the Pareto-optimal point** for our 0.80 recall target.
+
+Next, can more aggressive PQ compression hold that target? We swept `pq_bits ∈ {8, 7, 6}` at the same `nprobe` ladder (10M, top-10, concurrency=100, n=10000):
+
+| `nprobe` | `pq_bits=8` Recall | `pq_bits=7` Recall | `pq_bits=6` Recall |
+|---|---|---|---|
+| 1   | 0.39 | 0.38 | 0.37 |
+| 8   | 0.74 | 0.71 | 0.68 |
+| **16**  | **0.79** | 0.76 | 0.72 |
+| 32  | 0.82 | 0.79 | 0.74 |
+| 64  | 0.83 | 0.80 | 0.75 |
+| 128 | 0.84 | 0.81 | 0.76 |
+| 256 | 0.84 | 0.81 | 0.76 |
+
+Only `pq_bits = 8` clears 0.80 at `nprobe = 16`. `pq_bits = 7` needs `nprobe ≥ 64` to get there (4× more probes for the same recall), and `pq_bits = 6` never reaches 0.80 in this sweep — its asymptotic ceiling is ~0.76. Since dropping from 8 → 7 bits saves only ~12% on stored vector bytes, trading recall headroom for a fractional storage win is the wrong call.
+
+We then validated at 88M:
+
+![88M IVF-PQ: Recall vs. Latency across nprobe](pareto_88m.png)
+
+The 88M curve shows the same knee: recall hits 0.83 at `nprobe = 16` (~125 ms), and only creeps to 0.88 by `nprobe = 256` — but latency triples to ~380 ms once `nprobe ≥ 32`, where the per-probe cost stops fitting in the device-memory working set. The 10M-tuned setting (`pq_bits = 8, nprobe = 16`) holds at scale, which is the whole point of doing the Pareto on the smaller dataset.
+
+#### IVF-Flat: `lists = 10000`, `nprobe` is a recall–throughput dial
+
+IVF-Flat has no quantization knob — vectors are stored uncompressed in `float32` — so the only tunables are cluster count (`lists`) and `nprobe`. We set `lists = 10000` for the 88M index (≈ √N, the standard heuristic) and swept `nprobe`:
+
+| `nprobe` | Recall@10 | QPS | P50 latency |
+|---|---|---|---|
+| 5   | 0.70 | 22 | 4.40 s |
+| 20  | 0.91 | 10 | — |
+| 100 | 0.96 | 4  | — |
+
+(88M `wiki_all`, no filter, top-10, concurrency=100, n=10000.)
+
+Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster pages off disk — the 270 GB raw dataset doesn't fit in the ~256 GB usable cache (see the cache-miss analysis below) — so QPS roughly halves at each step. There is no sweet spot, only a recall-vs-throughput dial. For the head-to-head we report `nprobe ∈ {5, 20, 100}` to span the full curve from "fast but low recall" to "high recall but disk-bound".
 
 ### What the Numbers Tell Us
 
