@@ -869,8 +869,12 @@ func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
 }
 
 func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	// When backend budget is disabled, only non-backend errors may retry.
 	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
-		return 0, false
+		if isBoundedRetryLockError(err) {
+			return 0, false
+		}
+		return defaultWaitTimeOnRetryLock, true
 	}
 
 	now := time.Now()

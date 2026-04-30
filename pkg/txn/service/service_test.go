@@ -23,7 +23,20 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
+
+type retryTestSender struct {
+	send func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error)
+}
+
+func (s *retryTestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	return s.send(ctx, requests)
+}
+
+func (s *retryTestSender) Close() error {
+	return nil
+}
 
 func TestGCZombie(t *testing.T) {
 	sender := NewTestSender()
@@ -141,4 +154,55 @@ func Test_parallelSendWithRetry(t *testing.T) {
 	defer cancel()
 	sender.action = "return_err_and_reset"
 	s.parallelSendWithRetry(ctx, nil, nil)
+}
+
+func Test_parallelSendWithRetryStopsDuringBackoffOnContextCancel(t *testing.T) {
+	firstSend := make(chan struct{})
+	sender := &retryTestSender{
+		send: func(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+			select {
+			case <-firstSend:
+				return &rpc.SendResult{}, nil
+			default:
+				close(firstSend)
+				return nil, moerr.NewInternalErrorNoCtx("return error")
+			}
+		},
+	}
+	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, time.Millisecond*3).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultC := make(chan *rpc.SendResult, 1)
+	go func() {
+		resultC <- s.parallelSendWithRetry(ctx, nil, nil)
+	}()
+
+	<-firstSend
+	cancel()
+	assert.Nil(t, <-resultC)
+}
+
+func Test_parallelSendWithRetryReturnsNilWhenContextAlreadyCanceled(t *testing.T) {
+	called := false
+	sender := &retryTestSender{
+		send: func(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+			called = true
+			return &rpc.SendResult{}, nil
+		},
+	}
+	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, time.Millisecond*3).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.Nil(t, s.parallelSendWithRetry(ctx, nil, nil))
+	assert.False(t, called)
 }

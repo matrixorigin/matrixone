@@ -212,6 +212,127 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 	)
 }
 
+func TestUnlockRemoteStopsWhenRetryBudgetExhausted(t *testing.T) {
+	oldInitial := remoteRetryInitialBackoff
+	oldMaxBackoff := remoteRetryMaxBackoff
+	oldMaxDuration := remoteRetryMaxDuration
+	remoteRetryInitialBackoff = time.Millisecond
+	remoteRetryMaxBackoff = time.Millisecond
+	remoteRetryMaxDuration = -time.Millisecond
+	defer func() {
+		remoteRetryInitialBackoff = oldInitial
+		remoteRetryMaxBackoff = oldMaxBackoff
+		remoteRetryMaxDuration = oldMaxDuration
+	}()
+
+	n := 0
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Unlock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					n++
+					writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+				},
+			)
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = pb.LockTable{
+						ServiceID: "s1",
+						Valid:     true,
+					}
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			l.unlock(txn, nil, timestamp.Timestamp{})
+			assert.Equal(t, 1, n)
+			reuse.Free(txn, nil)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
+func TestGetLockRemoteWithRetry(t *testing.T) {
+	oldInitial := remoteRetryInitialBackoff
+	oldMaxBackoff := remoteRetryMaxBackoff
+	oldMaxDuration := remoteRetryMaxDuration
+	remoteRetryInitialBackoff = time.Millisecond
+	remoteRetryMaxBackoff = time.Millisecond
+	remoteRetryMaxDuration = time.Second
+	defer func() {
+		remoteRetryInitialBackoff = oldInitial
+		remoteRetryMaxBackoff = oldMaxBackoff
+		remoteRetryMaxDuration = oldMaxDuration
+	}()
+
+	n := 0
+	called := false
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_GetTxnLock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					n++
+					if n == 1 {
+						writeResponse(getLogger(""), cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+						return
+					}
+					resp.GetTxnLock.Value = int32(pb.Granularity_Row)
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = pb.LockTable{
+						ServiceID: "s1",
+						Valid:     true,
+					}
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			l.getLock([]byte("row1"), pb.WaitTxn{TxnID: []byte("txn1")}, func(lock Lock) {
+				called = true
+				assert.Equal(t, byte(pb.Granularity_Row), lock.value)
+			})
+			assert.True(t, called)
+			assert.Equal(t, 2, n)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
 func TestRemoteWithBindChanged(t *testing.T) {
 	newBind := pb.LockTable{
 		ServiceID: "s2",
