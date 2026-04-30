@@ -142,7 +142,12 @@ func ConstructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT " + formatStrLit(col.Comment))
+			// col.Comment has already been passed through
+			// util.DealCommentString at parse time (see AttributeComment
+			// production in mysql_sql.y), so any embedded single quote
+			// is stored in pre-doubled MySQL string-literal form. Emit it
+			// between single quotes without re-escaping.
+			buf.WriteString(" COMMENT '" + col.Comment + "'")
 		}
 
 		createStr += buf.String()
@@ -404,7 +409,11 @@ func ConstructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT=" + formatStrLit(kv.Value)
+					// Like col.Comment, the table-level comment stored in
+					// kv.Value has already been DealCommentString'd at parse
+					// time, so it is in pre-doubled MySQL string-literal
+					// form; emit between single quotes without re-escaping.
+					comment = " COMMENT='" + kv.Value + "'"
 				}
 			}
 		}
