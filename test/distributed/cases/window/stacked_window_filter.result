@@ -1,8 +1,112 @@
-drop table if exists stacked_window_filter_orders;
-create table stacked_window_filter_orders (customer_id int, amount decimal(12, 2), order_date date);
-insert into stacked_window_filter_orders values (1, 10.00, '2024-01-01'), (1, 20.00, '2024-01-02'), (1, 30.00, '2024-01-03'), (2, 7.00, '2024-01-01'), (2, 9.00, '2024-01-02');
-select x.customer_id, x.second_cum_amount from (select customer_id, row_number() over (partition by customer_id order by order_date) as rn, sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as second_cum_amount from stacked_window_filter_orders where year(order_date) = 2024) as x where x.rn = 2 order by x.customer_id;
-customer_id    second_cum_amount
-1    30.00
-2    16.00
-drop table if exists stacked_window_filter_orders;
+drop table if exists swf_orders;
+create table swf_orders (
+customer_id int,
+amount decimal(12, 2),
+order_date date
+);
+insert into swf_orders values
+(1, 10.00, '2024-01-01'), (1, 20.00, '2024-01-02'), (1, 30.00, '2024-01-03'),
+(2, 7.00, '2024-01-01'), (2, 9.00, '2024-01-02'),
+(3, 100.00, '2024-01-01'), (3, 200.00, '2024-01-02'), (3, 50.00, '2024-01-03'), (3, 25.00, '2024-01-04');
+select x.customer_id, x.cum_amount
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.rn = 2
+order by x.customer_id;
+➤ customer_id[4,11,0]  ¦  cum_amount[3,34,2]  𝄀
+1  ¦  30.00  𝄀
+2  ¦  16.00  𝄀
+3  ¦  300.00
+select x.customer_id, x.rn
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.cum_amount > 50.00
+order by x.customer_id, x.rn;
+➤ customer_id[4,11,0]  ¦  rn[-5,21,0]  𝄀
+1  ¦  3  𝄀
+3  ¦  1  𝄀
+3  ¦  2  𝄀
+3  ¦  3  𝄀
+3  ¦  4
+select x.customer_id, x.cum_amount, x.rnk
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+rank() over (partition by customer_id order by amount desc) as rnk,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.rn = 1
+order by x.customer_id;
+➤ customer_id[4,11,0]  ¦  cum_amount[3,34,2]  ¦  rnk[-5,21,0]  𝄀
+1  ¦  10.00  ¦  3  𝄀
+2  ¦  7.00  ¦  2  𝄀
+3  ¦  100.00  ¦  2
+select x.customer_id, x.rn, x.cum_amount
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+rank() over (partition by customer_id order by amount desc) as rnk,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.rnk = 1
+order by x.customer_id;
+➤ customer_id[4,11,0]  ¦  rn[-5,21,0]  ¦  cum_amount[3,34,2]  𝄀
+1  ¦  3  ¦  60.00  𝄀
+2  ¦  2  ¦  16.00  𝄀
+3  ¦  2  ¦  300.00
+select x.customer_id, x.cum_amount
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.rn >= 2 and x.cum_amount > 20.00
+order by x.customer_id, x.cum_amount;
+➤ customer_id[4,11,0]  ¦  cum_amount[3,34,2]  𝄀
+1  ¦  30.00  𝄀
+1  ¦  60.00  𝄀
+3  ¦  300.00  𝄀
+3  ¦  350.00  𝄀
+3  ¦  375.00
+select x.customer_id, x.avg_amount
+from (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+avg(amount) over (partition by customer_id order by order_date rows unbounded preceding) as avg_amount
+from swf_orders
+where year(order_date) = 2024
+) as x
+where x.rn = 3
+order by x.customer_id;
+➤ customer_id[4,11,0]  ¦  avg_amount[3,16,6]  𝄀
+1  ¦  20.000000  𝄀
+3  ¦  116.666667
+with ranked as (
+select customer_id,
+row_number() over (partition by customer_id order by order_date) as rn,
+sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as cum_amount
+from swf_orders
+where year(order_date) = 2024
+)
+select customer_id, cum_amount from ranked where rn = 2 order by customer_id;
+➤ customer_id[4,11,0]  ¦  cum_amount[3,34,2]  𝄀
+1  ¦  30.00  𝄀
+2  ¦  16.00  𝄀
+3  ¦  300.00
+drop table if exists swf_orders;

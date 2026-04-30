@@ -31,3 +31,14 @@ func TestSnapshotReadPolicyContextRoundTrip(t *testing.T) {
 	ctx := WithSnapshotReadPolicy(base, SnapshotReadPolicyVisibleState)
 	require.Equal(t, SnapshotReadPolicyVisibleState, SnapshotReadPolicyFromContext(ctx))
 }
+
+func TestRetainRowIDContextRoundTrip(t *testing.T) {
+	base := context.Background()
+
+	require.False(t, RetainRowIDFromContext(nil))
+	require.False(t, RetainRowIDFromContext(base))
+	require.True(t, WithRetainRowID(base, false) == base)
+
+	ctx := WithRetainRowID(base, true)
+	require.True(t, RetainRowIDFromContext(ctx))
+}

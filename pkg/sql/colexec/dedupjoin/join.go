@@ -16,6 +16,7 @@ package dedupjoin
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"time"
 
@@ -32,6 +33,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// receiveWorkerMsg blocks until the channel yields a message or the context
+// is canceled. Returns nil on close or cancellation.
+func receiveWorkerMsg(ctx context.Context, ch chan *WorkerJoinMsg) *WorkerJoinMsg {
+	select {
+	case <-ctx.Done():
+		return nil
+	case msg, ok := <-ch:
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+// mergeCaptured folds a non-merger worker's captured state into the merger's.
+// For each bucket set in msg.captured that the merger has not yet captured,
+// the merger copies the per-column values from the worker's capturedVecs into
+// its own and marks the bucket. First-wins semantics across workers: the
+// merger retains whichever worker's values arrive first.
+func (ctr *container) mergeCaptured(ap *DedupJoin, msg *WorkerJoinMsg, proc *process.Process) error {
+	if ctr.capturedVecs == nil || msg.capturedVecs == nil {
+		return nil
+	}
+	itr := msg.captured.Iterator()
+	for itr.HasNext() {
+		bucket := itr.Next()
+		if ctr.captured.Contains(bucket) {
+			continue
+		}
+		for cIdx := range ctr.capturedVecs {
+			if err := ctr.capturedVecs[cIdx].Copy(
+				msg.capturedVecs[cIdx],
+				int64(bucket), int64(bucket),
+				proc.Mp(),
+			); err != nil {
+				return err
+			}
+		}
+		ctr.captured.Add(bucket)
+	}
+	return nil
+}
 
 const opName = "dedup_join"
 
@@ -234,19 +278,35 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
-			ap.Channel <- ctr.matched
-			return nil
-		} else {
-			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
-				if v != nil {
-					ctr.matched.Or(v)
-				} else {
-					return nil
-				}
+			msg := &WorkerJoinMsg{matched: ctr.matched}
+			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
+				// Transfer ownership of capture state to the merger; clear
+				// our references so cleanCaptured() does not double-free.
+				msg.captured = ctr.captured
+				msg.capturedVecs = ctr.capturedVecs
+				ctr.captured = nil
+				ctr.capturedVecs = nil
 			}
-			close(ap.Channel)
+			ap.Channel <- msg
+			return nil
 		}
+		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+			msg := receiveWorkerMsg(proc.Ctx, ap.Channel)
+			if msg == nil {
+				return nil
+			}
+			if msg.matched != nil {
+				ctr.matched.Or(msg.matched)
+			}
+			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
+				if err := ctr.mergeCaptured(ap, msg, proc); err != nil {
+					freeCapturedVecs(msg.capturedVecs, proc)
+					return err
+				}
+				freeCapturedVecs(msg.capturedVecs, proc)
+			}
+		}
+		close(ap.Channel)
 	}
 
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {

@@ -270,7 +270,13 @@ func (s *service) Start() error {
 		return err
 	}
 
-	return s.server.Start()
+	if err := s.server.Start(); err != nil {
+		return err
+	}
+
+	s.task.runnerReady.Store(true)
+	s.startTaskRunner()
+	return nil
 }
 
 func (s *service) Close() error {

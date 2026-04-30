@@ -291,11 +291,12 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 
 			if tmpJoinMap == nil {
 				// Build bucket was empty.
-				// For left outer/single/anti: probe file was kept; open it with
-				// ctr.mp == nil so the existing emptyProbe path outputs every probe
-				// row as a non-match (NULLs on the build side).
+				// For joins that emit unmatched probe rows (left outer/single/anti,
+				// full outer): probe file was kept; open it with ctr.mp == nil so
+				// the existing emptyProbe path outputs every probe row as a
+				// non-match (NULLs on the build side).
 				// For all other join types: probe file was deleted; skip bucket.
-				if !hashJoin.IsLeftOuter() && !hashJoin.IsLeftSingle() && !hashJoin.IsLeftAnti() {
+				if !hashJoin.EmitUnmatchedProbe() {
 					continue
 				}
 			}
@@ -518,12 +519,14 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	jm = builder.GetJoinMap(proc.Mp())
 	if jm == nil {
 		// Empty build bucket.
-		// For join types other than left outer/single/anti nothing can match and the
-		// probe file is also useless — delete it and signal "skip this bucket".
-		// For left outer/single/anti the probe rows must still be output as non-matches
-		// (NULLs on the build side); keep the probe file and return nil so the caller
-		// opens it with ctr.mp == nil — the existing emptyProbe path handles this.
-		needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+		// For joins that emit unmatched probe rows (left outer/single/anti,
+		// full outer) the probe rows must still be output as non-matches
+		// (NULLs on the build side); keep the probe file and return nil so the
+		// caller opens it with ctr.mp == nil — the existing emptyProbe path
+		// handles this.
+		// For all other join types nothing can match and the probe file is
+		// also useless — delete it and signal "skip this bucket".
+		needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
 		if !needsProbeForEmpty {
 			// Close probe fd — the inode is released (file was created via CreateAndRemoveFile).
 			if bucket.probeFd != nil {
@@ -617,7 +620,7 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	//
 	// Disable probe writers for empty sub-build buckets so scatter discards
 	// those probe rows immediately (same pattern as root probe scatter).
-	needsProbeForEmpty := hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti()
+	needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
 	if !needsProbeForEmpty {
 		for i := range subProbeWriters {
 			if !subBuildWriters[i].created() {
@@ -646,7 +649,7 @@ func (hashJoin *HashJoin) reSpillBucket(proc *process.Process, bucket spillBucke
 	}
 
 	// Flush probe sub-buffers.
-	needsBuildForEmpty := hashJoin.IsRightOuter() || hashJoin.IsRightSingle() || hashJoin.IsRightAnti()
+	needsBuildForEmpty := hashJoin.EmitUnmatchedBuild()
 	for i, buf := range subProbeBufs {
 		if buf != nil {
 			if buf.RowCount() > 0 {
