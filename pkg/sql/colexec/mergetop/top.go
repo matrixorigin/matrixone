@@ -134,7 +134,6 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			return true, err
 		}
 		analyzer.Alloc(int64(bat.Size()))
-		defer bat.Clean(proc.Mp())
 
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
@@ -145,6 +144,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			} else {
 				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
 				if err != nil {
+					bat.Clean(proc.Mp())
 					return false, err
 				}
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
@@ -187,8 +187,10 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		}
 
 		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
+			bat.Clean(proc.Mp())
 			return false, err
 		}
+		bat.Clean(proc.Mp())
 	}
 }
 
