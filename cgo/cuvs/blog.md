@@ -12,6 +12,21 @@ Our target was an IVF index with thousands of clusters holding tens of millions 
 2. **Assignment Overhead**: Mapping 50M+ vectors to their nearest centroids is computationally expensive. On CPUs, this task competed for resources with data loading and decompression, dragging the process out to a full day.
 3. **The GPU "Single Query" Trap**: Databases typically process one query at a time. GPUs, however, only show their true strength when processing large batches.
 
+## Hardware & Methodology
+
+Before walking through the engineering, here is the explicit setup so the numbers later in the post have context. The headline is that this is **modest, off-the-shelf hardware** — one or eight commodity GPUs on stock AWS instances, not a custom training cluster.
+
+**Hardware (all benchmarks run on AWS `g6e`, NVIDIA L40S):**
+
+| | CPU baseline (IVF-Flat search) | GPU (IVF-PQ, 1M / 10M) | GPU (IVF-PQ, 88M) |
+|---|---|---|---|
+| AWS instance | `g6e.16xlarge` | `g6e.12xlarge` | `g6e.48xlarge` |
+| vCPU / host RAM | 64 vCPU / 512 GB | 48 vCPU / 384 GB | 192 vCPU / 1536 GB |
+| GPU | 1× L40S (48 GB) — *build only* | 1× L40S (48 GB) | 8× L40S (sharded) |
+| Search runs on | **CPU** | **GPU** | **GPU** |
+
+For every IVF-Flat search number we report, **search runs on the CPU** even when the index was *built* on the GPU — that is the apples-to-apples "CPU search" baseline against which the GPU IVF-PQ numbers should be read. IVF-PQ runs **end-to-end on the GPU**.
+
 ## Step 1: Solving Clustering with Balanced K-Means
 
 Standard K-Means often results in some clusters having thousands of vectors while others have almost none. In an IVF index, this leads to unpredictable IO and search times.
