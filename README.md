@@ -56,6 +56,7 @@ Contents
 * [Architecture](#architecture)
 * [Python SDK](#python-sdk)
 * [Contributing](#contributing)
+* [Reference](#reference)
 * [License](#license)
 
 ## What is MatrixOne?
@@ -1090,6 +1091,23 @@ Contributions to MatrixOne are welcome from everyone.
     </td></tr>
 </table>
 <!-- readme: contributors -end -->
+
+## <a id="reference">Reference</a>
+
+Reference to cite when you use MatrixOne in a research paper:
+
+```bibtex
+@misc{gou2026versioncontrolsystemdata,
+  title={Version Control System for Data with MatrixOne},
+  author={Gou, Hongshen and Tian, Feng and Wang, Long and Deng, Nan and Xu, Peng},
+  year={2026},
+  eprint={2604.03927},
+  archivePrefix={arXiv},
+  primaryClass={cs.DB},
+  doi={10.48550/arXiv.2604.03927},
+  url={https://arxiv.org/abs/2604.03927}
+}
+```
 
 ## <a id="license">License</a>
 
