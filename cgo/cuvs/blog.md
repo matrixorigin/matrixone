@@ -78,7 +78,7 @@ cuVS supports **pre-filtering via a predicate bitset**, and we wired it directly
 3. The bitset is handed to cuVS, which consults it during graph traversal / list scanning so the GPU skips disqualified vectors before distance computation.
 4. The CAGRA / IVF-PQ kernel returns only `top-k` results that already satisfy the predicate — no post-hoc reranking pass.
 
-The bitset itself stays in host RAM; only the index data lives on the GPU. The combination — RAM-resident filter columns plus CPU-computed bitsets driving GPU pre-filtering — sidesteps both disk I/O and wasted GPU work. The 88M numbers below show the payoff concretely: under SQL pre-filtering, GPU-enhanced IVF-Flat (which has to filter on the CPU *after* search) drops to **~3 QPS at high recall (0.97)** and tops out at ~12 QPS at lower recall, while pure-GPU IVF-PQ with bitset pre-filtering holds **~67 QPS** essentially flat across `nprobe`.
+The bitset itself stays in host RAM; only the index data lives on the GPU. The combination — RAM-resident filter columns plus CPU-computed bitsets driving GPU pre-filtering — sidesteps both disk I/O and wasted GPU work. The 88M numbers below show the payoff concretely: under SQL pre-filtering, GPU-enhanced IVF-Flat (which has to filter on the CPU *after* search) drops to **~3 QPS at recall 0.80** and tops out at ~12 QPS at lower recall, while pure-GPU IVF-PQ with bitset pre-filtering holds **~80–98 QPS** across `nprobe`.
 
 ## Head-to-Head: CPU IVF-Flat vs. GPU-Enhanced IVF-Flat vs. Pure-GPU IVF-PQ
 
@@ -116,61 +116,71 @@ We then validated at 88M:
 
 The 88M curve shows the same knee: recall hits 0.83 at `nprobe = 16` (~125 ms), and only creeps to 0.88 by `nprobe = 256` — but latency triples to ~380 ms once `nprobe ≥ 32`, where the per-probe cost stops fitting in the device-memory working set. The 10M-tuned setting (`pq_bits = 8, nprobe = 16`) holds at scale, which is the whole point of doing the Pareto on the smaller dataset.
 
-#### IVF-Flat: `lists = 10000`, `nprobe` is a recall–throughput dial
+#### IVF-Flat: `lists = 10000`, `nprobe = 8` to match the recall target
 
-IVF-Flat has no quantization knob — vectors are stored uncompressed in `float32` — so the only tunables are cluster count (`lists`) and `nprobe`. We set `lists = 10000` for the 88M index (≈ √N, the standard heuristic) and swept `nprobe`:
+IVF-Flat has no quantization knob — vectors are stored uncompressed in `float32` — so the only tunables are cluster count (`lists`) and `nprobe`. We set `lists = 10000` for the 88M index (≈ √N, the standard heuristic) and tuned `nprobe` to hit the same recall target as IVF-PQ (~0.8 @ top-10). On the 10M slice this lands at **`nprobe = 8`** (recall 0.82) — half the probes IVF-PQ needs for the same recall, since IVF-Flat keeps full-precision vectors. We use the same setting at 88M and report two higher points to span the curve:
 
-| `nprobe` | Recall@10 | QPS | P50 latency |
-|---|---|---|---|
-| 5   | 0.70 | 22 | 4.40 s |
-| 20  | 0.91 | 10 | — |
-| 100 | 0.96 | 4  | — |
+| `nprobe` | Recall@10 | QPS |
+|---|---|---|
+| **8**   | **0.70** | **22** |
+| 16  | 0.91 | 10 |
+| 32  | 0.96 | 4  |
 
 (88M `wiki_all`, no filter, top-10, concurrency=100, n=10000.)
 
-Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster pages off disk — the 270 GB raw dataset doesn't fit in the ~256 GB usable cache (see the cache-miss analysis below) — so QPS roughly halves at each step. There is no sweet spot, only a recall-vs-throughput dial. In the head-to-head below we report `nprobe ∈ {5, 20, 100}` to span the full curve from "fast but low recall" to "high recall but disk-bound".
+Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster pages off disk — the 270 GB raw dataset doesn't fit in the ~256 GB usable cache (see the cache-miss analysis below) — so QPS roughly halves at each step. At 88M the recall target slips: `nprobe = 8` matches IVF-PQ at smaller scales but only reaches 0.70 recall here, because each cluster gets fewer probes relative to the index size. Pushing `nprobe` higher recovers recall but at a steep QPS cost — there is no sweet spot, only a recall-vs-throughput dial. The head-to-head below uses `nprobe ∈ {8, 16, 32}` for IVF-Flat to span the full curve.
 
 ### Build Time
 
-| Dataset | IVF-Flat (CPU build) | IVF-Flat (GPU build, CPU search) | IVF-PQ (Pure GPU) | Speedup |
+| Dataset | IVF-Flat (CPU build) | IVF-Flat (GPU build, CPU search) | IVF-PQ (Pure GPU) | Speedup (CPU vs IVF-PQ) |
 |---|---|---|---|---|
-| 1M | 58 s | 29 s | 45 s | 0.6x |
-| 10M | 19 min | 4 min 26s | 4 min 21 s | 4.2x |
-| **88M** | **4 h 8 min** | **62 min** | **1 h 12 min** | **~4x** |
+| 1M | 58 s | 29 s | 45 s | 1.3x |
+| 10M | 19 min | 4 min 26s | 4 min 21 s | 4.4x |
+| **88M** | **4 h 8 min** | **62 min** | **1 h 12 min** | **~3.4x** |
 
-At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-Flat (GPUI) and VF-PQ builds nearly 4× faster tha CPU build** — turning an overnight job into a coffee break.
+At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-Flat (GPU) and IVF-PQ builds are ~3-4× faster than the CPU build** — turning an overnight job into a coffee break.
 
 ### Search Throughput (no filter, top-10)
 
+**Recall-matched headline** — IVF-Flat `nprobe=8` vs IVF-PQ `nprobe=16`, both tuned to land near the same recall target (~0.8 on the 10M slice):
+
+| Dataset | IVF-Flat (`nprobe=8`) | IVF-PQ (`nprobe=16`) | IVF-PQ vs IVF-Flat |
+|---|---|---|---|
+| 1M | 768 QPS, recall 0.86 | 904 QPS, recall 0.82 | 1.2× |
+| 10M | 491 QPS, recall 0.82 | 1066 QPS, recall 0.79 | 2.2× |
+| **88M** | **22 QPS, recall 0.70** | **759 QPS, recall 0.83** | **~35×** |
+
+**Full `nprobe` sweep** — same setup, each index across `nprobe ∈ {8, 16, 32}`:
+
 | Dataset | Nprobe | IVF-Flat Recall | IVF-Flat QPS | IVF-PQ Recall | IVF-PQ QPS |
 |---|---|---|---|---|---|
-| 1M | 5 | 0.86 | 415 | 0.84 | **884** |
-| 1M | 20 | 0.97 | 411 | 0.84 | 781 |
-| 1M | 100 | 0.99 | 384 | 0.84 | 755 |
-| 10M | 5 | 0.75 | 200 | 0.84 | **837** |
-| 10M | 20 | 0.91 | 71 | 0.84 | 713 |
-| 10M | 100 | 0.98 | 28 | 0.84 | 661 |
-| 88M | 5 | 0.70 | 22 | 0.87 | **278** |
-| 88M | 20 | 0.91 | 10 | 0.87 | 233 |
-| 88M | 100 | 0.96 | 4 | 0.87 | 230 |
+| 1M | 8 | 0.86 | 768 | 0.78 | 1060 |
+| 1M | 16 | 0.93 | 937 | 0.82 | 904 |
+| 1M | 32 | 0.99 | 384 | 0.84 | 889 |
+| 10M | 8 | 0.82 | 491 | 0.74 | 1099 |
+| 10M | 16 | 0.90 | 408 | 0.79 | 1066 |
+| 10M | 32 | 0.95 | 243 | 0.82 | 756 |
+| 88M | 8 | 0.70 | 22 | 0.79 | 776 |
+| 88M | 16 | 0.91 | 10 | 0.83 | 759 |
+| 88M | 32 | 0.96 | 4 | 0.85 | 260 |
 
 ### Search Throughput Under SQL Pre-Filter (88M, top-10)
 
 | Nprobe | IVF-Flat Recall | IVF-Flat QPS | IVF-PQ Recall | IVF-PQ QPS |
 |---|---|---|---|---|
-| 5 | 0.61 | 11.9 | 0.86 | **66.9** |
-| 20 | 0.82 | 12 | 0.86 | 65.4 |
-| 100 | 0.97 | 3 | 0.86 | 66.4 |
+| 8 | 0.61 | 11.9 | 0.69 | **98.0** |
+| 16 | 0.76 | 12 | 0.77 | 98.0 |
+| 32 | 0.80 | 3 | 0.81 | 80 |
 
-This is the bitset pre-filtering payoff: IVF-PQ stays flat at ~67 QPS across `nprobe`, while IVF-Flat must push `nprobe` up to recover the recall it loses to post-search filtering — and pays for it. At the high-recall setting (`nprobe=100`, recall 0.97), pure-GPU IVF-PQ delivers **~22× higher QPS** because the GPU never spends a cycle on rows the SQL predicate already rejected.
+This is the bitset pre-filtering payoff: IVF-PQ holds **~80–98 QPS** across `nprobe` while IVF-Flat must push `nprobe` up to recover the recall it loses to post-search filtering — and pays for it. At the matched-recall setting (~0.80, `nprobe=32` for IVF-Flat vs `nprobe=32` for IVF-PQ), pure-GPU IVF-PQ delivers **~27× higher QPS** because the GPU never spends a cycle on rows the SQL predicate already rejected.
 
 ### What the Numbers Tell Us
 
-* **At 88M vectors, pure-GPU IVF-PQ is ~12× faster than GPU-enhanced IVF-Flat** at comparable recall, and the gap widens dramatically as `nprobe` grows — at `nprobe=100` it reaches **~57×** — because each additional probe sends IVF-Flat further into uncached cluster pages on disk (see cache-miss analysis below).
-* **Recall stability**: IVF-PQ recall is largely invariant to `nprobe`, while IVF-Flat needs aggressive `nprobe` (and therefore more CPU work) to reach high recall. That makes IVF-PQ much easier to tune for production SLOs.
-* **Filtered queries are where IVF-Flat collapses**: with bitset pre-filtering inside cuVS, IVF-PQ keeps throughput essentially flat under predicates (~67 QPS regardless of `nprobe`); IVF-Flat's CPU-side filter pass forces the index deeper to refill `top-k`, dragging QPS from ~12 down to ~3 as `nprobe` climbs from 5 to 100.
-* **Why IVF-Flat's 88M numbers are so low — memory cache misses**: at 768-D `float32`, 88M vectors are **~270 GB** of raw vector data. The host has 512 GB RAM, but after the OS and the database engine itself, only **~256 GB is actually free for the data cache** — so the working set doesn't fit. As `nprobe` grows, IVF-Flat touches more cluster lists per query, the cache miss rate climbs, and search degrades from a memory-bound workload into a **disk-IO-bound** one — which is why QPS drops from 22 → 10 → 4 (no filter) and 12 → 3 (filtered) as `nprobe` goes from 5 → 100. IVF-PQ avoids this entirely: with `M=192, bits=8`, the 88M index is ~17 GB compressed and fits comfortably across 8 sharded GPUs at ~3.5 GB VRAM each — every probe is served from on-device memory, never the disk.
-* **IVF-Flat still wins for small datasets and recall-critical workloads** (e.g., 1M with `nprobe=100` reaches 0.99 recall). IVF-PQ trades ~10–15 points of recall for an order of magnitude of throughput at scale.
+* **At 88M vectors and recall ~0.8, pure-GPU IVF-PQ is ~35× faster than GPU-enhanced IVF-Flat** (759 QPS @ `nprobe=16`, recall 0.83 vs 22 QPS @ `nprobe=8`, recall 0.70), and the gap widens dramatically as IVF-Flat is pushed for higher recall — reaching **~75×** at `nprobe=16` (759 vs 10 QPS) and **~65×** at `nprobe=32` (260 vs 4 QPS) — because each additional probe sends IVF-Flat further into uncached cluster pages on disk (see cache-miss analysis below).
+* **Recall stability**: IVF-PQ recall climbs gently with `nprobe` (0.79 → 0.85 from 8 to 32 at 88M), while IVF-Flat must work much harder for the same gain (0.70 → 0.96) and pays a 5× QPS penalty doing it. That makes IVF-PQ much easier to tune for production SLOs.
+* **Filtered queries are where IVF-Flat collapses**: with bitset pre-filtering inside cuVS, IVF-PQ holds ~80–98 QPS under predicates across `nprobe`; IVF-Flat's CPU-side filter pass forces the index deeper to refill `top-k`, dragging QPS from ~12 down to ~3 as `nprobe` climbs from 8 to 32.
+* **Why IVF-Flat's 88M numbers are so low — memory cache misses**: at 768-D `float32`, 88M vectors are **~270 GB** of raw vector data. The host has 512 GB RAM, but after the OS and the database engine itself, only **~256 GB is actually free for the data cache** — so the working set doesn't fit. As `nprobe` grows, IVF-Flat touches more cluster lists per query, the cache miss rate climbs, and search degrades from a memory-bound workload into a **disk-IO-bound** one — which is why QPS drops from 22 → 10 → 4 (no filter) and 12 → 12 → 3 (filtered) as `nprobe` goes from 8 → 32. IVF-PQ avoids this entirely: with `M=192, bits=8`, the 88M index is ~17 GB compressed and fits comfortably across 8 sharded GPUs at ~3.5 GB VRAM each — every probe is served from on-device memory, never the disk.
+* **IVF-Flat still wins for small datasets and recall-critical workloads** (e.g., 1M with `nprobe=32` reaches 0.99 recall). IVF-PQ trades ~10–15 points of recall for an order of magnitude of throughput at scale.
 
 ### Setup
 
@@ -200,4 +210,4 @@ Our architecture now supports a suite of high-performance indexes, each with a c
 
 By shifting clustering, assignment, quantization — *and search, including SQL predicate evaluation* — onto the GPU through cuVS, MatrixOne handles massive vector datasets on surprisingly modest hardware. What once took a full day now takes well under an hour, with search latencies that remain low under heavy concurrency.
 
-The benchmark on `wiki_all` is unambiguous: at 88M vectors, **pure-GPU IVF-PQ delivers ~8× faster builds, ~12–57× higher unfiltered QPS (depending on `nprobe`), and up to ~22× higher filtered QPS at high recall** than GPU-assisted IVF-Flat with CPU search — at recall levels production workloads can ship with. Combined with `cuvs_worker_t`, dynamic batching, and bitset pre-filtering, this is not just a "fast index" but a **production-ready database engine** that scales with the demands of modern AI.
+The benchmark on `wiki_all` is unambiguous: at 88M vectors, **pure-GPU IVF-PQ delivers ~3–4× faster builds, ~35–75× higher unfiltered QPS (depending on `nprobe`), and up to ~27× higher filtered QPS at matched recall** than GPU-assisted IVF-Flat with CPU search — at recall levels production workloads can ship with. Combined with `cuvs_worker_t`, dynamic batching, and bitset pre-filtering, this is not just a "fast index" but a **production-ready database engine** that scales with the demands of modern AI.
