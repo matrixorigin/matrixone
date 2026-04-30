@@ -218,9 +218,17 @@ create table u2(id int, score int);
 insert into u1 values (1,'alice'),(2,'bob'),(3,'carol');
 insert into u2 values (2,90),(3,85),(4,70);
 SELECT * FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
-[unknown result because it is related to issue#24247]
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[4,32,0]  𝄀
+1  ¦  alice  ¦  null  𝄀
+2  ¦  bob  ¦  90  𝄀
+3  ¦  carol  ¦  85  𝄀
+4  ¦  null  ¦  70
 SELECT id, name, score FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
-[unknown result because it is related to issue#24247]
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  score[4,32,0]  𝄀
+1  ¦  alice  ¦  null  𝄀
+2  ¦  bob  ¦  90  𝄀
+3  ¦  carol  ¦  85  𝄀
+4  ¦  null  ¦  70
 drop table if exists r1;
 drop table if exists r2;
 create table r1(x int);

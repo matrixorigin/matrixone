@@ -122,10 +122,8 @@ create table u1(id int, name varchar(10));
 create table u2(id int, score int);
 insert into u1 values (1,'alice'),(2,'bob'),(3,'carol');
 insert into u2 values (2,90),(3,85),(4,70);
--- @bvt:issue#24247
 SELECT * FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
 SELECT id, name, score FROM u1 FULL OUTER JOIN u2 USING (id) ORDER BY id;
--- @bvt:issue
 
 -- -------------------------------------------------------------
 -- 9. Non-equi ON condition
