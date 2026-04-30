@@ -849,7 +849,7 @@ func (c *PushClient) subscribeTable(
 
 func (c *PushClient) subSysTables(ctx context.Context, initialActiveAccounts []uint32) error {
 	if enabled, p := objectio.CNSubSysErrInjected(); enabled && rand.Intn(100000) < p {
-		return moerr.NewInternalError(ctx, "FIND_TABLE sub sys error injected")
+		return moerr.NewInternalError(ctx, "catalog-load sub sys error injected")
 	}
 	if c.lazyCatalog != nil {
 		c.lazyCatalog.enable()
@@ -926,7 +926,7 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 	defer v2.LogTailClientReceiveCounter.Add(1)
 
 	if enabled, p := objectio.CNRecvErrInjected(); enabled && rand.Intn(100000) < p {
-		return moerr.NewInternalError(ctx, "FIND_TABLE random error")
+		return moerr.NewInternalError(ctx, "catalog-load random error")
 	}
 
 	resp := c.subscriber.receiveResponse(ctx)
@@ -1215,7 +1215,7 @@ func (c *PushClient) waitTimestamp(ctx context.Context) error {
 
 func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err error) {
 	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
-		return moerr.NewInternalError(ctx, "FIND_TABLE replay catalog cache error injected")
+		return moerr.NewInternalError(ctx, "catalog-load replay catalog cache error injected")
 	}
 	ts := c.receivedLogTailTime.getTimestamp()
 	if err = c.replayCatalogCacheAt(ctx, e, ts, []uint32{0}); err != nil {
@@ -1261,7 +1261,7 @@ func (c *PushClient) replayCatalogCacheForReconnect(
 	ctx context.Context, e *Engine, accountIDs []uint32,
 ) error {
 	if enabled, p := objectio.CNReplayCacheErrInjected(); enabled && rand.Intn(100000) < p {
-		return moerr.NewInternalError(ctx, "FIND_TABLE replay catalog cache error injected")
+		return moerr.NewInternalError(ctx, "catalog-load replay catalog cache error injected")
 	}
 	ts := c.receivedLogTailTime.getTimestamp()
 	if err := c.replayCatalogCacheAt(ctx, e, ts, accountIDs); err != nil {
@@ -1537,7 +1537,7 @@ func replayCatalogDatabaseCache(
 	}
 	defer result.Close()
 
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_databases %v rows", rowCountString(result.Batches))
+	logutil.Infof("catalog-load read mo_catalog.mo_databases %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
@@ -1564,7 +1564,7 @@ func replayCatalogTableCache(
 	}
 	defer result.Close()
 
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_tables %v rows", rowCountString(result.Batches))
+	logutil.Infof("catalog-load read mo_catalog.mo_tables %v rows", rowCountString(result.Batches))
 	for _, b := range result.Batches {
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
@@ -1589,7 +1589,7 @@ func replayCatalogColumnCache(
 	if err != nil {
 		return err
 	}
-	logutil.Infof("FIND_TABLE read mo_catalog.mo_columns %v rows", rowCountString(result.Batches))
+	logutil.Infof("catalog-load read mo_catalog.mo_columns %v rows", rowCountString(result.Batches))
 	return consumeReplayColumns(ctx, result.Batches, result.Mp, typeTs, func(b *batch.Batch) {
 		applyCatalogCacheChange(func() { ccache.InsertColumns(b) })
 	})
