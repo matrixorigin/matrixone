@@ -1,9 +1,7 @@
 -- issue https://github.com/matrixorigin/MO-Cloud/issues/4678
 use mo_catalog;
 -- @ignore:3,4,5,7,9,10,11,12
--- @bvt:issue#23743
-show table status;
--- @bvt:issue
+show table status like 'mo_table_stats_alpha';
 drop database if exists testdb;
 create database testdb;
 
