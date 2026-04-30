@@ -969,7 +969,29 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return fmt.Sprintf("%d/%d/%d/%s", typ.Id, typ.Width, typ.Scale, lit.String()), true
+	// Serialize the literal with proto binary Marshal rather than String(),
+	// which goes through the reflection-driven TextMarshaler and can dominate
+	// CPU when called per-value across large IN lists.
+	litBytes, err := lit.Marshal()
+	if err != nil {
+		return "", false
+	}
+	var buf [16]byte
+	n := 0
+	appendInt32 := func(v int32) {
+		buf[n] = byte(v)
+		buf[n+1] = byte(v >> 8)
+		buf[n+2] = byte(v >> 16)
+		buf[n+3] = byte(v >> 24)
+		n += 4
+	}
+	appendInt32(typ.Id)
+	appendInt32(typ.Width)
+	appendInt32(typ.Scale)
+	key := make([]byte, 0, n+len(litBytes))
+	key = append(key, buf[:n]...)
+	key = append(key, litBytes...)
+	return string(key), true
 }
 
 func constLiteralKeyForOperand(expr *plan.Expr, operand *domainFilterOperand) (string, bool) {
