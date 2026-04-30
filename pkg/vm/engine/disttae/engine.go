@@ -336,7 +336,9 @@ func (e *Engine) loadDatabaseFromStorage(
 	}
 	if row := res.Batches[0].RowCount(); row != 1 {
 		logerror()
-		panic("FIND_TABLE loadDatabaseFromStorage failed: table result row cnt != 1")
+		return nil, moerr.NewInternalErrorf(ctx,
+			"catalog-load loadDatabaseFromStorage: unexpected row count %d for %s.%v",
+			row, name, accountID)
 	}
 	bat := res.Batches[0]
 

@@ -18,9 +18,6 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 
@@ -83,11 +80,6 @@ func consumeEntry(
 			return err
 		}
 		if shouldDelay && lc.delayAccountCacheApply(accountID, func() { applyToCatalogCache(cache, e) }) {
-			logutil.Warn("DIAG-consumeEntry per-account DCA delayed",
-				zap.Uint32("delayedAccount", accountID),
-				zap.Uint64("tableId", e.TableId),
-				zap.String("entryType", e.EntryType.String()),
-			)
 			return nil
 		}
 	}

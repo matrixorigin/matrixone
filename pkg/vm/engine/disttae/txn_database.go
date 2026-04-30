@@ -253,7 +253,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
-			"FIND_TABLE deleteTableError",
+			"catalog-load deleteTableError",
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
@@ -280,7 +280,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 
 	if len(rowids) != len(colPKs) {
 		logutil.Error(
-			"FIND_TABLE deleteTableError",
+			"catalog-load deleteTableError",
 			zap.String("bat", stringifySlice(rowids, func(a any) string {
 				r := a.(types.Rowid)
 				return r.ShortStringEx()
@@ -591,7 +591,7 @@ func (db *txnDatabase) loadTableFromStorage(
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
-			logutil.Info("FIND_TABLE slow loadTableFromStorage",
+			logutil.Info("catalog-load slow loadTableFromStorage",
 				zap.Duration("cost", time.Since(now)),
 				zap.String("table", name),
 				zap.Uint32("accountID", accountID),
@@ -621,7 +621,7 @@ func (db *txnDatabase) loadTableFromStorage(
 			// catalog was compacted by a checkpoint or hasn't been fully
 			// activated yet.  Return nil instead of panicking so the caller
 			// can handle the missing table gracefully.
-			logutil.Warn("FIND_TABLE loadTableFromStorage unexpected row count",
+			logutil.Warn("catalog-load loadTableFromStorage unexpected row count",
 				zap.Int("rows", row),
 				zap.String("sql", tblSql))
 			return
@@ -648,7 +648,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		defer res.Close()
 		if len(res.Batches) == 0 {
-			err = moerr.NewParseErrorf(ctx, "FIND_TABLE columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
+			err = moerr.NewParseErrorf(ctx, "catalog-load columns of table %q does not exist, cnt: %v, sql:%v", name, len(res.Batches), colSql)
 			return
 		}
 		bat := res.Batches[0]
@@ -658,7 +658,7 @@ func (db *txnDatabase) loadTableFromStorage(
 				return
 			}
 		}
-		logutil.Info("FIND_TABLE loadTableFromStorage columns",
+		logutil.Info("catalog-load loadTableFromStorage columns",
 			zap.String("table", name),
 			zap.Uint32("accountID", accountID),
 			zap.Int("batches", len(res.Batches)),
@@ -670,7 +670,7 @@ func (db *txnDatabase) loadTableFromStorage(
 		}
 		cache.ParseColumnsBatchAnd(bat, func(m map[cache.TableItemKey]cache.Columns) {
 			if len(m) != 1 {
-				logutil.Warn("FIND_TABLE loadTableFromStorage columns touch unexpected tables",
+				logutil.Warn("catalog-load loadTableFromStorage columns touch unexpected tables",
 					zap.Int("count", len(m)),
 					zap.String("table", name))
 				// Clear tableitem so the caller sees nil.
@@ -712,7 +712,7 @@ func (db *txnDatabase) getTableItem(
 		if item.Defs != nil {
 			return &item, nil
 		}
-		logutil.Warn("FIND_TABLE catalog-cache item has no column defs, falling through to storage",
+		logutil.Warn("catalog-load catalog-cache item has no column defs, falling through to storage",
 			zap.String("table", name),
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", item.Id),
@@ -721,7 +721,7 @@ func (db *txnDatabase) getTableItem(
 	var tableitem *cache.TableItem
 	if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) ||
 		!engine.pClient.CanServeAccount(accountID, db.op.SnapshotTS()) {
-		logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
+		logutil.Info("catalog-load loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))
 		if tableitem, err = db.loadTableFromStorage(ctx, accountID, name); err != nil {
 			return nil, err
 		}
