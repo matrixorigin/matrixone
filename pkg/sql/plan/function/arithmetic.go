@@ -257,12 +257,12 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return v1 + v2
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return addFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
@@ -330,12 +330,12 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 - v2
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 - v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return subFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 - v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return subFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
@@ -415,12 +415,12 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 * v2
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 * v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return mulFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 * v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return mulFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
@@ -452,12 +452,18 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
-		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 / v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			if v2 == 0 {
+				return 0, moerr.NewDivByZeroNoCtx()
+			}
+			return divFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return specialTemplateForDivFunction[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 / v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			if v2 == 0 {
+				return 0, moerr.NewDivByZeroNoCtx()
+			}
+			return divFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
@@ -814,54 +820,62 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Add(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Subtract(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Multiply(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 
 func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
-
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
-
 	r, err := moarray.Divide(_v1, _v2)
 	if err != nil {
 		return nil, err
 	}
-
+	for _, elem := range r {
+		if math.IsInf(float64(elem), 0) {
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+	}
 	return types.ArrayToBytes[T](r), nil
 }
 

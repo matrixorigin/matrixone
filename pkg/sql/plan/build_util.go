@@ -199,7 +199,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+		case defines.MYSQL_TYPE_YEAR:
+			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 38 {
+				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			}
 			if n.InternalType.DisplayWith > 16 {
 				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}
@@ -218,6 +223,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_GEOMETRY:
+			typ := plan.Type{Id: int32(types.T_geometry)}
+			if subtype := normalizeGeometrySubtype(n.InternalType.FamilyString); subtype != "" {
+				typ.Enumvalues = subtype
+			}
+			return typ, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
@@ -235,6 +246,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			}
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+		case defines.MYSQL_TYPE_SET:
+			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: types.EncodeSetValues(setValues)}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -289,6 +306,31 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
+
+	// SET columns need SET-aware resolution (match value against the set
+	// members), not the generic varchar -> uint64 cast that makePlan2CastExpr
+	// wraps on top of funcCastForSetType. Fold the raw expression first so
+	// that constant-foldable non-literals like concat('read','') collapse to a
+	// literal we can hand directly to funcCastForSetType, and reject anything
+	// that cannot be folded to a constant.
+	if isSetPlanType(&typ) {
+		folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(planExpr), proc, false, true)
+		if foldErr != nil || folded.GetLit() == nil {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+		}
+		castedExpr, err := funcCastForSetType(proc.Ctx, folded, typ)
+		if err != nil {
+			return nil, err
+		}
+		return &plan.Default{
+			NullAbility:  nullAbility,
+			Expr:         castedExpr,
+			OriginString: fmtCtx.String(),
+		}, nil
+	}
+
 	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -300,8 +342,6 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		return nil, err
 	}
 
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
-	fmtCtx.PrintExpr(expr, expr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
@@ -329,20 +369,37 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
-	if err != nil {
-		return nil, err
-	}
+	var onUpdateExpr *plan.Expr
 
-	// try to calculate on update value, return err if fails
-	executor, err := colexec.NewExpressionExecutor(proc, onUpdateExpr)
-	if err != nil {
-		return nil, err
-	}
-	defer executor.Free()
-	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-	if err != nil {
-		return nil, err
+	if isSetPlanType(&typ) {
+		// Match the buildDefaultExpr contract for SET: fold to a literal and
+		// run it through funcCastForSetType so the stored expression resolves
+		// by set-member lookup, not by generic varchar -> uint64 cast.
+		folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(planExpr), proc, false, true)
+		if foldErr != nil || folded.GetLit() == nil {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "SET column on-update value must be a constant expression")
+		}
+		castedExpr, valErr := funcCastForSetType(proc.Ctx, folded, typ)
+		if valErr != nil {
+			return nil, valErr
+		}
+		onUpdateExpr = castedExpr
+	} else {
+		onUpdateExpr, err = makePlan2CastExpr(proc.Ctx, planExpr, typ)
+		if err != nil {
+			return nil, err
+		}
+
+		// try to calculate on update value, return err if fails
+		executor, err := colexec.NewExpressionExecutor(proc, onUpdateExpr)
+		if err != nil {
+			return nil, err
+		}
+		defer executor.Free()
+		_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	ret := &plan.OnUpdate{

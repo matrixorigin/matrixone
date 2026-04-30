@@ -100,6 +100,21 @@ func TestPreExtendAndReset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPreExtendAndResetYear(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_year.ToType(), mp)
+
+	result := MustFunctionResult[types.MoYear](wrapper)
+	require.NoError(t, wrapper.PreExtendAndReset(2))
+	require.NoError(t, result.Append(types.MoYear(2024), false))
+
+	values := MustFixedColNoTypeCheck[types.MoYear](result.GetResultVector())
+	require.Equal(t, types.MoYear(2024), values[0])
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestReuseFunctionParameterStr(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_varchar.ToType())

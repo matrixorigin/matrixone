@@ -240,9 +240,13 @@ func (v *Vector) setupFromData() {
 			v.col.setFromVector(v)
 		case types.T_decimal128:
 			v.col.setFromVector(v)
+		case types.T_decimal256:
+			v.col.setFromVector(v)
 		case types.T_uuid:
 			v.col.setFromVector(v)
 		case types.T_date:
+			v.col.setFromVector(v)
+		case types.T_year:
 			v.col.setFromVector(v)
 		case types.T_time:
 			v.col.setFromVector(v)
@@ -373,6 +377,10 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Decimal64](vec)
 	case types.T_decimal128:
 		return appendBytesToFixSized[types.Decimal128](vec)
+	case types.T_decimal256:
+		return appendBytesToFixSized[types.Decimal256](vec)
+	case types.T_year:
+		return appendBytesToFixSized[types.MoYear](vec)
 	case types.T_uuid:
 		return appendBytesToFixSized[types.Uuid](vec)
 	case types.T_TS:

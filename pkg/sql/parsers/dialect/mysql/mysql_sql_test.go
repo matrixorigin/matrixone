@@ -142,6 +142,46 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.Nil(t, diffStmt.OutputOpt)
 }
 
+func TestDecimalPrecisionUpTo65(t *testing.T) {
+	_, err := ParseOne(context.TODO(), "create table t (a decimal(65,30), b numeric(39,0))", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.TODO(), "create table t (a decimal(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
+
+	_, err = ParseOne(context.TODO(), "create table t (a numeric(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
+}
+
+func TestSpatialSubtypeColumnTypes(t *testing.T) {
+	tests := []string{
+		"POINT",
+		"LINESTRING",
+		"POLYGON",
+		"GEOMETRYCOLLECTION",
+		"MULTIPOINT",
+		"MULTILINESTRING",
+		"MULTIPOLYGON",
+	}
+
+	for _, subtype := range tests {
+		t.Run(subtype, func(t *testing.T) {
+			stmt, err := ParseOne(context.TODO(), "create table t (g "+subtype+")", 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			col, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+			colType, ok := col.Type.(*tree.T)
+			require.True(t, ok)
+			require.Equal(t, subtype, colType.InternalType.FamilyString)
+		})
+	}
+}
+
 func getFuncExprsFromSelect(t *testing.T, sql string) []*tree.FuncExpr {
 	t.Helper()
 

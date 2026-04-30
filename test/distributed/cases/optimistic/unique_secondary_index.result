@@ -3,7 +3,7 @@ insert into index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.
 insert into index_01 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
 Duplicate entry '13456789872' for key 'col2'
 insert into index_01 values (4,'13866666666',20.23,'5678'),(5,'13873458290',100.00,'23'),(6,'13777777777',100.00,'23');
-Duplicate entry '13873458290' for key '__mo_index_idx_col'
+Duplicate entry '13873458290' for key 'col2'
 select col2,col4 from index_01;
 col2    col4
 13456789872    5678
@@ -12,7 +12,7 @@ null    23
 create table index_02 (col1 bigint primary key,col2 char(25) unique key,col3 float,col4 char(50),key num_id(col4));
 insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
 insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
-Duplicate entry '' for key '__mo_index_idx_col'
+Duplicate entry '' for key 'col2'
 insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
 Duplicate entry '67834' for key 'col1'
 insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
@@ -167,7 +167,7 @@ create table index_table_01 (col1 bigint auto_increment primary key,col2 varchar
 insert into index_table_01 values (67834,'13456789872',20.23,4090),(56473,'',100.00,5678);
 insert into index_table_01 values (34,NULL,4090,1);
 insert into index_table_01 values (56478,'',103.00,5670);
-Duplicate entry '' for key '__mo_index_idx_col'
+Duplicate entry '' for key 'col2'
 select * from index_table_01;
 col1    col2    col3    col4
 67834    13456789872    20.23    4090
@@ -259,7 +259,7 @@ create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25
 insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key 'm1'
 insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
 select * from index_table_04;
 col1    col2    col3    col4
@@ -292,7 +292,7 @@ apple
 bread
 chart
 update index_table_05 set col2='bread' where col1=1;
-Duplicate entry 'bread' for key '__mo_index_idx_col'
+Duplicate entry 'bread' for key 'col2'
 select * from index_table_05;
 col1    col2    col3    col4
 1    apple    1    10
@@ -523,7 +523,7 @@ create unique index m1_index on create_index_18(col2,col3);
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key 'm1_index'
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 select * from create_index_18;
 col1    col2    col3    col4
@@ -538,7 +538,7 @@ insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '(apple,2,12)' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2,12)' for key 'm2_index'
 select * from create_index_18;
 col1    col2    col3    col4
 1    apple    1    10
@@ -590,7 +590,7 @@ apple
 bread
 chart
 update create_index_19 set col2='bread' where col1=1;
-Duplicate entry 'bread' for key '__mo_index_idx_col'
+Duplicate entry 'bread' for key 'col2'
 select * from create_index_19;
 col1    col2    col3    col4
 1    apple    1    10

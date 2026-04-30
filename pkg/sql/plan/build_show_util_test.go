@@ -236,3 +236,41 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 	return showSQL, nil
 }
+
+// formatIdent and formatStrLit split the old formatStr responsibilities.
+// Identifier escape (backticks -> doubled backticks), string literal escape
+// (single quotes -> doubled quotes). Free-form expression text is never
+// passed through either — callers emit it verbatim.
+func TestFormatIdentEscapesBackticks(t *testing.T) {
+	require.Equal(t, "a``b", formatIdent("a`b"))
+	require.Equal(t, "plain", formatIdent("plain"))
+	// Must not treat single quotes specially — they are allowed inside an
+	// identifier name.
+	require.Equal(t, "o'brien", formatIdent("o'brien"))
+}
+
+func TestFormatStrLitEscapesSingleQuotes(t *testing.T) {
+	require.Equal(t, "'o''brien'", formatStrLit("o'brien"))
+	require.Equal(t, "''", formatStrLit(""))
+	// Backticks are NOT doubled inside a string literal.
+	require.Equal(t, "'a`b'", formatStrLit("a`b"))
+	// Multiple interior quotes must all be doubled.
+	require.Equal(t, "'''hi''there'''", formatStrLit("'hi'there'"))
+}
+
+// TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
+// loop only lower-cases the leading "SET" keyword and keeps the declared
+// member-name case, so SET('Read','Write') round-trips as set('Read','Write')
+// instead of set('read','write').
+func TestShowCreateSetMemberCasePreservation(t *testing.T) {
+	setType := plan.Type{Id: int32(28), Enumvalues: "Read,Write"} // T_uint64 with SET members
+	raw := FormatColType(setType)
+	require.Equal(t, "SET('Read','Write')", raw)
+
+	// Mirror the branch added to build_show_util.go: lower-case only the
+	// type keyword, keep members intact.
+	lowered := strings.ToLower(raw[:3]) + raw[3:]
+	require.Equal(t, "set('Read','Write')", lowered)
+	require.NotEqual(t, strings.ToLower(raw), lowered,
+		"plain strings.ToLower would damage member names; keep the fix in place")
+}

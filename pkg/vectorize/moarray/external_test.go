@@ -15,10 +15,12 @@
 package moarray
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestAdd(t *testing.T) {
@@ -352,6 +354,22 @@ func TestCast(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Narrowing cast (float64 -> float32) of a finite element whose magnitude
+// exceeds float32's range used to silently return +/-Inf. We now surface an
+// out-of-range error, matching scalar float-cast behaviour.
+func TestCastFloat64ToFloat32OverflowIsRejected(t *testing.T) {
+	_, err := Cast[float64, float32]([]float64{1e300})
+	if err == nil {
+		t.Fatalf("Cast[float64,float32]([1e300]) should return out-of-range error, got nil")
+	}
+
+	// An explicit +Inf on the source passes through without a new error —
+	// we only guard against silent finite -> Inf overflow.
+	if _, err := Cast[float64, float32]([]float64{math.Inf(1)}); err != nil {
+		t.Fatalf("Cast[float64,float32]([+Inf]) should pass through, got %v", err)
 	}
 }
 
@@ -937,5 +955,37 @@ func TestScalarOp(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestScalarOpOverflow(t *testing.T) {
+	maxF32 := float32(math.MaxFloat32)
+	maxF64 := math.MaxFloat64
+
+	// float32 overflow: MaxFloat32 * 2 → +Inf
+	_, err := ScalarOp[float32]([]float32{maxF32}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float32 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// float64 overflow: MaxFloat64 * 2 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// addition overflow: MaxFloat64 + MaxFloat64 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "+", maxF64)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 add overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
 	}
 }

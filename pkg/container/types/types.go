@@ -66,6 +66,7 @@ const (
 	T_datetime  T = 52
 	T_timestamp T = 53
 	T_interval  T = 54
+	T_year      T = 55
 
 	// string family
 	T_char      T = 60
@@ -75,6 +76,7 @@ const (
 	T_binary    T = 64
 	T_varbinary T = 65
 	T_enum      T = 66
+	T_geometry  T = 67
 
 	// blobs
 	T_blob     T = 70
@@ -397,9 +399,11 @@ var Types = map[string]T{
 	"time":      T_time,
 	"timestamp": T_timestamp,
 	"interval":  T_interval,
+	"year":      T_year,
 
-	"char":    T_char,
-	"varchar": T_varchar,
+	"char":     T_char,
+	"varchar":  T_varchar,
+	"geometry": T_geometry,
 
 	"binary":    T_binary,
 	"varbinary": T_varbinary,
@@ -432,7 +436,7 @@ func New(oid T, width, scale int32) Type {
 
 func CharsetType(oid T) uint8 {
 	switch oid {
-	case T_blob, T_varbinary, T_binary:
+	case T_blob, T_varbinary, T_binary, T_geometry:
 		// binary charset
 		return 1
 	default:
@@ -527,7 +531,7 @@ func (t Type) IsNumeric() bool {
 
 func (t Type) IsTemporal() bool {
 	switch t.Oid {
-	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+	case T_date, T_time, T_datetime, T_timestamp, T_interval, T_year:
 		return true
 	}
 	return false
@@ -595,6 +599,9 @@ func (t T) ToType() Type {
 		typ.Size = 1
 	case T_int16:
 		typ.Size = 2
+	case T_year:
+		typ.Size = 2
+		typ.Width = 4
 	case T_int32, T_date:
 		typ.Size = 4
 	case T_int64, T_datetime, T_time, T_timestamp:
@@ -628,7 +635,7 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_Blockid:
 		typ.Size = BlockidSize
-	case T_json, T_blob, T_text, T_datalink:
+	case T_json, T_blob, T_text, T_datalink, T_geometry:
 		typ.Size = VarlenaSize
 	case T_char:
 		typ.Size = VarlenaSize
@@ -740,6 +747,10 @@ func (t T) String() string {
 		return "VECF64"
 	case T_enum:
 		return "ENUM"
+	case T_year:
+		return "YEAR"
+	case T_geometry:
+		return "GEOMETRY"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -791,6 +802,8 @@ func (t T) OidString() string {
 		return "T_time"
 	case T_timestamp:
 		return "T_timestamp"
+	case T_year:
+		return "T_year"
 	case T_decimal64:
 		return "T_decimal64"
 	case T_decimal128:
@@ -813,6 +826,8 @@ func (t T) OidString() string {
 		return "T_interval"
 	case T_enum:
 		return "T_enum"
+	case T_geometry:
+		return "T_geometry"
 	case T_array_float32:
 		return "T_array_float32"
 	case T_array_float64:
@@ -830,7 +845,7 @@ func (t T) TypeLen() int {
 		return 8
 	case T_int8, T_bool:
 		return 1
-	case T_int16:
+	case T_int16, T_year:
 		return 2
 	case T_int32, T_date:
 		return 4
@@ -848,7 +863,8 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64,
+		T_datalink, T_geometry:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -881,7 +897,7 @@ func (t T) FixedLength() int {
 		return 8
 	case T_int8, T_uint8, T_bool:
 		return 1
-	case T_int16, T_uint16:
+	case T_int16, T_uint16, T_year:
 		return 2
 	case T_int32, T_uint32, T_date, T_float32:
 		return 4
@@ -901,7 +917,8 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64,
+		T_datalink, T_geometry:
 		return -24
 	case T_enum:
 		return 2
@@ -919,7 +936,7 @@ func (t T) IsOrdered() bool {
 		T_uint8, T_uint16, T_uint32, T_uint64,
 		T_float32, T_float64,
 		T_date, T_time, T_datetime, T_timestamp,
-		T_bit:
+		T_year, T_bit:
 		return true
 	default:
 		return false
@@ -975,7 +992,7 @@ func (t T) IsMySQLString() bool {
 }
 
 func (t T) IsDateRelate() bool {
-	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
+	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time || t == T_year {
 		return true
 	}
 	return false

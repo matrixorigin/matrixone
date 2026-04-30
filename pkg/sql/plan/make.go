@@ -16,9 +16,11 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,22 +66,38 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	_, scale, err := types.Parse128(v)
-	if err != nil {
-		return nil, err
-	}
 	var typ plan.Type
-	if scale < 18 && len(v) < 18 {
+	_, scale, err := types.Parse128(v)
+	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       18,
 			Scale:       scale,
 			NotNullable: true,
 		}
-	} else {
+	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       38,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		// Only retry with Decimal256 when Parse128 failed because the value
+		// overflowed Decimal128's width (message contains "beyond the
+		// range"). For malformed inputs like "abc" or "1.2.3" the 128-bit
+		// error is already the right diagnostic — returning the 256-bit
+		// "beyond the range" message would mislead the user.
+		if !strings.Contains(err.Error(), "beyond the range") {
+			return nil, err
+		}
+		_, scale, err = types.Parse256(v)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       65,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -549,6 +567,12 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 
 func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
+	if isSetPlanType(&targetType) {
+		expr, err = funcCastForSetType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -622,6 +646,82 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, err
 		}
 	}
+	return expr, nil
+}
+
+func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isSetPlanType(&targetType) {
+		return expr, nil
+	}
+
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return expr, nil
+	}
+
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		bits, err := types.ParseSet(targetType.Enumvalues, value.Sval)
+		if err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U64Val:
+		if _, err := types.ParseSetValue(targetType.Enumvalues, value.U64Val); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(value.U64Val)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_I8Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I8Val), targetType)
+	case *plan.Literal_I16Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I16Val), targetType)
+	case *plan.Literal_I32Val:
+		return funcCastSignedLiteralForSetType(ctx, int64(value.I32Val), targetType)
+	case *plan.Literal_I64Val:
+		return funcCastSignedLiteralForSetType(ctx, value.I64Val, targetType)
+	case *plan.Literal_U8Val:
+		bits := uint64(value.U8Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U16Val:
+		bits := uint64(value.U16Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	case *plan.Literal_U32Val:
+		bits := uint64(value.U32Val)
+		if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+			return nil, err
+		}
+		expr = makePlan2Uint64ConstExprWithType(bits)
+		expr.Typ = targetType
+		return expr, nil
+	}
+
+	return expr, nil
+}
+
+func funcCastSignedLiteralForSetType(ctx context.Context, value int64, targetType Type) (*Expr, error) {
+	if value < 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "convert to MySQL set failed: negative value %d", value)
+	}
+	bits := uint64(value)
+	if _, err := types.ParseSetValue(targetType.Enumvalues, bits); err != nil {
+		return nil, err
+	}
+	expr := makePlan2Uint64ConstExprWithType(bits)
+	expr.Typ = targetType
 	return expr, nil
 }
 

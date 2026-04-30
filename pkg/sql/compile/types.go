@@ -315,10 +315,17 @@ type RemoteReceivRegInfo struct {
 }
 
 type fuzzyCheck struct {
-	db        string
-	tbl       string
-	attr      string
-	condition string
+	db  string
+	tbl string
+	// attr is the column name used for the background dedup SQL. For unique
+	// index hidden tables it stays as the hidden index column (e.g.
+	// __mo_index_idx_col) so the SQL actually hits an existing column.
+	attr string
+	// displayAttr is the column name surfaced to the user in the duplicate
+	// entry error. Normally it equals attr, but for unique index hidden tables
+	// it is the original table's column/index name.
+	displayAttr string
+	condition   string
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
 	isCompound bool

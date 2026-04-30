@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -545,6 +546,13 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			return th.txnOp.Commit(ctx2)
 		})
 		if err != nil {
+			// Optimistic-txn dedup fires at commit time and surfaces
+			// "__mo_index_idx_col" directly from the engine. Rewrite the key
+			// name to the user-visible column/index using the current
+			// statement's plan before we wrap it with AttachCause.
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) && execCtx.cw != nil {
+				err = plan2.RewriteHiddenIndexDupEntry(execCtx.cw.Plan(), err)
+			}
 			err = moerr.AttachCause(ctx2, err)
 			if hasRecovered {
 				execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeRollbackWhenCommitPanic)

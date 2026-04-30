@@ -374,7 +374,7 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	// check overflow
 	for i := range ret {
 		if math.IsInf(float64(ret[i]), 0) {
-			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
+			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
 		}
 	}
 	return ret, nil
@@ -423,6 +423,16 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 	out = make([]O, n)
 	for i := 0; i < n; i++ {
 		out[i] = O(in[i])
+		// When narrowing (e.g. float64 -> float32), a finite source element
+		// whose magnitude exceeds the target type's range becomes +/-Inf. Go's
+		// implicit numeric conversion does not report this. Raise the same
+		// out-of-range error SQL users already get from scalar float casts,
+		// so vecf64 -> vecf32 doesn't silently insert Inf.
+		src := float64(in[i])
+		dst := float64(out[i])
+		if !math.IsInf(src, 0) && math.IsInf(dst, 0) {
+			return nil, moerr.NewOutOfRangeNoCtxf("vector element", "value '%v' overflows target element type", src)
+		}
 	}
 
 	return out, nil
