@@ -116,3 +116,63 @@ func TestRewriteHiddenIndexDupEntryMultipleUniqueIndexesUnchanged(t *testing.T) 
 	require.Equal(t, src.Error(), rewritten.Error(),
 		"with multiple unique indexes we cannot tell which one was hit, so keep the original error")
 }
+
+// Composite hidden UNIQUE index: the hidden index table's PK column is
+// __mo_cpkey_col (compound primary key), not __mo_index_idx_col. The plan
+// carries both the user-table node (with the unique-index definition) and a
+// hidden-index-table scan node, so we pick the composite index's IndexName.
+func TestRewriteHiddenIndexDupEntryCompositeUniqueOnCpkeyCol(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "t1",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "uk_ab", Parts: []string{"a", "b"}},
+							},
+						},
+					},
+					{
+						TableDef: &plan.TableDef{
+							Name: catalog.UniqueIndexTableNamePrefix + "abcd",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("(1,2)", catalog.CPrimaryKeyColName)
+	rewritten := RewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, "Duplicate entry '(1,2)' for key 'uk_ab'", rewritten.Error())
+}
+
+// A user table with a composite PRIMARY KEY also carries __mo_cpkey_col as
+// the PK column name, and such tables may happen to have a unique index too.
+// A PK dedup error must NOT be rewritten as the unique index's name — leave
+// it alone when no hidden-index-table node is in the plan.
+func TestRewriteHiddenIndexDupEntryUserCompositePkUnchanged(t *testing.T) {
+	p := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Nodes: []*plan.Node{
+					{
+						TableDef: &plan.TableDef{
+							Name: "t1",
+							Indexes: []*plan.IndexDef{
+								{Unique: true, IndexName: "uk_c", Parts: []string{"c"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	src := moerr.NewDuplicateEntryNoCtx("(1,2)", catalog.CPrimaryKeyColName)
+	rewritten := RewriteHiddenIndexDupEntry(p, src)
+	require.Equal(t, src.Error(), rewritten.Error(),
+		"user-table composite PK dedup error must keep __mo_cpkey_col, not be rewritten as the unique index name")
+}
