@@ -135,7 +135,7 @@ select e.k as ek, l.k as lk
   order by lk;
 
 -- ---------------------------------------------------------------------
--- 8. FULL OUTER JOIN ... USING(col): merged column must coalesce both
+-- 10. FULL OUTER JOIN ... USING(col): merged column must coalesce both
 --    sides (issue #24247). Null-padded rows must surface the value from
 --    the non-padded side.
 -- ---------------------------------------------------------------------
@@ -216,7 +216,7 @@ drop table u2;
 drop table u3;
 
 -- ---------------------------------------------------------------------
--- 9. NATURAL FULL [OUTER] JOIN (issue #24250). Grammar must reduce both
+-- 11. NATURAL FULL [OUTER] JOIN (issue #24250). Grammar must reduce both
 --    `natural full outer join` and `natural full join` to FULL OUTER,
 --    not silently to RIGHT.
 -- ---------------------------------------------------------------------
