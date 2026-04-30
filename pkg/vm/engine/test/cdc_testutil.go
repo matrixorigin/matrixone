@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -31,11 +32,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+func activateTenantFromCtx(de *testutil.TestDisttaeEngine, ctx context.Context) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil || accountID == 0 {
+		return nil
+	}
+	return de.Engine.ActivateTenantCatalog(ctx, accountID)
+}
+
 func execSql(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 	sql string,
 ) (result executor.Result, err error) {
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -95,6 +107,7 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	assert.NoError(t, activateTenantFromCtx(de, ctx))
 	_, err := exec.Exec(ctx, createDBSql, executor.Options{})
 	assert.NoError(t, err)
 	_, err = exec.Exec(ctx, createTableSql, executor.Options{})
