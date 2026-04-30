@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -348,7 +349,7 @@ func batchSingleCPKeyAccountID(bat *containers.Batch) (uint32, bool, error) {
 			if accountID != first {
 				// Mixed-account delete batch (e.g., from restore).
 				mixed = true
-				return fmt.Errorf("break")
+				return moerr.NewInternalErrorNoCtx("break")
 			}
 			return nil
 		},
