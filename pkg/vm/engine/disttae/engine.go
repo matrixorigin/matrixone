@@ -232,6 +232,12 @@ func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
 	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
+// GCCatalogCache implements engine.CatalogCacheGCer.
+func (e *Engine) GCCatalogCache(ctx context.Context, ago time.Duration) {
+	ts := types.BuildTS(time.Now().UTC().UnixNano()-ago.Nanoseconds(), 0)
+	e.catalog.Load().GC(ts.ToTimestamp())
+}
+
 func (e *Engine) AcquireQuota(v int64) (int64, bool) {
 	left, ok := e.config.memThrottler.Acquire(v)
 	if ok {
