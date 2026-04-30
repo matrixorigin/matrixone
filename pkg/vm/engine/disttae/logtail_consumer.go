@@ -96,7 +96,7 @@ const (
 // doActivateTenantCatalog when the pending response channel receives nil,
 // which means a reconnect cycle cleared it. The outer ActivateTenantCatalog
 // loop retries on this specific error.
-var errActivationInterruptedByReconnect = errors.New("tenant catalog activation interrupted by reconnect")
+var errActivationInterruptedByReconnect = moerr.NewInternalErrorNoCtx("tenant catalog activation interrupted by reconnect")
 
 type SubscribeState int32
 
