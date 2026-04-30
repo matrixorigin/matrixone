@@ -4605,7 +4605,7 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 	case *tree.JoinTableExpr:
 		var err, err0 error
 		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_FULL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
-			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport LEFT, RIGHT or OUTER JOIN in recursive CTE: %T", stmt)
+			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport outer join (LEFT/RIGHT/FULL) in recursive CTE: %T", stmt)
 		}
 		c1, err1 := builder.checkRecursiveTable(tbl.Left, name)
 		c2, err2 := builder.checkRecursiveTable(tbl.Right, name)

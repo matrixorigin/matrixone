@@ -193,6 +193,24 @@ select id from (u1 full outer join u2 using(id)) left join u3 using(id)
 select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
   order by id;
 
+-- Sibling FOJ-USING subtrees joined at the same level: each subtree's
+-- merged id must coalesce its OWN arms, not inherit the sibling's. The
+-- bind-context-wide outerUsingCols map is shared, so per-NameTuple arms
+-- on the binding tree are required for SELECT * to resolve correctly.
+-- u3 here doubles as the right subtree's left arm; values arranged so
+-- left.id ranges over {1,2,3,4} and right.id ranges over {3,4,5,6}.
+drop table if exists s1;
+drop table if exists s2;
+create table s1(id int);
+create table s2(id int);
+insert into s1 values (3),(4),(6);
+insert into s2 values (4),(5),(6);
+select * from (u1 full outer join u2 using(id)),
+              (s1 full outer join s2 using(id))
+  order by 1, 2, 3, 4;
+drop table s1;
+drop table s2;
+
 drop table u1;
 drop table u2;
 drop table u3;
@@ -211,7 +229,7 @@ insert into n2 values (2,'B'),(3,'C');
 
 select id from n1 natural full outer join n2 order by id;
 select id from n1 natural full join n2 order by id;
-select * from n1 natural full outer join n2 order by id;
+select * from n1 natural full outer join n2 order by id, v;
 
 drop table n1;
 drop table n2;

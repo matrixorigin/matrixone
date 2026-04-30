@@ -377,6 +377,13 @@ type SelectField struct {
 type NameTuple struct {
 	table string
 	col   string
+	// coalesceArms is non-empty (len >= 2) only for FOJ-USING merged columns:
+	// the ordered list of contributing leaf-table names so star-expansion at
+	// this join node emits COALESCE(arm1.col, ..., armN.col) without consulting
+	// the bind-context-wide outerUsingCols map (which is shared across sibling
+	// subtrees and so cannot disambiguate two FOJ-USING(c) trees joined at the
+	// same level).
+	coalesceArms []string
 }
 
 type BindingTreeNode struct {

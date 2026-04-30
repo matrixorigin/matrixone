@@ -235,11 +235,8 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 		chosen, chosenCoalesce = rightBinding, rightCoalesce
 	}
 	bc.bindingByCol[col] = chosen
-	bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
-		table: chosen.table,
-		col:   col,
-	})
 
+	var mergedArms []string
 	switch {
 	case typ == plan.Node_OUTER:
 		// FULL OUTER JOIN ... USING(col): merged value is
@@ -253,18 +250,25 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 		if len(rightArms) == 0 {
 			rightArms = []string{rightBinding.table}
 		}
-		merged := make([]string, 0, len(leftArms)+len(rightArms))
-		merged = append(merged, leftArms...)
-		merged = append(merged, rightArms...)
-		bc.outerUsingCols[col] = merged
+		mergedArms = make([]string, 0, len(leftArms)+len(rightArms))
+		mergedArms = append(mergedArms, leftArms...)
+		mergedArms = append(mergedArms, rightArms...)
+		bc.outerUsingCols[col] = mergedArms
 	case len(chosenCoalesce) > 0:
 		// LEFT/INNER/RIGHT USING: merged column adopts the chosen side's
 		// value; preserve any prior coalesce list from a nested FOJ-USING.
+		mergedArms = chosenCoalesce
 		bc.outerUsingCols[col] = chosenCoalesce
 	default:
 		// Drop any list inherited from the unchosen side via mergeContexts.
 		delete(bc.outerUsingCols, col)
 	}
+
+	bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
+		table:        chosen.table,
+		col:          col,
+		coalesceArms: mergedArms,
+	})
 
 	leftEq, err := bc.buildUsingEqOperand(col, leftBinding, leftCoalesce)
 	if err != nil {
@@ -279,10 +283,6 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 	return expr, err
 }
 
-// buildUsingEqOperand returns the operand for one side of a USING equality.
-// If the side has been merged through a prior FULL OUTER JOIN ... USING(col),
-// the operand is COALESCE(arm1.col, arm2.col, ...); otherwise it is just
-// binding.col.
 // buildUsingEqOperand returns the operand for one side of a USING equality.
 // If the side has been merged through a prior FULL OUTER JOIN ... USING(col),
 // the operand is COALESCE(arm1.col, arm2.col, ...); otherwise it is just
@@ -429,17 +429,21 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		if catalog.ContainExternalHidenCol(using.col) {
 			continue
 		}
-		//the non-sys account skips the column account_id for the cluster table
-		if !isSysAccount && root.binding.isClusterTable && util.IsClusterTableAttribute(using.col) {
-			continue
+		//the non-sys account skips the column account_id for the cluster table.
+		//root.binding is nil at JOIN nodes, so look up the chosen-side
+		//binding via using.table (set in addUsingCol from chosen.table).
+		if !isSysAccount {
+			if b := bc.bindingByTable[using.table]; b != nil && b.isClusterTable && util.IsClusterTableAttribute(using.col) {
+				continue
+			}
 		}
 		if !visitedUsingCols[using.col] {
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = true
 
 			var expr tree.Expr
-			if list := bc.outerUsingCols[using.col]; len(list) >= 2 {
-				expr = makeCoalesceUsingExprFromList(list, using.col, bc.lower)
+			if len(using.coalesceArms) >= 2 {
+				expr = makeCoalesceUsingExprFromList(using.coalesceArms, using.col, bc.lower)
 			} else {
 				expr = tree.NewUnresolvedName(tree.NewCStr(using.table, bc.lower), tree.NewCStr(using.col, 1))
 			}
@@ -636,28 +640,4 @@ func makeCoalesceUsingExprFromList(tables []string, col string, lower int64) tre
 		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("coalesce")),
 		Exprs: exprs,
 	}
-}
-
-// buildOuterUsingColRefPlan resolves an unqualified column reference `col`
-// against the bindContext's outer-using coalesce list (length must be >= 2),
-// returning a plan.Expr whose value follows FULL-OUTER USING coalesce
-// semantics: COALESCE(arm1.col, arm2.col, ...).
-func (bc *BindContext) buildOuterUsingColRefPlan(ctx context.Context, col string) (*plan.Expr, error) {
-	list := bc.outerUsingCols[col]
-	args := make([]*plan.Expr, 0, len(list))
-	for _, t := range list {
-		b := bc.bindingByTable[t]
-		colPos := b.colIdByName[col]
-		args = append(args, &plan.Expr{
-			Typ: *b.types[colPos],
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: b.tag,
-					ColPos: colPos,
-					Name:   col,
-				},
-			},
-		})
-	}
-	return BindFuncExprImplByPlanExpr(ctx, "coalesce", args)
 }
