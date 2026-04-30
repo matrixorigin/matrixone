@@ -163,6 +163,40 @@ func TestNewFuzzyCheckHiddenOnlyPath(t *testing.T) {
 	require.NoError(t, err)
 	defer f.release()
 	require.True(t, f.onlyInsertHidden)
+	// Hidden-only fallback must not leak the internal PK column name —
+	// firstlyCheck / backgroundSQLCheck use displayAttr directly in
+	// NewDuplicateEntry without going through RewriteHiddenIndexDupEntry.
+	require.NotEqual(t, catalog.IndexTableIndexColName, f.displayAttr,
+		"hidden-only fallback must not surface the internal index column name")
+	require.NotContains(t, f.displayAttr, "__mo_",
+		"hidden-only fallback must not surface any __mo_ internal name")
+}
+
+// Composite CREATE UNIQUE INDEX on an existing table hits the same
+// onlyInsertHidden fallback, but the hidden table's PK is __mo_cpkey_col.
+// That name must also not leak into the user-visible error.
+func TestNewFuzzyCheckHiddenOnlyCompositeDoesNotLeakInternalName(t *testing.T) {
+	n := &plan.Node{
+		ObjRef: &plan.ObjectRef{SchemaName: "db"},
+		TableDef: &plan.TableDef{
+			Name: catalog.PrefixIndexTableName + "unique_composite",
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: catalog.CPrimaryKeyColName,
+				Names:       []string{"a", "b"},
+			},
+			Cols: []*plan.ColDef{
+				{Name: catalog.CPrimaryKeyColName, Typ: plan.Type{}},
+				{Name: "a", Typ: plan.Type{}},
+				{Name: "b", Typ: plan.Type{}},
+			},
+		},
+	}
+	f, err := newFuzzyCheck(n)
+	require.NoError(t, err)
+	defer f.release()
+	require.True(t, f.onlyInsertHidden)
+	require.NotEqual(t, catalog.CPrimaryKeyColName, f.displayAttr)
+	require.NotContains(t, f.displayAttr, "__mo_")
 }
 
 // TestNewFuzzyCheckRejectsEmptyNames covers the error branch when tblName or

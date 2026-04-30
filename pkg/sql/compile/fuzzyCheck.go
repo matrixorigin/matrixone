@@ -72,6 +72,14 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
 	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
 		f.onlyInsertHidden = true
+		// displayAttr was initialized above to the hidden table's PK column
+		// name (__mo_index_idx_col for single-column UNIQUE, __mo_cpkey_col
+		// for composite). Errors reported from firstlyCheck /
+		// backgroundSQLCheck use f.displayAttr directly and do not pass
+		// through RewriteHiddenIndexDupEntry, so leaving the internal name
+		// here leaks it to the user. Replace with a neutral placeholder; we
+		// do not have the user-declared unique-index name at this point.
+		f.displayAttr = "unique index"
 	}
 
 	if n.Fuzzymessage != nil {
