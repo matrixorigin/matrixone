@@ -3,6 +3,13 @@
 drop account if exists acc_branch_meta;
 create account acc_branch_meta admin_name "root1" identified by "111";
 
+-- Activate the new account on this CN for subsequent cross-account catalog queries.
+set @acc_id = (
+  select account_id from mo_catalog.mo_account
+  where account_name = 'acc_branch_meta'
+);
+set @_activate = (select mo_ctl('cn', 'ActivateTenantCatalog', cast(@acc_id as char)));
+
 -- @session:id=1&user=acc_branch_meta:root1&password=111
 -- Case 1: data branch create/delete table in normal tenant.
 drop database if exists br_meta_db;
@@ -20,10 +27,6 @@ drop table if exists branch_tbl;
 data branch create table branch_tbl from base_tbl{snapshot="sp_base_tbl"};
 
 -- @session
-set @acc_id = (
-  select account_id from mo_catalog.mo_account
-  where account_name = 'acc_branch_meta'
-);
 set @branch_tbl_id = (
   select rel_id from mo_catalog.mo_tables
   where account_id = @acc_id and reldatabase = 'br_meta_db' and relname = 'branch_tbl'

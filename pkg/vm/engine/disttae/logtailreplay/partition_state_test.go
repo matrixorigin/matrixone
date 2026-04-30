@@ -2901,3 +2901,114 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		require.Error(t, err, "CountRows must return error when CollectDataStats fails")
 	})
 }
+
+// TestHandleDataObjectEntry_DuplicateDeleteRunsGC verifies the fix for the
+// push-vs-activation race condition where a sealed appendable's DELETE
+// DataObject arrives twice on CN — first via a regular push (when the btree
+// is still empty, so GC is a no-op) and then inside the activation response
+// (when btree rows have been inserted in between by the activation's INSERT
+// entries). Before the fix, the dead-object protection `continue` at the
+// second DELETE skipped GC entirely, leaving duplicate btree rows.
+func TestHandleDataObjectEntry_DuplicateDeleteRunsGC(t *testing.T) {
+	ctx := context.Background()
+	state := NewPartitionState("", true, 42, false)
+
+	// Build an appendable ObjectEntry with BlkCnt=1, Size>0 so it is
+	// not filtered out by the early-skip checks.
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, true /*appendable*/, false, false)
+	objectio.SetObjectStatsBlkCnt(stats, 1)
+	objectio.SetObjectStatsSize(stats, 100)
+
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+
+	sealedEntry := objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  createTS,
+		DeleteTime:  deleteTS,
+	}
+
+	// ── Step 1: push delivers the sealed-appendable DELETE first ──
+	// At this point the btree is empty, so GC is a no-op.
+	err := state.handleDataObjectEntry(ctx, nil, sealedEntry)
+	require.NoError(t, err)
+
+	// Verify the entry is in nameIndex with DeleteTime set.
+	got, ok := state.dataObjectsNameIndex.Get(sealedEntry)
+	require.True(t, ok)
+	require.False(t, got.DeleteTime.IsEmpty())
+
+	// Verify btree is empty.
+	require.Equal(t, 0, state.rows.Len(), "btree should be empty before insert")
+
+	// ── Step 2: activation INSERT entries add rows to btree ──
+	// Simulate rows that belong to this appendable object's block.
+	blkID := types.NewBlockidWithObjectID(&objID, 0)
+	numRows := 10
+	for i := 0; i < numRows; i++ {
+		rowID := types.NewRowid(&blkID, uint32(i))
+		state.rows.Set(&RowEntry{
+			BlockID: blkID,
+			RowID:   rowID,
+			Time:    types.BuildTS(5, uint32(i)), // Time <= createTS, eligible for GC
+			ID:      int64(i),
+			Deleted: false,
+		})
+	}
+	require.Equal(t, numRows, state.rows.Len(), "btree should have %d rows after insert", numRows)
+
+	// ── Step 3: activation DataObject for the same sealed appendable arrives ──
+	// Before the fix: the dead-object protection would `continue`, skipping GC.
+	// After the fix: GC still runs and cleans up all btree rows.
+	err = state.handleDataObjectEntry(ctx, nil, sealedEntry)
+	require.NoError(t, err)
+
+	// All rows with Time <= deleteTS should have been GC'd.
+	require.Equal(t, 0, state.rows.Len(),
+		"btree should be empty after second DELETE processing runs GC")
+}
+
+// TestHandleDataObjectEntry_CreateOverDeleteStillBlocked verifies that the
+// dead-object protection is preserved: a CREATE (DeleteTime empty) must NOT
+// overwrite a DELETE (DeleteTime set) in nameIndex.
+func TestHandleDataObjectEntry_CreateOverDeleteStillBlocked(t *testing.T) {
+	ctx := context.Background()
+	state := NewPartitionState("", true, 42, false)
+
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false /*non-appendable*/, false, false)
+	objectio.SetObjectStatsBlkCnt(stats, 1)
+	objectio.SetObjectStatsSize(stats, 100)
+
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+
+	// First: process the DELETE entry.
+	deleteEntry := objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  createTS,
+		DeleteTime:  deleteTS,
+	}
+	err := state.handleDataObjectEntry(ctx, nil, deleteEntry)
+	require.NoError(t, err)
+
+	got, ok := state.dataObjectsNameIndex.Get(deleteEntry)
+	require.True(t, ok)
+	require.False(t, got.DeleteTime.IsEmpty())
+
+	// Second: process a CREATE entry for the same object (CKP replay scenario).
+	createEntry := objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  createTS,
+		// DeleteTime is zero — this is a CREATE.
+	}
+	err = state.handleDataObjectEntry(ctx, nil, createEntry)
+	require.NoError(t, err)
+
+	// The DELETE should NOT be overwritten — object stays dead.
+	got, ok = state.dataObjectsNameIndex.Get(deleteEntry)
+	require.True(t, ok)
+	require.False(t, got.DeleteTime.IsEmpty(),
+		"CREATE must not overwrite DELETE in nameIndex (dead-object protection)")
+}

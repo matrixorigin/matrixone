@@ -4214,10 +4214,97 @@ func TestCollectInsert(t *testing.T) {
 	batches[schema.Version].Close()
 }
 
-func TestAppendnode(t *testing.T) {
+// TestCollectInsertAfterFlush appends three transactions into an appendable
+// object, flushes that aobj so its in-memory node is upgraded to a persisted
+// node, and then verifies that RangeScanInMemoryByObject (used by logtail
+// emission) still returns the same row windows it would have returned before
+// the flush. This locks in persistedNode.ScanDataInRange's behavior: if the
+// pnode branch returns nil again, rows disappear from logtail tails during
+// concurrent aobj flushes (the lazy-catalog bug this path was added to fix).
+func TestCollectInsertAfterFlush(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(ctx, "flush-for-scan-range")
+	worker.Start()
+	defer worker.Stop()
+
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.Extra.BlockMaxRows = 20
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 12)
+	bats := bat.Split(4)
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	txn1, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[1]))
+	assert.NoError(t, txn1.Commit(ctx))
+	p1 := txn1.GetPrepareTS()
+
+	txn2, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[2]))
+	assert.NoError(t, txn2.Commit(ctx))
+	p2 := txn2.GetPrepareTS()
+
+	txn3, rel := tae.GetRelation()
+	assert.NoError(t, rel.Append(ctx, bats[3]))
+	assert.NoError(t, txn3.Commit(ctx))
+	p3 := txn3.GetPrepareTS()
+
+	_, rel = tae.GetRelation()
+	objEntry := testutil.GetOneObject(rel).GetMeta().(*catalog.ObjectEntry)
+	require.True(t, objEntry.IsAppendable(), "expected appendable object before flush")
+
+	flushTxn, _ := tae.GetRelation()
+	task, err := jobs.NewFlushTableTailTask(
+		tasks.WaitableCtx, flushTxn,
+		[]*catalog.ObjectEntry{objEntry},
+		nil,
+		tae.DB.Runtime,
+	)
+	assert.NoError(t, err)
+	worker.SendOp(task)
+	assert.NoError(t, task.WaitDone(ctx))
+	assert.NoError(t, flushTxn.Commit(ctx))
+
+	flushedEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(objEntry.ID(), false)
+	assert.NoError(t, err)
+	require.True(t, flushedEntry.IsAppendable(),
+		"flushed aobj should still be marked appendable")
+	deleteAt := flushedEntry.GetDeleteAt()
+	require.False(t, (&deleteAt).IsEmpty(),
+		"flushed aobj should carry a non-empty DeleteAt")
+
+	check := func(name string, start, end types.TS, expectedRows int) {
+		t.Helper()
+		batches := make(map[uint32]*containers.BatchWithVersion)
+		err := tables.RangeScanInMemoryByObject(
+			ctx, flushedEntry, batches, start, end, common.DefaultAllocator,
+		)
+		assert.NoErrorf(t, err, "%s: scan error", name)
+		bwv := batches[schema.Version]
+		require.NotNilf(t, bwv, "%s: expected batch at schema version %d", name, schema.Version)
+		for _, vec := range bwv.Vecs {
+			assert.Equalf(t, expectedRows, vec.Length(),
+				"%s: unexpected row count for attrs=%v", name, bwv.Attrs)
+		}
+		bwv.Close()
+	}
+
+	check("[0,p1]", types.TS{}, p1, 6)
+	check("[0,p2]", types.TS{}, p2, 9)
+	check("(p1,p2]", p1.Next(), p2, 3)
+	check("(p1,p3]", p1.Next(), p3, 6)
+}
+
+func TestAppendnode(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()

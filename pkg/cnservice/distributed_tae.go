@@ -112,6 +112,7 @@ func (s *service) initDistributedTAE(
 		statusServer := ss.(*status.Server)
 		statusServer.SetTxnClient(s.cfg.UUID, client)
 		statusServer.SetLogTailClient(s.cfg.UUID, cnEngine.PushClient())
+		statusServer.SetEngine(s.cfg.UUID, cnEngine)
 	}
 
 	s.initProcessCodecService()

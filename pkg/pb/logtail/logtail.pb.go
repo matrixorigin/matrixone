@@ -28,10 +28,12 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 // SubscribeRequest is the request for subscription.
 type SubscribeRequest struct {
-	Table                *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
-	XXX_unrecognized     []byte       `json:"-"`
-	XXX_sizecache        int32        `json:"-"`
+	Table                 *api.TableID `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
+	LazyCatalog           bool         `protobuf:"varint,2,opt,name=lazy_catalog,json=lazyCatalog,proto3" json:"lazy_catalog,omitempty"`
+	InitialActiveAccounts []uint32     `protobuf:"varint,3,rep,packed,name=initial_active_accounts,json=initialActiveAccounts,proto3" json:"initial_active_accounts,omitempty"`
+	XXX_NoUnkeyedLiteral  struct{}     `json:"-"`
+	XXX_unrecognized      []byte       `json:"-"`
+	XXX_sizecache         int32        `json:"-"`
 }
 
 func (m *SubscribeRequest) Reset()         { *m = SubscribeRequest{} }
@@ -70,6 +72,20 @@ var xxx_messageInfo_SubscribeRequest proto.InternalMessageInfo
 func (m *SubscribeRequest) GetTable() *api.TableID {
 	if m != nil {
 		return m.Table
+	}
+	return nil
+}
+
+func (m *SubscribeRequest) GetLazyCatalog() bool {
+	if m != nil {
+		return m.LazyCatalog
+	}
+	return false
+}
+
+func (m *SubscribeRequest) GetInitialActiveAccounts() []uint32 {
+	if m != nil {
+		return m.InitialActiveAccounts
 	}
 	return nil
 }
@@ -122,6 +138,132 @@ func (m *UnsubscribeRequest) GetTable() *api.TableID {
 	return nil
 }
 
+type ActivateAccountForCatalogRequest struct {
+	AccountId            uint32   `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Seq                  uint64   `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *ActivateAccountForCatalogRequest) Reset()         { *m = ActivateAccountForCatalogRequest{} }
+func (m *ActivateAccountForCatalogRequest) String() string { return proto.CompactTextString(m) }
+func (*ActivateAccountForCatalogRequest) ProtoMessage()    {}
+func (*ActivateAccountForCatalogRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{2}
+}
+func (m *ActivateAccountForCatalogRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *ActivateAccountForCatalogRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_ActivateAccountForCatalogRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *ActivateAccountForCatalogRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ActivateAccountForCatalogRequest.Merge(m, src)
+}
+func (m *ActivateAccountForCatalogRequest) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *ActivateAccountForCatalogRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_ActivateAccountForCatalogRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ActivateAccountForCatalogRequest proto.InternalMessageInfo
+
+func (m *ActivateAccountForCatalogRequest) GetAccountId() uint32 {
+	if m != nil {
+		return m.AccountId
+	}
+	return 0
+}
+
+func (m *ActivateAccountForCatalogRequest) GetSeq() uint64 {
+	if m != nil {
+		return m.Seq
+	}
+	return 0
+}
+
+type ActivateAccountForCatalogResponse struct {
+	AccountId            uint32               `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Seq                  uint64               `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	TargetTs             *timestamp.Timestamp `protobuf:"bytes,3,opt,name=target_ts,json=targetTs,proto3" json:"target_ts,omitempty"`
+	Tails                []TableLogtail       `protobuf:"bytes,4,rep,name=tails,proto3" json:"tails"`
+	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
+	XXX_unrecognized     []byte               `json:"-"`
+	XXX_sizecache        int32                `json:"-"`
+}
+
+func (m *ActivateAccountForCatalogResponse) Reset()         { *m = ActivateAccountForCatalogResponse{} }
+func (m *ActivateAccountForCatalogResponse) String() string { return proto.CompactTextString(m) }
+func (*ActivateAccountForCatalogResponse) ProtoMessage()    {}
+func (*ActivateAccountForCatalogResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3604137dacc8e6bf, []int{3}
+}
+func (m *ActivateAccountForCatalogResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *ActivateAccountForCatalogResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_ActivateAccountForCatalogResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *ActivateAccountForCatalogResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ActivateAccountForCatalogResponse.Merge(m, src)
+}
+func (m *ActivateAccountForCatalogResponse) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *ActivateAccountForCatalogResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_ActivateAccountForCatalogResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ActivateAccountForCatalogResponse proto.InternalMessageInfo
+
+func (m *ActivateAccountForCatalogResponse) GetAccountId() uint32 {
+	if m != nil {
+		return m.AccountId
+	}
+	return 0
+}
+
+func (m *ActivateAccountForCatalogResponse) GetSeq() uint64 {
+	if m != nil {
+		return m.Seq
+	}
+	return 0
+}
+
+func (m *ActivateAccountForCatalogResponse) GetTargetTs() *timestamp.Timestamp {
+	if m != nil {
+		return m.TargetTs
+	}
+	return nil
+}
+
+func (m *ActivateAccountForCatalogResponse) GetTails() []TableLogtail {
+	if m != nil {
+		return m.Tails
+	}
+	return nil
+}
+
 // TableLogtail describes total or additional logtail for a table.
 type TableLogtail struct {
 	CkpLocation          string               `protobuf:"bytes,1,opt,name=ckp_location,json=ckpLocation,proto3" json:"ckp_location,omitempty"`
@@ -137,7 +279,7 @@ func (m *TableLogtail) Reset()         { *m = TableLogtail{} }
 func (m *TableLogtail) String() string { return proto.CompactTextString(m) }
 func (*TableLogtail) ProtoMessage()    {}
 func (*TableLogtail) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{2}
+	return fileDescriptor_3604137dacc8e6bf, []int{4}
 }
 func (m *TableLogtail) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -209,7 +351,7 @@ func (m *Status) Reset()         { *m = Status{} }
 func (m *Status) String() string { return proto.CompactTextString(m) }
 func (*Status) ProtoMessage()    {}
 func (*Status) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{3}
+	return fileDescriptor_3604137dacc8e6bf, []int{5}
 }
 func (m *Status) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -265,7 +407,7 @@ func (m *ErrorResponse) Reset()         { *m = ErrorResponse{} }
 func (m *ErrorResponse) String() string { return proto.CompactTextString(m) }
 func (*ErrorResponse) ProtoMessage()    {}
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{4}
+	return fileDescriptor_3604137dacc8e6bf, []int{6}
 }
 func (m *ErrorResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -322,7 +464,7 @@ func (m *SubscribeResponse) Reset()         { *m = SubscribeResponse{} }
 func (m *SubscribeResponse) String() string { return proto.CompactTextString(m) }
 func (*SubscribeResponse) ProtoMessage()    {}
 func (*SubscribeResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{5}
+	return fileDescriptor_3604137dacc8e6bf, []int{7}
 }
 func (m *SubscribeResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -375,7 +517,7 @@ func (m *UpdateResponse) Reset()         { *m = UpdateResponse{} }
 func (m *UpdateResponse) String() string { return proto.CompactTextString(m) }
 func (*UpdateResponse) ProtoMessage()    {}
 func (*UpdateResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{6}
+	return fileDescriptor_3604137dacc8e6bf, []int{8}
 }
 func (m *UpdateResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -437,7 +579,7 @@ func (m *UnSubscribeResponse) Reset()         { *m = UnSubscribeResponse{} }
 func (m *UnSubscribeResponse) String() string { return proto.CompactTextString(m) }
 func (*UnSubscribeResponse) ProtoMessage()    {}
 func (*UnSubscribeResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{7}
+	return fileDescriptor_3604137dacc8e6bf, []int{9}
 }
 func (m *UnSubscribeResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -479,6 +621,7 @@ type LogtailRequest struct {
 	// Types that are valid to be assigned to Request:
 	//	*LogtailRequest_SubscribeTable
 	//	*LogtailRequest_UnsubscribeTable
+	//	*LogtailRequest_ActivateAccountForCatalog
 	Request              isLogtailRequest_Request `protobuf_oneof:"request"`
 	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
 	XXX_unrecognized     []byte                   `json:"-"`
@@ -489,7 +632,7 @@ func (m *LogtailRequest) Reset()         { *m = LogtailRequest{} }
 func (m *LogtailRequest) String() string { return proto.CompactTextString(m) }
 func (*LogtailRequest) ProtoMessage()    {}
 func (*LogtailRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{8}
+	return fileDescriptor_3604137dacc8e6bf, []int{10}
 }
 func (m *LogtailRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -530,9 +673,13 @@ type LogtailRequest_SubscribeTable struct {
 type LogtailRequest_UnsubscribeTable struct {
 	UnsubscribeTable *UnsubscribeRequest `protobuf:"bytes,3,opt,name=unsubscribe_table,json=unsubscribeTable,proto3,oneof" json:"unsubscribe_table,omitempty"`
 }
+type LogtailRequest_ActivateAccountForCatalog struct {
+	ActivateAccountForCatalog *ActivateAccountForCatalogRequest `protobuf:"bytes,4,opt,name=activate_account_for_catalog,json=activateAccountForCatalog,proto3,oneof" json:"activate_account_for_catalog,omitempty"`
+}
 
-func (*LogtailRequest_SubscribeTable) isLogtailRequest_Request()   {}
-func (*LogtailRequest_UnsubscribeTable) isLogtailRequest_Request() {}
+func (*LogtailRequest_SubscribeTable) isLogtailRequest_Request()            {}
+func (*LogtailRequest_UnsubscribeTable) isLogtailRequest_Request()          {}
+func (*LogtailRequest_ActivateAccountForCatalog) isLogtailRequest_Request() {}
 
 func (m *LogtailRequest) GetRequest() isLogtailRequest_Request {
 	if m != nil {
@@ -562,11 +709,19 @@ func (m *LogtailRequest) GetUnsubscribeTable() *UnsubscribeRequest {
 	return nil
 }
 
+func (m *LogtailRequest) GetActivateAccountForCatalog() *ActivateAccountForCatalogRequest {
+	if x, ok := m.GetRequest().(*LogtailRequest_ActivateAccountForCatalog); ok {
+		return x.ActivateAccountForCatalog
+	}
+	return nil
+}
+
 // XXX_OneofWrappers is for the internal use of the proto package.
 func (*LogtailRequest) XXX_OneofWrappers() []interface{} {
 	return []interface{}{
 		(*LogtailRequest_SubscribeTable)(nil),
 		(*LogtailRequest_UnsubscribeTable)(nil),
+		(*LogtailRequest_ActivateAccountForCatalog)(nil),
 	}
 }
 
@@ -578,6 +733,7 @@ type LogtailResponse struct {
 	//	*LogtailResponse_UnsubscribeResponse
 	//	*LogtailResponse_UpdateResponse
 	//	*LogtailResponse_Error
+	//	*LogtailResponse_ActivateAccountForCatalogResponse
 	Response             isLogtailResponse_Response `protobuf_oneof:"response"`
 	XXX_NoUnkeyedLiteral struct{}                   `json:"-"`
 	XXX_unrecognized     []byte                     `json:"-"`
@@ -588,7 +744,7 @@ func (m *LogtailResponse) Reset()         { *m = LogtailResponse{} }
 func (m *LogtailResponse) String() string { return proto.CompactTextString(m) }
 func (*LogtailResponse) ProtoMessage()    {}
 func (*LogtailResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{9}
+	return fileDescriptor_3604137dacc8e6bf, []int{11}
 }
 func (m *LogtailResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -635,11 +791,15 @@ type LogtailResponse_UpdateResponse struct {
 type LogtailResponse_Error struct {
 	Error *ErrorResponse `protobuf:"bytes,5,opt,name=error,proto3,oneof" json:"error,omitempty"`
 }
+type LogtailResponse_ActivateAccountForCatalogResponse struct {
+	ActivateAccountForCatalogResponse *ActivateAccountForCatalogResponse `protobuf:"bytes,6,opt,name=activate_account_for_catalog_response,json=activateAccountForCatalogResponse,proto3,oneof" json:"activate_account_for_catalog_response,omitempty"`
+}
 
-func (*LogtailResponse_SubscribeResponse) isLogtailResponse_Response()   {}
-func (*LogtailResponse_UnsubscribeResponse) isLogtailResponse_Response() {}
-func (*LogtailResponse_UpdateResponse) isLogtailResponse_Response()      {}
-func (*LogtailResponse_Error) isLogtailResponse_Response()               {}
+func (*LogtailResponse_SubscribeResponse) isLogtailResponse_Response()                 {}
+func (*LogtailResponse_UnsubscribeResponse) isLogtailResponse_Response()               {}
+func (*LogtailResponse_UpdateResponse) isLogtailResponse_Response()                    {}
+func (*LogtailResponse_Error) isLogtailResponse_Response()                             {}
+func (*LogtailResponse_ActivateAccountForCatalogResponse) isLogtailResponse_Response() {}
 
 func (m *LogtailResponse) GetResponse() isLogtailResponse_Response {
 	if m != nil {
@@ -683,6 +843,13 @@ func (m *LogtailResponse) GetError() *ErrorResponse {
 	return nil
 }
 
+func (m *LogtailResponse) GetActivateAccountForCatalogResponse() *ActivateAccountForCatalogResponse {
+	if x, ok := m.GetResponse().(*LogtailResponse_ActivateAccountForCatalogResponse); ok {
+		return x.ActivateAccountForCatalogResponse
+	}
+	return nil
+}
+
 // XXX_OneofWrappers is for the internal use of the proto package.
 func (*LogtailResponse) XXX_OneofWrappers() []interface{} {
 	return []interface{}{
@@ -690,6 +857,7 @@ func (*LogtailResponse) XXX_OneofWrappers() []interface{} {
 		(*LogtailResponse_UnsubscribeResponse)(nil),
 		(*LogtailResponse_UpdateResponse)(nil),
 		(*LogtailResponse_Error)(nil),
+		(*LogtailResponse_ActivateAccountForCatalogResponse)(nil),
 	}
 }
 
@@ -709,7 +877,7 @@ func (m *MessageSegment) Reset()         { *m = MessageSegment{} }
 func (m *MessageSegment) String() string { return proto.CompactTextString(m) }
 func (*MessageSegment) ProtoMessage()    {}
 func (*MessageSegment) Descriptor() ([]byte, []int) {
-	return fileDescriptor_3604137dacc8e6bf, []int{10}
+	return fileDescriptor_3604137dacc8e6bf, []int{12}
 }
 func (m *MessageSegment) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -776,6 +944,8 @@ func (m *MessageSegment) GetPayload() []byte {
 func init() {
 	proto.RegisterType((*SubscribeRequest)(nil), "logtail.SubscribeRequest")
 	proto.RegisterType((*UnsubscribeRequest)(nil), "logtail.UnsubscribeRequest")
+	proto.RegisterType((*ActivateAccountForCatalogRequest)(nil), "logtail.ActivateAccountForCatalogRequest")
+	proto.RegisterType((*ActivateAccountForCatalogResponse)(nil), "logtail.ActivateAccountForCatalogResponse")
 	proto.RegisterType((*TableLogtail)(nil), "logtail.TableLogtail")
 	proto.RegisterType((*Status)(nil), "logtail.Status")
 	proto.RegisterType((*ErrorResponse)(nil), "logtail.ErrorResponse")
@@ -790,53 +960,65 @@ func init() {
 func init() { proto.RegisterFile("logtail.proto", fileDescriptor_3604137dacc8e6bf) }
 
 var fileDescriptor_3604137dacc8e6bf = []byte{
-	// 734 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x55, 0x4f, 0x4f, 0xdb, 0x4a,
-	0x10, 0x8f, 0x43, 0x42, 0xc8, 0x24, 0x24, 0xb0, 0xf0, 0xde, 0xcb, 0xcb, 0x7b, 0x0d, 0xd4, 0xea,
-	0x21, 0x87, 0x92, 0x20, 0xaa, 0xa2, 0xf6, 0xd2, 0x43, 0x04, 0x55, 0x42, 0x41, 0x6a, 0x37, 0xe1,
-	0xd2, 0x4b, 0xb4, 0x76, 0xb6, 0xae, 0x45, 0xec, 0x75, 0xbd, 0x6b, 0x09, 0xfa, 0x69, 0x38, 0x55,
-	0xea, 0x37, 0xe1, 0xd0, 0x43, 0xd5, 0x0f, 0x50, 0x55, 0xf4, 0x8b, 0x54, 0xd9, 0x5d, 0xff, 0x09,
-	0x01, 0x54, 0xf5, 0x36, 0x33, 0x3b, 0xf3, 0x9b, 0xfd, 0xfd, 0x66, 0xd6, 0x86, 0xd5, 0x29, 0x73,
-	0x04, 0x71, 0xa7, 0x9d, 0x20, 0x64, 0x82, 0xa1, 0x92, 0x76, 0x9b, 0x3b, 0x8e, 0x2b, 0xde, 0x47,
-	0x56, 0xc7, 0x66, 0x5e, 0xd7, 0x61, 0x0e, 0xeb, 0xca, 0x73, 0x2b, 0x7a, 0x27, 0x3d, 0xe9, 0x48,
-	0x4b, 0xd5, 0x35, 0xeb, 0xc2, 0xf5, 0x28, 0x17, 0xc4, 0x0b, 0x74, 0xa0, 0x4c, 0x02, 0x57, 0x99,
-	0xe6, 0x3e, 0xac, 0x0d, 0x23, 0x8b, 0xdb, 0xa1, 0x6b, 0x51, 0x4c, 0x3f, 0x44, 0x94, 0x0b, 0x64,
-	0x42, 0x51, 0x10, 0x6b, 0x4a, 0x1b, 0xc6, 0xb6, 0xd1, 0xae, 0xec, 0x55, 0x3b, 0xb3, 0xf4, 0xd1,
-	0x2c, 0x32, 0x38, 0xc0, 0xea, 0xc8, 0x7c, 0x06, 0xe8, 0xd4, 0xe7, 0x7f, 0x52, 0xf9, 0xd9, 0x80,
-	0xaa, 0x0c, 0x1d, 0x2b, 0x36, 0xe8, 0x21, 0x54, 0xed, 0xb3, 0x60, 0x3c, 0x65, 0x36, 0x11, 0x2e,
-	0xf3, 0x65, 0x6d, 0x19, 0x57, 0xec, 0xb3, 0xe0, 0x58, 0x87, 0xd0, 0x23, 0xc8, 0x0b, 0xde, 0xc8,
-	0x4b, 0xd0, 0xcd, 0x4e, 0x4a, 0x67, 0x14, 0x5b, 0x38, 0x2f, 0x78, 0xda, 0x7d, 0xe9, 0xce, 0xee,
-	0xe8, 0x31, 0xac, 0xd8, 0xcc, 0xf3, 0x88, 0x3f, 0xe1, 0x8d, 0xc2, 0xf6, 0x52, 0xbb, 0xb2, 0x07,
-	0x32, 0xed, 0xd0, 0x17, 0xe1, 0x45, 0xaf, 0x70, 0xf5, 0x7d, 0x2b, 0x87, 0x93, 0x0c, 0x73, 0x1f,
-	0x96, 0x87, 0x82, 0x88, 0x88, 0x23, 0x04, 0x05, 0x9b, 0x4d, 0x14, 0xb1, 0x55, 0x2c, 0x6d, 0xd4,
-	0x80, 0x92, 0x47, 0x39, 0x27, 0x0e, 0x95, 0x57, 0x2b, 0xe3, 0xd8, 0x35, 0x2d, 0x58, 0x3d, 0x0c,
-	0x43, 0x16, 0x62, 0xca, 0x03, 0xe6, 0x73, 0x8a, 0x76, 0x60, 0x99, 0x4b, 0x20, 0xad, 0x4c, 0xbd,
-	0x13, 0x8f, 0x56, 0xe1, 0xeb, 0xce, 0x3a, 0x29, 0x65, 0x92, 0xbf, 0x5b, 0xc7, 0x23, 0x58, 0xcf,
-	0x4c, 0x4e, 0xf7, 0x79, 0x0a, 0xf1, 0x92, 0xe8, 0x46, 0x7f, 0x25, 0x8d, 0xb2, 0x9a, 0xeb, 0x76,
-	0x71, 0xae, 0x79, 0x69, 0x40, 0xed, 0x34, 0x98, 0x10, 0x91, 0x22, 0xb5, 0xa1, 0xf0, 0x32, 0x64,
-	0x9e, 0x86, 0xb9, 0x5d, 0x74, 0x99, 0x31, 0x1b, 0xce, 0x88, 0xdd, 0x3f, 0x9c, 0x11, 0x43, 0x2f,
-	0xa0, 0xaa, 0xbb, 0x8d, 0xa7, 0x2e, 0x17, 0x8d, 0x25, 0x29, 0xfe, 0xbd, 0xd7, 0xab, 0xe8, 0xb3,
-	0x63, 0x97, 0x0b, 0xf3, 0x39, 0x6c, 0x9c, 0xfa, 0x8b, 0x84, 0x7f, 0x67, 0xe3, 0xbe, 0x18, 0x50,
-	0xd3, 0xc8, 0xf1, 0xa2, 0x3e, 0x00, 0x08, 0x95, 0x39, 0x76, 0x27, 0xb2, 0xb6, 0x80, 0xcb, 0x3a,
-	0x32, 0x98, 0xa0, 0x03, 0xa8, 0x27, 0xbb, 0x3d, 0xce, 0x4e, 0xe2, 0xdf, 0x74, 0x6e, 0x37, 0x76,
-	0xbf, 0x9f, 0xc3, 0xb5, 0xa4, 0x46, 0x5e, 0x00, 0x1d, 0xc1, 0x7a, 0xe4, 0xdf, 0xc4, 0x51, 0xbb,
-	0xf9, 0x5f, 0x82, 0xb3, 0xf8, 0x8a, 0xfa, 0x39, 0xbc, 0x96, 0xa9, 0x93, 0x58, 0xbd, 0x32, 0x94,
-	0xf4, 0xf5, 0xcc, 0x6f, 0x79, 0xa8, 0x27, 0x74, 0xb4, 0x0c, 0x5b, 0x50, 0x09, 0xb5, 0x9d, 0x12,
-	0x82, 0x38, 0x34, 0x98, 0xa0, 0x57, 0x80, 0xd2, 0x9b, 0xc4, 0x71, 0x4d, 0xaa, 0x79, 0x1b, 0x29,
-	0x95, 0xd1, 0xcf, 0xe1, 0x75, 0xbe, 0x20, 0xfa, 0x1b, 0xd8, 0xcc, 0x12, 0x4b, 0xe0, 0x14, 0xb7,
-	0xff, 0x33, 0xdc, 0x6e, 0x03, 0xdc, 0x88, 0xfc, 0x45, 0xc8, 0x1e, 0xd4, 0x23, 0xb9, 0x80, 0x29,
-	0x5a, 0x41, 0xa2, 0xfd, 0x93, 0xa2, 0xcd, 0x2d, 0xe8, 0x4c, 0xef, 0x68, 0x7e, 0x65, 0x3b, 0x50,
-	0xa4, 0xb3, 0x57, 0xd7, 0x28, 0xca, 0xca, 0xbf, 0x93, 0xca, 0xb9, 0xb7, 0xd8, 0xcf, 0x61, 0x95,
-	0xd6, 0x03, 0x58, 0x89, 0x9b, 0x99, 0x9f, 0x0c, 0xa8, 0x9d, 0xa8, 0xd7, 0x3b, 0xa4, 0x8e, 0x47,
-	0x7d, 0x81, 0x9a, 0xb0, 0x32, 0x14, 0x21, 0x25, 0xde, 0xe0, 0x40, 0x0b, 0x9a, 0xf8, 0x68, 0x1b,
-	0x2a, 0x71, 0xb6, 0xfb, 0x51, 0xe9, 0x58, 0xc4, 0xd9, 0x90, 0xac, 0x9e, 0x0d, 0xcc, 0xb7, 0x95,
-	0x2e, 0x45, 0x9c, 0xf8, 0xb2, 0x9a, 0x9c, 0x27, 0xc7, 0x05, 0x5d, 0x9d, 0x86, 0x66, 0x9f, 0x96,
-	0xd7, 0xe4, 0x62, 0xca, 0xc8, 0x44, 0x92, 0xa9, 0xe2, 0xd8, 0xdd, 0x3b, 0x81, 0x52, 0xfc, 0xe1,
-	0xec, 0xa5, 0x66, 0xaa, 0xd2, 0xfc, 0xa2, 0x37, 0x1b, 0x8b, 0x07, 0x9a, 0x71, 0xae, 0x6d, 0xec,
-	0x1a, 0xbd, 0xde, 0xd5, 0x75, 0xcb, 0xf8, 0x7a, 0xdd, 0x32, 0x7e, 0x5c, 0xb7, 0x72, 0x97, 0x3f,
-	0x5b, 0xc6, 0xdb, 0xdd, 0xcc, 0xcf, 0xc5, 0x23, 0x22, 0x74, 0xcf, 0x59, 0xe8, 0x3a, 0xae, 0x1f,
-	0x3b, 0x3e, 0xed, 0x06, 0x67, 0x4e, 0x37, 0xb0, 0xba, 0x1a, 0xd9, 0x5a, 0x96, 0xbf, 0x92, 0x27,
-	0xbf, 0x02, 0x00, 0x00, 0xff, 0xff, 0xbd, 0xae, 0x7f, 0xca, 0xaf, 0x06, 0x00, 0x00,
+	// 921 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x56, 0xdb, 0x8e, 0xdb, 0x44,
+	0x18, 0x8e, 0x73, 0xd8, 0x4d, 0xfe, 0x64, 0x37, 0xdd, 0x69, 0x4b, 0xd3, 0x50, 0xb6, 0x59, 0x0b,
+	0xa4, 0x80, 0x68, 0xd2, 0x2e, 0xa2, 0x82, 0x1b, 0xa4, 0x86, 0x6d, 0x95, 0x94, 0xad, 0x04, 0x93,
+	0xec, 0x0d, 0x37, 0xd6, 0xc4, 0x71, 0xcd, 0x68, 0x6d, 0x8f, 0xeb, 0x19, 0xa3, 0x6e, 0x2f, 0x78,
+	0x07, 0xde, 0xa0, 0x57, 0x48, 0xbc, 0x42, 0x9f, 0xa0, 0x97, 0x88, 0x07, 0x40, 0x68, 0x79, 0x11,
+	0xe4, 0x39, 0xd8, 0xde, 0x66, 0x0f, 0x85, 0xbb, 0xf9, 0x4f, 0xdf, 0xfc, 0xf3, 0x7d, 0xf3, 0x8f,
+	0x0d, 0x5b, 0x01, 0xf3, 0x05, 0xa1, 0xc1, 0x28, 0x4e, 0x98, 0x60, 0x68, 0x53, 0x9b, 0xfd, 0x7b,
+	0x3e, 0x15, 0x3f, 0xa5, 0xcb, 0x91, 0xcb, 0xc2, 0xb1, 0xcf, 0x7c, 0x36, 0x96, 0xf1, 0x65, 0xfa,
+	0x5c, 0x5a, 0xd2, 0x90, 0x2b, 0x55, 0xd7, 0xef, 0x0a, 0x1a, 0x7a, 0x5c, 0x90, 0x30, 0xd6, 0x8e,
+	0x16, 0x89, 0xa9, 0x5a, 0xda, 0xbf, 0x5a, 0x70, 0x6d, 0x9e, 0x2e, 0xb9, 0x9b, 0xd0, 0xa5, 0x87,
+	0xbd, 0x17, 0xa9, 0xc7, 0x05, 0xb2, 0xa1, 0x21, 0xc8, 0x32, 0xf0, 0x7a, 0xd6, 0xc0, 0x1a, 0xb6,
+	0xf7, 0x3b, 0xa3, 0x2c, 0x7f, 0x91, 0x79, 0x66, 0x07, 0x58, 0x85, 0xd0, 0x1e, 0x74, 0x02, 0xf2,
+	0xea, 0xc4, 0x71, 0x89, 0x20, 0x01, 0xf3, 0x7b, 0xd5, 0x81, 0x35, 0x6c, 0xe2, 0x76, 0xe6, 0xfb,
+	0x56, 0xb9, 0xd0, 0x43, 0xb8, 0x45, 0x23, 0x2a, 0x28, 0x09, 0x1c, 0xe2, 0x0a, 0xfa, 0xb3, 0xe7,
+	0x10, 0xd7, 0x65, 0x69, 0x24, 0x78, 0xaf, 0x36, 0xa8, 0x0d, 0xb7, 0xf0, 0x4d, 0x1d, 0x7e, 0x24,
+	0xa3, 0x8f, 0x74, 0xd0, 0xfe, 0x0a, 0xd0, 0x51, 0xc4, 0xff, 0x47, 0x53, 0xf6, 0x1c, 0x06, 0x12,
+	0x8b, 0x08, 0x83, 0xf6, 0x84, 0x25, 0xba, 0x1d, 0x83, 0xf3, 0x11, 0x80, 0x6e, 0xc3, 0xa1, 0x2b,
+	0x09, 0xb6, 0x85, 0x5b, 0xda, 0x33, 0x5b, 0xa1, 0x6b, 0x50, 0xe3, 0xde, 0x0b, 0x79, 0x9c, 0x3a,
+	0xce, 0x96, 0xf6, 0x1b, 0x0b, 0xf6, 0x2e, 0x41, 0xe5, 0x31, 0x8b, 0xb8, 0xf7, 0x9f, 0x61, 0xd1,
+	0x03, 0x68, 0x09, 0x92, 0xf8, 0x9e, 0x70, 0x24, 0x1f, 0xd9, 0x99, 0x6e, 0x8c, 0x0a, 0xa5, 0x16,
+	0x66, 0x85, 0x9b, 0x2a, 0x6d, 0xc1, 0xd1, 0x83, 0x8c, 0x02, 0x1a, 0xf0, 0x5e, 0x7d, 0x50, 0x1b,
+	0xb6, 0xf7, 0x6f, 0x8e, 0xcc, 0xfd, 0x90, 0x34, 0x1c, 0x2a, 0x63, 0x52, 0x7f, 0xfb, 0xd7, 0xdd,
+	0x0a, 0x56, 0x99, 0xf6, 0xef, 0x16, 0x74, 0xca, 0xd1, 0x4c, 0x37, 0xf7, 0x38, 0x76, 0x02, 0xe6,
+	0x12, 0x41, 0x59, 0x24, 0x3b, 0x6d, 0xe1, 0xb6, 0x7b, 0x1c, 0x1f, 0x6a, 0x17, 0xfa, 0x18, 0xaa,
+	0x82, 0xcb, 0x56, 0x2f, 0x6a, 0xa9, 0x2a, 0x78, 0xa1, 0x47, 0xed, 0xe2, 0x4b, 0xf2, 0x39, 0x34,
+	0x5d, 0x16, 0x86, 0x24, 0x5a, 0x99, 0x9e, 0x41, 0xa6, 0x3d, 0x8e, 0x44, 0x72, 0xa2, 0x1b, 0xcd,
+	0x33, 0xec, 0x87, 0xb0, 0x31, 0x17, 0x44, 0xa4, 0x1c, 0x21, 0xa8, 0xbb, 0x6c, 0xe5, 0x69, 0x1a,
+	0xe5, 0x1a, 0xf5, 0x60, 0x33, 0xf4, 0x38, 0x27, 0xbe, 0x27, 0x5b, 0x6b, 0x61, 0x63, 0xda, 0x4b,
+	0xd8, 0x7a, 0x9c, 0x24, 0x2c, 0xc9, 0xb5, 0xb8, 0x07, 0x1b, 0x5c, 0x02, 0xe9, 0xbb, 0xd2, 0xcd,
+	0x89, 0x52, 0xf8, 0x7a, 0x67, 0x9d, 0x54, 0x9c, 0xa4, 0x7a, 0xf1, 0xcd, 0x7a, 0x0a, 0x3b, 0xa5,
+	0x31, 0xd1, 0xfb, 0x7c, 0x09, 0x66, 0x24, 0xf5, 0x46, 0x97, 0x2a, 0x62, 0x72, 0xed, 0xd7, 0x16,
+	0x6c, 0x1f, 0xc5, 0x2b, 0x22, 0x0a, 0xa4, 0x21, 0xd4, 0x9f, 0x24, 0x2c, 0xd4, 0x30, 0xe7, 0x93,
+	0x2e, 0x33, 0x32, 0x71, 0x16, 0xec, 0x72, 0x71, 0x16, 0x0c, 0x7d, 0x03, 0x1d, 0xbd, 0x9b, 0x13,
+	0x50, 0x2e, 0xe4, 0xbc, 0x5d, 0xd1, 0x5e, 0x5b, 0xc7, 0x0e, 0x29, 0x17, 0xf6, 0xd7, 0x70, 0xfd,
+	0x28, 0x5a, 0x3f, 0xf0, 0xfb, 0xcc, 0xe0, 0x9b, 0x2a, 0x6c, 0x6b, 0xe4, 0xd2, 0xc8, 0x25, 0x6a,
+	0x69, 0x66, 0xa3, 0x8e, 0x5b, 0xda, 0x33, 0x5b, 0xa1, 0x03, 0xe8, 0xe6, 0xd3, 0xee, 0x94, 0x95,
+	0xb8, 0x5d, 0xe8, 0xf6, 0xce, 0x6b, 0x30, 0xad, 0xe0, 0xed, 0xbc, 0x46, 0x36, 0x80, 0x9e, 0xc2,
+	0x4e, 0x1a, 0xbd, 0x8b, 0xa3, 0xee, 0xe6, 0x87, 0x39, 0xce, 0xfa, 0xbb, 0x32, 0xad, 0xe0, 0x6b,
+	0xa5, 0x3a, 0x85, 0x15, 0xc0, 0x1d, 0xa2, 0x27, 0xde, 0xbc, 0x59, 0xce, 0x73, 0x96, 0xe4, 0x8f,
+	0x5d, 0x5d, 0xc2, 0x7e, 0x9a, 0xc3, 0x5e, 0xf5, 0xe8, 0x4c, 0x2b, 0xf8, 0x36, 0xb9, 0x28, 0x67,
+	0xd2, 0x82, 0x4d, 0x4d, 0x86, 0xfd, 0x67, 0x0d, 0xba, 0x39, 0x79, 0x9a, 0xf4, 0xbb, 0xd0, 0x4e,
+	0xf4, 0xba, 0xa0, 0x0f, 0x8c, 0x6b, 0xb6, 0x42, 0xdf, 0x01, 0x2a, 0xce, 0x6d, 0xfc, 0x9a, 0xc2,
+	0xfe, 0x79, 0x14, 0xaa, 0x8c, 0x69, 0x05, 0xef, 0xf0, 0x35, 0x89, 0x7f, 0x80, 0x1b, 0x65, 0x1a,
+	0x73, 0x38, 0xc5, 0xe4, 0x9d, 0x12, 0x93, 0xe7, 0x01, 0x5e, 0x4f, 0xa3, 0x75, 0xc8, 0x09, 0x74,
+	0x53, 0x79, 0xdd, 0x0b, 0x34, 0x45, 0xe0, 0xad, 0x02, 0xed, 0xcc, 0x38, 0x64, 0xea, 0xa6, 0x67,
+	0x07, 0x64, 0x04, 0x0d, 0x2f, 0x9b, 0xf1, 0x5e, 0x43, 0x56, 0x7e, 0x90, 0x57, 0x9e, 0x99, 0xfc,
+	0x69, 0x05, 0xab, 0x34, 0xf4, 0x0b, 0x7c, 0x72, 0x99, 0x82, 0x45, 0x27, 0x1b, 0x12, 0xef, 0xb3,
+	0xf7, 0x91, 0x32, 0xdf, 0x63, 0x8f, 0x5c, 0x95, 0x34, 0x01, 0x68, 0x9a, 0x2d, 0xec, 0xdf, 0x2c,
+	0xd8, 0x7e, 0xa6, 0xde, 0xaa, 0xb9, 0xe7, 0x87, 0x5e, 0x24, 0x50, 0x1f, 0x9a, 0x73, 0x91, 0x78,
+	0x24, 0x9c, 0x1d, 0x68, 0x41, 0x73, 0x1b, 0x0d, 0xa0, 0x6d, 0xb2, 0xe9, 0x2b, 0xa5, 0x63, 0x03,
+	0x97, 0x5d, 0xb2, 0x3a, 0xbb, 0x30, 0x91, 0xab, 0x74, 0x69, 0xe0, 0xdc, 0x96, 0xd5, 0xe4, 0x65,
+	0x1e, 0xae, 0xeb, 0xea, 0xc2, 0x95, 0x3d, 0xa4, 0xdf, 0x93, 0x93, 0x80, 0x91, 0x95, 0x24, 0xb3,
+	0x83, 0x8d, 0xb9, 0xff, 0x0c, 0x36, 0xcd, 0x67, 0x62, 0x52, 0x2c, 0x0b, 0x95, 0xce, 0x8e, 0x75,
+	0xbf, 0xb7, 0x1e, 0xd0, 0x27, 0xae, 0x0c, 0xad, 0xfb, 0xd6, 0x64, 0xf2, 0xf6, 0x74, 0xd7, 0xfa,
+	0xe3, 0x74, 0xd7, 0xfa, 0xfb, 0x74, 0xb7, 0xf2, 0xfa, 0x9f, 0x5d, 0xeb, 0xc7, 0xfb, 0xa5, 0x1f,
+	0x97, 0x90, 0x88, 0x84, 0xbe, 0x64, 0x09, 0xf5, 0x69, 0x64, 0x8c, 0xc8, 0x1b, 0xc7, 0xc7, 0xfe,
+	0x38, 0x5e, 0x8e, 0x35, 0xf2, 0x72, 0x43, 0xfe, 0xa6, 0x7c, 0xf1, 0x6f, 0x00, 0x00, 0x00, 0xff,
+	0xff, 0x7a, 0x16, 0x6b, 0x5b, 0x0b, 0x09, 0x00, 0x00,
 }
 
 func (m *SubscribeRequest) Marshal() (dAtA []byte, err error) {
@@ -862,6 +1044,34 @@ func (m *SubscribeRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.InitialActiveAccounts) > 0 {
+		dAtA2 := make([]byte, len(m.InitialActiveAccounts)*10)
+		var j1 int
+		for _, num := range m.InitialActiveAccounts {
+			for num >= 1<<7 {
+				dAtA2[j1] = uint8(uint64(num)&0x7f | 0x80)
+				num >>= 7
+				j1++
+			}
+			dAtA2[j1] = uint8(num)
+			j1++
+		}
+		i -= j1
+		copy(dAtA[i:], dAtA2[:j1])
+		i = encodeVarintLogtail(dAtA, i, uint64(j1))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.LazyCatalog {
+		i--
+		if m.LazyCatalog {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x10
 	}
 	if m.Table != nil {
 		{
@@ -913,6 +1123,106 @@ func (m *UnsubscribeRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 		i--
 		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *ActivateAccountForCatalogRequest) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ActivateAccountForCatalogRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ActivateAccountForCatalogRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Seq != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.Seq))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.AccountId != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.AccountId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *ActivateAccountForCatalogResponse) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *ActivateAccountForCatalogResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *ActivateAccountForCatalogResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Tails) > 0 {
+		for iNdEx := len(m.Tails) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Tails[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintLogtail(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x22
+		}
+	}
+	if m.TargetTs != nil {
+		{
+			size, err := m.TargetTs.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.Seq != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.Seq))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.AccountId != 0 {
+		i = encodeVarintLogtail(dAtA, i, uint64(m.AccountId))
+		i--
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -1301,6 +1611,27 @@ func (m *LogtailRequest_UnsubscribeTable) MarshalToSizedBuffer(dAtA []byte) (int
 	}
 	return len(dAtA) - i, nil
 }
+func (m *LogtailRequest_ActivateAccountForCatalog) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogtailRequest_ActivateAccountForCatalog) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.ActivateAccountForCatalog != nil {
+		{
+			size, err := m.ActivateAccountForCatalog.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	return len(dAtA) - i, nil
+}
 func (m *LogtailResponse) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
@@ -1426,6 +1757,27 @@ func (m *LogtailResponse_Error) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	}
 	return len(dAtA) - i, nil
 }
+func (m *LogtailResponse_ActivateAccountForCatalogResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogtailResponse_ActivateAccountForCatalogResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.ActivateAccountForCatalogResponse != nil {
+		{
+			size, err := m.ActivateAccountForCatalogResponse.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintLogtail(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
+	return len(dAtA) - i, nil
+}
 func (m *MessageSegment) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
@@ -1501,6 +1853,16 @@ func (m *SubscribeRequest) ProtoSize() (n int) {
 		l = m.Table.ProtoSize()
 		n += 1 + l + sovLogtail(uint64(l))
 	}
+	if m.LazyCatalog {
+		n += 2
+	}
+	if len(m.InitialActiveAccounts) > 0 {
+		l = 0
+		for _, e := range m.InitialActiveAccounts {
+			l += sovLogtail(uint64(e))
+		}
+		n += 1 + sovLogtail(uint64(l)) + l
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -1516,6 +1878,52 @@ func (m *UnsubscribeRequest) ProtoSize() (n int) {
 	if m.Table != nil {
 		l = m.Table.ProtoSize()
 		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *ActivateAccountForCatalogRequest) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.AccountId != 0 {
+		n += 1 + sovLogtail(uint64(m.AccountId))
+	}
+	if m.Seq != 0 {
+		n += 1 + sovLogtail(uint64(m.Seq))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *ActivateAccountForCatalogResponse) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.AccountId != 0 {
+		n += 1 + sovLogtail(uint64(m.AccountId))
+	}
+	if m.Seq != 0 {
+		n += 1 + sovLogtail(uint64(m.Seq))
+	}
+	if m.TargetTs != nil {
+		l = m.TargetTs.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	if len(m.Tails) > 0 {
+		for _, e := range m.Tails {
+			l = e.ProtoSize()
+			n += 1 + l + sovLogtail(uint64(l))
+		}
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1688,6 +2096,18 @@ func (m *LogtailRequest_UnsubscribeTable) ProtoSize() (n int) {
 	}
 	return n
 }
+func (m *LogtailRequest_ActivateAccountForCatalog) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ActivateAccountForCatalog != nil {
+		l = m.ActivateAccountForCatalog.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	return n
+}
 func (m *LogtailResponse) ProtoSize() (n int) {
 	if m == nil {
 		return 0
@@ -1750,6 +2170,18 @@ func (m *LogtailResponse_Error) ProtoSize() (n int) {
 	_ = l
 	if m.Error != nil {
 		l = m.Error.ProtoSize()
+		n += 1 + l + sovLogtail(uint64(l))
+	}
+	return n
+}
+func (m *LogtailResponse_ActivateAccountForCatalogResponse) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ActivateAccountForCatalogResponse != nil {
+		l = m.ActivateAccountForCatalogResponse.ProtoSize()
 		n += 1 + l + sovLogtail(uint64(l))
 	}
 	return n
@@ -1853,6 +2285,102 @@ func (m *SubscribeRequest) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LazyCatalog", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.LazyCatalog = bool(v != 0)
+		case 3:
+			if wireType == 0 {
+				var v uint32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowLogtail
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= uint32(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.InitialActiveAccounts = append(m.InitialActiveAccounts, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowLogtail
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= int(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthLogtail
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex < 0 {
+					return ErrInvalidLengthLogtail
+				}
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				var elementCount int
+				var count int
+				for _, integer := range dAtA[iNdEx:postIndex] {
+					if integer < 128 {
+						count++
+					}
+				}
+				elementCount = count
+				if elementCount != 0 && len(m.InitialActiveAccounts) == 0 {
+					m.InitialActiveAccounts = make([]uint32, 0, elementCount)
+				}
+				for iNdEx < postIndex {
+					var v uint32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowLogtail
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= uint32(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.InitialActiveAccounts = append(m.InitialActiveAccounts, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field InitialActiveAccounts", wireType)
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLogtail(dAtA[iNdEx:])
@@ -1937,6 +2465,254 @@ func (m *UnsubscribeRequest) Unmarshal(dAtA []byte) error {
 				m.Table = &api.TableID{}
 			}
 			if err := m.Table.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *ActivateAccountForCatalogRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ActivateAccountForCatalogRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ActivateAccountForCatalogRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AccountId", wireType)
+			}
+			m.AccountId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AccountId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Seq", wireType)
+			}
+			m.Seq = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Seq |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipLogtail(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *ActivateAccountForCatalogResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowLogtail
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: ActivateAccountForCatalogResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: ActivateAccountForCatalogResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AccountId", wireType)
+			}
+			m.AccountId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AccountId |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Seq", wireType)
+			}
+			m.Seq = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Seq |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetTs", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.TargetTs == nil {
+				m.TargetTs = &timestamp.Timestamp{}
+			}
+			if err := m.TargetTs.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Tails", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Tails = append(m.Tails, TableLogtail{})
+			if err := m.Tails[len(m.Tails)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -2819,6 +3595,41 @@ func (m *LogtailRequest) Unmarshal(dAtA []byte) error {
 			}
 			m.Request = &LogtailRequest_UnsubscribeTable{v}
 			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ActivateAccountForCatalog", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &ActivateAccountForCatalogRequest{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Request = &LogtailRequest_ActivateAccountForCatalog{v}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLogtail(dAtA[iNdEx:])
@@ -3028,6 +3839,41 @@ func (m *LogtailResponse) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			m.Response = &LogtailResponse_Error{v}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ActivateAccountForCatalogResponse", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogtail
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthLogtail
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &ActivateAccountForCatalogResponse{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Response = &LogtailResponse_ActivateAccountForCatalogResponse{v}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

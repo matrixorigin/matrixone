@@ -49,7 +49,7 @@ type LogtailClient struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// requestC is a chan, which receives all sub/unsub request.
+	// requestC is a chan, which receives all logtail stream requests.
 	// There is another worker send the items in the chan to stream.
 	requestC chan *LogtailRequest
 
@@ -116,6 +116,31 @@ func (c *LogtailClient) Close() error {
 func (c *LogtailClient) Subscribe(
 	ctx context.Context, table api.TableID,
 ) error {
+	return c.sendSubscribeRequest(ctx, &logtail.SubscribeRequest{
+		Table: &table,
+	})
+}
+
+// SubscribeCatalogTable subscribes one of the three catalog system tables with lazy-catalog metadata.
+func (c *LogtailClient) SubscribeCatalogTable(
+	ctx context.Context, table api.TableID, initialActiveAccounts []uint32,
+) error {
+	if !isLazyCatalogTableID(&table) {
+		return moerr.NewNotSupportedf(ctx,
+			"lazy catalog subscribe only supports mo_database/mo_tables/mo_columns, got %s",
+			table.String(),
+		)
+	}
+	return c.sendSubscribeRequest(ctx, &logtail.SubscribeRequest{
+		Table:                 &table,
+		LazyCatalog:           true,
+		InitialActiveAccounts: append([]uint32(nil), initialActiveAccounts...),
+	})
+}
+
+func (c *LogtailClient) sendSubscribeRequest(
+	ctx context.Context, req *logtail.SubscribeRequest,
+) error {
 	if c.streamBroken() {
 		logutil.Error("logtail client: subscribe via broken morpc stream")
 		return moerr.NewStreamClosedNoCtx()
@@ -125,9 +150,34 @@ func (c *LogtailClient) Subscribe(
 
 	request := &LogtailRequest{}
 	request.Request = &logtail.LogtailRequest_SubscribeTable{
-		SubscribeTable: &logtail.SubscribeRequest{
-			Table: &table,
-		},
+		SubscribeTable: cloneSubscribeRequest(req),
+	}
+	return c.sendRequest(request)
+}
+
+// ActivateAccountForCatalog sends the account-level lazy catalog activation request.
+func (c *LogtailClient) ActivateAccountForCatalog(
+	ctx context.Context, accountID uint32, seq uint64,
+) error {
+	return c.sendActivateAccountForCatalogRequest(ctx, &logtail.ActivateAccountForCatalogRequest{
+		AccountId: accountID,
+		Seq:       seq,
+	})
+}
+
+func (c *LogtailClient) sendActivateAccountForCatalogRequest(
+	ctx context.Context, req *logtail.ActivateAccountForCatalogRequest,
+) error {
+	if c.streamBroken() {
+		logutil.Error("logtail client: activate account via broken morpc stream")
+		return moerr.NewStreamClosedNoCtx()
+	}
+
+	c.limiter.Take()
+
+	request := &LogtailRequest{}
+	request.Request = &logtail.LogtailRequest_ActivateAccountForCatalog{
+		ActivateAccountForCatalog: cloneActivateAccountForCatalogRequest(req),
 	}
 	return c.sendRequest(request)
 }
@@ -161,7 +211,8 @@ func (c *LogtailClient) BreakoutReceive() {
 // 1. response for error: *LogtailResponse.GetError() != nil
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
-// 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
+// 4. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
+// 5. response for account activation: *LogtailResponse.GetActivateAccountForCatalogResponse() != nil
 func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		select {
@@ -249,8 +300,35 @@ func (c *LogtailClient) sendWorker() error {
 
 		case request := <-c.requestC:
 			if err := sendFn(request); err != nil {
-				logutil.Error("logtail client: fail to send sub/unsub request via morpc stream", zap.Error(err))
+				logutil.Error("logtail client: fail to send logtail request via morpc stream", zap.Error(err))
 			}
 		}
+	}
+}
+
+func cloneSubscribeRequest(req *logtail.SubscribeRequest) *logtail.SubscribeRequest {
+	if req == nil {
+		return &logtail.SubscribeRequest{}
+	}
+	clone := &logtail.SubscribeRequest{
+		LazyCatalog:           req.GetLazyCatalog(),
+		InitialActiveAccounts: append([]uint32(nil), req.GetInitialActiveAccounts()...),
+	}
+	if table := req.GetTable(); table != nil {
+		tableCopy := *table
+		clone.Table = &tableCopy
+	}
+	return clone
+}
+
+func cloneActivateAccountForCatalogRequest(
+	req *logtail.ActivateAccountForCatalogRequest,
+) *logtail.ActivateAccountForCatalogRequest {
+	if req == nil {
+		return &logtail.ActivateAccountForCatalogRequest{}
+	}
+	return &logtail.ActivateAccountForCatalogRequest{
+		AccountId: req.GetAccountId(),
+		Seq:       req.GetSeq(),
 	}
 }

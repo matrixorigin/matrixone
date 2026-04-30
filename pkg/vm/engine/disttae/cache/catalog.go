@@ -15,6 +15,8 @@
 package cache
 
 import (
+	"bytes"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -395,12 +397,17 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 
 		if item.Ts.Greater(qry.Ts) {
-			if item.deleted || item.Id != qry.TableId || item.Version < qry.Version {
+			if item.deleted {
+				find = true
+			} else if item.Id != qry.TableId {
+				find = true
+			} else if item.Version < qry.Version {
 				find = true
 			}
 		}
 		return false
 	})
+
 	return find
 }
 
@@ -429,6 +436,9 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
 		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
+			if !bytes.Equal(item.CPKey, pk) {
+				return false
+			}
 			newItem := &TableItem{
 				deleted:    true,
 				Id:         item.Id,
@@ -450,6 +460,9 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 	for i, ts := range timestamps {
 		pk := cpks.GetBytesAt(i)
 		cc.databases.cpkeyIndex.Ascend(&DatabaseItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *DatabaseItem) bool {
+			if !bytes.Equal(item.CPKey, pk) {
+				return false
+			}
 			newItem := &DatabaseItem{
 				deleted:   true,
 				Id:        item.Id,
@@ -580,6 +593,36 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
 	sort.Sort(cols)
+	// Detection-only: log duplicate column names WITHOUT removing them so the
+	// downstream "ambiguous column" error is still exposed for root-cause tracing.
+	if len(cols) > 1 {
+		seen := make(map[string]int, len(cols))
+		var duplicates []string
+		for _, col := range cols {
+			seen[col.Name]++
+			if seen[col.Name] == 2 {
+				duplicates = append(duplicates, col.Name)
+			}
+		}
+		if len(duplicates) > 0 {
+			colDetails := make([]string, 0, len(cols))
+			for _, col := range cols {
+				colDetails = append(colDetails, fmt.Sprintf(
+					"%s(seqnum=%d,num=%d)", col.Name, col.Seqnum, col.Num))
+			}
+			logutil.Error("catalog-cache: DUPLICATE COLUMNS DETECTED in table definition",
+				zap.Uint32("account-id", item.AccountId),
+				zap.Uint64("database-id", item.DatabaseId),
+				zap.Uint64("table-id", item.Id),
+				zap.String("table-name", item.Name),
+				zap.String("ts", item.Ts.String()),
+				zap.Int("total-columns", len(cols)),
+				zap.Strings("duplicate-names", duplicates),
+				zap.Strings("all-columns", colDetails),
+				zap.Stack("stack"),
+			)
+		}
+	}
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -598,6 +641,16 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	ParseColumnsBatchAnd(bat, func(mp map[TableItemKey]Columns) {
 		queryKey := new(TableItem)
 		for k, cols := range mp {
+			// Diagnostic: log column insertion details per table for duplication tracing.
+			ts := k.Ts.toTs()
+			logutil.Info("catalog-cache.InsertColumns",
+				zap.Uint32("account-id", k.AccountId),
+				zap.Uint64("database-id", k.DatabaseId),
+				zap.Uint64("table-id", k.Id),
+				zap.String("table-name", k.Name),
+				zap.String("ts", ts.String()),
+				zap.Int("column-count", len(cols)),
+			)
 			queryKey.Name = k.Name
 			queryKey.AccountId = k.AccountId
 			queryKey.DatabaseId = k.DatabaseId
@@ -611,7 +664,18 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				)
 				continue
 			}
-			InitTableItemWithColumns(item, cols)
+			// Copy-on-write: create a new item and populate its columns
+			// instead of mutating the existing BTree item in-place.  This
+			// eliminates the data race where a concurrent GetTable reader
+			// (holding only the BTree read lock, not catalogCacheMu) could
+			// observe a partially-written Defs slice during in-place
+			// mutation.  After Set, readers atomically see either the old
+			// item (nil Defs) or the new item (full Defs).
+			newItem := new(TableItem)
+			*newItem = *item
+			InitTableItemWithColumns(newItem, cols)
+			cc.tables.data.Set(newItem)
+			cc.tables.cpkeyIndex.Set(newItem)
 		}
 	})
 }

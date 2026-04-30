@@ -527,6 +527,14 @@ func (obj *baseObject) ScanInMemory(
 	node := obj.PinNode()
 	defer node.Unref()
 	if node.IsPersisted() {
+		// A flushed appendable object still needs to contribute per-row inserts
+		// to logtail tails that span its creation time, because the aobj's
+		// mnode data is gone but its row data lives on the persisted block.
+		// Non-appendable persisted objects are carried by object-meta only and
+		// do not need row-level collection here.
+		if obj.meta.Load().IsAppendable() && !obj.meta.Load().IsTombstone {
+			return node.MustPNode().ScanDataInRange(ctx, batches, start, end, mp)
+		}
 		return nil
 	}
 	mnode := node.MustMNode()
