@@ -59,6 +59,7 @@ Contents
 * [Installation & Deployment](#️-installation--deployment)
 * [Architecture](#architecture)
 * [Python SDK](#python-sdk)
+* [Citing MatrixOne](#citation)
 * [Contributing](#contributing)
 * [License](#license)
 
@@ -336,6 +337,23 @@ MatrixOne provides a **comprehensive Python SDK** for database operations, vecto
 📖 **[Python SDK README](clients/python/README.md)** - Full features, installation, and usage guide
 
 📦 **Installation**: `pip install matrixone-python-sdk`
+
+## <a id="citation">Citing MatrixOne</a>
+
+If you use MatrixOne in academic work or refer to its Git for Data design, please cite:
+
+```bibtex
+@misc{gou2026versioncontrolsystemdata,
+  title={Version Control System for Data with MatrixOne},
+  author={Gou, Hongshen and Tian, Feng and Wang, Long and Deng, Nan and Xu, Peng},
+  year={2026},
+  eprint={2604.03927},
+  archivePrefix={arXiv},
+  primaryClass={cs.DB},
+  doi={10.48550/arXiv.2604.03927},
+  url={https://arxiv.org/abs/2604.03927}
+}
+```
 
 ## 🙌 <a id="contributing">Contributing</a>
 
