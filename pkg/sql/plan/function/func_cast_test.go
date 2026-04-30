@@ -2407,6 +2407,104 @@ func TestDecimal256ToOthersRouting(t *testing.T) {
 	require.Equal(t, "42", string(got))
 }
 
+// TestDecimal256ToOthersDispatcher drives every arm of decimal256ToOthers,
+// including the null/error branches inside each helper and the unsupported
+// target-type fallback. This is what lights up the routing table's
+// coverage the most — calling the helpers directly (as the routing test
+// above does) skips the dispatcher case rows.
+func TestDecimal256ToOthersDispatcher(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	d256Typ := types.T_decimal256.ToType()
+	buildSrc := func(values []types.Decimal256, nulls []bool) vector.FunctionParameterWrapper[types.Decimal256] {
+		srcVec := vector.NewVec(d256Typ)
+		t.Cleanup(func() { srcVec.Free(mp) })
+		require.NoError(t, vector.AppendFixedList(srcVec, values, nulls, mp))
+		return vector.GenerateFunctionFixedTypeParameter[types.Decimal256](srcVec)
+	}
+
+	d42, err := types.ParseDecimal256("42", 65, 0)
+	require.NoError(t, err)
+	src := buildSrc([]types.Decimal256{d42}, nil)
+
+	// Feed every supported Oid. We're not asserting numeric correctness here
+	// (that belongs in per-helper tests); the point is to execute each case
+	// branch of the switch so the dispatcher table is covered.
+	targets := []types.T{
+		types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink,
+	}
+	for _, oid := range targets {
+		toType := oid.ToType()
+		if oid == types.T_char || oid == types.T_varchar || oid == types.T_binary ||
+			oid == types.T_varbinary {
+			toType.Width = 64
+		}
+		res := vector.NewFunctionResultWrapper(toType, mp)
+		require.NoError(t, res.PreExtendAndReset(1))
+		err := decimal256ToOthers(ctx, src, toType, res, 1, nil)
+		// Some combinations (e.g. 42 fits int8) are ok; others reject by
+		// design (e.g. too-narrow decimal). Either is fine — we just want
+		// the case to execute.
+		_ = err
+		res.Free()
+	}
+
+	// Unsupported target hits the default arm.
+	err = decimal256ToOthers(ctx, src, types.T_uuid.ToType(),
+		vector.NewFunctionResultWrapper(types.T_uuid.ToType(), mp), 1, nil)
+	require.Error(t, err)
+
+	// Null input lights up every helper's null-append arm.
+	srcNull := buildSrc([]types.Decimal256{{}}, []bool{true})
+	for _, oid := range []types.T{
+		types.T_bit, types.T_int16, types.T_uint16,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_varchar,
+	} {
+		toType := oid.ToType()
+		if oid == types.T_varchar {
+			toType.Width = 64
+		}
+		res := vector.NewFunctionResultWrapper(toType, mp)
+		require.NoError(t, res.PreExtendAndReset(1))
+		require.NoError(t, decimal256ToOthers(ctx, srcNull, toType, res, 1, nil))
+		res.Free()
+	}
+
+	// Out-of-range for narrow integer types goes through each helper's
+	// ParseInt/ParseUint error branch.
+	dLarge, err := types.ParseDecimal256("99999999999999", 65, 0)
+	require.NoError(t, err)
+	srcLarge := buildSrc([]types.Decimal256{dLarge}, nil)
+	for _, oid := range []types.T{types.T_int8, types.T_uint8, types.T_bit} {
+		toType := oid.ToType()
+		if oid == types.T_bit {
+			toType.Width = 4
+		}
+		res := vector.NewFunctionResultWrapper(toType, mp)
+		require.NoError(t, res.PreExtendAndReset(1))
+		require.Error(t, decimal256ToOthers(ctx, srcLarge, toType, res, 1, nil))
+		res.Free()
+	}
+
+	// decimal256ToStr with a small binary target exercises the Width-bound
+	// rejection path inside decimal256ToStr.
+	tinyBin := types.T_binary.ToType()
+	tinyBin.Width = 1
+	res := vector.NewFunctionResultWrapper(tinyBin, mp)
+	require.NoError(t, res.PreExtendAndReset(1))
+	// 42 is 2 characters, exceeds Width=1 — expect error.
+	require.Error(t, decimal256ToStr(ctx, src, res.(*vector.FunctionResult[types.Varlena]), 1, tinyBin))
+	res.Free()
+}
+
 func TestIntegerToYearAcrossWidths(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

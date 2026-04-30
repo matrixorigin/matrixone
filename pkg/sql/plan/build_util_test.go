@@ -365,6 +365,55 @@ func TestFuncCastForSetTypeCoversAllLiteralShapes(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Exercise the SET error branches in buildDefaultExpr / buildOnUpdate that
+// otherwise show as uncovered (ConstantFold failure and funcCastForSetType
+// mismatch on the on-update path).
+func TestSetDefaultAndOnUpdateErrorBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
+
+	// On-update with a non-foldable value (unresolved column reference).
+	// We can't build one through the binder because BindExpr rejects unknown
+	// columns, so instead use a func expr referencing a non-constant like
+	// now() which the binder accepts but that ConstantFold will not reduce
+	// to a literal.
+	onUpdateNonConst := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeOnUpdate{Expr: &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("now")),
+				Exprs: tree.Exprs{},
+			}},
+		},
+	)
+	_, err := buildOnUpdate(onUpdateNonConst, setType, proc)
+	require.Error(t, err, "non-constant SET on-update expression must be rejected")
+
+	// On-update that folds to a value not in the SET members: funcCastForSetType
+	// returns an error.
+	onUpdateBadMember := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("perm"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeOnUpdate{Expr: tree.NewNumVal("nope", "nope", false, tree.P_char)},
+		},
+	)
+	_, err = buildOnUpdate(onUpdateBadMember, setType, proc)
+	require.Error(t, err, "SET on-update with non-member literal must be rejected")
+}
+
+// Trigger NormalizeSetValues error inside getTypeFromAst by passing zero
+// enum/set members (length == 0 is the empty-input branch).
+func TestGetTypeFromAstRejectsEmptySet(t *testing.T) {
+	ctx := context.Background()
+	_, err := getTypeFromAst(ctx, &tree.T{InternalType: tree.InternalType{
+		Oid:        uint32(defines.MYSQL_TYPE_SET),
+		EnumValues: nil,
+	}})
+	require.Error(t, err)
+}
+
 func TestSetEmptyMemberFormatting(t *testing.T) {
 	setValues, err := types.NormalizeSetValues([]string{"", "a"})
 	require.NoError(t, err)

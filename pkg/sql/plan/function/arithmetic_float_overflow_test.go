@@ -137,6 +137,7 @@ func TestFloatArithmeticOverflowThroughFunctions(t *testing.T) {
 		{"plusFn float32 overflow", plusFn, math.MaxFloat32, math.MaxFloat32},
 		{"minusFn float32 overflow", minusFn, -math.MaxFloat32, math.MaxFloat32},
 		{"multiFn float32 overflow", multiFn, math.MaxFloat32, 2},
+		{"divFn float32 overflow", divFn, math.MaxFloat32, math.SmallestNonzeroFloat32},
 	}
 	for _, c := range cases32 {
 		tc := tcTemp{
@@ -151,6 +152,34 @@ func TestFloatArithmeticOverflowThroughFunctions(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, c.name, info)
 	}
+}
+
+// Each array arithmetic function has a post-op IsInf scan; drive a pair of
+// large-magnitude vecf32 arrays through them so those branches execute.
+func TestArrayArithmeticInfScanRejected(t *testing.T) {
+	// Build two float32 arrays whose element-wise add/sub/mul/div overflows
+	// float32 range. The helpers take raw bytes: encode via ArrayToBytes.
+	a32 := types.ArrayToBytes[float32]([]float32{math.MaxFloat32})
+	b32Big := types.ArrayToBytes[float32]([]float32{math.MaxFloat32})
+	b32Small := types.ArrayToBytes[float32]([]float32{math.SmallestNonzeroFloat32})
+
+	_, err := plusFnArray[float32](a32, b32Big)
+	require.Error(t, err, "float32 array plus overflow must be rejected")
+
+	_, err = minusFnArray[float32](a32, types.ArrayToBytes[float32]([]float32{-math.MaxFloat32}))
+	require.Error(t, err, "float32 array minus overflow must be rejected")
+
+	_, err = multiFnArray[float32](a32, types.ArrayToBytes[float32]([]float32{2}))
+	require.Error(t, err, "float32 array multiply overflow must be rejected")
+
+	_, err = divFnArray[float32](a32, b32Small)
+	require.Error(t, err, "float32 array divide overflow must be rejected")
+
+	// Sanity: well-within-range arrays succeed.
+	_, err = plusFnArray[float32](
+		types.ArrayToBytes[float32]([]float32{1}),
+		types.ArrayToBytes[float32]([]float32{2}))
+	require.NoError(t, err)
 }
 
 func TestExpOverflowReturnsError(t *testing.T) {
