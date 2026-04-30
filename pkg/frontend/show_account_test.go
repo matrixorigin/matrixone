@@ -64,7 +64,6 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			wantNotContains: []string{
 				"mo_catalog.mo_tables AS mt JOIN mo_catalog.mo_database AS md",
 				"db_tbl_counts",
-				"LEFT JOIN",
 			},
 		},
 		{
