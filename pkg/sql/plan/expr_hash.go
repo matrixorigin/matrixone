@@ -95,9 +95,16 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	case *plan.Expr_F:
 		writeByte(h, tagFn)
 		if v.F != nil {
+			// Feed the entire ObjectRef (server/db/schema/obj/name/...) into
+			// the hash, not just ObjName, so that same-named functions from
+			// different overloads/databases do not collide.
 			if v.F.Func != nil {
-				_, _ = h.Write([]byte(v.F.Func.ObjName))
-				writeByte(h, 0)
+				if b, err := v.F.Func.Marshal(); err == nil {
+					writeUint32(h, uint32(len(b)))
+					_, _ = h.Write(b)
+				}
+			} else {
+				writeUint32(h, 0)
 			}
 			for _, a := range v.F.Args {
 				hashExprInto(h, a)
@@ -237,10 +244,7 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		if av.F == nil || bv.F == nil {
 			return av.F == bv.F
 		}
-		if (av.F.Func == nil) != (bv.F.Func == nil) {
-			return false
-		}
-		if av.F.Func != nil && av.F.Func.ObjName != bv.F.Func.ObjName {
+		if !objectRefEqual(av.F.Func, bv.F.Func) {
 			return false
 		}
 		if len(av.F.Args) != len(bv.F.Args) {
@@ -373,4 +377,32 @@ func literalEqual(a, b *plan.Literal) bool {
 		}
 		return true
 	}
+}
+
+// objectRefEqual compares two *plan.ObjectRef for full identity (server, db,
+// schema, obj, names, subscription, pub info, flags). Using ObjName alone is
+// not safe because distinct function resolutions can share a name but differ
+// in overload id / module path, which would let applyDistributivity fuse them
+// incorrectly.
+func objectRefEqual(a, b *plan.ObjectRef) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	ab, aerr := a.Marshal()
+	bb, berr := b.Marshal()
+	if aerr != nil || berr != nil {
+		return false
+	}
+	if len(ab) != len(bb) {
+		return false
+	}
+	for i := range ab {
+		if ab[i] != bb[i] {
+			return false
+		}
+	}
+	return true
 }

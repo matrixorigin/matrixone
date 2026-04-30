@@ -75,4 +75,33 @@ select a from t1 where a in (1,2,3,4) and (a not in (2, null) or a = 99) order b
 -- @separator:table
 explain select a from t1 where a in (1,2,3,4) and a not in (2, null);
 
+-- Composite varchar PK + outer varchar IN + inner cast(col AS BIGINT) IN/NOT IN.
+-- Exercises the full optimizeFilters path: the domain rewrite must run before
+-- mergeFiltersOnCompositeKey, otherwise the outer IN gets folded into
+-- prefix_in(__mo_cpkey_col) and the nested cast-based NOT IN / <> survives
+-- untouched. Asserts both the result rows and that the scan filter collapses
+-- (the explain has no `cast(... AS BIGINT) !=` clauses after the rewrite).
+create table t3 (
+  code varchar(255) not null,
+  id   bigint not null auto_increment,
+  bveh varchar(32),
+  primary key (code, id)
+);
+insert into t3 (code, bveh) values
+  ('4999999010','OTHER'),
+  ('5001010000','TFUA1000'),
+  ('5001020000','TFUA1000'),
+  ('6401010000','TFUA1000'),
+  ('7001010000','OTHER');
+select code, bveh from t3
+where code in ('4999999010','5001010000','5001020000','6401010000')
+  and ((code in (5001010000, 5001020000, 6401010000) and bveh = 'TFUA1000')
+       or (code is not null and code not in (5001010000, 5001020000, 6401010000)))
+order by code;
+-- @separator:table
+explain select code, bveh from t3
+where code in ('4999999010','5001010000','5001020000','6401010000')
+  and ((code in (5001010000, 5001020000, 6401010000) and bveh = 'TFUA1000')
+       or (code is not null and code not in (5001010000, 5001020000, 6401010000)));
+
 drop database if exists d_indomain;
