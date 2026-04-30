@@ -342,6 +342,7 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			checks: map[string]bool{
 				"IsInner": true, "IsLeftOuter": false, "IsRightOuter": false,
 				"IsFullOuter": false, "IsSemi": false, "IsAnti": false, "IsSingle": false,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": false,
 			},
 		},
 		{
@@ -349,20 +350,29 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			joinType: plan.Node_LEFT,
 			checks: map[string]bool{
 				"IsInner": false, "IsLeftOuter": true, "IsRightOuter": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": false,
 			},
 		},
 		{
-			name:     "right outer join",
-			joinType: plan.Node_RIGHT,
+			name:        "right outer join",
+			joinType:    plan.Node_RIGHT,
+			isRightJoin: true,
 			checks: map[string]bool{
 				"IsInner": false, "IsLeftOuter": false, "IsRightOuter": true,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": true,
 			},
 		},
 		{
-			name:     "full outer join",
-			joinType: plan.Node_OUTER,
+			name:        "full outer join",
+			joinType:    plan.Node_OUTER,
+			isRightJoin: true,
 			checks: map[string]bool{
 				"IsFullOuter": true, "IsInner": false,
+				"IsLeftOuter": false, "IsRightOuter": false,
+				"IsLeftSemi": false, "IsRightSemi": false,
+				"IsLeftAnti": false, "IsRightAnti": false,
+				"IsLeftSingle": false, "IsRightSingle": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": true,
 			},
 		},
 		{
@@ -457,6 +467,14 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			}
 			if expected, ok := tt.checks["IsRightSingle"]; ok {
 				require.Equal(t, expected, arg.IsRightSingle())
+			}
+			if expected, ok := tt.checks["EmitUnmatchedProbe"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedProbe(),
+					"EmitUnmatchedProbe mismatch for %s", tt.name)
+			}
+			if expected, ok := tt.checks["EmitUnmatchedBuild"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedBuild(),
+					"EmitUnmatchedBuild mismatch for %s", tt.name)
 			}
 		})
 	}

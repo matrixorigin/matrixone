@@ -124,7 +124,7 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 		// we just cast it as float64 / float64
 		{
 			shouldCast: true,
-			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
+			in:         [2]types.Type{types.T_any.ToType(), types.T_any.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 		},
 	}

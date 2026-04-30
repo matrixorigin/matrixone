@@ -17,12 +17,16 @@ package morpc
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,6 +143,155 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 	})
 }
 
+func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.T) {
+	released := 0
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
+	)
+	cs.c = make(chan *Future, 1)
+	cs.c <- newFuture(nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cs.Write(ctx, newTestMessage(1))
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 1, released)
+	case <-time.After(time.Second):
+		t.Fatal("write blocked after context deadline")
+	}
+}
+
+func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
+	released := 0
+	futureReleased := 0
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
+	)
+
+	f := newFuture(func(*Future) { futureReleased++ })
+	f.init(RPCMessage{
+		Ctx:     context.Background(),
+		Message: newTestMessage(1),
+		oneWay:  true,
+	})
+	cs.c <- f
+
+	cs.cleanSend()
+	require.Equal(t, 1, released)
+	require.Equal(t, 1, futureReleased)
+}
+
+func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
+	run := func(t *testing.T, conn *testIOSession) {
+		var futureReleased atomic.Int32
+		s := &server{
+			name:     "test",
+			metrics:  newServerMetrics("test"),
+			logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+			stopper:  stopper.NewStopper("test"),
+			sessions: &sync.Map{},
+		}
+		s.adjust()
+		s.options.batchSendSize = 1
+
+		cs := newClientSession(
+			s.metrics,
+			conn,
+			newTestCodec(),
+			func() *Future { return newFuture(nil) },
+			nil,
+		)
+
+		f := newFuture(func(*Future) { futureReleased.Add(1) })
+		f.init(RPCMessage{
+			Ctx:     context.Background(),
+			Message: newTestMessage(1),
+			oneWay:  true,
+		})
+		cs.c <- f
+
+		require.NoError(t, s.startWriteLoop(cs))
+		require.Eventually(t, func() bool {
+			return futureReleased.Load() == 1
+		}, time.Second, time.Millisecond*10)
+		s.stopper.Stop()
+	}
+
+	t.Run("write error", func(t *testing.T) {
+		run(t, newTestIOSession(goetty.ErrIllegalState, nil))
+	})
+	t.Run("flush error", func(t *testing.T) {
+		run(t, newTestIOSession(nil, io.ErrClosedPipe))
+	})
+}
+
+func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
+	var released atomic.Int32
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 3
+	defer s.stopper.Stop()
+
+	cs := newClientSession(
+		s.metrics,
+		newTestIOSessionWithWriteErrorAt(2, goetty.ErrIllegalState, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released.Add(1) },
+	)
+
+	newSyncFuture := func(id uint64) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{
+			Ctx:     ctx,
+			Message: newTestMessage(id),
+		})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	f1 := newSyncFuture(1)
+	f2 := newSyncFuture(2)
+	f3 := newSyncFuture(3)
+	cs.c <- f1
+	cs.c <- f2
+	cs.c <- f3
+
+	require.NoError(t, s.startWriteLoop(cs))
+	for _, f := range []*Future{f1, f2, f3} {
+		select {
+		case err := <-f.writtenC:
+			require.ErrorIs(t, err, goetty.ErrIllegalState)
+		case <-time.After(time.Second):
+			t.Fatalf("future %d was not completed after batch write failure", f.getSendMessageID())
+		}
+	}
+	require.Equal(t, int32(2), released.Load())
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -180,6 +333,50 @@ func TestStreamServer(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+type testIOSession struct {
+	out        *buf.ByteBuf
+	writeErr   error
+	writeErrAt int32
+	writeCount atomic.Int32
+	flushErr   error
+}
+
+func newTestIOSession(writeErr, flushErr error) *testIOSession {
+	writeErrAt := int32(0)
+	if writeErr != nil {
+		writeErrAt = 1
+	}
+	return newTestIOSessionWithWriteErrorAt(writeErrAt, writeErr, flushErr)
+}
+
+func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error) *testIOSession {
+	return &testIOSession{
+		out:        buf.NewByteBuf(1),
+		writeErr:   writeErr,
+		writeErrAt: writeErrAt,
+		flushErr:   flushErr,
+	}
+}
+
+func (s *testIOSession) ID() uint64                           { return 1 }
+func (s *testIOSession) Connect(string, time.Duration) error  { return nil }
+func (s *testIOSession) Connected() bool                      { return true }
+func (s *testIOSession) Disconnect() error                    { return nil }
+func (s *testIOSession) Close() error                         { s.out.Close(); return nil }
+func (s *testIOSession) Ref()                                 {}
+func (s *testIOSession) Read(goetty.ReadOptions) (any, error) { return nil, io.EOF }
+func (s *testIOSession) Write(any, goetty.WriteOptions) error {
+	if s.writeErr != nil && s.writeCount.Add(1) == s.writeErrAt {
+		return s.writeErr
+	}
+	return nil
+}
+func (s *testIOSession) Flush(time.Duration) error { return s.flushErr }
+func (s *testIOSession) RemoteAddress() string     { return "" }
+func (s *testIOSession) RawConn() net.Conn         { return nil }
+func (s *testIOSession) UseConn(net.Conn)          {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf      { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
