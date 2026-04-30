@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	io "io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,11 +30,16 @@ import (
 
 const (
 	AggBatchSize     = 8192
-	kAggArgArenaSize = 512 * 1024
-	kAggArgPrefixSz  = 2
-	kAggArgOrdinalSz = 4
-	magicNumber      = uint64(0xdeadbeefbeefdead)
+	aggBatchSizeShift = 13 // log2(AggBatchSize)
+	aggBatchSizeMask  = AggBatchSize - 1
+	kAggArgArenaSize  = 512 * 1024
+	kAggArgPrefixSz   = 2
+	kAggArgOrdinalSz  = 4
+	magicNumber       = uint64(0xdeadbeefbeefdead)
 )
+
+var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}  // mask == size-1
+var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
 
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
@@ -595,6 +601,7 @@ type aggExec struct {
 	aggInfo
 	chunkSize int
 	state     []aggState
+	chunkPtrs []unsafe.Pointer // cached data pointers for state[i].vecs[0], rebuilt on GroupGrow
 }
 
 func (ae *aggExec) getChunkSize() int {
@@ -618,6 +625,22 @@ func (ae *aggExec) getXY(u uint64) (int, uint16) {
 	return int(x), uint16(y)
 }
 
+func (ae *aggExec) rebuildChunkPtrs() {
+	ae.chunkPtrs = ae.chunkPtrs[:0]
+	for _, s := range ae.state {
+		if len(s.vecs) > 0 && s.vecs[0] != nil {
+			data := s.vecs[0].GetData()
+			if len(data) > 0 {
+				ae.chunkPtrs = append(ae.chunkPtrs, unsafe.Pointer(&data[0]))
+			} else {
+				ae.chunkPtrs = append(ae.chunkPtrs, nil)
+			}
+		} else {
+			ae.chunkPtrs = append(ae.chunkPtrs, nil)
+		}
+	}
+}
+
 func (ae *aggExec) GetNumChunks() int {
 	return len(ae.state)
 }
@@ -639,6 +662,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 		}
 
 		ae.state[0].grow(ae.mp, 1, true)
+		ae.rebuildChunkPtrs()
 		return nil
 	}
 
@@ -649,6 +673,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 		}
 
 		if remain == 0 {
+			ae.rebuildChunkPtrs()
 			return nil
 		}
 		ae.state = append(ae.state, aggState{})
@@ -656,6 +681,7 @@ func (ae *aggExec) GroupGrow(more int) error {
 			return err
 		}
 	}
+	ae.rebuildChunkPtrs()
 	return nil
 }
 
@@ -671,6 +697,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 		}
 
 		if remain == 0 {
+			ae.rebuildChunkPtrs()
 			return nil
 		}
 		ae.state = append(ae.state, aggState{})
@@ -678,6 +705,7 @@ func (ae *aggExec) preAllocateGroupsWithNulls(more int, setNulls bool) error {
 			return err
 		}
 	}
+	ae.rebuildChunkPtrs()
 	return nil
 }
 
@@ -759,6 +787,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
 		}
+		ae.rebuildChunkPtrs()
 		return nil
 	}
 
