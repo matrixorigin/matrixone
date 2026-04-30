@@ -134,6 +134,7 @@ select e.k as ek, l.k as lk
   from e full outer join l on e.k > l.k
   order by lk;
 
+
 -- ---------------------------------------------------------------------
 -- 10. FULL OUTER JOIN ... USING(col): merged column must coalesce both
 --    sides (issue #24247). Null-padded rows must surface the value from
@@ -233,5 +234,24 @@ select * from n1 natural full outer join n2 order by id, v;
 
 drop table n1;
 drop table n2;
+
+-- ---------------------------------------------------------------------
+-- 12. ORDER BY multi-key over FULL OUTER JOIN with NULLs in keys.
+--    Regression for #24248: secondary sort key must work within
+--    partitions formed when the primary key has adjacent NULLs (from
+--    null-padded rows).
+-- ---------------------------------------------------------------------
+create table fj_o1(s int, v varchar(5));
+create table fj_o2(s int, v varchar(5));
+insert into fj_o1 values (1,'a'),(5,'b'),(NULL,'x');
+insert into fj_o2 values (13,'c'),(14,NULL);
+select fj_o1.s, fj_o1.v, fj_o2.s, fj_o2.v
+  from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+  order by fj_o1.s, fj_o2.s, fj_o1.v, fj_o2.v;
+select fj_o1.s, fj_o2.s
+  from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+  order by fj_o1.s, fj_o2.s desc;
+drop table fj_o1;
+drop table fj_o2;
 
 drop database fojdb;
