@@ -150,4 +150,134 @@ null  ¦  1  𝄀
 null  ¦  2  𝄀
 null  ¦  3  𝄀
 null  ¦  4
+drop table if exists u1;
+drop table if exists u2;
+drop table if exists u3;
+create table u1(id int, v varchar(4));
+create table u2(id int, v varchar(4));
+create table u3(id int, v varchar(4));
+insert into u1 values (1,'a'),(2,'b'),(3,'c');
+insert into u2 values (2,'B'),(3,'C'),(4,'D');
+insert into u3 values (3,'x'),(4,'y'),(5,'z');
+select id from u1 full outer join u2 using(id) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select * from u1 full outer join u2 using(id) order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  ¦  null  𝄀
+2  ¦  b  ¦  B  𝄀
+3  ¦  c  ¦  C  𝄀
+4  ¦  null  ¦  D
+select id from u1 full outer join u2 using(id) where id = 4;
+➤ id[4,32,0]  𝄀
+4
+select id from u1 full outer join u2 using(id) where id = 1;
+➤ id[4,32,0]  𝄀
+1
+select id, count(*) from u1 full outer join u2 using(id) group by id order by id;
+➤ id[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select id from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+select u1.id as l_id, u2.id as r_id
+from u1 full outer join u2 using(id)
+order by l_id, r_id;
+➤ l_id[4,32,0]  ¦  r_id[4,32,0]  𝄀
+null  ¦  4  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+select id from u1 inner join u2 using(id) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from (u1 full outer join u2 using(id)) inner join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+select id from (u1 full outer join u2 using(id)) left join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  B  ¦  null  𝄀
+3  ¦  c  ¦  C  ¦  x  𝄀
+4  ¦  null  ¦  D  ¦  y  𝄀
+5  ¦  null  ¦  null  ¦  z
+drop table if exists s1;
+drop table if exists s2;
+create table s1(id int);
+create table s2(id int);
+insert into s1 values (3),(4),(6);
+insert into s2 values (4),(5),(6);
+select * from (u1 full outer join u2 using(id)),
+(s1 full outer join s2 using(id))
+order by 1, 2, 3, 4;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  𝄀
+1  ¦  a  ¦  null  ¦  3  𝄀
+1  ¦  a  ¦  null  ¦  4  𝄀
+1  ¦  a  ¦  null  ¦  5  𝄀
+1  ¦  a  ¦  null  ¦  6  𝄀
+2  ¦  b  ¦  B  ¦  3  𝄀
+2  ¦  b  ¦  B  ¦  4  𝄀
+2  ¦  b  ¦  B  ¦  5  𝄀
+2  ¦  b  ¦  B  ¦  6  𝄀
+3  ¦  c  ¦  C  ¦  3  𝄀
+3  ¦  c  ¦  C  ¦  4  𝄀
+3  ¦  c  ¦  C  ¦  5  𝄀
+3  ¦  c  ¦  C  ¦  6  𝄀
+4  ¦  null  ¦  D  ¦  3  𝄀
+4  ¦  null  ¦  D  ¦  4  𝄀
+4  ¦  null  ¦  D  ¦  5  𝄀
+4  ¦  null  ¦  D  ¦  6
+drop table s1;
+drop table s2;
+drop table u1;
+drop table u2;
+drop table u3;
+drop table if exists n1;
+drop table if exists n2;
+create table n1(id int, v varchar(4));
+create table n2(id int, v varchar(4));
+insert into n1 values (1,'a'),(2,'b');
+insert into n2 values (2,'B'),(3,'C');
+select id from n1 natural full outer join n2 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+2  𝄀
+3
+select id from n1 natural full join n2 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+2  𝄀
+3
+select * from n1 natural full outer join n2 order by id, v;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  B  𝄀
+2  ¦  b  𝄀
+3  ¦  C
+drop table n1;
+drop table n2;
 drop database fojdb;

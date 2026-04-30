@@ -329,6 +329,11 @@ type BindContext struct {
 	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
+	// outerUsingCols maps an unqualified column name to the ordered list of
+	// leaf tables whose values must be COALESCEd to produce the merged value.
+	// Only populated when the column has been merged through at least one
+	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
+	outerUsingCols map[string][]string
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -372,6 +377,13 @@ type SelectField struct {
 type NameTuple struct {
 	table string
 	col   string
+	// coalesceArms is non-empty (len >= 2) only for FOJ-USING merged columns:
+	// the ordered list of contributing leaf-table names so star-expansion at
+	// this join node emits COALESCE(arm1.col, ..., armN.col) without consulting
+	// the bind-context-wide outerUsingCols map (which is shared across sibling
+	// subtrees and so cannot disambiguate two FOJ-USING(c) trees joined at the
+	// same level).
+	coalesceArms []string
 }
 
 type BindingTreeNode struct {

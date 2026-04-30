@@ -134,4 +134,104 @@ select e.k as ek, l.k as lk
   from e full outer join l on e.k > l.k
   order by lk;
 
+-- ---------------------------------------------------------------------
+-- 10. FULL OUTER JOIN ... USING(col): merged column must coalesce both
+--    sides (issue #24247). Null-padded rows must surface the value from
+--    the non-padded side.
+-- ---------------------------------------------------------------------
+drop table if exists u1;
+drop table if exists u2;
+drop table if exists u3;
+create table u1(id int, v varchar(4));
+create table u2(id int, v varchar(4));
+create table u3(id int, v varchar(4));
+insert into u1 values (1,'a'),(2,'b'),(3,'c');
+insert into u2 values (2,'B'),(3,'C'),(4,'D');
+insert into u3 values (3,'x'),(4,'y'),(5,'z');
+
+-- Bare USING column is COALESCE(left.id, right.id): never NULL on a row
+-- that exists on either side.
+select id from u1 full outer join u2 using(id) order by id;
+
+-- SELECT * exposes the merged column once and then each side's other cols.
+select * from u1 full outer join u2 using(id) order by id;
+
+-- WHERE on the merged column resolves to coalesce; predicate must hit
+-- right-only and left-only rows.
+select id from u1 full outer join u2 using(id) where id = 4;
+select id from u1 full outer join u2 using(id) where id = 1;
+
+-- GROUP BY / aggregate over the merged column.
+select id, count(*) from u1 full outer join u2 using(id) group by id order by id;
+
+-- Nested FOJ ... USING: inner merged id propagates as coalesce into the
+-- outer USING comparison, so id=4 matches across all three tables once.
+select id from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+  order by id;
+
+-- Qualified column references keep the per-side value (NULL on padded side).
+select u1.id as l_id, u2.id as r_id
+  from u1 full outer join u2 using(id)
+  order by l_id, r_id;
+
+-- INNER JOIN ... USING(col): merged column resolves to the chosen
+-- (left) side, NOT a coalesce. This exercises the non-OUTER USING path.
+select id from u1 inner join u2 using(id) order by id;
+
+-- Nested: (FOJ ... USING) INNER JOIN ... USING(col). The outer INNER USING
+-- inherits the inner FOJ's coalesce list, so id resolves through the FOJ
+-- arms and the equality predicate compares against u3.id.
+select id from (u1 full outer join u2 using(id)) inner join u3 using(id)
+  order by id;
+
+-- LEFT JOIN ... USING(col) on top of FOJ ... USING preserves the inner
+-- coalesce list on the chosen left side.
+select id from (u1 full outer join u2 using(id)) left join u3 using(id)
+  order by id;
+
+-- Star-expand on nested FOJ-USING: merged column appears once, via coalesce.
+select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+  order by id;
+
+-- Sibling FOJ-USING subtrees joined at the same level: each subtree's
+-- merged id must coalesce its OWN arms, not inherit the sibling's. The
+-- bind-context-wide outerUsingCols map is shared, so per-NameTuple arms
+-- on the binding tree are required for SELECT * to resolve correctly.
+-- u3 here doubles as the right subtree's left arm; values arranged so
+-- left.id ranges over {1,2,3,4} and right.id ranges over {3,4,5,6}.
+drop table if exists s1;
+drop table if exists s2;
+create table s1(id int);
+create table s2(id int);
+insert into s1 values (3),(4),(6);
+insert into s2 values (4),(5),(6);
+select * from (u1 full outer join u2 using(id)),
+              (s1 full outer join s2 using(id))
+  order by 1, 2, 3, 4;
+drop table s1;
+drop table s2;
+
+drop table u1;
+drop table u2;
+drop table u3;
+
+-- ---------------------------------------------------------------------
+-- 11. NATURAL FULL [OUTER] JOIN (issue #24250). Grammar must reduce both
+--    `natural full outer join` and `natural full join` to FULL OUTER,
+--    not silently to RIGHT.
+-- ---------------------------------------------------------------------
+drop table if exists n1;
+drop table if exists n2;
+create table n1(id int, v varchar(4));
+create table n2(id int, v varchar(4));
+insert into n1 values (1,'a'),(2,'b');
+insert into n2 values (2,'B'),(3,'C');
+
+select id from n1 natural full outer join n2 order by id;
+select id from n1 natural full join n2 order by id;
+select * from n1 natural full outer join n2 order by id, v;
+
+drop table n1;
+drop table n2;
+
 drop database fojdb;
