@@ -10,8 +10,7 @@ Our target was an IVF index with thousands of clusters holding tens of millions 
 
 1. **Clustering Latency**: Standard K-Means was slow and often produced unbalanced clusters, leading to "hotspots" that slowed down search.
 2. **Assignment Overhead**: Mapping 50M+ vectors to their nearest centroids is computationally expensive. On CPUs, this task competed for resources with data loading and decompression, dragging the process out to a full day.
-3. **The GPU "Single Query" Trap**: Databases typically process one query at a time. GPUs, however, only show their true strength when processing large batches.
-4. **Filtered Search Penalty**: Real SQL workloads rarely query a vector index in isolation — they look like *"top-10 nearest passages **where `file_id = X`**"*. The straightforward implementation is **file-based filtering**: for every incoming query, re-read the filter columns from object storage to evaluate the predicate. At tens of millions of rows, that turns each query into a storage-bound job — disk/network I/O dominates and GPU search throughput collapses long before the index itself is the bottleneck. Compounding this, the "search first, filter later" pattern wastes GPU cycles ranking rows the predicate will discard and forces deeper `nprobe` sweeps to refill `top-k` after filtering.
+3. **Filtered Search Penalty**: Real SQL workloads rarely query a vector index in isolation — they look like *"top-10 nearest passages **where `file_id = X`**"*. The straightforward implementation is **file-based filtering**: for every incoming query, re-read the filter columns from object storage to evaluate the predicate. At tens of millions of rows, that turns each query into a storage-bound job — disk/network I/O dominates and GPU search throughput collapses long before the index itself is the bottleneck. Compounding this, the "search first, filter later" pattern wastes GPU cycles ranking rows the predicate will discard and forces deeper `nprobe` sweeps to refill `top-k` after filtering.
 
 ## Hardware & Methodology
 
@@ -44,16 +43,9 @@ By using the **cuVS Brute-Force index** to offload distance computation to the G
 
 * **Result**: The assignment phase dropped from **24 hours to 30 minutes**.
 
-## Step 3: The Architecture — `cuvs_worker_t` and Dynamic Batching
+## Step 3: The Architecture — `cuvs_worker_t`
 
-To solve the "Single Query" problem, we designed a bridge between Go and CUDA: the `cuvs_worker_t`.
-
-### Dynamic Batching: The Secret Sauce
-
-Instead of launching a new CUDA kernel for every incoming request, our worker implements **Dynamic Batching**. It holds incoming queries for a tiny microsecond window, consolidates them into a single matrix, and executes one large GPU search.
-
-* This maximizes warp utilization and reduces kernel launch overhead.
-* **Performance Gain**: Provides a **5x–10x throughput boost** in high-concurrency environments.
+To bridge Go and CUDA cleanly, we built the `cuvs_worker_t`: a persistent C++ worker that owns long-lived GPU resources on behalf of the Go-based engine.
 
 ### RAFT Resource Management
 
@@ -210,4 +202,4 @@ Our architecture now supports a suite of high-performance indexes, each with a c
 
 By shifting clustering, assignment, quantization — *and search, including SQL predicate evaluation* — onto the GPU through cuVS, MatrixOne handles massive vector datasets on surprisingly modest hardware. What once took a full day now takes well under an hour, with search latencies that remain low under heavy concurrency.
 
-The benchmark on `wiki_all` is unambiguous: at 88M vectors, **pure-GPU IVF-PQ delivers ~3–4× faster builds, ~35–75× higher unfiltered QPS (depending on `nprobe`), and up to ~27× higher filtered QPS at matched recall** than GPU-assisted IVF-Flat with CPU search — at recall levels production workloads can ship with. Combined with `cuvs_worker_t`, dynamic batching, and bitset pre-filtering, this is not just a "fast index" but a **production-ready database engine** that scales with the demands of modern AI.
+The benchmark on `wiki_all` is unambiguous: at 88M vectors, **pure-GPU IVF-PQ delivers ~3–4× faster builds, ~35–75× higher unfiltered QPS (depending on `nprobe`), and up to ~27× higher filtered QPS at matched recall** than GPU-assisted IVF-Flat with CPU search — at recall levels production workloads can ship with. Combined with `cuvs_worker_t` and bitset pre-filtering, this is not just a "fast index" but a **production-ready database engine** that scales with the demands of modern AI.
