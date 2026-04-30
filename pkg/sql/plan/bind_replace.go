@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+const maxReplaceStaticFilterRows = 1024
+
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
 	// REPLACE has its own conflict handling; bypass the generic FK table rejection
@@ -44,7 +46,109 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 		return 0, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindReplace(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx)
+	staticFilterValues, err := builder.collectReplaceStaticFilterValues(stmt, dmlCtx.tableDefs[0])
+	if err != nil {
+		return 0, err
+	}
+
+	return builder.appendDedupAndMultiUpdateNodesForBindReplace(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		colName2Idx,
+		skipUniqueIdx,
+		staticFilterValues,
+	)
+}
+
+func (builder *QueryBuilder) collectReplaceStaticFilterValues(stmt *tree.Replace, tableDef *plan.TableDef) (map[string][]*plan.Expr, error) {
+	if stmt == nil || stmt.Rows == nil || stmt.Rows.Select == nil {
+		return nil, nil
+	}
+
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok || len(valuesClause.Rows) == 0 {
+		return nil, nil
+	}
+	if len(valuesClause.Rows) > maxReplaceStaticFilterRows {
+		return nil, nil
+	}
+
+	insertColumns, err := builder.getInsertColsFromStmt(stmt.Columns, tableDef)
+	if err != nil {
+		return nil, err
+	}
+
+	colCount := len(insertColumns)
+	for rowIdx, row := range valuesClause.Rows {
+		if len(row) != colCount {
+			return nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), rowIdx+1)
+		}
+	}
+
+	proc := builder.compCtx.GetProcess()
+	staticValues := make(map[string][]*plan.Expr, colCount)
+	for i, colName := range insertColumns {
+		colIdx, ok := tableDef.Name2ColIndex[colName]
+		if !ok {
+			return nil, moerr.NewInternalErrorf(builder.GetContext(), "replace static filter missing column %s", colName)
+		}
+		colDef := tableDef.Cols[colIdx]
+		colTyp := makeTypeByPlan2Type(colDef.Typ)
+		targetTyp := &plan.Expr{
+			Typ: colDef.Typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{},
+			},
+		}
+		binder := NewDefaultBinder(builder.GetContext(), nil, nil, colDef.Typ, nil)
+		binder.builder = builder
+
+		for _, row := range valuesClause.Rows {
+			astExpr := row[i]
+			if _, isDefault := astExpr.(*tree.DefaultVal); isDefault {
+				return nil, nil
+			}
+
+			var valueExpr *plan.Expr
+			if nv, isNum := astExpr.(*tree.NumVal); isNum && !isEnumOrSetPlanType(&colDef.Typ) {
+				valueExpr, err = MakeInsertValueConstExpr(proc, nv, &colTyp)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if valueExpr == nil {
+				valueExpr, err = binder.BindExpr(astExpr, 0, true)
+				if err != nil {
+					return nil, nil
+				}
+				if isEnumPlanType(&colDef.Typ) {
+					valueExpr, err = funcCastForEnumType(builder.GetContext(), valueExpr, colDef.Typ)
+					if err != nil {
+						return nil, err
+					}
+				} else if isSetPlanType(&colDef.Typ) {
+					valueExpr, err = funcCastForSetType(builder.GetContext(), valueExpr, colDef.Typ)
+					if err != nil {
+						return nil, err
+					}
+				} else if isGeometryPlanType(&colDef.Typ) {
+					valueExpr, err = funcCastForGeometryType(builder.GetContext(), valueExpr, colDef.Typ)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			valueExpr, err = forceCastExpr2(builder.GetContext(), valueExpr, colTyp, targetTyp)
+			if err != nil {
+				return nil, err
+			}
+			staticValues[colName] = append(staticValues[colName], valueExpr)
+		}
+	}
+
+	return staticValues, nil
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
@@ -53,6 +157,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	lastNodeID int32,
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
+	staticFilterValues map[string][]*plan.Expr,
 ) (int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
@@ -75,6 +180,165 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+	}
+
+	colExpr := func(tag, pos int32, typ plan.Type) *plan.Expr {
+		return &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tag,
+					ColPos: pos,
+				},
+			},
+		}
+	}
+	nullExpr := func(typ plan.Type) *plan.Expr {
+		return &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Isnull: true},
+			},
+		}
+	}
+	bindFn := func(name string, args ...*plan.Expr) (*plan.Expr, error) {
+		copiedArgs := make([]*plan.Expr, len(args))
+		for i, arg := range args {
+			copiedArgs[i] = DeepCopyExpr(arg)
+		}
+		expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, copiedArgs)
+		if err != nil {
+			return nil, err
+		}
+		if expr == nil || expr.Expr == nil {
+			return nil, moerr.NewInternalErrorf(builder.GetContext(), "bind function %s got nil expression", name)
+		}
+		return expr, nil
+	}
+	nullSafeEq := func(left, right *plan.Expr) (*plan.Expr, error) {
+		leftIsNull, err := bindFn("isnull", left)
+		if err != nil {
+			return nil, err
+		}
+		rightIsNull, err := bindFn("isnull", right)
+		if err != nil {
+			return nil, err
+		}
+		bothNull, err := bindFn("and", leftIsNull, rightIsNull)
+		if err != nil {
+			return nil, err
+		}
+		leftNotNull, err := bindFn("isnotnull", left)
+		if err != nil {
+			return nil, err
+		}
+		rightNotNull, err := bindFn("isnotnull", right)
+		if err != nil {
+			return nil, err
+		}
+		bothNotNull, err := bindFn("and", leftNotNull, rightNotNull)
+		if err != nil {
+			return nil, err
+		}
+		eq, err := bindFn("=", left, right)
+		if err != nil {
+			// Fallback to "not equal" to keep REPLACE semantics correct when
+			// typed equality cannot be bound for specific index key types.
+			return makePlan2BoolConstExprWithType(false), nil
+		}
+		notNullEq, err := bindFn("and", bothNotNull, eq)
+		if err != nil {
+			return nil, err
+		}
+		return bindFn("or", bothNull, notNullEq)
+	}
+	makeNeedRewriteIdxExpr := func(oldRowID, oldIdx, newIdx, oldMainPK, newMainPK *plan.Expr) (*plan.Expr, error) {
+		oldRowIDIsNull, err := bindFn("isnull", oldRowID)
+		if err != nil {
+			return nil, err
+		}
+		sameIdx, err := nullSafeEq(oldIdx, newIdx)
+		if err != nil {
+			return nil, err
+		}
+		sameMainPK, err := nullSafeEq(oldMainPK, newMainPK)
+		if err != nil {
+			return nil, err
+		}
+		sameIdxAndPK, err := bindFn("and", sameIdx, sameMainPK)
+		if err != nil {
+			return nil, err
+		}
+		notSame, err := bindFn("not", sameIdxAndPK)
+		if err != nil {
+			return nil, err
+		}
+		return bindFn("or", oldRowIDIsNull, notSame)
+	}
+	makeIfExpr := func(cond, whenTrue, whenFalse *plan.Expr) (*plan.Expr, error) {
+		return bindFn("if", cond, whenTrue, whenFalse)
+	}
+	buildStaticScanFilter := func(scanCol *plan.Expr, values []*plan.Expr) (*plan.Expr, error) {
+		nonNullVals := make([]*plan.Expr, 0, len(values))
+		seenVals := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			if value == nil {
+				continue
+			}
+			if lit := value.GetLit(); lit != nil && lit.Isnull {
+				continue
+			}
+			key, marshalErr := value.Marshal()
+			if marshalErr == nil {
+				if _, ok := seenVals[string(key)]; ok {
+					continue
+				}
+				seenVals[string(key)] = struct{}{}
+			}
+			nonNullVals = append(nonNullVals, value)
+		}
+		if len(nonNullVals) == 0 {
+			return nil, nil
+		}
+
+		if len(nonNullVals) == 1 {
+			filterExpr, err := bindFn("=", scanCol, nonNullVals[0])
+			if err != nil {
+				return nil, nil
+			}
+			return filterExpr, nil
+		}
+
+		inExpr := &plan.Expr{
+			Typ: scanCol.Typ,
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: nonNullVals,
+				},
+			},
+		}
+		filterExpr, err := bindFn("in", scanCol, inExpr)
+		if err == nil {
+			return filterExpr, nil
+		}
+
+		// Fallback to OR-equality chain when IN is unsupported for this type.
+		filterExpr, err = bindFn("=", scanCol, nonNullVals[0])
+		if err != nil {
+			// Filter pushdown is an optimization only.
+			return nil, nil
+		}
+		for i := 1; i < len(nonNullVals); i++ {
+			eqExpr, bindErr := bindFn("=", scanCol, nonNullVals[i])
+			if bindErr != nil {
+				return nil, nil
+			}
+			filterExpr, bindErr = bindFn("or", filterExpr, eqExpr)
+			if bindErr != nil {
+				return nil, nil
+			}
+		}
+		return filterExpr, nil
 	}
 
 	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
@@ -339,13 +603,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		// handle primary/unique key confliction
 		builder.addNameByColRef(scanTag, tableDef)
 
-		scanNodeID := builder.appendNode(&plan.Node{
+		scanNode := &plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     tableDef,
 			ObjRef:       objRef,
 			BindingTags:  []int32{scanTag},
 			ScanSnapshot: bindCtx.snapshot,
-		}, bindCtx)
+		}
 
 		pkPos := tableDef.Name2ColIndex[pkName]
 		pkTyp := tableDef.Cols[pkPos].Typ
@@ -358,6 +622,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		}
+		if len(tableDef.Pkey.Names) == 1 {
+			filterExpr, filterErr := buildStaticScanFilter(leftExpr, staticFilterValues[tableDef.Pkey.Names[0]])
+			if filterErr != nil {
+				return 0, filterErr
+			}
+			if filterExpr != nil {
+				scanNode.FilterList = append(scanNode.FilterList, filterExpr)
+			}
+		}
+		scanNodeID := builder.appendNode(scanNode, bindCtx)
 
 		rightExpr := &plan.Expr{
 			Typ: pkTyp,
@@ -438,7 +712,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// detect unique key confliction
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.Unique {
+		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
 
@@ -465,6 +739,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 					ColPos: idxPkPos,
 				},
 			},
+		}
+		if len(idxDef.Parts) == 1 {
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			filterExpr, filterErr := buildStaticScanFilter(leftExpr, staticFilterValues[partName])
+			if filterErr != nil {
+				return 0, filterErr
+			}
+			if filterExpr != nil {
+				idxScanNode.FilterList = append(idxScanNode.FilterList, filterExpr)
+			}
 		}
 
 		rightExpr := &plan.Expr{
@@ -552,6 +836,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 					ColPos: idxPkPos,
 				},
 			},
+		}
+		if len(idxDef.Parts) == 1 {
+			partName := catalog.ResolveAlias(idxDef.Parts[0])
+			filterExpr, filterErr := buildStaticScanFilter(leftExpr, staticFilterValues[partName])
+			if filterErr != nil {
+				return 0, filterErr
+			}
+			if filterExpr != nil {
+				idxScanNode.FilterList = append(idxScanNode.FilterList, filterExpr)
+			}
 		}
 
 		oldPkPos := oldColName2Idx[idxTableDefs[i].Name+"."+lookupColName]
@@ -661,31 +955,24 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			TableDef:   tableDef,
 			InsertCols: insertCols,
 			DeleteCols: deleteCols,
+			IsReplace:  true,
 		})
 	}
+
+	newMainPkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	newMainPkExpr := colExpr(fullProjTag, newMainPkPos, fullProjList[newMainPkPos].Typ)
+	oldMainPkPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	oldMainPkExpr := colExpr(oldMainPkPos[0], oldMainPkPos[1], fullProjList[oldMainPkPos[1]].Typ)
 
 	for i, idxDef := range tableDef.Indexes {
 		insertCols := make([]plan.ColRef, 2)
 		deleteCols := make([]plan.ColRef, 2)
 
-		newIdxPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
-		if indexTableStoresSerializedKey(idxDef) {
-			idxExpr := &plan.Expr{
-				Typ: fullProjList[newIdxPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: fullProjTag,
-						ColPos: newIdxPos,
-					},
-				},
-			}
-			newIdxPos = int32(len(finalProjList))
-			finalProjList = append(finalProjList, idxExpr)
-		}
+		newIdxSourcePos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
+		newIdxExpr := colExpr(fullProjTag, newIdxSourcePos, fullProjList[newIdxSourcePos].Typ)
 
-		oldRowIdPos := int32(len(finalProjList))
 		oldColRef := oldColName2Idx[idxDef.IndexTableName+"."+catalog.Row_ID]
-		rowIdExpr := &plan.Expr{
+		oldRowIDExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[idxTableDefs[i].Name2ColIndex[catalog.Row_ID]].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -694,13 +981,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		}
-		finalProjList = append(finalProjList, rowIdExpr)
 
-		oldIdxPos := int32(len(finalProjList))
 		lookupColName := indexLookupColumnName(idxDef)
 		lookupColIdx := idxTableDefs[i].Name2ColIndex[lookupColName]
 		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+lookupColName]
-		idxExpr := &plan.Expr{
+		oldIdxExpr := &plan.Expr{
 			Typ: idxTableDefs[i].Cols[lookupColIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -709,17 +994,46 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		}
-		finalProjList = append(finalProjList, idxExpr)
+
+		newIdxProjExpr := newIdxExpr
+		oldRowIDProjExpr := oldRowIDExpr
+		oldIdxProjExpr := oldIdxExpr
+
+		needRewriteIdxExpr, err := makeNeedRewriteIdxExpr(oldRowIDExpr, oldIdxExpr, newIdxExpr, oldMainPkExpr, newMainPkExpr)
+		if err == nil {
+			newIdxProjExpr, err = makeIfExpr(needRewriteIdxExpr, newIdxExpr, nullExpr(newIdxExpr.Typ))
+		}
+		if err == nil {
+			oldRowIDProjExpr, err = makeIfExpr(needRewriteIdxExpr, oldRowIDExpr, nullExpr(oldRowIDExpr.Typ))
+		}
+		if err == nil {
+			oldIdxProjExpr, err = makeIfExpr(needRewriteIdxExpr, oldIdxExpr, nullExpr(oldIdxExpr.Typ))
+		}
+		if err != nil {
+			// Conditional index rewrite is an optimization only. For types that
+			// cannot bind IF/equals safely (e.g. geometry), fall back to always
+			// rewriting this index row to keep REPLACE semantics correct.
+			newIdxProjExpr = newIdxExpr
+			oldRowIDProjExpr = oldRowIDExpr
+			oldIdxProjExpr = oldIdxExpr
+		}
+
+		newIdxPos := int32(len(finalProjList))
+		finalProjList = append(finalProjList, newIdxProjExpr)
+		oldRowIdPos := int32(len(finalProjList))
+		finalProjList = append(finalProjList, oldRowIDProjExpr)
+		oldIdxPos := int32(len(finalProjList))
+		finalProjList = append(finalProjList, oldIdxProjExpr)
 
 		insertCols[0].RelPos = finalProjTag
-		insertCols[0].ColPos = int32(newIdxPos)
+		insertCols[0].ColPos = newIdxPos
 		insertCols[1].RelPos = finalProjTag
 		insertCols[1].ColPos = newPkIdx
 
 		deleteCols[0].RelPos = finalProjTag
 		deleteCols[0].ColPos = oldRowIdPos
 		deleteCols[1].RelPos = finalProjTag
-		deleteCols[1].ColPos = int32(oldIdxPos)
+		deleteCols[1].ColPos = oldIdxPos
 
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:     idxObjRefs[i],
@@ -728,17 +1042,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			DeleteCols: deleteCols,
 		})
 
-		if idxDef.Unique {
+		if idxDef.Unique && !skipUniqueIdx[i] {
 			lockTargets = append(lockTargets, &plan.LockTarget{
 				TableId:            idxTableDefs[i].TblId,
 				ObjRef:             idxObjRefs[i],
-				PrimaryColIdxInBat: int32(newIdxPos),
+				PrimaryColIdxInBat: newIdxPos,
 				PrimaryColRelPos:   finalProjTag,
 				PrimaryColTyp:      finalProjList[newIdxPos].Typ,
 			}, &plan.LockTarget{
 				TableId:            idxTableDefs[i].TblId,
 				ObjRef:             idxObjRefs[i],
-				PrimaryColIdxInBat: int32(oldIdxPos),
+				PrimaryColIdxInBat: oldIdxPos,
 				PrimaryColRelPos:   finalProjTag,
 				PrimaryColTyp:      finalProjList[oldIdxPos].Typ,
 			})

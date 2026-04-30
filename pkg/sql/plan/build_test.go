@@ -805,6 +805,230 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func TestReplaceSkipUniqueDedupWhenUniqueColsAreDefaultNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	withUniqueValue, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	withDefaultNull, err := runOneStmt(mock, t, "REPLACE INTO dept(deptno, loc) VALUES (1, 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	countDedup := func(q *plan.Query) int {
+		cnt := 0
+		for _, node := range q.Nodes {
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+				cnt++
+			}
+		}
+		return cnt
+	}
+
+	// pk dedup + unique(dname) dedup
+	assert.Equal(t, 2, countDedup(withUniqueValue.GetQuery()))
+	// only pk dedup: unique(dname) is default NULL, dedup should be skipped.
+	assert.Equal(t, 1, countDedup(withDefaultNull.GetQuery()))
+}
+
+func TestReplaceIndexUpdateUsesConditionalProjection(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var muNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			muNode = node
+			break
+		}
+	}
+	if !assert.NotNil(t, muNode) {
+		return
+	}
+	if !assert.NotEmpty(t, muNode.Children) {
+		return
+	}
+
+	child := query.Nodes[muNode.Children[0]]
+	if child.NodeType == plan.Node_LOCK_OP {
+		if !assert.NotEmpty(t, child.Children) {
+			return
+		}
+		child = query.Nodes[child.Children[0]]
+	}
+	if !assert.Equal(t, plan.Node_PROJECT, child.NodeType) {
+		return
+	}
+	finalProj := child
+
+	for _, ctx := range muNode.UpdateCtxList {
+		if ctx.TableDef == nil {
+			continue
+		}
+		if !(catalog.IsUniqueIndexTable(ctx.TableDef.Name) || catalog.IsSecondaryIndexTable(ctx.TableDef.Name)) {
+			continue
+		}
+		if !assert.NotEmpty(t, ctx.InsertCols) || len(ctx.DeleteCols) < 2 {
+			continue
+		}
+
+		newIdxExpr := finalProj.ProjectList[ctx.InsertCols[0].ColPos]
+		oldRowIDExpr := finalProj.ProjectList[ctx.DeleteCols[0].ColPos]
+		oldIdxExpr := finalProj.ProjectList[ctx.DeleteCols[1].ColPos]
+
+		assert.NotNil(t, newIdxExpr.GetF(), "index insert key should be guarded by IF expression")
+		assert.Equal(t, "if", newIdxExpr.GetF().Func.ObjName)
+		assert.NotNil(t, oldRowIDExpr.GetF(), "index delete rowid should be guarded by IF expression")
+		assert.Equal(t, "if", oldRowIDExpr.GetF().Func.ObjName)
+		assert.NotNil(t, oldIdxExpr.GetF(), "index delete key should be guarded by IF expression")
+		assert.Equal(t, "if", oldIdxExpr.GetF().Func.ObjName)
+	}
+}
+
+func TestReplaceStaticScanFilterPushdownForValues(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (2, 'HR', 'LA')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	mainScanFiltered := 0
+	uniqueScanFiltered := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || node.TableDef == nil {
+			continue
+		}
+		if node.TableDef.Name == "dept" {
+			mainScanFiltered++
+		}
+		if catalog.IsUniqueIndexTable(node.TableDef.Name) {
+			uniqueScanFiltered++
+		}
+	}
+
+	assert.Equal(t, 1, mainScanFiltered, "pk dedup scan should carry static filter for VALUES REPLACE")
+	assert.GreaterOrEqual(t, uniqueScanFiltered, 1, "single-part unique dedup scan should carry static filter")
+}
+
+func TestReplaceStaticScanFilterPushdownForExplicitColumns(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept(deptno, dname, loc) VALUES (1, 'Sales', 'NY')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	mainScanFiltered := 0
+	uniqueScanFiltered := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || node.TableDef == nil {
+			continue
+		}
+		if node.TableDef.Name == "dept" {
+			mainScanFiltered++
+		}
+		if catalog.IsUniqueIndexTable(node.TableDef.Name) {
+			uniqueScanFiltered++
+		}
+	}
+
+	assert.Equal(t, 1, mainScanFiltered, "explicit-column REPLACE should push down static filter for pk dedup scan")
+	assert.GreaterOrEqual(t, uniqueScanFiltered, 1, "explicit-column REPLACE should push down static filter for unique dedup scan")
+}
+
+func TestReplaceStaticScanFilterUsesInWithDeduplicatedValues(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (1, 'Sales2', 'SF'), (2, 'HR', 'LA')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	foundInFilter := false
+	foundInListForm := false
+	foundDedupedTwoValues := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
+			continue
+		}
+		for _, filter := range node.FilterList {
+			f := filter.GetF()
+			if f == nil || f.Func == nil || f.Func.ObjName != "in" {
+				continue
+			}
+			foundInFilter = true
+			if len(f.Args) != 2 {
+				continue
+			}
+			if f.Args[1].GetList() == nil {
+				continue
+			}
+			foundInListForm = true
+			if len(f.Args[1].GetList().List) == 2 {
+				foundDedupedTwoValues = true
+			}
+		}
+	}
+
+	assert.True(t, foundInFilter, "static scan filter should prefer IN when multiple values exist")
+	if foundInListForm {
+		assert.True(t, foundDedupedTwoValues, "duplicate key values should be deduplicated in IN list")
+	}
+}
+
+func TestReplaceStaticScanFilterPushdownForIndexRowidLookup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO dept VALUES (1, 'Sales', 'NY'), (2, 'HR', 'LA')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	uniqueScanFiltered := make(map[string]int)
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || node.TableDef == nil {
+			continue
+		}
+		if catalog.IsUniqueIndexTable(node.TableDef.Name) {
+			uniqueScanFiltered[node.TableDef.Name]++
+		}
+	}
+
+	hasRowidLookupFiltered := false
+	for _, filteredCount := range uniqueScanFiltered {
+		// The same unique index table should be filtered in both:
+		// 1) unique dedup scan
+		// 2) index rowid lookup scan
+		if filteredCount >= 2 {
+			hasRowidLookupFiltered = true
+			break
+		}
+	}
+	assert.True(t, hasRowidLookupFiltered, "unique index rowid lookup scan should carry static filter pushdown")
+}
+
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

@@ -824,6 +824,7 @@ func constructMultiUpdate(
 			InsertCols:    insertCols,
 			DeleteCols:    deleteCols,
 			PartitionCols: partitionCols,
+			IsReplace:     updateCtx.IsReplace,
 		}
 	}
 	arg.Action = action

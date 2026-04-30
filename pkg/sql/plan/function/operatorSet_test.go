@@ -432,6 +432,37 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 	}
 }
 
+func Test_Iff_Rowid(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_Rowid.ToType(),
+		types.T_Rowid.ToType(),
+	}
+	result := iffCheck(nil, inputs)
+	require.NotEqual(t, failedFunctionParametersWrong, result.status, "iffCheck should accept rowid branches")
+
+	proc := testutil.NewProcess(t)
+	rid1 := types.Rowid([24]byte{1})
+	rid2 := types.Rowid([24]byte{2})
+	tc := tcTemp{
+		info: "if(cond, rowid_a, rowid_b)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(),
+				[]bool{true, false, false, true}, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_Rowid.ToType(),
+				[]types.Rowid{rid1, rid1, rid1, rid1}, []bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_Rowid.ToType(),
+				[]types.Rowid{rid2, rid2, rid2, rid2}, []bool{false, false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_Rowid.ToType(), false,
+			[]types.Rowid{rid1, rid2, rid2, rid1}, []bool{false, false, false, false}),
+	}
+
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, iffFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
 func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	// Test CASE WHEN with NULL value compared to string
 	// This should not error, matching MySQL behavior

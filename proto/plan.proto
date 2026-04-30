@@ -623,6 +623,10 @@ message UpdateCtx {
   repeated ColRef insert_cols = 7 [(gogoproto.nullable) = false];
   repeated ColRef delete_cols = 8 [(gogoproto.nullable) = false];
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
+  // is_replace marks UpdateCtx instances produced by REPLACE INTO.
+  // Used by the multi_update operator to count delete rows toward affected_rows
+  // (MySQL REPLACE semantics: affected_rows = inserted + deleted).
+  bool is_replace = 10;
 }
 
 message InsertCtx {

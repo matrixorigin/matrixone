@@ -320,7 +320,7 @@ var (
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_uuid,
+		types.T_uuid, types.T_Rowid,
 		types.T_bool, types.T_date, types.T_datetime,
 		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
@@ -413,6 +413,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[float64](parameters, result, proc, length, selectList)
 	case types.T_uuid:
 		return generalIffFn[types.Uuid](parameters, result, proc, length, selectList)
+	case types.T_Rowid:
+		return generalIffFn[types.Rowid](parameters, result, proc, length, selectList)
 	case types.T_bool:
 		return generalIffFn[bool](parameters, result, proc, length, selectList)
 	case types.T_date:
@@ -438,7 +440,7 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid | types.Rowid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
