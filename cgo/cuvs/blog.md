@@ -114,13 +114,13 @@ IVF-Flat has no quantization knob — vectors are stored uncompressed in `float3
 
 | `nprobe` | Recall@10 | QPS |
 |---|---|---|
-| **8**   | **0.70** | **22** |
+| **8**   | **0.76** | **22** |
 | 16  | 0.91 | 10 |
 | 32  | 0.96 | 4  |
 
 (88M `wiki_all`, no filter, top-10, concurrency=100, n=10000.)
 
-Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster pages off disk — the 270 GB raw dataset doesn't fit in the ~256 GB usable cache (see the cache-miss analysis below) — so QPS roughly halves at each step. At 88M the recall target slips: `nprobe = 8` matches IVF-PQ at smaller scales but only reaches 0.70 recall here, because each cluster gets fewer probes relative to the index size. Pushing `nprobe` higher recovers recall but at a steep QPS cost — there is no sweet spot, only a recall-vs-throughput dial. The head-to-head below uses `nprobe ∈ {8, 16, 32}` for IVF-Flat to span the full curve.
+Unlike IVF-PQ there is no flat region: every additional probe pulls more cluster pages off disk — the 270 GB raw dataset doesn't fit in the ~256 GB usable cache (see the cache-miss analysis below) — so QPS roughly halves at each step. At 88M the recall target slips: `nprobe = 8` matches IVF-PQ at smaller scales but only reaches 0.76 recall here, because each cluster gets fewer probes relative to the index size. Pushing `nprobe` higher recovers recall but at a steep QPS cost — there is no sweet spot, only a recall-vs-throughput dial. The head-to-head below uses `nprobe ∈ {8, 16, 32}` for IVF-Flat to span the full curve.
 
 ### Build Time
 
@@ -152,7 +152,7 @@ At small scale, IVF-Flat's simpler build wins. At **88M vectors, IVF-Flat (GPU) 
 | 10M | 8 | 0.82 | 491 | 0.74 | 1099 |
 | 10M | 16 | 0.90 | 408 | 0.79 | 1066 |
 | 10M | 32 | 0.95 | 243 | 0.82 | 756 |
-| 88M | 8 | 0.70 | 22 | 0.79 | 776 |
+| 88M | 8 | 0.76 | 22 | 0.79 | 776 |
 | 88M | 16 | 0.91 | 10 | 0.83 | 759 |
 | 88M | 32 | 0.96 | 4 | 0.85 | 260 |
 
