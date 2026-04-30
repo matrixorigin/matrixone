@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"slices"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -132,68 +133,151 @@ func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*
 
 func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	lastX := -1
-	var sums []T
-	var sumVec *vector.Vector
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
 
-	for i, grp := range groups {
+	// Phase 1: accumulate into L1-resident local buffer.
+	// slotOf maps group IDs to local slots via open-addressing (uint8 index, 256 capacity).
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localSums [256]T
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			sumVec = exec.state[x].vecs[0]
-			sums = vector.MustFixedColNoTypeCheck[T](sumVec)
-		}
+		g := grp - 1
+		val := T(vals[i+offset])
 
-		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
-		result := sums[y] + T(val)
-		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+		// Open-addressing lookup in local slot table.
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localSums[s] += val
+				break
+			}
+			h++
+		}
+	}
+
+	// Phase 2: scatter-back local results into chunked state.
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+
+		sums := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+		old := sums[y]
+		add := localSums[s]
+		result := old + add
+		if err := exec.ofCheck(old, add, result); err != nil {
 			return err
 		}
-		if sumVec.IsNull(uint64(y)) {
-			sumVec.UnsetNull(uint64(y))
-		}
 		sums[y] = result
+
+		if exec.state[x].vecs[0].IsNull(y) {
+			exec.state[x].vecs[0].UnsetNull(y)
+		}
 	}
 	return nil
 }
 
+
 func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	lastX := -1
-	var sums []T
-	var cnts []int64
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
 
-	for i, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localSums [256]T
+	var localCnts [256]int64
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			sums = vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[0])
-			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
-		}
+		g := grp - 1
+		val := T(vals[i+offset])
 
-		val := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
-		result := sums[y] + T(val)
-		if err := exec.ofCheck(sums[y], T(val), result); err != nil {
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localSums[s] += val
+				localCnts[s]++
+				break
+			}
+			h++
+		}
+	}
+
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+
+		sums := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+		old := sums[y]
+		add := localSums[s]
+		result := old + add
+		if err := exec.ofCheck(old, add, result); err != nil {
 			return err
 		}
 		sums[y] = result
-		cnts[y] += 1
+
+		// AVG uses a second state vector for counts.
+		cntPtr := exec.state[x].vecs[1].GetData()
+		cnts := (*[AggBatchSize]int64)(unsafe.Pointer(&cntPtr[0]))
+		cnts[y] += localCnts[s]
 	}
 	return nil
 }
@@ -213,18 +297,21 @@ func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []
 			continue
 		}
 
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
-		sumVec1 := exec.state[x1].vecs[0]
-		sumVec2 := other.state[x2].vecs[0]
-		sums1 := vector.MustFixedColNoTypeCheck[T](sumVec1)
-		sums2 := vector.MustFixedColNoTypeCheck[T](sumVec2)
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+
+		sums1 := (*[AggBatchSize]T)(exec.chunkPtrs[x1])
+		sums2 := (*[AggBatchSize]T)(other.chunkPtrs[x2])
 
 		if exec.isSum {
-			if sumVec2.IsNull(uint64(y2)) {
+			if other.state[x2].vecs[0].IsNull(y2) {
 				continue
-			} else if sumVec1.IsNull(uint64(y1)) {
-				sumVec1.UnsetNull(uint64(y1))
+			} else if exec.state[x1].vecs[0].IsNull(y1) {
+				exec.state[x1].vecs[0].UnsetNull(y1)
 				sums1[y1] = sums2[y2]
 			} else {
 				result := sums1[y1] + sums2[y2]
@@ -234,13 +321,13 @@ func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []
 				sums1[y1] = result
 			}
 		} else {
-			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
-			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
 			result := sums1[y1] + sums2[y2]
 			if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
 				return err
 			}
 			sums1[y1] = result
+			cnts1 := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])[0]))
+			cnts2 := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])[0]))
 			cnts1[y1] += cnts2[y2]
 		}
 	}
@@ -395,6 +482,17 @@ func decimalStateAdd[S sumAvgDecimalState](left, right S) (S, error) {
 	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal state type %T", left))
 }
 
+func decimalStateAddUnchecked[S sumAvgDecimalState](left, right S) S {
+	switch value := any(left).(type) {
+	case types.Decimal128:
+		return any(value.Add128Unchecked(any(right).(types.Decimal128))).(S)
+	case types.Decimal256:
+		result, _ := value.Add256(any(right).(types.Decimal256))
+		return any(result).(S)
+	}
+	panic("unreachable")
+}
+
 type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	aggExec
 	isSum bool
@@ -419,37 +517,67 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 }
 
 func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
-	var err error
 	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
 	argScale := exec.aggInfo.argTypes[0].Scale
-	lastX := -1
-	var sumVec *vector.Vector
-	var sums []S
+	args := vector.MustFixedColNoTypeCheck[A](vec)
 
-	for i, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localSums [256]S
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			sumVec = exec.state[x].vecs[0]
-			sums = vector.MustFixedColNoTypeCheck[S](sumVec)
+		g := grp - 1
+		val := decimalStateFromArg[A, S](args[i+offset], argScale)
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localSums[s] = decimalStateAddUnchecked(localSums[s], val)
+				break
+			}
+			h++
 		}
+	}
 
-		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
-		val := decimalStateFromArg[A, S](raw, argScale)
-		if sumVec.IsNull(uint64(y)) {
-			sumVec.UnsetNull(uint64(y))
-			sums[y] = val
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+		sums := (*[AggBatchSize]S)(exec.chunkPtrs[x])
+		sumVec := exec.state[x].vecs[0]
+		if sumVec.IsNull(y) {
+			sumVec.UnsetNull(y)
+			sums[y] = localSums[s]
 		} else {
-			if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
+			var err error
+			if sums[y], err = decimalStateAdd(sums[y], localSums[s]); err != nil {
 				return err
 			}
 		}
@@ -458,36 +586,69 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 }
 
 func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
-	var err error
 	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
 	argScale := exec.aggInfo.argTypes[0].Scale
-	lastX := -1
-	var sums []S
-	var cnts []int64
+	args := vector.MustFixedColNoTypeCheck[A](vec)
 
-	for i, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localSums [256]S
+	var localCnts [256]int64
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			sums = vector.MustFixedColNoTypeCheck[S](exec.state[x].vecs[0])
-			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		g := grp - 1
+		val := decimalStateFromArg[A, S](args[i+offset], argScale)
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localSums[s] = decimalStateAddUnchecked(localSums[s], val)
+				localCnts[s]++
+				break
+			}
+			h++
 		}
+	}
 
-		raw := vector.GetFixedAtNoTypeCheck[A](vec, int(idx))
-		val := decimalStateFromArg[A, S](raw, argScale)
-		if sums[y], err = decimalStateAdd[S](sums[y], val); err != nil {
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+		sums := (*[AggBatchSize]S)(exec.chunkPtrs[x])
+		var err error
+		if sums[y], err = decimalStateAdd(sums[y], localSums[s]); err != nil {
 			return err
 		}
-		cnts[y]++
+		cnts := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[0]))
+		cnts[y] += localCnts[s]
 	}
 	return nil
 }
@@ -508,30 +669,33 @@ func (exec *sumAvgDecExec[A, S]) BatchMerge(next AggFuncExec, offset int, groups
 			continue
 		}
 
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
-		sumVec1 := exec.state[x1].vecs[0]
-		sumVec2 := other.state[x2].vecs[0]
-		sums1 := vector.MustFixedColNoTypeCheck[S](sumVec1)
-		sums2 := vector.MustFixedColNoTypeCheck[S](sumVec2)
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+
+		sums1 := (*[AggBatchSize]S)(exec.chunkPtrs[x1])
+		sums2 := (*[AggBatchSize]S)(other.chunkPtrs[x2])
 
 		if exec.isSum {
-			if sumVec2.IsNull(uint64(y2)) {
+			if other.state[x2].vecs[0].IsNull(y2) {
 				continue
-			} else if sumVec1.IsNull(uint64(y1)) {
-				sumVec1.UnsetNull(uint64(y1))
+			} else if exec.state[x1].vecs[0].IsNull(y1) {
+				exec.state[x1].vecs[0].UnsetNull(y1)
 				sums1[y1] = sums2[y2]
 			} else {
-				if sums1[y1], err = decimalStateAdd[S](sums1[y1], sums2[y2]); err != nil {
+				if sums1[y1], err = decimalStateAdd(sums1[y1], sums2[y2]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if sums1[y1], err = decimalStateAdd[S](sums1[y1], sums2[y2]); err != nil {
+			if sums1[y1], err = decimalStateAdd(sums1[y1], sums2[y2]); err != nil {
 				return err
 			}
-			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
-			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+			cnts1 := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])[0]))
+			cnts2 := (*[AggBatchSize]int64)(unsafe.Pointer(&vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])[0]))
 			cnts1[y1] += cnts2[y2]
 		}
 	}

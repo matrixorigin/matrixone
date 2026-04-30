@@ -43,39 +43,75 @@ func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) er
 }
 
 func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	lastX := -1
-	var vals []int64
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
 
-	for _, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localCnts [256]int64
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-		x, y := exec.getXY(uint64(grp - 1))
-		if x != lastX {
-			lastX = x
-			vals = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+		g := grp - 1
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localCnts[s]++
+				break
+			}
+			h++
 		}
-		vals[y] += 1
+	}
+
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+		vals := (*[AggBatchSize]int64)(exec.chunkPtrs[x])
+		vals[y] += localCnts[s]
 	}
 	return nil
 }
 
 func (exec *countStarExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*countStarExec)
-	x1, y1 := exec.getXY(uint64(groupIdx1))
-	x2, y2 := other.getXY(uint64(groupIdx2))
-	vals1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
-	vals2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
-	vals1[y1] += vals2[y2]
-	return nil
+	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
 
 func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*countStarExec)
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-		exec.Merge(next, int(grp-1), int(offset+i))
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+		vals1 := (*[AggBatchSize]int64)(exec.chunkPtrs[x1])
+		vals2 := (*[AggBatchSize]int64)(other.chunkPtrs[x2])
+		vals1[y1] += vals2[y2]
 	}
 	return nil
 }
@@ -123,24 +159,57 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 	}
 
 	vec := vectors[0]
-	lastX := -1
-	var vals []int64
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
 
-	for i, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localCnts [256]int64
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			vals = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+		g := grp - 1
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				localCnts[s]++
+				break
+			}
+			h++
 		}
-		vals[y] += 1
+	}
+
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+		vals := (*[AggBatchSize]int64)(exec.chunkPtrs[x])
+		vals[y] += localCnts[s]
 	}
 	return nil
 }
@@ -160,10 +229,14 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		if grp == GroupNotMatched {
 			continue
 		}
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
-		vals1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
-		vals2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+		vals1 := (*[AggBatchSize]int64)(exec.chunkPtrs[x1])
+		vals2 := (*[AggBatchSize]int64)(other.chunkPtrs[x2])
 		vals1[y1] += vals2[y2]
 	}
 	return nil

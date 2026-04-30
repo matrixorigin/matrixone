@@ -48,36 +48,78 @@ func (exec *minMaxExecFixed[T]) BulkFill(groupIndex int, vectors []*vector.Vecto
 
 func (exec *minMaxExecFixed[T]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	lastX := -1
-	var aggs []T
-	var aggVec *vector.Vector
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[T](vec)
 
-	for i, grp := range groups {
+	const slotEmpty = 0xFF
+	var slotOf [256]uint8
+	var localVals [256]T
+	var localInit [256]bool
+	var localGrps [256]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
 		if grp == GroupNotMatched {
 			continue
 		}
-		idx := uint64(i) + uint64(offset)
-		if vec.IsNull(idx) {
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
 			continue
 		}
 
-		x, y := exec.getXY(grp - 1)
-		if x != lastX {
-			lastX = x
-			aggVec = exec.state[x].vecs[0]
-			aggs = vector.MustFixedColNoTypeCheck[T](aggVec)
-		}
+		g := grp - 1
+		value := vals[i+offset]
 
-		value := vector.GetFixedAtNoTypeCheck[T](vec, int(idx))
-		if aggVec.IsNull(uint64(y)) {
-			aggVec.UnsetNull(uint64(y))
-			aggs[y] = value
-		} else if exec.comp(value, aggs[y]) < 0 {
-			aggs[y] = value
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localVals[nSlots] = value
+				localInit[nSlots] = true
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				if exec.comp(value, localVals[s]) < 0 {
+					localVals[s] = value
+				}
+				break
+			}
+			h++
+		}
+	}
+
+	for s := 0; s < nSlots; s++ {
+		if !localInit[s] {
+			continue
+		}
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		y := g & aggBatchSizeMask
+
+		aggs := (*[AggBatchSize]T)(exec.chunkPtrs[x])
+		aggVec := exec.state[x].vecs[0]
+		if aggVec.IsNull(y) {
+			aggVec.UnsetNull(y)
+			aggs[y] = localVals[s]
+		} else if exec.comp(localVals[s], aggs[y]) < 0 {
+			aggs[y] = localVals[s]
 		}
 	}
 	return nil
 }
+
 
 func (exec *minMaxExecFixed[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
@@ -90,17 +132,21 @@ func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups 
 			continue
 		}
 
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
 
-		aggs1 := vector.MustFixedColNoTypeCheck[T](exec.state[x1].vecs[0])
-		aggs2 := vector.MustFixedColNoTypeCheck[T](other.state[x2].vecs[0])
+		aggs1 := (*[AggBatchSize]T)(exec.chunkPtrs[x1])
+		aggs2 := (*[AggBatchSize]T)(other.chunkPtrs[x2])
 
-		if other.state[x2].vecs[0].IsNull(uint64(y2)) {
+		if other.state[x2].vecs[0].IsNull(y2) {
 			continue
 		}
-		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
+		if exec.state[x1].vecs[0].IsNull(y1) {
+			exec.state[x1].vecs[0].UnsetNull(y1)
 			aggs1[y1] = aggs2[y2]
 		} else if exec.comp(aggs2[y2], aggs1[y1]) < 0 {
 			aggs1[y1] = aggs2[y2]
