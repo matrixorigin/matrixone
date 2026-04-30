@@ -867,6 +867,38 @@ func TestPitrDupError(t *testing.T) {
 	}
 }
 
+func TestDropPitrReservedName(t *testing.T) {
+	newDropPitrScope := func(name string, ifExists bool) *Scope {
+		return &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_DropPitr{
+				DropPitr: &plan2.DropPitr{
+					Name:     name,
+					IfExists: ifExists,
+				},
+			},
+		}}}}
+	}
+
+	compile := &Compile{proc: testutil.NewProc(t)}
+	for _, name := range []string{
+		dataBranchSysMoCatalogPitrName,
+		dataBranchInternalPitrNamePrefix,
+		dataBranchInternalPitrNamePrefix + "_table_123",
+	} {
+		name := name
+		t.Run(name+"/without_if_exists", func(t *testing.T) {
+			err := newDropPitrScope(name, false).DropPitr(compile)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "pitr name is reserved")
+		})
+
+		t.Run(name+"/with_if_exists", func(t *testing.T) {
+			err := newDropPitrScope(name, true).DropPitr(compile)
+			assert.NoError(t, err)
+		})
+	}
+}
+
 func TestIsExperimentalEnabled(t *testing.T) {
 	s := newScope(TableClone)
 

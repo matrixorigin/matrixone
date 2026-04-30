@@ -544,6 +544,20 @@ func (tbl *txnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
+	return tbl.collectTombstonesAtSnapshot(
+		ctx,
+		txnOffset,
+		policy,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+	)
+}
+
+func (tbl *txnTable) collectTombstonesAtSnapshot(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	snapshot types.TS,
+) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
 
 	//collect uncommitted tombstones
@@ -603,8 +617,7 @@ func (tbl *txnTable) CollectTombstones(
 			return nil, err
 		}
 		{
-			ts := tbl.db.op.SnapshotTS()
-			iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
+			iter := state.NewRowsIter(snapshot, nil, true)
 			for iter.Next() {
 				entry := iter.Entry()
 				//bid, o := entry.RowID.Decode()
@@ -615,7 +628,6 @@ func (tbl *txnTable) CollectTombstones(
 
 		//tombstone.SortInMemory()
 		//collect committed persisted tombstones from partition state.
-		snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
 		err = state.CollectTombstoneObjects(snapshot,
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)

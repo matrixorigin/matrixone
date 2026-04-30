@@ -289,7 +289,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -369,7 +369,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -451,7 +451,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -534,7 +534,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -618,7 +618,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -716,7 +716,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -813,7 +813,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -911,7 +911,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1007,7 +1007,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1088,7 +1088,7 @@ func Test_doRestorePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1172,7 +1172,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1253,7 +1253,7 @@ func Test_doRestorePitrValid(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1296,7 +1296,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELCLUSTER,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and obj_id = 18446744073709551615;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and obj_id = 18446744073709551615 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "sys",
@@ -1304,7 +1304,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys' and level = 'account' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'sys' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1312,7 +1312,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 			stmt: &tree.CreatePitr{
 				Level: tree.PITRLEVELACCOUNT,
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount' and level = 'account' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and account_name = 'testAccount' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "sys",
@@ -1321,7 +1321,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:       tree.PITRLEVELACCOUNT,
 				AccountName: "testAccountName",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName' and level = 'account' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and account_name = 'testAccountName' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "sys",
@@ -1330,7 +1330,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and level = 'database' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and level = 'database' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1339,7 +1339,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				Level:        tree.PITRLEVELDATABASE,
 				DatabaseName: "testDb",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and level = 'database' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and level = 'database' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "sys",
@@ -1349,7 +1349,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable' and level = 'table' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 0 and database_name = 'testDb' and table_name = 'testTable' and level = 'table' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 		{
 			createAccount:   "testAccount",
@@ -1359,7 +1359,7 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 				DatabaseName: "testDb",
 				TableName:    "testTable",
 			},
-			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable' and level = 'table' and pitr_status = 1;",
+			expected: "select pitr_id from mo_catalog.mo_pitr where create_account = 1 and database_name = 'testDb' and table_name = 'testTable' and level = 'table' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';",
 		},
 	}
 
@@ -1427,7 +1427,7 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1553,7 +1553,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1672,7 +1672,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1793,7 +1793,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -1913,7 +1913,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -2035,7 +2035,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -2155,7 +2155,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -2281,7 +2281,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -2403,7 +2403,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -2543,7 +2543,7 @@ func Test_doCreatePitr(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where create_account = %d", sysAccountID) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sysAccountName)
+		sql = fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where create_account = %d", sysAccountID) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';", sysAccountName)
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -3241,7 +3241,7 @@ func Test_RestoreOtherAccount(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -3330,7 +3330,7 @@ func Test_RestoreOtherAccount(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -3420,7 +3420,7 @@ func Test_RestoreOtherAccount(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -3510,7 +3510,7 @@ func Test_RestoreOtherAccount(t *testing.T) {
 		mrs := newMrsForPitrRecord([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
 		bh.sql2result[sql] = mrs
 
-		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0"
+		sql = "select * from mo_catalog.mo_pitr where pitr_name = 'pitr01' and create_account = 0 and kind = 'user'"
 		mrs = newMrsForPitrRecord([][]interface{}{{
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
@@ -3574,4 +3574,13 @@ func Test_getPitrLengthAndUnit(t *testing.T) {
 
 	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
 	assert.Error(t, err)
+}
+
+func Test_isReservedPitrName(t *testing.T) {
+	assert.True(t, isReservedPitrName(SYSMOCATALOGPITR))
+	assert.True(t, isReservedPitrName("__mo_data_branch_pitr"))
+	assert.True(t, isReservedPitrName("__mo_data_branch_pitr_table_123"))
+	assert.True(t, isReservedPitrName("__mo_data_branch_pitr_database_456"))
+	assert.False(t, isReservedPitrName("__mo_data_branch_pitrx_table_123"))
+	assert.False(t, isReservedPitrName("user_pitr"))
 }

@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,6 +49,31 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
+
+const (
+	dataBranchPitrNamePrefix = "__mo_data_branch_pitr"
+	dataBranchPitrLength     = 1
+	dataBranchPitrUnit       = "y"
+	dataBranchPitrKind       = "internal"
+)
+
+type dataBranchPitrRecord struct {
+	pitrName     string
+	level        string
+	accountID    uint64
+	accountName  string
+	databaseName string
+	tableName    string
+	objectID     uint64
+}
+
+type dataBranchExistingPitrRecord struct {
+	exists     bool
+	kind       string
+	active     bool
+	pitrLength uint64
+	pitrUnit   string
+}
 
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
@@ -352,6 +378,10 @@ func dataBranchCreateTable(
 		return
 	}
 
+	if err = createDataBranchTablePitr(execCtx.reqCtx, ses, bh, receipt); err != nil {
+		return
+	}
+
 	return nil
 }
 
@@ -394,7 +424,821 @@ func dataBranchCreateDatabase(
 		}
 	}
 
+	if err = createDataBranchDatabasePitr(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, receipts); err != nil {
+		return
+	}
+
 	return nil
+}
+
+func dataBranchPitrName(level string, objectID string) string {
+	return fmt.Sprintf("%s_%s_%s", dataBranchPitrNamePrefix, level, objectID)
+}
+
+func dataBranchCloneTxn(ctx context.Context, bh BackgroundExec) (TxnOperator, error) {
+	be, ok := bh.(*backExec)
+	if !ok || be.backSes == nil || be.backSes.GetTxnHandler() == nil {
+		return nil, moerr.NewInternalError(ctx, "data branch pitr requires background transaction")
+	}
+	return be.backSes.GetTxnHandler().GetTxn(), nil
+}
+
+func createDataBranchTablePitr(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	receipt cloneReceipt,
+) error {
+	if receipt.dstDb == "" || receipt.dstTbl == "" {
+		return moerr.NewInternalError(ctx, "data branch table pitr requires target table")
+	}
+
+	cloneTxnOp, err := dataBranchCloneTxn(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if err = createDataBranchTablePitrForTarget(
+		ctx, ses, bh, cloneTxnOp, receipt.toAccount, receipt.dstDb, receipt.dstTbl, "target",
+	); err != nil {
+		return err
+	}
+	if receipt.srcDb == "" || receipt.srcTbl == "" {
+		return nil
+	}
+	return createDataBranchTablePitrForTarget(
+		ctx, ses, bh, cloneTxnOp, receipt.srcAccount, receipt.srcDb, receipt.srcTbl, "source",
+	)
+}
+
+func createDataBranchDatabasePitr(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.CloneDatabase,
+	receipts []cloneReceipt,
+) error {
+	if stmt == nil {
+		return moerr.NewInternalError(ctx, "data branch database pitr requires clone database statement")
+	}
+
+	var (
+		toAccountID  uint32
+		srcAccountID uint32
+		err          error
+	)
+	if len(receipts) > 0 {
+		toAccountID = receipts[0].toAccount
+		srcAccountID = receipts[0].srcAccount
+	} else {
+		var snapshot *plan2.Snapshot
+		srcAccountID, toAccountID, snapshot, err = getOpAndToAccountId(
+			ctx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
+		)
+		if err != nil {
+			return err
+		}
+		if snapshot != nil && snapshot.Tenant != nil {
+			srcAccountID = snapshot.Tenant.TenantID
+		}
+	}
+
+	dstDb := stmt.DstDatabase.String()
+	if dstDb == "" {
+		return moerr.NewInternalError(ctx, "data branch database pitr requires target database")
+	}
+	cloneTxnOp, err := dataBranchCloneTxn(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if err = createDataBranchDatabasePitrForTarget(
+		ctx, ses, bh, cloneTxnOp, toAccountID, dstDb, "target",
+	); err != nil {
+		return err
+	}
+
+	srcDb := stmt.SrcDatabase.String()
+	if len(receipts) > 0 && receipts[0].srcDb != "" {
+		srcDb = receipts[0].srcDb
+	}
+	if srcDb == "" {
+		return nil
+	}
+	return createDataBranchDatabasePitrForTarget(
+		ctx, ses, bh, cloneTxnOp, srcAccountID, srcDb, "source",
+	)
+}
+
+func createDataBranchTablePitrForTarget(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	cloneTxnOp TxnOperator,
+	accountID uint32,
+	dbName string,
+	tableName string,
+	role string,
+) error {
+	tableID, err := dataBranchTableID(ctx, ses, cloneTxnOp, accountID, dbName, tableName)
+	if err != nil {
+		return err
+	}
+	pitrName := dataBranchPitrName("table", strconv.FormatUint(tableID, 10))
+	accountName, err := dataBranchPitrAccountName(ctx, ses, bh, accountID)
+	if err != nil {
+		return err
+	}
+	logutil.Info(
+		"DataBranch-CreatePITR-Table",
+		zap.String("role", role),
+		zap.String("pitr-name", pitrName),
+		zap.Uint64("table-id", tableID),
+		zap.Uint32("account-id", accountID),
+		zap.String("database", dbName),
+		zap.String("table", tableName),
+	)
+	return createDataBranchPitrRecord(ctx, ses, bh, cloneTxnOp, dataBranchPitrRecord{
+		pitrName:     pitrName,
+		level:        tree.PITRLEVELTABLE.String(),
+		accountID:    uint64(accountID),
+		accountName:  accountName,
+		databaseName: dbName,
+		tableName:    tableName,
+		objectID:     tableID,
+	})
+}
+
+func createDataBranchDatabasePitrForTarget(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	cloneTxnOp TxnOperator,
+	accountID uint32,
+	dbName string,
+	role string,
+) error {
+	databaseID, err := dataBranchDatabaseID(ctx, ses, cloneTxnOp, accountID, dbName)
+	if err != nil {
+		return err
+	}
+	pitrName := dataBranchPitrName("database", strconv.FormatUint(databaseID, 10))
+	accountName, err := dataBranchPitrAccountName(ctx, ses, bh, accountID)
+	if err != nil {
+		return err
+	}
+	logutil.Info(
+		"DataBranch-CreatePITR-Database",
+		zap.String("role", role),
+		zap.String("pitr-name", pitrName),
+		zap.Uint64("database-id", databaseID),
+		zap.Uint32("account-id", accountID),
+		zap.String("database", dbName),
+	)
+	return createDataBranchPitrRecord(ctx, ses, bh, cloneTxnOp, dataBranchPitrRecord{
+		pitrName:     pitrName,
+		level:        tree.PITRLEVELDATABASE.String(),
+		accountID:    uint64(accountID),
+		accountName:  accountName,
+		databaseName: dbName,
+		objectID:     databaseID,
+	})
+}
+
+func dataBranchDatabaseID(
+	ctx context.Context,
+	ses *Session,
+	cloneTxnOp TxnOperator,
+	accountID uint32,
+	dbName string,
+) (uint64, error) {
+	dbCtx := defines.AttachAccountId(ctx, accountID)
+	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(dbCtx, dbName, cloneTxnOp)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(db.GetDatabaseId(dbCtx), 10, 64)
+}
+
+func dataBranchTableID(
+	ctx context.Context,
+	ses *Session,
+	cloneTxnOp TxnOperator,
+	accountID uint32,
+	dbName string,
+	tableName string,
+) (uint64, error) {
+	dbCtx := defines.AttachAccountId(ctx, accountID)
+	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(dbCtx, dbName, cloneTxnOp)
+	if err != nil {
+		return 0, err
+	}
+	rel, err := db.Relation(dbCtx, tableName, nil)
+	if err != nil {
+		return 0, err
+	}
+	return rel.GetTableDef(dbCtx).TblId, nil
+}
+
+func dataBranchPitrAccountName(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) (string, error) {
+	if accountID == sysAccountID {
+		return sysAccountName, nil
+	}
+	if tenantInfo := ses.GetTenantInfo(); tenantInfo != nil && accountID == tenantInfo.GetTenantID() {
+		return tenantInfo.GetTenant(), nil
+	}
+
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select account_name from mo_catalog.mo_account where account_id = %d",
+		accountID,
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", moerr.NewInternalErrorf(ctx, "account %d does not exist", accountID)
+	}
+	return erArray[0].GetString(sysCtx, 0, 0)
+}
+
+func createDataBranchPitrRecord(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	cloneTxnOp TxnOperator,
+	record dataBranchPitrRecord,
+) error {
+	now := cloneTxnOp.SnapshotTS().ToStdTime().UTC().UnixNano()
+	existing, err := getDataBranchPitrRecord(ctx, bh, record.pitrName, record.accountID)
+	if err != nil {
+		return err
+	}
+	if existing.exists {
+		if err = ensureDataBranchPitrRecord(ctx, bh, now, record, existing); err != nil {
+			return err
+		}
+		return ensureDataBranchMoCatalogPitr(
+			ctx, ses, bh, cloneTxnOp, now,
+		)
+	}
+
+	pitrID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	sql, err := getSqlForCreateDataBranchPitrRecord(ctx, pitrID.String(), now, record)
+	if err != nil {
+		return err
+	}
+
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	if err = bh.Exec(sysCtx, sql); err != nil {
+		// Concurrent branch creation can win the primary key race. Re-read the
+		// record and normalize it if it is the expected internal PITR.
+		existing, readErr := getDataBranchPitrRecord(ctx, bh, record.pitrName, record.accountID)
+		if readErr == nil && existing.exists && existing.kind == dataBranchPitrKind {
+			if ensureErr := ensureDataBranchPitrRecord(ctx, bh, now, record, existing); ensureErr != nil {
+				return ensureErr
+			}
+			return ensureDataBranchMoCatalogPitr(ctx, ses, bh, cloneTxnOp, now)
+		}
+		return err
+	}
+	return ensureDataBranchMoCatalogPitr(ctx, ses, bh, cloneTxnOp, now)
+}
+
+func getDataBranchPitrRecord(
+	ctx context.Context,
+	bh BackgroundExec,
+	pitrName string,
+	accountID uint64,
+) (dataBranchExistingPitrRecord, error) {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select kind, pitr_status, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
+		quoteSQLStringLiteral(pitrName),
+		accountID,
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return dataBranchExistingPitrRecord{}, nil
+	}
+	kind, err := erArray[0].GetString(sysCtx, 0, 0)
+	if err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	status, err := erArray[0].GetUint64(sysCtx, 0, 1)
+	if err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	pitrLength, err := erArray[0].GetUint64(sysCtx, 0, 2)
+	if err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	pitrUnit, err := erArray[0].GetString(sysCtx, 0, 3)
+	if err != nil {
+		return dataBranchExistingPitrRecord{}, err
+	}
+	return dataBranchExistingPitrRecord{
+		exists:     true,
+		kind:       kind,
+		active:     status == 1,
+		pitrLength: pitrLength,
+		pitrUnit:   pitrUnit,
+	}, nil
+}
+
+func ensureDataBranchPitrRecord(
+	ctx context.Context,
+	bh BackgroundExec,
+	now int64,
+	record dataBranchPitrRecord,
+	existing dataBranchExistingPitrRecord,
+) error {
+	setParts := []string{
+		fmt.Sprintf("modified_time = %d", now),
+		fmt.Sprintf("level = %s", quoteSQLStringLiteral(record.level)),
+		fmt.Sprintf("account_id = %d", record.accountID),
+		fmt.Sprintf("account_name = %s", quoteSQLStringLiteral(record.accountName)),
+		fmt.Sprintf("database_name = %s", quoteSQLStringLiteral(record.databaseName)),
+		fmt.Sprintf("table_name = %s", quoteSQLStringLiteral(record.tableName)),
+		fmt.Sprintf("obj_id = %d", record.objectID),
+		"pitr_status = 1",
+		fmt.Sprintf("kind = %s", quoteSQLStringLiteral(dataBranchPitrKind)),
+	}
+	if !existing.active {
+		setParts = append(setParts, fmt.Sprintf("pitr_status_changed_time = %d", now))
+	}
+	needDurationUpdate, err := dataBranchPitrDurationNeedsUpdate(existing.pitrLength, existing.pitrUnit)
+	if err != nil {
+		return err
+	}
+	if needDurationUpdate {
+		setParts = append(setParts,
+			fmt.Sprintf("pitr_length = %d", dataBranchPitrLength),
+			fmt.Sprintf("pitr_unit = %s", quoteSQLStringLiteral(dataBranchPitrUnit)),
+		)
+	}
+
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"update mo_catalog.mo_pitr set %s where pitr_name = %s and create_account = %d",
+		strings.Join(setParts, ", "),
+		quoteSQLStringLiteral(record.pitrName),
+		record.accountID,
+	)
+	return bh.Exec(sysCtx, sql)
+}
+
+func dataBranchPitrDurationNeedsUpdate(oldLength uint64, oldUnit string) (bool, error) {
+	oldMinTs, err := addTimeSpan(time.Time{}, int(oldLength), oldUnit)
+	if err != nil {
+		return false, err
+	}
+	newMinTs, err := addTimeSpan(time.Time{}, dataBranchPitrLength, dataBranchPitrUnit)
+	if err != nil {
+		return false, err
+	}
+	return newMinTs.Before(oldMinTs), nil
+}
+
+func getSqlForCreateDataBranchPitrRecord(
+	ctx context.Context,
+	pitrID string,
+	now int64,
+	record dataBranchPitrRecord,
+) (string, error) {
+	if err := inputNameIsInvalid(ctx, record.pitrName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`insert into mo_catalog.mo_pitr(
+		pitr_id,
+		pitr_name,
+		create_account,
+		create_time,
+		modified_time,
+		level,
+		account_id,
+		account_name,
+		database_name,
+		table_name,
+		obj_id,
+		pitr_length,
+		pitr_unit,
+		pitr_status_changed_time,
+		kind) values (%s, %s, %d, %d, %d, %s, %d, %s, %s, %s, %d, %d, %s, %d, %s);`,
+		quoteSQLStringLiteral(pitrID),
+		quoteSQLStringLiteral(record.pitrName),
+		record.accountID,
+		now,
+		now,
+		quoteSQLStringLiteral(record.level),
+		record.accountID,
+		quoteSQLStringLiteral(record.accountName),
+		quoteSQLStringLiteral(record.databaseName),
+		quoteSQLStringLiteral(record.tableName),
+		record.objectID,
+		dataBranchPitrLength,
+		quoteSQLStringLiteral(dataBranchPitrUnit),
+		now,
+		quoteSQLStringLiteral(dataBranchPitrKind),
+	), nil
+}
+
+func ensureDataBranchMoCatalogPitr(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	cloneTxnOp TxnOperator,
+	now int64,
+) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s",
+		quoteSQLStringLiteral(SYSMOCATALOGPITR),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+
+	if execResultArrayHasData(erArray) {
+		sysPitrLength, err := erArray[0].GetUint64(sysCtx, 0, 0)
+		if err != nil {
+			return err
+		}
+		sysPitrUnit, err := erArray[0].GetString(sysCtx, 0, 1)
+		if err != nil {
+			return err
+		}
+		oldMinTs, err := addTimeSpan(time.Time{}, int(sysPitrLength), sysPitrUnit)
+		if err != nil {
+			return err
+		}
+		newMinTs, err := addTimeSpan(time.Time{}, dataBranchPitrLength, dataBranchPitrUnit)
+		if err != nil {
+			return err
+		}
+		setParts := []string{
+			fmt.Sprintf("modified_time = %d", now),
+			"pitr_status = 1",
+			fmt.Sprintf("kind = %s", quoteSQLStringLiteral(dataBranchPitrKind)),
+		}
+		if !newMinTs.Before(oldMinTs) {
+			sql = fmt.Sprintf(
+				"update mo_catalog.mo_pitr set %s where pitr_name = %s and create_account = %d",
+				strings.Join(setParts, ", "),
+				quoteSQLStringLiteral(SYSMOCATALOGPITR),
+				sysAccountID,
+			)
+			return bh.Exec(sysCtx, sql)
+		}
+		setParts = append(setParts,
+			fmt.Sprintf("pitr_length = %d", dataBranchPitrLength),
+			fmt.Sprintf("pitr_unit = %s", quoteSQLStringLiteral(dataBranchPitrUnit)),
+		)
+		sql = fmt.Sprintf(
+			"update mo_catalog.mo_pitr set %s where pitr_name = %s and create_account = %d",
+			strings.Join(setParts, ", "),
+			quoteSQLStringLiteral(SYSMOCATALOGPITR),
+			sysAccountID,
+		)
+		return bh.Exec(sysCtx, sql)
+	}
+
+	moCatalogDB, err := ses.proc.GetSessionInfo().StorageEngine.Database(
+		sysCtx, catalog.MO_CATALOG, cloneTxnOp,
+	)
+	if err != nil {
+		return err
+	}
+	moCatalogID, err := strconv.ParseUint(moCatalogDB.GetDatabaseId(sysCtx), 10, 64)
+	if err != nil {
+		return err
+	}
+	pitrID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	sql, err = getSqlForCreateDataBranchPitrRecord(ctx, pitrID.String(), now, dataBranchPitrRecord{
+		pitrName:     SYSMOCATALOGPITR,
+		level:        tree.PITRLEVELDATABASE.String(),
+		accountID:    sysAccountID,
+		accountName:  sysAccountName,
+		databaseName: catalog.MO_CATALOG,
+		objectID:     moCatalogID,
+	})
+	if err != nil {
+		return err
+	}
+	return bh.Exec(sysCtx, sql)
+}
+
+func deleteDataBranchInternalPitrRecord(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	pitrName string,
+) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d and (kind = %s or pitr_name like %s)",
+		quoteSQLStringLiteral(pitrName),
+		accountID,
+		quoteSQLStringLiteral(dataBranchPitrKind),
+		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
+	)
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return err
+	}
+	return cleanupDataBranchMoCatalogPitrIfUnused(ctx, bh)
+}
+
+func cleanupDataBranchMoCatalogPitrIfUnused(ctx context.Context, bh BackgroundExec) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select pitr_id from mo_catalog.mo_pitr where pitr_name != %s limit 1",
+		quoteSQLStringLiteral(SYSMOCATALOGPITR),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	if execResultArrayHasData(erArray) {
+		return nil
+	}
+	sql = fmt.Sprintf(
+		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d and kind = %s",
+		quoteSQLStringLiteral(SYSMOCATALOGPITR),
+		sysAccountID,
+		quoteSQLStringLiteral(dataBranchPitrKind),
+	)
+	return bh.Exec(sysCtx, sql)
+}
+
+func cleanupDataBranchTablePitrIfUnused(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	tableID uint64,
+) error {
+	hasRef, err := dataBranchTablesHaveActiveReference(ctx, bh, []uint64{tableID})
+	if err != nil {
+		return err
+	}
+	if hasRef {
+		return nil
+	}
+	return deleteDataBranchInternalPitrRecord(
+		ctx,
+		bh,
+		accountID,
+		dataBranchPitrName("table", strconv.FormatUint(tableID, 10)),
+	)
+}
+
+func cleanupAllDataBranchTablePitrsIfUnused(ctx context.Context, bh BackgroundExec) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select create_account, obj_id from mo_catalog.mo_pitr where (kind = %s or pitr_name like %s) and level = %s and pitr_name like %s",
+		quoteSQLStringLiteral(dataBranchPitrKind),
+		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
+		quoteSQLStringLiteral(tree.PITRLEVELTABLE.String()),
+		quoteSQLStringLiteral(dataBranchPitrName("table", "")+"%"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil
+	}
+
+	type tablePitr struct {
+		accountID uint64
+		tableID   uint64
+	}
+	pitrs := make([]tablePitr, 0, erArray[0].GetRowCount())
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		accountID, err := erArray[0].GetUint64(sysCtx, i, 0)
+		if err != nil {
+			return err
+		}
+		tableID, err := erArray[0].GetUint64(sysCtx, i, 1)
+		if err != nil {
+			return err
+		}
+		pitrs = append(pitrs, tablePitr{accountID: accountID, tableID: tableID})
+	}
+
+	for _, pitr := range pitrs {
+		if err = cleanupDataBranchTablePitrIfUnused(ctx, bh, pitr.accountID, pitr.tableID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupAllDataBranchDatabasePitrsIfUnused(ctx context.Context, bh BackgroundExec) error {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select create_account, obj_id, database_name, create_time from mo_catalog.mo_pitr where (kind = %s or pitr_name like %s) and level = %s and pitr_name like %s",
+		quoteSQLStringLiteral(dataBranchPitrKind),
+		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
+		quoteSQLStringLiteral(tree.PITRLEVELDATABASE.String()),
+		quoteSQLStringLiteral(dataBranchPitrName("database", "")+"%"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil
+	}
+
+	type dbPitr struct {
+		accountID  uint64
+		databaseID uint64
+		database   string
+		createTime int64
+	}
+	pitrs := make([]dbPitr, 0, erArray[0].GetRowCount())
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		accountID, err := erArray[0].GetUint64(sysCtx, i, 0)
+		if err != nil {
+			return err
+		}
+		databaseID, err := erArray[0].GetUint64(sysCtx, i, 1)
+		if err != nil {
+			return err
+		}
+		database, err := erArray[0].GetString(sysCtx, i, 2)
+		if err != nil {
+			return err
+		}
+		createTime, err := erArray[0].GetInt64(sysCtx, i, 3)
+		if err != nil {
+			return err
+		}
+		pitrs = append(pitrs, dbPitr{
+			accountID:  accountID,
+			databaseID: databaseID,
+			database:   database,
+			createTime: createTime,
+		})
+	}
+
+	for _, pitr := range pitrs {
+		tableIDs, err := dataBranchDatabaseTableIDsAt(ctx, bh, pitr.accountID, pitr.database, pitr.createTime)
+		if err != nil {
+			return err
+		}
+		if err = cleanupDataBranchDatabasePitrIfUnused(
+			ctx, bh, pitr.accountID, pitr.databaseID, tableIDs,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupDataBranchDatabasePitrIfUnused(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	databaseID uint64,
+	tableIDs []uint64,
+) error {
+	if len(tableIDs) > 0 {
+		hasRef, err := dataBranchTablesHaveActiveReference(ctx, bh, tableIDs)
+		if err != nil {
+			return err
+		}
+		if hasRef {
+			return nil
+		}
+	}
+	return deleteDataBranchInternalPitrRecord(
+		ctx,
+		bh,
+		accountID,
+		dataBranchPitrName("database", strconv.FormatUint(databaseID, 10)),
+	)
+}
+
+func dataBranchDatabaseTableIDsAt(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	databaseName string,
+	ts int64,
+) ([]uint64, error) {
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	sql := fmt.Sprintf(
+		"select rel_id from mo_catalog.mo_tables {MO_TS = %d} where account_id = %d and reldatabase = %s",
+		ts,
+		accountID,
+		quoteSQLStringLiteral(databaseName),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(sysCtx, sql); err != nil {
+		return nil, err
+	}
+	erArray, err := getResultSet(sysCtx, bh)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil, nil
+	}
+	tableIDs := make([]uint64, 0, erArray[0].GetRowCount())
+	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+		tableID, err := erArray[0].GetUint64(sysCtx, i, 0)
+		if err != nil {
+			return nil, err
+		}
+		tableIDs = append(tableIDs, tableID)
+	}
+	return tableIDs, nil
+}
+
+func dataBranchTablesHaveActiveReference(
+	ctx context.Context,
+	bh BackgroundExec,
+	tableIDs []uint64,
+) (bool, error) {
+	if len(tableIDs) == 0 {
+		return false, nil
+	}
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	const batchSize = 512
+	for start := 0; start < len(tableIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(tableIDs) {
+			end = len(tableIDs)
+		}
+		idList := dataBranchUintListSQL(tableIDs[start:end])
+		sql := fmt.Sprintf(
+			"select table_id from mo_catalog.mo_branch_metadata where table_deleted = false and (table_id in (%s) or p_table_id in (%s)) limit 1",
+			idList,
+			idList,
+		)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(sysCtx, sql); err != nil {
+			return false, err
+		}
+		erArray, err := getResultSet(sysCtx, bh)
+		if err != nil {
+			return false, err
+		}
+		if execResultArrayHasData(erArray) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dataBranchUintListSQL(ids []uint64) string {
+	var sqlBuilder strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			sqlBuilder.WriteByte(',')
+		}
+		sqlBuilder.WriteString(strconv.FormatUint(id, 10))
+	}
+	return sqlBuilder.String()
 }
 
 func markBranchTablesDeleted(
@@ -518,6 +1362,16 @@ func dataBranchDeleteTable(
 		return
 	}
 
+	if err = cleanupDataBranchTablePitrIfUnused(execCtx.reqCtx, bh, uint64(accId), tblID); err != nil {
+		return
+	}
+	if err = cleanupAllDataBranchTablePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
+		return
+	}
+	if err = cleanupAllDataBranchDatabasePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
+		return
+	}
+
 	return nil
 }
 
@@ -545,12 +1399,33 @@ func dataBranchDeleteDatabase(
 		dbName   = stmt.DatabaseName
 		accId    uint32
 		sqlRet   executor.Result
+		dbID     uint64
+		dbFound  bool
 		tableIDs []uint64
 	)
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
 	}
+
+	if sqlRet, err = runSql(
+		execCtx.reqCtx, ses, bh, fmt.Sprintf(
+			"select dat_id from %s.%s where account_id = %d and datname = '%s'",
+			catalog.MO_CATALOG, catalog.MO_DATABASE, accId, dbName,
+		), nil, nil,
+	); err != nil {
+		return
+	}
+
+	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return false
+		}
+		dbID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+		dbFound = true
+		return false
+	})
+	sqlRet.Close()
 
 	if sqlRet, err = runSql(
 		execCtx.reqCtx, ses, bh, fmt.Sprintf(
@@ -583,6 +1458,23 @@ func dataBranchDeleteDatabase(
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	for _, tableID := range tableIDs {
+		if err = cleanupDataBranchTablePitrIfUnused(execCtx.reqCtx, bh, uint64(accId), tableID); err != nil {
+			return
+		}
+	}
+	if err = cleanupAllDataBranchTablePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
+		return
+	}
+	if dbFound {
+		if err = cleanupDataBranchDatabasePitrIfUnused(execCtx.reqCtx, bh, uint64(accId), dbID, tableIDs); err != nil {
+			return
+		}
+	}
+	if err = cleanupAllDataBranchDatabasePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
 		return
 	}
 

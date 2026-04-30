@@ -37,6 +37,7 @@ const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
 const SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
+const DATA_BRANCH_PITR_NAME_PREFIX = "__mo_data_branch_pitr"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -1002,10 +1003,10 @@ func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 			"		pitr_length as `PITR_LENGTH`, "+
 			"		pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr "+
 			"where "+
-			"	create_account = %d and pitr_name != '%s' "+
+			"	create_account = %d and pitr_name != '%s' and kind = 'user' and pitr_name not like '%s%%' "+
 			"ORDER BY "+
 			"	create_time DESC",
-		MO_CATALOG_DB_NAME, curAccountId, SYSMOCATALOGPITR)
+		MO_CATALOG_DB_NAME, curAccountId, SYSMOCATALOGPITR, DATA_BRANCH_PITR_NAME_PREFIX+"_")
 
 	newCtx := ctx.GetContext()
 	if curAccountId != catalog.System_Account {
