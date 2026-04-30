@@ -44,9 +44,9 @@ func ConstructCreateTableSQL(
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := fmt.Sprintf("`%s`", formatIdent(tblName))
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = fmt.Sprintf("`%s`.`%s`", formatIdent(schemaName), formatIdent(tblName))
 	}
 
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
@@ -111,7 +111,7 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  `%s` %s", formatIdent(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.Typ.AutoIncr {
@@ -130,7 +130,10 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				// OriginString is free-form SQL text reconstructed from the
+				// AST (e.g. concat(`col`, 'x')). It is already valid SQL —
+				// emit it verbatim; do not re-escape backticks or quotes.
+				buf.WriteString(" DEFAULT " + col.Default.OriginString)
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -139,7 +142,7 @@ func ConstructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			buf.WriteString(" COMMENT " + formatStrLit(col.Comment))
 		}
 
 		createStr += buf.String()
@@ -159,9 +162,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`)", formatIdent(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`,", formatIdent(def))
 			}
 		}
 		if rowCount != 0 {
@@ -191,7 +194,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(indexdef.IndexName))
 				}
 				indexStr += "("
 				i := 0
@@ -204,7 +207,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(part))
 					i++
 				}
 
@@ -227,7 +230,7 @@ func ConstructCreateTableSQL(
 				} else {
 					indexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("`%s` ", formatIdent(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -242,7 +245,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(part))
 					i++
 				}
 
@@ -257,8 +260,7 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				indexStr += " COMMENT " + formatStrLit(indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -384,12 +386,12 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		fkRefDbTblName := fmt.Sprintf("`%s`", formatIdent(fkTableDef.Name))
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatIdent(fkTableDef.DbName), formatIdent(fkTableDef.Name))
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+			formatIdent(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	if rowCount != 0 {
@@ -402,7 +404,7 @@ func ConstructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					comment = " COMMENT=" + formatStrLit(kv.Value)
 				}
 			}
 		}
@@ -467,14 +469,14 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", `%s`", formatIdent(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf("`%s`", formatIdent(cbName))
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += fmt.Sprintf("`%s`", formatIdent(tableDef.ClusterBy.Name))
 		}
 		clusterby += ")"
 		createStr += clusterby
@@ -643,20 +645,23 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
-func formatStr(str string) string {
-	tmp := strings.Replace(str, "`", "``", -1)
-	strLen := len(tmp)
-	if strLen < 2 {
-		return tmp
-	}
-	if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
-	}
-	// Not a string literal — e.g. a function/expression default like
-	// concat('read',''). Escaping interior quotes here would corrupt the
-	// expression (they are already correctly placed by the producer), so
-	// emit it verbatim (modulo the backtick escaping above).
-	return tmp
+// formatIdent escapes a string for use inside a backtick-quoted identifier,
+// i.e. when the caller wraps the result in `...`. Embedded backticks are
+// doubled per MySQL's identifier-quoting rules.
+//
+// Do NOT use this on free-form SQL text (e.g. an expression default like
+// concat(`col`, 'x')) — that text is not inside a backtick-quoted identifier
+// and doubling interior backticks corrupts the original SQL.
+func formatIdent(s string) string {
+	return strings.ReplaceAll(s, "`", "``")
+}
+
+// formatStrLit returns s as a MySQL single-quoted string literal with any
+// embedded single quotes doubled per the standard escape rule. It is the
+// right helper for column/table/index comments and any context that emits
+// a quoted literal.
+func formatStrLit(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

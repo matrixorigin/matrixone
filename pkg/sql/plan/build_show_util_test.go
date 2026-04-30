@@ -237,22 +237,25 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	return showSQL, nil
 }
 
-// TestFormatStrPreservesNonLiteralDefault verifies formatStr does not escape
-// single quotes inside a non-string-literal default expression such as
-// concat('read',”), which would otherwise corrupt the SHOW CREATE output.
-func TestFormatStrPreservesNonLiteralDefault(t *testing.T) {
-	// Function call default: must be emitted verbatim.
-	got := formatStr("concat('read','')")
-	require.Equal(t, "concat('read','')", got,
-		"non-literal default expressions must not have their interior quotes re-escaped")
+// formatIdent and formatStrLit split the old formatStr responsibilities.
+// Identifier escape (backticks -> doubled backticks), string literal escape
+// (single quotes -> doubled quotes). Free-form expression text is never
+// passed through either — callers emit it verbatim.
+func TestFormatIdentEscapesBackticks(t *testing.T) {
+	require.Equal(t, "a``b", formatIdent("a`b"))
+	require.Equal(t, "plain", formatIdent("plain"))
+	// Must not treat single quotes specially — they are allowed inside an
+	// identifier name.
+	require.Equal(t, "o'brien", formatIdent("o'brien"))
+}
 
-	// A bare string literal should still get its interior quotes doubled.
-	got = formatStr("'o'brien'")
-	require.Equal(t, "'o''brien'", got)
-
-	// Backticks are always escaped.
-	got = formatStr("a`b")
-	require.Equal(t, "a``b", got)
+func TestFormatStrLitEscapesSingleQuotes(t *testing.T) {
+	require.Equal(t, "'o''brien'", formatStrLit("o'brien"))
+	require.Equal(t, "''", formatStrLit(""))
+	// Backticks are NOT doubled inside a string literal.
+	require.Equal(t, "'a`b'", formatStrLit("a`b"))
+	// Multiple interior quotes must all be doubled.
+	require.Equal(t, "'''hi''there'''", formatStrLit("'hi'there'"))
 }
 
 // TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
