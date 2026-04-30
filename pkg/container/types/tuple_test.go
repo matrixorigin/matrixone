@@ -1086,23 +1086,35 @@ func TestDecodeTupleWithSchema(t *testing.T) {
 
 func TestUnpackNthElement(t *testing.T) {
 	uuid, _ := BuildUuid()
+
 	tuple := Tuple{
-		[]byte("hello"),
-		int32(42),
+		nil,
+		int8(8),
+		int16(16),
+		int32(32),
+		int64(64),
+		uint8(18),
+		uint16(116),
+		uint32(132),
+		uint64(164),
 		true,
-		float64(3.14),
-		[]byte("world"),
+		false,
+		float32(3.14),
+		float64(2.718),
+		Date(100),
+		Datetime(200),
+		Timestamp(300),
+		Decimal64(999),
+		Decimal128{1, 2},
+		[]byte("hello"),
 		uuid,
 	}
+	p := NewPacker()
+	encodeBufToPacker(tuple, p)
+	encoded := p.GetBuf()
 
-	packer := NewPacker()
-	encodeBufToPacker(tuple, packer)
-	encoded := packer.GetBuf()
-
-	// Verify against full unpack
 	fullTuple, fullSchema, err := UnpackWithSchema(encoded)
 	require.NoError(t, err)
-
 	for i := 0; i < len(fullTuple); i++ {
 		el, schema, err := UnpackNthElement(encoded, i)
 		require.NoError(t, err, "UnpackNthElement(%d) should not error", i)
@@ -1114,42 +1126,38 @@ func TestUnpackNthElement(t *testing.T) {
 	_, _, err = UnpackNthElement(encoded, len(fullTuple))
 	require.Error(t, err)
 
-	// Single element tuple
-	packer2 := NewPacker()
-	encodeBufToPacker(Tuple{[]byte("single")}, packer2)
-	el, schema, err := UnpackNthElement(packer2.GetBuf(), 0)
-	require.NoError(t, err)
-	require.Equal(t, T_varchar, schema)
-	require.Equal(t, []byte("single"), el)
+	// Types that use special Packer API (not encodeBufToPacker)
+	type nthCase struct {
+		name   string
+		encode func(*Packer)
+		idx    int
+		schema T
+		value  any
+	}
+	var oid Objectid
+	_, _ = crand.Read(oid[:])
+	cases := []nthCase{
+		{"time", func(pk *Packer) { pk.EncodeTime(Time(400)); pk.EncodeNull() }, 0, T_time, Time(400)},
+		{"year", func(pk *Packer) { pk.EncodeMoYear(MoYear(2024)); pk.EncodeNull() }, 0, T_year, MoYear(2024)},
+		{"bit", func(pk *Packer) { pk.EncodeBit(0xBEEF); pk.EncodeNull() }, 0, T_bit, uint64(0xBEEF)},
+		{"objectid", func(pk *Packer) { pk.EncodeObjectid(&oid); pk.EncodeNull() }, 0, T_Objectid, oid},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pk := NewPacker()
+			c.encode(pk)
+			el, schema, err := UnpackNthElement(pk.GetBuf(), c.idx)
+			require.NoError(t, err)
+			require.Equal(t, c.schema, schema)
+			require.Equal(t, c.value, el)
+		})
+	}
 
-	// Nil element
-	packer3 := NewPacker()
-	encodeBufToPacker(Tuple{nil, int64(99)}, packer3)
-	el, schema, err = UnpackNthElement(packer3.GetBuf(), 0)
-	require.NoError(t, err)
-	require.Equal(t, T_any, schema)
-	require.Nil(t, el)
+	// Unknown typecode
+	_, _, err = UnpackNthElement([]byte{0xFF}, 0)
+	require.Error(t, err)
 
-	el2, schema2, err := UnpackNthElement(packer3.GetBuf(), 1)
-	require.NoError(t, err)
-	require.Equal(t, T_int64, schema2)
-	require.Equal(t, int64(99), el2)
-
-	// Decimal128 followed by nil (regression: decodeDecimal128 offset was double-counted)
-	packer4 := NewPacker()
-	packer4.EncodeDecimal128(Decimal128{1, 0})
-	packer4.EncodeNull()
-	el3, schema3, err := UnpackNthElement(packer4.GetBuf(), 1)
-	require.NoError(t, err)
-	require.Equal(t, T_any, schema3)
-	require.Nil(t, el3)
-
-	// Decimal64 followed by string
-	packer5 := NewPacker()
-	packer5.EncodeDecimal64(Decimal64(42))
-	packer5.EncodeStringType([]byte("after_decimal"))
-	el4, schema4, err := UnpackNthElement(packer5.GetBuf(), 1)
-	require.NoError(t, err)
-	require.Equal(t, T_varchar, schema4)
-	require.Equal(t, []byte("after_decimal"), el4)
+	// Empty input
+	_, _, err = UnpackNthElement([]byte{}, 0)
+	require.Error(t, err)
 }
