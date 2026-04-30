@@ -357,6 +357,22 @@ func TestCast(t *testing.T) {
 	}
 }
 
+// Narrowing cast (float64 -> float32) of a finite element whose magnitude
+// exceeds float32's range used to silently return +/-Inf. We now surface an
+// out-of-range error, matching scalar float-cast behaviour.
+func TestCastFloat64ToFloat32OverflowIsRejected(t *testing.T) {
+	_, err := Cast[float64, float32]([]float64{1e300})
+	if err == nil {
+		t.Fatalf("Cast[float64,float32]([1e300]) should return out-of-range error, got nil")
+	}
+
+	// An explicit +Inf on the source passes through without a new error —
+	// we only guard against silent finite -> Inf overflow.
+	if _, err := Cast[float64, float32]([]float64{math.Inf(1)}); err != nil {
+		t.Fatalf("Cast[float64,float32]([+Inf]) should pass through, got %v", err)
+	}
+}
+
 func TestAbs(t *testing.T) {
 	type args struct {
 		argF32 []float32
