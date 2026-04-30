@@ -28,6 +28,10 @@
   <a href="https://www.matrixorigin.cn/">
    <b> Official Website</b>
   </a>
+  <b>||</b>
+  <a href="https://arxiv.org/abs/2604.03927">
+   <b> 论文</b>
+  </a>
   <br>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/README.md">
     <b>English</b>
@@ -67,7 +71,7 @@
 
 ### 🎬 **Git for Data - 革命性创新**
 
-正如 Git 革新了代码管理，MatrixOne 革新了数据管理。**像管理代码一样管理数据库：**
+正如 Git 革新了代码管理，MatrixOne 将 Git 风格工作流带入数据管理。这一能力的设计与实现可参见 arXiv 论文 [Version Control System for Data with MatrixOne](https://arxiv.org/abs/2604.03927)；在实际使用中，您可以**像管理代码一样管理数据库：**
 
 - **📸 即时快照** - 毫秒级零拷贝快照，无存储膨胀
 - **⏰ 时间旅行** - 查询任意历史时刻的数据状态

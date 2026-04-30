@@ -29,6 +29,10 @@
   <a href="https://www.matrixorigin.io/">
    <b> Official Website</b>
   </a>
+  <b>||</b>
+  <a href="https://arxiv.org/abs/2604.03927">
+   <b> Research Paper</b>
+  </a>
   <br>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/README.md">
     <b>English</b>
@@ -66,7 +70,7 @@ At its core, MatrixOne is a **HTAP (Hybrid Transactional/Analytical Processing) 
 
 ### 🎬 **Git for Data - The Game Changer**
 
-Just as Git revolutionized code management, MatrixOne revolutionizes data management. **Manage your database like code:**
+Just as Git revolutionized code management, MatrixOne brings Git-style workflows to data management. The design behind this capability is detailed in the arXiv paper [Version Control System for Data with MatrixOne](https://arxiv.org/abs/2604.03927), and in practice it lets you **manage your database like code:**
 
 - **📸 Instant Snapshots** - Zero-copy snapshots in milliseconds, no storage explosion
 - **⏰ Time Travel** - Query data as it existed at any point in history
