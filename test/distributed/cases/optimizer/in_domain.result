@@ -51,7 +51,7 @@ explain select a from t1 where a in (1,2,3,4) and (a not in (2,3) or a = 99);
 TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t1
-        Filter Cond: (t1.a in ([1 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+        Filter Cond: t1.a in ([1 4 99]), t1.a in ([1 2 3 4])
 select a from t1 where a in (1,2,3,4,5,6,7,8) and a between 3 and 6 order by a;
 a
 3
@@ -92,7 +92,7 @@ explain select a from t1 where a in (1,2,3,4) and (a <> 2 or a = 99);
 TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t1
-        Filter Cond: (t1.a in ([1 3 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+        Filter Cond: t1.a in ([1 3 4 99]), t1.a in ([1 2 3 4])
 select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) or a = 99) order by a;
 a
 1
@@ -101,7 +101,7 @@ explain select a from t1 where a in (1,2,3,4) and ((a not in (2,3) and a <> 3) o
 TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t1
-        Filter Cond: (t1.a in ([1 4]) or (t1.a = 99)), t1.a in ([1 2 3 4])
+        Filter Cond: t1.a in ([1 4 99]), t1.a in ([1 2 3 4])
 select a from t1 where a in (1,2,3,4) and a not in (2, null) order by a;
 a
 select a from t1 where a in (1,2,3,4) and (a not in (2, null) or a = 99) order by a;
@@ -111,4 +111,34 @@ TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t1
         Filter Cond: t1.a in ([1 3 4]), (t1.a != (null))
+create table t3 (
+code varchar(255) not null,
+id   bigint not null auto_increment,
+bveh varchar(32),
+primary key (code, id)
+);
+insert into t3 (code, bveh) values
+('4999999010','OTHER'),
+('5001010000','TFUA1000'),
+('5001020000','TFUA1000'),
+('6401010000','TFUA1000'),
+('7001010000','OTHER');
+select code, bveh from t3
+where code in ('4999999010','5001010000','5001020000','6401010000')
+and ((code in (5001010000, 5001020000, 6401010000) and bveh = 'TFUA1000')
+or (code is not null and code not in (5001010000, 5001020000, 6401010000)))
+order by code;
+code    bveh
+4999999010    OTHER
+5001010000    TFUA1000
+5001020000    TFUA1000
+6401010000    TFUA1000
+explain select code, bveh from t3
+where code in ('4999999010','5001010000','5001020000','6401010000')
+and ((code in (5001010000, 5001020000, 6401010000) and bveh = 'TFUA1000')
+or (code is not null and code not in (5001010000, 5001020000, 6401010000)));
+TP QUERY PLAN
+Project
+  ->  Table Scan on d_indomain.t3
+        Filter Cond: (((prefix_in(t3.__mo_cpkey_col) or prefix_eq(t3.__mo_cpkey_col)) and (t3.bveh = 'TFUA1000')) or (prefix_eq(t3.__mo_cpkey_col) and (t3.code IS NOT NULL))), prefix_in(t3.__mo_cpkey_col)
 drop database if exists d_indomain;
