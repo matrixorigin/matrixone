@@ -27,6 +27,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/simdkernels"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -4309,18 +4310,9 @@ func decimal64ToDecimal128Array(
 			}
 		} else {
 			if totype.Scale == fromtype.Scale {
-				// Fast path: direct slice write with branchless sign extension.
-				// BCE hints + int index eliminate bounds checks in the inner loop.
+				// Fast path: assembly sign-extend with prefetch for cold destination.
 				dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
-				_ = v[length-1]
-				_ = dst[length-1]
-				for i := 0; i < length; i++ {
-					s := int64(v[i]) >> 63
-					dst[i] = types.Decimal128{
-						B0_63:   uint64(v[i]),
-						B64_127: uint64(s),
-					}
-				}
+				simdkernels.Decimal64SignExtend(unsafe.Pointer(&dst[0]), unsafe.Pointer(&v[0]), length)
 			} else {
 				for i := 0; i < length; i++ {
 					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
@@ -4352,15 +4344,7 @@ func decimal64ToDecimal128Array(
 			rsVec.GetNulls().Or(srcVec.GetNulls())
 			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
 			v := vector.MustFixedColWithTypeCheck[types.Decimal64](srcVec)
-			_ = v[length-1]
-			_ = dst[length-1]
-			for i := 0; i < length; i++ {
-				s := int64(v[i]) >> 63
-				dst[i] = types.Decimal128{
-					B0_63:   uint64(v[i]),
-					B64_127: uint64(s),
-				}
-			}
+			simdkernels.Decimal64SignExtend(unsafe.Pointer(&dst[0]), unsafe.Pointer(&v[0]), length)
 		} else {
 			var dft types.Decimal128
 			for i := 0; i < length; i++ {
