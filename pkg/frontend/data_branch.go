@@ -435,6 +435,10 @@ func dataBranchPitrName(level string, objectID string) string {
 	return fmt.Sprintf("%s_%s_%s", dataBranchPitrNamePrefix, level, objectID)
 }
 
+func quoteSQLIdentifier(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+
 func dataBranchCloneTxn(ctx context.Context, bh BackgroundExec) (TxnOperator, error) {
 	be, ok := bh.(*backExec)
 	if !ok || be.backSes == nil || be.backSes.GetTxnHandler() == nil {
@@ -1288,8 +1292,12 @@ func dataBranchDeleteTable(
 
 	if sqlRet, err = runSql(
 		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id, reldatabase_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
+			"select rel_id, reldatabase_id from %s.%s where account_id = %d and reldatabase = %s and relname = %s",
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			accId,
+			quoteSQLStringLiteral(string(dbName)),
+			quoteSQLStringLiteral(string(tblName)),
 		), nil, nil,
 	); err != nil {
 		return
@@ -1312,7 +1320,11 @@ func dataBranchDeleteTable(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, tblName)
+		dropSQL := fmt.Sprintf(
+			"drop table if exists %s.%s",
+			quoteSQLIdentifier(string(dbName)),
+			quoteSQLIdentifier(string(tblName)),
+		)
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
@@ -1371,8 +1383,11 @@ func dataBranchDeleteDatabase(
 
 	if sqlRet, err = runSql(
 		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select dat_id from %s.%s where account_id = %d and datname = '%s'",
-			catalog.MO_CATALOG, catalog.MO_DATABASE, accId, dbName,
+			"select dat_id from %s.%s where account_id = %d and datname = %s",
+			catalog.MO_CATALOG,
+			catalog.MO_DATABASE,
+			accId,
+			quoteSQLStringLiteral(string(dbName)),
 		), nil, nil,
 	); err != nil {
 		return
@@ -1390,8 +1405,11 @@ func dataBranchDeleteDatabase(
 
 	if sqlRet, err = runSql(
 		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName,
+			"select rel_id from %s.%s where account_id = %d and reldatabase = %s",
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			accId,
+			quoteSQLStringLiteral(string(dbName)),
 		), nil, nil,
 	); err != nil {
 		return
@@ -1412,7 +1430,7 @@ func dataBranchDeleteDatabase(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop database if exists `%s`", dbName)
+		dropSQL := fmt.Sprintf("drop database if exists %s", quoteSQLIdentifier(string(dbName)))
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
