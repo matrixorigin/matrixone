@@ -465,6 +465,48 @@ func TestScanSnapshotWithCurrentRanges_EarlyValidation(t *testing.T) {
 	})
 }
 
+type testSnapshotTombstoneCollector struct {
+	txnOffset int
+	policy    engine.TombstoneCollectPolicy
+	snapshot  types.TS
+	ret       engine.Tombstoner
+	err       error
+}
+
+func (c *testSnapshotTombstoneCollector) collectTombstonesAtSnapshot(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	snapshot types.TS,
+) (engine.Tombstoner, error) {
+	c.txnOffset = txnOffset
+	c.policy = policy
+	c.snapshot = snapshot
+	return c.ret, c.err
+}
+
+func TestCollectSnapshotScanTombstonesUsesSnapshotPolicy(t *testing.T) {
+	snapshot := types.BuildTS(40, 0)
+	expected := readutil.NewEmptyTombstoneData()
+	collector := &testSnapshotTombstoneCollector{ret: expected}
+
+	got, err := collectSnapshotScanTombstones(context.Background(), collector, snapshot)
+	require.NoError(t, err)
+	require.Same(t, expected, got)
+	require.Equal(t, 0, collector.txnOffset)
+	require.Equal(t, engine.TombstoneCollectPolicy(engine.Policy_CollectCommittedTombstones), collector.policy)
+	require.Equal(t, snapshot, collector.snapshot)
+
+	wantErr := moerr.NewInternalErrorNoCtx("collect failed")
+	collector.err = wantErr
+	_, err = collectSnapshotScanTombstones(context.Background(), collector, snapshot)
+	require.ErrorIs(t, err, wantErr)
+
+	_, err = collectSnapshotScanTombstones(context.Background(), nil, snapshot)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tombstone collector")
+}
+
 func TestReadSnapshotWithSource_ReaderError(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

@@ -59,6 +59,31 @@ type snapshotScanReaderConfig struct {
 	hasBlockFilter bool
 }
 
+type snapshotScanTombstoneCollector interface {
+	collectTombstonesAtSnapshot(
+		ctx context.Context,
+		txnOffset int,
+		policy engine.TombstoneCollectPolicy,
+		snapshot types.TS,
+	) (engine.Tombstoner, error)
+}
+
+func collectSnapshotScanTombstones(
+	ctx context.Context,
+	collector snapshotScanTombstoneCollector,
+	snapshotTS types.TS,
+) (engine.Tombstoner, error) {
+	if collector == nil {
+		return nil, moerr.NewInternalErrorNoCtx("snapshot scan requires a tombstone collector")
+	}
+	return collector.collectTombstonesAtSnapshot(
+		ctx,
+		0,
+		engine.Policy_CollectCommittedTombstones,
+		snapshotTS,
+	)
+}
+
 // ScanSnapshotWithCurrentRanges reads rows at snapshotTS by reusing the current
 // relation handle and its current-view ranges.
 //
@@ -138,7 +163,7 @@ func ScanSnapshotWithCurrentRanges(
 		zap.Int("disk-block-cnt", diskBlockCnt),
 	)
 
-	tombstones, err := tbl.collectTombstonesAtSnapshot(ctx, 0, engine.Policy_CollectCommittedTombstones, snapshotTS)
+	tombstones, err := collectSnapshotScanTombstones(ctx, tbl, snapshotTS)
 	if err != nil {
 		return err
 	}
