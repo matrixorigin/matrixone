@@ -717,6 +717,7 @@ func TestScope_DropDatabase_ToleratesDanglingHiddenIndexMetadata(t *testing.T) {
 
 	mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
 	mockDbMeta.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDbMeta.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
 	mockDbMeta.EXPECT().Relations(gomock.Any()).Return([]string{"__idx_meta"}, nil).AnyTimes()
 	mockDbMeta.EXPECT().Relation(gomock.Any(), "__idx_meta", gomock.Any()).Return(relation, nil).AnyTimes()
 
