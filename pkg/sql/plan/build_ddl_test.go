@@ -732,35 +732,8 @@ func TestBuildCreatePitr(t *testing.T) {
 			Level:       tree.PITRLEVELCLUSTER,
 			PitrValue:   1,
 			PitrUnit:    "h",
+		}
 	}
-}
-
-func TestBuildDropPitrReservedName(t *testing.T) {
-	ctx := &MockCompilerContext{}
-	for _, name := range []string{
-		SYSMOCATALOGPITR,
-		DATA_BRANCH_PITR_NAME_PREFIX,
-		DATA_BRANCH_PITR_NAME_PREFIX + "_table_123",
-	} {
-		t.Run(name+"/without_if_exists", func(t *testing.T) {
-			stmt := &tree.DropPitr{Name: tree.Identifier(name)}
-			_, err := buildDropPitr(stmt, ctx)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "pitr name is reserved")
-		})
-
-		t.Run(name+"/with_if_exists", func(t *testing.T) {
-			stmt := &tree.DropPitr{Name: tree.Identifier(name), IfExists: true}
-			built, err := buildDropPitr(stmt, ctx)
-			assert.NoError(t, err)
-			require.NotNil(t, built)
-			dropPitr := built.GetDdl().GetDropPitr()
-			require.NotNil(t, dropPitr)
-			assert.True(t, dropPitr.GetIfExists())
-			assert.Equal(t, name, dropPitr.GetName())
-		})
-	}
-}
 
 	t.Run("sys account can create cluster level pitr", func(t *testing.T) {
 		ctx := &MockCompilerContext{}
@@ -910,4 +883,31 @@ func TestBuildDropPitrReservedName(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, plan)
 	})
+}
+
+func TestBuildDropPitrReservedName(t *testing.T) {
+	ctx := &MockCompilerContext{}
+	for _, name := range []string{
+		SYSMOCATALOGPITR,
+		DATA_BRANCH_PITR_NAME_PREFIX,
+		DATA_BRANCH_PITR_NAME_PREFIX + "_table_123",
+	} {
+		t.Run(name+"/without_if_exists", func(t *testing.T) {
+			stmt := &tree.DropPitr{Name: tree.Identifier(name)}
+			_, err := buildDropPitr(stmt, ctx)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "pitr name is reserved")
+		})
+
+		t.Run(name+"/with_if_exists", func(t *testing.T) {
+			stmt := &tree.DropPitr{Name: tree.Identifier(name), IfExists: true}
+			built, err := buildDropPitr(stmt, ctx)
+			assert.NoError(t, err)
+			require.NotNil(t, built)
+			dropPitr := built.GetDdl().GetDropPitr()
+			require.NotNil(t, dropPitr)
+			assert.True(t, dropPitr.GetIfExists())
+			assert.Equal(t, name, dropPitr.GetName())
+		})
+	}
 }
