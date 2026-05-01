@@ -12372,7 +12372,7 @@ func TestCheckTimeStampValid(t *testing.T) {
 
 func Test_getSqlForCheckDupPitrFormat(t *testing.T) {
 	sql := getSqlForCheckDupPitrFormat(123, 456)
-	assert.Equal(t, "select pitr_id from mo_catalog.mo_pitr where create_account = 123 and obj_id = 456 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%';", sql)
+	assert.Equal(t, "select pitr_id from mo_catalog.mo_pitr where create_account = 123 and obj_id = 456 and kind = 'user';", sql)
 }
 
 func Test_checkPitrDup(t *testing.T) {
