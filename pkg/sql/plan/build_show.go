@@ -1129,10 +1129,10 @@ func buildShowPitr(stmt *tree.ShowPitr, ctx CompilerContext) (*Plan, error) {
 			"		pitr_length as `PITR_LENGTH`, "+
 			"		pitr_unit  as `PITR_UNIT` FROM %s.mo_pitr "+
 			"where "+
-			"	create_account = %d and pitr_name != '%s' and kind = 'user' "+
+			"	create_account = %d and pitr_name != '%s' and left(pitr_name, %d) != '%s' "+
 			"ORDER BY "+
 			"	create_time DESC",
-		MO_CATALOG_DB_NAME, curAccountId, SYSMOCATALOGPITR)
+		MO_CATALOG_DB_NAME, curAccountId, SYSMOCATALOGPITR, len(DATA_BRANCH_PITR_NAME_PREFIX)+1, DATA_BRANCH_PITR_NAME_PREFIX+"_")
 
 	newCtx := ctx.GetContext()
 	if curAccountId != catalog.System_Account {

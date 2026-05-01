@@ -38,6 +38,13 @@ import (
 )
 
 var (
+	userPitrNameCondition = fmt.Sprintf(
+		"pitr_name != '%s' and left(pitr_name, %d) != '%s'",
+		SYSMOCATALOGPITR,
+		len(dataBranchInternalPitrSQLPrefix),
+		dataBranchInternalPitrSQLPrefix,
+	)
+
 	insertIntoMoPitr = `insert into mo_catalog.mo_pitr(
 		pitr_id,
 		pitr_name,
@@ -54,15 +61,15 @@ var (
 		pitr_unit,
         pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d);`
 
-	checkPitrFormat = `select pitr_id from mo_catalog.mo_pitr where pitr_name = "%s" and create_account = %d and kind = 'user' order by pitr_id;`
+	checkPitrFormat = `select pitr_id from mo_catalog.mo_pitr where pitr_name = "%s" and create_account = %d order by pitr_id;`
 
-	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d and kind = 'user' order by pitr_id;`
+	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id;`
 
-	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = %d, pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d and kind = 'user';`
+	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = %d, pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
 
-	checkDupPitrFormat = `select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d and kind = 'user';`
+	checkDupPitrFormat = `select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d and ` + userPitrNameCondition + `;`
 
 	getSqlForCheckDatabaseFmt = `select dat_id from mo_catalog.mo_database {MO_TS = %d} where datname = '%s';`
 
@@ -73,9 +80,9 @@ var (
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
-	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d and kind = 'user';`
+	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d and ` + userPitrNameCondition + `;`
 
-	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s' and pitr_status = 1 and kind = 'user'`
+	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s' and pitr_status = 1 and ` + userPitrNameCondition
 )
 
 type pitrRecord struct {
@@ -232,20 +239,24 @@ func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, 
 // if level is table, check whether has a pitr which account_name db_name and tbl_name is the same
 // @return sql
 func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *tree.CreatePitr) string {
-	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	sql := fmt.Sprintf(
+		"select pitr_id from mo_catalog.mo_pitr where create_account = %d and %s",
+		createAccountId,
+		userPitrNameCondition,
+	)
 	switch stmt.Level {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user';", stmt.AccountName)
+			return sql + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user';", createAccount)
+			return sql + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1 and kind = 'user';", stmt.DatabaseName)
+		return sql + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1 and kind = 'user';", stmt.DatabaseName, stmt.TableName)
+		return sql + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
 	}
 	return sql
 }
@@ -1929,7 +1940,7 @@ func getPitrByName(ctx context.Context, bh BackgroundExec, pitrName string, acco
 		return nil, err
 	}
 
-	sql := fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d and kind = 'user'", getPitrFormat, pitrName, accountId)
+	sql := fmt.Sprintf("%s where pitr_name = '%s' and create_account = %d", getPitrFormat, pitrName, accountId)
 	if records, err := getPitrRecords(newCtx, bh, sql); err != nil {
 		return nil, err
 	} else if len(records) != 1 {

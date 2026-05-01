@@ -198,8 +198,8 @@ func constructRecoveryWindow(
 			"	modified_time, pitr_length, pitr_unit, pitr_status, pitr_status_changed_time "+
 			"from "+
 			"`%s`.`%s` "+
-			"	where %s AND pitr_name != '%s' AND kind = 'user'",
-		catalog.MO_CATALOG, catalog.MO_PITR, snapPitrSearchCond, SYSMOCATALOGPITR,
+			"	where %s AND %s",
+		catalog.MO_CATALOG, catalog.MO_PITR, snapPitrSearchCond, userPitrNameCondition,
 	)
 
 	var (

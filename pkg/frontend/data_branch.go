@@ -51,10 +51,10 @@ import (
 )
 
 const (
-	dataBranchPitrNamePrefix = "__mo_data_branch_pitr"
-	dataBranchPitrLength     = 1
-	dataBranchPitrUnit       = "y"
-	dataBranchPitrKind       = "internal"
+	dataBranchPitrNamePrefix        = "__mo_data_branch_pitr"
+	dataBranchInternalPitrSQLPrefix = dataBranchPitrNamePrefix + "_"
+	dataBranchPitrLength            = 1
+	dataBranchPitrUnit              = "y"
 )
 
 type dataBranchPitrRecord struct {
@@ -69,7 +69,6 @@ type dataBranchPitrRecord struct {
 
 type dataBranchExistingPitrRecord struct {
 	exists     bool
-	kind       string
 	active     bool
 	pitrLength uint64
 	pitrUnit   string
@@ -691,7 +690,7 @@ func createDataBranchPitrRecord(
 		// Concurrent branch creation can win the primary key race. Re-read the
 		// record and normalize it if it is the expected internal PITR.
 		existing, readErr := getDataBranchPitrRecord(ctx, bh, record.pitrName, record.accountID)
-		if readErr == nil && existing.exists && existing.kind == dataBranchPitrKind {
+		if readErr == nil && existing.exists {
 			if ensureErr := ensureDataBranchPitrRecord(ctx, bh, now, record, existing); ensureErr != nil {
 				return ensureErr
 			}
@@ -710,7 +709,7 @@ func getDataBranchPitrRecord(
 ) (dataBranchExistingPitrRecord, error) {
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 	sql := fmt.Sprintf(
-		"select kind, pitr_status, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
+		"select pitr_status, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
 		quoteSQLStringLiteral(pitrName),
 		accountID,
 	)
@@ -725,25 +724,20 @@ func getDataBranchPitrRecord(
 	if !execResultArrayHasData(erArray) {
 		return dataBranchExistingPitrRecord{}, nil
 	}
-	kind, err := erArray[0].GetString(sysCtx, 0, 0)
+	status, err := erArray[0].GetUint64(sysCtx, 0, 0)
 	if err != nil {
 		return dataBranchExistingPitrRecord{}, err
 	}
-	status, err := erArray[0].GetUint64(sysCtx, 0, 1)
+	pitrLength, err := erArray[0].GetUint64(sysCtx, 0, 1)
 	if err != nil {
 		return dataBranchExistingPitrRecord{}, err
 	}
-	pitrLength, err := erArray[0].GetUint64(sysCtx, 0, 2)
-	if err != nil {
-		return dataBranchExistingPitrRecord{}, err
-	}
-	pitrUnit, err := erArray[0].GetString(sysCtx, 0, 3)
+	pitrUnit, err := erArray[0].GetString(sysCtx, 0, 2)
 	if err != nil {
 		return dataBranchExistingPitrRecord{}, err
 	}
 	return dataBranchExistingPitrRecord{
 		exists:     true,
-		kind:       kind,
 		active:     status == 1,
 		pitrLength: pitrLength,
 		pitrUnit:   pitrUnit,
@@ -766,7 +760,6 @@ func ensureDataBranchPitrRecord(
 		fmt.Sprintf("table_name = %s", quoteSQLStringLiteral(record.tableName)),
 		fmt.Sprintf("obj_id = %d", record.objectID),
 		"pitr_status = 1",
-		fmt.Sprintf("kind = %s", quoteSQLStringLiteral(dataBranchPitrKind)),
 	}
 	if !existing.active {
 		setParts = append(setParts, fmt.Sprintf("pitr_status_changed_time = %d", now))
@@ -827,8 +820,7 @@ func getSqlForCreateDataBranchPitrRecord(
 		obj_id,
 		pitr_length,
 		pitr_unit,
-		pitr_status_changed_time,
-		kind) values (%s, %s, %d, %d, %d, %s, %d, %s, %s, %s, %d, %d, %s, %d, %s);`,
+		pitr_status_changed_time) values (%s, %s, %d, %d, %d, %s, %d, %s, %s, %s, %d, %d, %s, %d);`,
 		quoteSQLStringLiteral(pitrID),
 		quoteSQLStringLiteral(record.pitrName),
 		record.accountID,
@@ -843,7 +835,6 @@ func getSqlForCreateDataBranchPitrRecord(
 		dataBranchPitrLength,
 		quoteSQLStringLiteral(dataBranchPitrUnit),
 		now,
-		quoteSQLStringLiteral(dataBranchPitrKind),
 	), nil
 }
 
@@ -888,7 +879,6 @@ func ensureDataBranchMoCatalogPitr(
 		setParts := []string{
 			fmt.Sprintf("modified_time = %d", now),
 			"pitr_status = 1",
-			fmt.Sprintf("kind = %s", quoteSQLStringLiteral(dataBranchPitrKind)),
 		}
 		if !newMinTs.Before(oldMinTs) {
 			sql = fmt.Sprintf(
@@ -976,10 +966,9 @@ func cleanupDataBranchMoCatalogPitrIfUnused(ctx context.Context, bh BackgroundEx
 		return nil
 	}
 	sql = fmt.Sprintf(
-		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d and kind = %s",
+		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
 		quoteSQLStringLiteral(SYSMOCATALOGPITR),
 		sysAccountID,
-		quoteSQLStringLiteral(dataBranchPitrKind),
 	)
 	return bh.Exec(sysCtx, sql)
 }

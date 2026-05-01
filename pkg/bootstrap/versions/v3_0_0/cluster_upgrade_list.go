@@ -25,7 +25,6 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
-	upg_mo_pitr_add_kind,
 	upg_drop_mo_stored_procedure,
 	upg_create_mo_stored_procedure,
 	upg_create_mo_branch_metadata,
@@ -54,23 +53,6 @@ var upg_mo_pitr = versions.UpgradeEntry{
 			return true, nil
 		}
 		return false, nil
-	},
-}
-
-var upg_mo_pitr_add_kind = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_PITR,
-	UpgType:   versions.ADD_COLUMN,
-	UpgSql: fmt.Sprintf(
-		"ALTER TABLE %s.%s ADD COLUMN kind varchar(32) not null default 'user' AFTER pitr_status_changed_time",
-		catalog.MO_CATALOG, catalog.MO_PITR,
-	),
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "kind")
-		if err != nil {
-			return false, err
-		}
-		return colInfo.IsExits, nil
 	},
 }
 
