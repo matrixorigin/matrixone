@@ -944,11 +944,9 @@ func deleteDataBranchInternalPitrRecord(
 ) error {
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 	sql := fmt.Sprintf(
-		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d and (kind = %s or pitr_name like %s)",
+		"delete from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
 		quoteSQLStringLiteral(pitrName),
 		accountID,
-		quoteSQLStringLiteral(dataBranchPitrKind),
-		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
 	)
 	if err := bh.Exec(sysCtx, sql); err != nil {
 		return err
@@ -1003,117 +1001,81 @@ func cleanupDataBranchTablePitrIfUnused(
 	)
 }
 
-func cleanupAllDataBranchTablePitrsIfUnused(ctx context.Context, bh BackgroundExec) error {
-	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
-	sql := fmt.Sprintf(
-		"select create_account, obj_id from mo_catalog.mo_pitr where (kind = %s or pitr_name like %s) and level = %s and pitr_name like %s",
-		quoteSQLStringLiteral(dataBranchPitrKind),
-		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
-		quoteSQLStringLiteral(tree.PITRLEVELTABLE.String()),
-		quoteSQLStringLiteral(dataBranchPitrName("table", "")+"%"),
-	)
-	bh.ClearExecResultSet()
-	if err := bh.Exec(sysCtx, sql); err != nil {
-		return err
-	}
-	erArray, err := getResultSet(sysCtx, bh)
-	if err != nil {
-		return err
-	}
-	if !execResultArrayHasData(erArray) {
-		return nil
-	}
-
-	type tablePitr struct {
-		accountID uint64
-		tableID   uint64
-	}
-	pitrs := make([]tablePitr, 0, erArray[0].GetRowCount())
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		accountID, err := erArray[0].GetUint64(sysCtx, i, 0)
-		if err != nil {
-			return err
-		}
-		tableID, err := erArray[0].GetUint64(sysCtx, i, 1)
-		if err != nil {
-			return err
-		}
-		pitrs = append(pitrs, tablePitr{accountID: accountID, tableID: tableID})
-	}
-
-	for _, pitr := range pitrs {
-		if err = cleanupDataBranchTablePitrIfUnused(ctx, bh, pitr.accountID, pitr.tableID); err != nil {
-			return err
-		}
-	}
-	return nil
+type dataBranchDatabasePitrForCleanup struct {
+	accountID  uint64
+	databaseID uint64
+	database   string
+	createTime int64
 }
 
-func cleanupAllDataBranchDatabasePitrsIfUnused(ctx context.Context, bh BackgroundExec) error {
+func getDataBranchDatabasePitrForCleanup(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	databaseID uint64,
+) (dataBranchDatabasePitrForCleanup, bool, error) {
+	if databaseID == 0 {
+		return dataBranchDatabasePitrForCleanup{}, false, nil
+	}
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	pitrName := dataBranchPitrName("database", strconv.FormatUint(databaseID, 10))
 	sql := fmt.Sprintf(
-		"select create_account, obj_id, database_name, create_time from mo_catalog.mo_pitr where (kind = %s or pitr_name like %s) and level = %s and pitr_name like %s",
-		quoteSQLStringLiteral(dataBranchPitrKind),
-		quoteSQLStringLiteral(dataBranchPitrName("", "")+"%"),
+		"select create_account, obj_id, database_name, create_time from mo_catalog.mo_pitr where create_account = %d and pitr_name = %s and level = %s limit 1",
+		accountID,
+		quoteSQLStringLiteral(pitrName),
 		quoteSQLStringLiteral(tree.PITRLEVELDATABASE.String()),
-		quoteSQLStringLiteral(dataBranchPitrName("database", "")+"%"),
 	)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(sysCtx, sql); err != nil {
-		return err
+		return dataBranchDatabasePitrForCleanup{}, false, err
 	}
 	erArray, err := getResultSet(sysCtx, bh)
 	if err != nil {
-		return err
+		return dataBranchDatabasePitrForCleanup{}, false, err
 	}
 	if !execResultArrayHasData(erArray) {
-		return nil
+		return dataBranchDatabasePitrForCleanup{}, false, nil
 	}
 
-	type dbPitr struct {
-		accountID  uint64
-		databaseID uint64
-		database   string
-		createTime int64
+	pitrAccountID, err := erArray[0].GetUint64(sysCtx, 0, 0)
+	if err != nil {
+		return dataBranchDatabasePitrForCleanup{}, false, err
 	}
-	pitrs := make([]dbPitr, 0, erArray[0].GetRowCount())
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		accountID, err := erArray[0].GetUint64(sysCtx, i, 0)
-		if err != nil {
-			return err
-		}
-		databaseID, err := erArray[0].GetUint64(sysCtx, i, 1)
-		if err != nil {
-			return err
-		}
-		database, err := erArray[0].GetString(sysCtx, i, 2)
-		if err != nil {
-			return err
-		}
-		createTime, err := erArray[0].GetInt64(sysCtx, i, 3)
-		if err != nil {
-			return err
-		}
-		pitrs = append(pitrs, dbPitr{
-			accountID:  accountID,
-			databaseID: databaseID,
-			database:   database,
-			createTime: createTime,
-		})
+	pitrDatabaseID, err := erArray[0].GetUint64(sysCtx, 0, 1)
+	if err != nil {
+		return dataBranchDatabasePitrForCleanup{}, false, err
 	}
+	database, err := erArray[0].GetString(sysCtx, 0, 2)
+	if err != nil {
+		return dataBranchDatabasePitrForCleanup{}, false, err
+	}
+	createTime, err := erArray[0].GetInt64(sysCtx, 0, 3)
+	if err != nil {
+		return dataBranchDatabasePitrForCleanup{}, false, err
+	}
+	return dataBranchDatabasePitrForCleanup{
+		accountID:  pitrAccountID,
+		databaseID: pitrDatabaseID,
+		database:   database,
+		createTime: createTime,
+	}, true, nil
+}
 
-	for _, pitr := range pitrs {
-		tableIDs, err := dataBranchDatabaseTableIDsAt(ctx, bh, pitr.accountID, pitr.database, pitr.createTime)
-		if err != nil {
-			return err
-		}
-		if err = cleanupDataBranchDatabasePitrIfUnused(
-			ctx, bh, pitr.accountID, pitr.databaseID, tableIDs,
-		); err != nil {
-			return err
-		}
+func cleanupDataBranchDatabasePitrByIDIfUnused(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+	databaseID uint64,
+) error {
+	pitr, found, err := getDataBranchDatabasePitrForCleanup(ctx, bh, accountID, databaseID)
+	if err != nil || !found {
+		return err
 	}
-	return nil
+	tableIDs, err := dataBranchDatabaseTableIDsAt(ctx, bh, pitr.accountID, pitr.database, pitr.createTime)
+	if err != nil {
+		return err
+	}
+	return cleanupDataBranchDatabasePitrIfUnused(ctx, bh, pitr.accountID, pitr.databaseID, tableIDs)
 }
 
 func cleanupDataBranchDatabasePitrIfUnused(
@@ -1294,6 +1256,7 @@ func dataBranchDeleteTable(
 		accId   uint32
 		sqlRet  executor.Result
 		tblID   uint64
+		dbID    uint64
 		found   bool
 	)
 
@@ -1307,7 +1270,7 @@ func dataBranchDeleteTable(
 
 	if sqlRet, err = runSql(
 		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
+			"select rel_id, reldatabase_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
 			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
 		), nil, nil,
 	); err != nil {
@@ -1319,6 +1282,7 @@ func dataBranchDeleteTable(
 			return false
 		}
 		tblID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+		dbID = vector.GetFixedAtWithTypeCheck[uint64](cols[1], 0)
 		found = true
 		return false
 	})
@@ -1347,10 +1311,7 @@ func dataBranchDeleteTable(
 	if err = cleanupDataBranchTablePitrIfUnused(execCtx.reqCtx, bh, uint64(accId), tblID); err != nil {
 		return
 	}
-	if err = cleanupAllDataBranchTablePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
-		return
-	}
-	if err = cleanupAllDataBranchDatabasePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
+	if err = cleanupDataBranchDatabasePitrByIDIfUnused(execCtx.reqCtx, bh, uint64(accId), dbID); err != nil {
 		return
 	}
 
@@ -1448,16 +1409,10 @@ func dataBranchDeleteDatabase(
 			return
 		}
 	}
-	if err = cleanupAllDataBranchTablePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
-		return
-	}
 	if dbFound {
-		if err = cleanupDataBranchDatabasePitrIfUnused(execCtx.reqCtx, bh, uint64(accId), dbID, tableIDs); err != nil {
+		if err = cleanupDataBranchDatabasePitrByIDIfUnused(execCtx.reqCtx, bh, uint64(accId), dbID); err != nil {
 			return
 		}
-	}
-	if err = cleanupAllDataBranchDatabasePitrsIfUnused(execCtx.reqCtx, bh); err != nil {
-		return
 	}
 
 	return nil
