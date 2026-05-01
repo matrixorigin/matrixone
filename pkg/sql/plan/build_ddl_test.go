@@ -735,7 +735,6 @@ func TestBuildDropPitrReservedName(t *testing.T) {
 		DATA_BRANCH_PITR_NAME_PREFIX,
 		DATA_BRANCH_PITR_NAME_PREFIX + "_table_123",
 	} {
-		name := name
 		t.Run(name+"/without_if_exists", func(t *testing.T) {
 			stmt := &tree.DropPitr{Name: tree.Identifier(name)}
 			_, err := buildDropPitr(stmt, ctx)

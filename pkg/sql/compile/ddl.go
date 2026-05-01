@@ -3111,7 +3111,6 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 	}
 
-	tblID := qry.GetTableId()
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -3126,7 +3125,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 		return err
 	}
-	tblID = rel.GetTableID(c.proc.Ctx)
+	tblID := rel.GetTableID(c.proc.Ctx)
 
 	// Check if the table is a CCPR shared table
 	if !isTemp && !isView && !isSource {

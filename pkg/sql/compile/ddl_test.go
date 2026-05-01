@@ -885,7 +885,6 @@ func TestDropPitrReservedName(t *testing.T) {
 		dataBranchInternalPitrNamePrefix,
 		dataBranchInternalPitrNamePrefix + "_table_123",
 	} {
-		name := name
 		t.Run(name+"/without_if_exists", func(t *testing.T) {
 			err := newDropPitrScope(name, false).DropPitr(compile)
 			assert.Error(t, err)
