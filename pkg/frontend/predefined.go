@@ -154,6 +154,7 @@ var (
 			pitr_unit varchar(10),
 			pitr_status tinyint unsigned default 1 comment '1: active, 0: inactive',
 			pitr_status_changed_time bigint not null,
+			kind varchar(32) not null default 'user',
 			primary key(pitr_name, create_account)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 
