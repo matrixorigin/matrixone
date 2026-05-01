@@ -31,15 +31,11 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
 
-	if vec.IsConst() {
-		if vec.IsConstNull() {
-			for i := range sels {
-				diffs[i] = false
-			}
-		}
-		partitions = append(partitions, 0)
-
-	} else {
+	// Note: diffs is accumulated across multiple Partition calls (one per
+	// sort key in pkg/sql/colexec/order/order.go and per partition spec in
+	// pkg/sql/colexec/window/window.go). We must only OR new boundaries in
+	// and never overwrite existing ones with false.
+	if !vec.IsConst() {
 		var n bool
 		var v T
 
@@ -51,11 +47,10 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
-				} else if n && isNull {
-					diffs[i] = false
-				} else {
-					diffs[i] = diffs[i] || (v != vs[sel])
+				} else if !isNull {
+					diffs[i] = diffs[i] || (v != w)
 				}
+				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
 				v = w
 			}
@@ -66,11 +61,12 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 				v = w
 			}
 		}
+	}
+	// vec.IsConst(): all rows equal under this key, no new boundaries.
 
-		for i, j := int64(0), int64(len(diffs)); i < j; i++ {
-			if diffs[i] {
-				partitions = append(partitions, i)
-			}
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
 		}
 	}
 
@@ -85,15 +81,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
 
-	if vec.IsConst() {
-		if vec.IsConstNull() {
-			for i := range sels {
-				diffs[i] = false
-			}
-		}
-		partitions = append(partitions, 0)
-
-	} else {
+	// See genericPartition: diffs is accumulated; never overwrite to false.
+	if !vec.IsConst() {
 		var n bool
 		var v []byte
 
@@ -105,11 +94,10 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
-				} else if n && isNull {
-					diffs[i] = false
-				} else {
+				} else if !isNull {
 					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
 				}
+				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
 				v = w
 			}
@@ -120,10 +108,11 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				v = w
 			}
 		}
-		for i, j := int64(0), int64(len(diffs)); i < j; i++ {
-			if diffs[i] {
-				partitions = append(partitions, i)
-			}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
 		}
 	}
 

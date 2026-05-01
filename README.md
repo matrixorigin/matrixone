@@ -29,6 +29,10 @@
   <a href="https://www.matrixorigin.io/">
    <b> Official Website</b>
   </a>
+  <b>||</b>
+  <a href="https://arxiv.org/abs/2604.03927">
+   <b> Research Paper</b>
+  </a>
   <br>
   <a href="https://github.com/matrixorigin/matrixone/blob/main/README.md">
     <b>English</b>
@@ -55,6 +59,7 @@ Contents
 * [Installation & Deployment](#️-installation--deployment)
 * [Architecture](#architecture)
 * [Python SDK](#python-sdk)
+* [Citing MatrixOne](#citation)
 * [Contributing](#contributing)
 * [License](#license)
 
@@ -66,7 +71,7 @@ At its core, MatrixOne is a **HTAP (Hybrid Transactional/Analytical Processing) 
 
 ### 🎬 **Git for Data - The Game Changer**
 
-Just as Git revolutionized code management, MatrixOne revolutionizes data management. **Manage your database like code:**
+Just as Git revolutionized code management, MatrixOne brings Git-style workflows to data management. The design behind this capability is detailed in the arXiv paper [Version Control System for Data with MatrixOne](https://arxiv.org/abs/2604.03927), and in practice it lets you **manage your database like code:**
 
 - **📸 Instant Snapshots** - Zero-copy snapshots in milliseconds, no storage explosion
 - **⏰ Time Travel** - Query data as it existed at any point in history
@@ -332,6 +337,23 @@ MatrixOne provides a **comprehensive Python SDK** for database operations, vecto
 📖 **[Python SDK README](clients/python/README.md)** - Full features, installation, and usage guide
 
 📦 **Installation**: `pip install matrixone-python-sdk`
+
+## <a id="citation">Citing MatrixOne</a>
+
+If you use MatrixOne in academic work or refer to its Git for Data design, please cite:
+
+```bibtex
+@misc{gou2026versioncontrolsystemdata,
+  title={Version Control System for Data with MatrixOne},
+  author={Gou, Hongshen and Tian, Feng and Wang, Long and Deng, Nan and Xu, Peng},
+  year={2026},
+  eprint={2604.03927},
+  archivePrefix={arXiv},
+  primaryClass={cs.DB},
+  doi={10.48550/arXiv.2604.03927},
+  url={https://arxiv.org/abs/2604.03927}
+}
+```
 
 ## 🙌 <a id="contributing">Contributing</a>
 
