@@ -143,6 +143,7 @@ data branch merge t2 into t1;
 data branch diff t2 against t1;
 
 update t1 set b = b + 1 where a = 4;
+update t1 set b = 2 where a = 1;
 data branch diff t2 against t1;
 
 -- @ignore:0

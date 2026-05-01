@@ -166,8 +166,10 @@ data branch merge t2 into t1;
 data branch diff t2 against t1;
 diff t2 against t1	flag	a	b
 update t1 set b = b + 1 where a = 4;
+update t1 set b = 2 where a = 1;
 data branch diff t2 against t1;
 diff t2 against t1	flag	a	b
+t1	UPDATE	1	2
 t2	INSERT	4	4
 t1	INSERT	4	5
 select mo_ctl('dn', 'flush', 'test_gc_diff.t2');
@@ -193,6 +195,7 @@ select mo_ctl('dn', 'diskcleaner', 'force_gc');
 {\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 data branch diff t2 against t1;
 diff t2 against t1	flag	a	b
+t1	UPDATE	1	2
 t2	INSERT	4	4
 t1	INSERT	4	5
 drop table t1;
