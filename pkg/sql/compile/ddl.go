@@ -4466,7 +4466,6 @@ func (s *Scope) DropPitr(c *Compile) error {
 		}
 		return moerr.NewInternalError(c.proc.Ctx, "pitr name is reserved")
 	}
-	const sysMoCatalogPitr = dataBranchSysMoCatalogPitrName
 	const sysAccountId = 0
 
 	// Get current account
