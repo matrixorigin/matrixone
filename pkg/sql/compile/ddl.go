@@ -195,11 +195,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 	var ignoreTables []string
+	relationIDs := make(map[string]uint64, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
 			return err
 		}
+		relationIDs[r] = t.GetTableID(c.proc.Ctx)
 
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
@@ -233,6 +235,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		if !isIndexTable {
 			deleteTables = append(deleteTables, r)
+		}
+	}
+	tableIDs := make([]uint64, 0, len(deleteTables))
+	for _, t := range deleteTables {
+		if id, ok := relationIDs[t]; ok {
+			tableIDs = append(tableIDs, id)
 		}
 	}
 
@@ -295,6 +303,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err = c.cleanupDataBranchPitrsForDroppedDatabase(
 		uint64(accountId),
 		databaseID,
+		tableIDs,
 	); err != nil {
 		return err
 	}
@@ -1893,7 +1902,12 @@ func (c *Compile) cleanupDataBranchPitrsForDroppedTable(accountID uint64, databa
 	return c.cleanupDataBranchMoCatalogPitrAfterDDL()
 }
 
-func (c *Compile) cleanupDataBranchPitrsForDroppedDatabase(accountID uint64, databaseID uint64) error {
+func (c *Compile) cleanupDataBranchPitrsForDroppedDatabase(accountID uint64, databaseID uint64, tableIDs []uint64) error {
+	for _, tableID := range tableIDs {
+		if err := c.cleanupDataBranchTablePitrAfterDDL(accountID, tableID); err != nil {
+			return err
+		}
+	}
 	if err := c.cleanupDataBranchDatabasePitrByIDAfterDDL(accountID, databaseID); err != nil {
 		return err
 	}
@@ -4402,7 +4416,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	createPitr := s.Plan.GetDdl().GetCreatePitr()
 	pitrName := createPitr.GetName()
 	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
-	if pitrName == "__mo_data_branch_pitr" || strings.HasPrefix(pitrName, "__mo_data_branch_pitr_") {
+	if isReservedPitrName(pitrName) {
 		return moerr.NewInternalError(c.proc.Ctx, "pitr name is reserved")
 	}
 
@@ -4613,7 +4627,8 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user'", pitrName, accountId)
+	pitrNameLiteral := quoteCompileSQLStringLiteral(pitrName)
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = %s AND create_account = %d AND kind = 'user'", pitrNameLiteral, accountId)
 	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4627,7 +4642,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user'", pitrName, accountId)
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = %s AND create_account = %d AND kind = 'user'", pitrNameLiteral, accountId)
 	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4756,7 +4771,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user' ORDER BY pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = %s AND create_account = %d AND kind = 'user' ORDER BY pitr_id", quoteCompileSQLStringLiteral(pitrName), accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
