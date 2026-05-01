@@ -83,6 +83,11 @@ func TestContainsDataBranchTempTableName(t *testing.T) {
 	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
 }
 
+func TestQuoteSQLIdentifier(t *testing.T) {
+	require.Equal(t, "`plain`", quoteSQLIdentifier("plain"))
+	require.Equal(t, "`a``b`", quoteSQLIdentifier("a`b"))
+}
+
 func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
