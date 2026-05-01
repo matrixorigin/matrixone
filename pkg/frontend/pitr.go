@@ -62,7 +62,7 @@ var (
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
 
-	checkDupPitrFormat = `select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';`
+	checkDupPitrFormat = `select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d and kind = 'user';`
 
 	getSqlForCheckDatabaseFmt = `select dat_id from mo_catalog.mo_database {MO_TS = %d} where datname = '%s';`
 
@@ -73,9 +73,9 @@ var (
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
-	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';`
+	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d and kind = 'user';`
 
-	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`
+	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s' and pitr_status = 1 and kind = 'user'`
 )
 
 type pitrRecord struct {
@@ -238,14 +238,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user';", stmt.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1 and kind = 'user';", createAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1 and kind = 'user';", stmt.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%';", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1 and kind = 'user';", stmt.DatabaseName, stmt.TableName)
 	}
 	return sql
 }

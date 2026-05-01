@@ -271,7 +271,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
-		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s AND `kind` = 'user' AND `pitr_name` not like '__mo_data_branch_pitr_%%'",
+		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s AND `kind` = 'user'",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -3371,7 +3371,7 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		updatePitrSql := fmt.Sprintf(
-			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d and `kind` = 'user' and `pitr_name` not like '__mo_data_branch_pitr_%%'",
+			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d and `kind` = 'user'",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -4707,7 +4707,7 @@ func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
-	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%'"
+	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND kind = 'user'"
 	switch tree.PitrLevel(createPitr.GetLevel()) {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
@@ -4726,7 +4726,7 @@ func getSqlForCheckPitrDup(
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
-	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%';`, accountId, objId)
+	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d AND kind = 'user';`, accountId, objId)
 }
 
 func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
@@ -4794,7 +4794,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%' ORDER BY pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d AND kind = 'user' ORDER BY pitr_id", pitrName, accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -5551,7 +5551,7 @@ func (c *Compile) checkPitrGranularity(
 		return err
 	}
 
-	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d AND pitr_status = 1 AND kind = 'user' AND pitr_name not like '__mo_data_branch_pitr_%%'`,
+	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d AND pitr_status = 1 AND kind = 'user'`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
@@ -5586,20 +5586,20 @@ func (c *Compile) checkPitrGranularity(
 		}
 
 		checkDBByName := func(nameLower string) (bool, error) {
-			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
+			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d and pitr_status = 1 and kind = 'user'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, nameLower, accountId)
 			if ok, err := checkQuery(qDB); err != nil {
 				return false, err
 			} else if ok {
 				return true, nil
 			}
-			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
+			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and pitr_status = 1 and kind = 'user'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, nameLower)
 			return checkQuery(qDB2)
 		}
 
 		// 1) account level always checked first for any pattern
-		qAcc := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='account' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
+		qAcc := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='account' and account_id = %d and pitr_status = 1 and kind = 'user'`,
 			catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 		if ok, err := checkQuery(qAcc); err != nil {
 			return err
@@ -5631,7 +5631,7 @@ func (c *Compile) checkPitrGranularity(
 
 		// 3) table level only for table pattern
 		if !isDB {
-			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d and pitr_status = 1 and kind = 'user' and pitr_name not like '__mo_data_branch_pitr_%%'`,
+			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d and pitr_status = 1 and kind = 'user'`,
 				catalog.MO_CATALOG, catalog.MO_PITR, dbNameLower, tblNameLower, accountId)
 			if ok, err := checkQuery(qTbl); err != nil {
 				return err
