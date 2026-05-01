@@ -217,11 +217,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	ignoreTables := make(map[string]struct{})
+	relationIDs := make(map[string]uint64, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
 			return err
 		}
+		relationIDs[r] = t.GetTableID(c.proc.Ctx)
 		defs, err := t.TableDefs(c.proc.Ctx)
 		if err != nil {
 			return err
@@ -260,6 +262,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	for _, r := range relations {
 		if _, isIndexTable := ignoreTables[r]; !isIndexTable {
 			deleteTables = append(deleteTables, r)
+		}
+	}
+	tableIDs := make([]uint64, 0, len(deleteTables))
+	for _, t := range deleteTables {
+		if id, ok := relationIDs[t]; ok {
+			tableIDs = append(tableIDs, id)
 		}
 	}
 
@@ -319,6 +327,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err = c.cleanupDataBranchPitrsForDroppedDatabase(
 		uint64(accountId),
 		databaseID,
+		tableIDs,
 	); err != nil {
 		return err
 	}
@@ -1664,7 +1673,12 @@ func (c *Compile) cleanupDataBranchPitrsForDroppedTable(accountID uint64, databa
 	return c.cleanupDataBranchMoCatalogPitrAfterDDL()
 }
 
-func (c *Compile) cleanupDataBranchPitrsForDroppedDatabase(accountID uint64, databaseID uint64) error {
+func (c *Compile) cleanupDataBranchPitrsForDroppedDatabase(accountID uint64, databaseID uint64, tableIDs []uint64) error {
+	for _, tableID := range tableIDs {
+		if err := c.cleanupDataBranchTablePitrAfterDDL(accountID, tableID); err != nil {
+			return err
+		}
+	}
 	if err := c.cleanupDataBranchDatabasePitrByIDAfterDDL(accountID, databaseID); err != nil {
 		return err
 	}

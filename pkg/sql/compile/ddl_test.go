@@ -884,6 +884,12 @@ func TestDropPitrReservedName(t *testing.T) {
 	}
 }
 
+func TestGetSqlForCheckPitrExistsQuotesName(t *testing.T) {
+	sql := getSqlForCheckPitrExists("a'b", 7)
+	assert.Contains(t, sql, "pitr_name = 'a''b'")
+	assert.Contains(t, sql, "create_account = 7")
+}
+
 func TestIsExperimentalEnabled(t *testing.T) {
 	s := newScope(TableClone)
 
