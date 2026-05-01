@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -267,6 +268,58 @@ func TestCreateDataBranchPitrRecordRefreshesExistingRecords(t *testing.T) {
 	requireExecutedSQLContains(t, bh.executedSQLs, "where pitr_name = 'sys_mo_catalog_pitr' and create_account = 0")
 }
 
+func TestCreateDataBranchPitrRecordCreatesMissingRecord(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(200, 0).ToTimestamp()).AnyTimes()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	record := dataBranchPitrRecord{
+		pitrName:     dataBranchPitrName("table", "99"),
+		level:        "table",
+		accountID:    9,
+		accountName:  "acc_9",
+		databaseName: "db",
+		tableName:    "tbl",
+		objectID:     99,
+	}
+
+	recordSelectSQL := fmt.Sprintf(
+		"select kind, pitr_status, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
+		quoteSQLStringLiteral(record.pitrName),
+		record.accountID,
+	)
+	bh.sql2result[recordSelectSQL] = dataBranchTestResultSet(
+		[]defines.MysqlType{
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_LONGLONG,
+			defines.MYSQL_TYPE_LONGLONG,
+			defines.MYSQL_TYPE_VARCHAR,
+		},
+		nil,
+	)
+
+	sysSelectSQL := fmt.Sprintf(
+		"select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s",
+		quoteSQLStringLiteral(SYSMOCATALOGPITR),
+	)
+	bh.sql2result[sysSelectSQL] = dataBranchTestResultSet(
+		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR},
+		[][]interface{}{{uint64(2), "y"}},
+	)
+
+	err := createDataBranchPitrRecord(ctx, nil, bh, txnOp, record)
+	require.NoError(t, err)
+	requireExecutedSQLContains(t, bh.executedSQLs, "insert into mo_catalog.mo_pitr")
+	requireExecutedSQLContains(t, bh.executedSQLs, "'__mo_data_branch_pitr_table_99'")
+	requireExecutedSQLContains(t, bh.executedSQLs, "where pitr_name = 'sys_mo_catalog_pitr' and create_account = 0")
+}
+
 func TestEnsureDataBranchMoCatalogPitrUpdatesDurationWhenNeeded(t *testing.T) {
 	ctx := context.Background()
 	selectSQL := fmt.Sprintf(
@@ -302,6 +355,33 @@ func TestEnsureDataBranchMoCatalogPitrUpdatesDurationWhenNeeded(t *testing.T) {
 		require.Contains(t, lastSQL, "modified_time = 456")
 		require.NotContains(t, lastSQL, "pitr_length")
 		require.NotContains(t, lastSQL, "pitr_unit")
+	})
+
+	t.Run("creates missing sys mo catalog pitr", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[selectSQL] = dataBranchTestResultSet(
+			[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_VARCHAR},
+			nil,
+		)
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("123").Times(1)
+		eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, txnOp).Return(db, nil).Times(1)
+
+		ses := newValidateSession(t)
+		ses.proc.Base.SessionInfo.StorageEngine = eng
+
+		err := ensureDataBranchMoCatalogPitr(ctx, ses, bh, txnOp, 789)
+		require.NoError(t, err)
+		requireExecutedSQLContains(t, bh.executedSQLs, "insert into mo_catalog.mo_pitr")
+		requireExecutedSQLContains(t, bh.executedSQLs, "'sys_mo_catalog_pitr'")
+		requireExecutedSQLContains(t, bh.executedSQLs, "'mo_catalog'")
 	})
 }
 
@@ -494,6 +574,94 @@ func TestDataBranchPitrCleanupHelpers(t *testing.T) {
 		err := cleanupDataBranchDatabasePitrByIDIfUnused(ctx, bh, 7, 66)
 		require.NoError(t, err)
 		requireExecutedSQLContains(t, bh.executedSQLs, "delete from mo_catalog.mo_pitr where pitr_name = '__mo_data_branch_pitr_database_66' and create_account = 7")
+	})
+}
+
+func TestDataBranchPitrErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	wantErr := moerr.NewInternalErrorNoCtx("pitr helper failed")
+
+	t.Run("get pitr record propagates exec error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		selectSQL := fmt.Sprintf(
+			"select kind, pitr_status, pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s and create_account = %d",
+			quoteSQLStringLiteral(dataBranchPitrName("table", "88")),
+			uint64(7),
+		)
+		bh.sql2err[selectSQL] = wantErr
+
+		_, err := getDataBranchPitrRecord(ctx, bh, dataBranchPitrName("table", "88"), 7)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("ensure pitr record rejects invalid existing duration", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		err := ensureDataBranchPitrRecord(ctx, bh, 123, dataBranchPitrRecord{
+			pitrName:  dataBranchPitrName("table", "88"),
+			level:     "table",
+			accountID: 7,
+			objectID:  88,
+		}, dataBranchExistingPitrRecord{
+			exists:     true,
+			active:     true,
+			pitrLength: 1,
+			pitrUnit:   "bad",
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("ensure sys pitr propagates select error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		selectSQL := fmt.Sprintf(
+			"select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = %s",
+			quoteSQLStringLiteral(SYSMOCATALOGPITR),
+		)
+		bh.sql2err[selectSQL] = wantErr
+
+		err := ensureDataBranchMoCatalogPitr(ctx, nil, bh, nil, 123)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("cleanup sys pitr propagates select error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		selectSQL := fmt.Sprintf(
+			"select pitr_id from mo_catalog.mo_pitr where pitr_name != %s limit 1",
+			quoteSQLStringLiteral(SYSMOCATALOGPITR),
+		)
+		bh.sql2err[selectSQL] = wantErr
+
+		err := cleanupDataBranchMoCatalogPitrIfUnused(ctx, bh)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("database pitr lookup skips zero database id", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		_, found, err := getDataBranchDatabasePitrForCleanup(ctx, bh, 7, 0)
+		require.NoError(t, err)
+		require.False(t, found)
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("database pitr lookup propagates select error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		selectSQL := fmt.Sprintf(
+			"select create_account, obj_id, database_name, create_time from mo_catalog.mo_pitr where create_account = %d and pitr_name = %s and level = %s limit 1",
+			uint64(7),
+			quoteSQLStringLiteral(dataBranchPitrName("database", "55")),
+			quoteSQLStringLiteral("database"),
+		)
+		bh.sql2err[selectSQL] = wantErr
+
+		_, _, err := getDataBranchDatabasePitrForCleanup(ctx, bh, 7, 55)
+		require.ErrorIs(t, err, wantErr)
 	})
 }
 
