@@ -34,13 +34,14 @@ var _ vm.Operator = new(Insert)
 // )
 
 type container struct {
-	state              vm.CtrState
-	s3Writer           *colexec.CNS3Writer
-	partitionS3Writers []*colexec.CNS3Writer // The array is aligned with the partition number array
-	buf                *batch.Batch
-	affectedRows       uint64
-	s3MemGranted       int64
-	s3MemThrottler     rscthrottler.RSCThrottler
+	state               vm.CtrState
+	s3Writer            *colexec.CNS3Writer
+	partitionS3Writers  []*colexec.CNS3Writer // The array is aligned with the partition number array
+	buf                 *batch.Batch
+	affectedRows        uint64
+	s3MemGranted        int64
+	s3MemThrottler      rscthrottler.RSCThrottler
+	s3MemNoThresholdCap bool
 
 	source engine.Relation
 }

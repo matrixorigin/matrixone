@@ -59,7 +59,9 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		// If the target is not partition table, you only need to operate the main table
 		var sinkerOpts []ioutil.SinkerOption
+		pipelineFlush := false
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
+			pipelineFlush = true
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
 		s3Writer := colexec.NewCNS3DataWriter(
@@ -68,6 +70,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		insert.ctr.s3Writer = s3Writer
 		insert.ctr.s3MemGranted = 0
+		insert.ctr.s3MemNoThresholdCap = pipelineFlush
 		insert.ctr.s3MemThrottler = nil
 		if throttler, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.CNMemoryThrottler); ok {
 			insert.ctr.s3MemThrottler = throttler.(rscthrottler.RSCThrottler)
@@ -193,10 +196,17 @@ func (insert *Insert) acquireS3WriteMemory(proc *process.Process, analyzer proce
 		return nil
 	}
 
-	ask := int64(size)
+	ask := insert.s3WriteMemoryReservation(size) - insert.ctr.s3MemGranted
+	if ask <= 0 {
+		return nil
+	}
+
+	if insert.tryAcquireS3WriteMemory(ask) {
+		return nil
+	}
+
 	forcedRefresh(insert.ctr.s3MemThrottler)
-	if _, ok := insert.ctr.s3MemThrottler.Acquire(ask); ok {
-		insert.ctr.s3MemGranted += ask
+	if insert.tryAcquireS3WriteMemory(ask) {
 		return nil
 	}
 
@@ -204,15 +214,41 @@ func (insert *Insert) acquireS3WriteMemory(proc *process.Process, analyzer proce
 		return err
 	}
 
-	forcedRefresh(insert.ctr.s3MemThrottler)
-	if _, ok := insert.ctr.s3MemThrottler.Acquire(ask); ok {
-		insert.ctr.s3MemGranted += ask
+	ask = insert.s3WriteMemoryReservation(size) - insert.ctr.s3MemGranted
+	if ask <= 0 || insert.tryAcquireS3WriteMemory(ask) {
 		return nil
 	}
 
+	forcedRefresh(insert.ctr.s3MemThrottler)
+	if insert.tryAcquireS3WriteMemory(ask) {
+		return nil
+	}
 	return moerr.NewInternalErrorf(proc.Ctx,
 		"CN S3 write memory is exhausted, available %d bytes, ask %d bytes",
 		insert.ctr.s3MemThrottler.Available(), ask)
+}
+
+func (insert *Insert) s3WriteMemoryReservation(size int) int64 {
+	reservation := insert.ctr.s3MemGranted + int64(size)
+	if insert.ctr.s3MemNoThresholdCap {
+		return reservation
+	}
+	if insert.ctr.s3Writer != nil {
+		if threshold := int64(insert.ctr.s3Writer.MemorySizeThreshold()); threshold > 0 && reservation > threshold {
+			reservation = threshold
+		}
+	} else if threshold := int64(colexec.WriteS3Threshold); reservation > threshold {
+		reservation = int64(colexec.WriteS3Threshold)
+	}
+	return reservation
+}
+
+func (insert *Insert) tryAcquireS3WriteMemory(ask int64) bool {
+	if _, ok := insert.ctr.s3MemThrottler.Acquire(ask); ok {
+		insert.ctr.s3MemGranted += ask
+		return true
+	}
+	return false
 }
 
 func forcedRefresh(throttler interface{ Refresh() }) {

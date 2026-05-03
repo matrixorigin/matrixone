@@ -206,7 +206,7 @@ func TestInsertAcquireS3WriteMemory(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 
-	throttler := &testS3MemThrottler{grants: []bool{true}}
+	throttler := &testS3MemThrottler{grants: []bool{true, true}}
 	insert := &Insert{
 		InsertCtx: &InsertCtx{},
 		ctr: container{
@@ -218,14 +218,20 @@ func TestInsertAcquireS3WriteMemory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{1024}, throttler.acquired)
 	require.Equal(t, int64(1024), insert.ctr.s3MemGranted)
-	require.Equal(t, 1, throttler.forceRefresh)
+	require.Equal(t, 0, throttler.forceRefresh)
+
+	err = insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1024, 1024}, throttler.acquired)
+	require.Equal(t, int64(2048), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
 }
 
 func TestInsertAcquireS3WriteMemoryFlushesBeforeRetry(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 
-	throttler := &testS3MemThrottler{grants: []bool{false, true}}
+	throttler := &testS3MemThrottler{grants: []bool{false, false, true}}
 	insert := &Insert{
 		InsertCtx: &InsertCtx{},
 		ctr: container{
@@ -234,10 +240,55 @@ func TestInsertAcquireS3WriteMemoryFlushesBeforeRetry(t *testing.T) {
 		},
 	}
 
-	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 4096)
 	require.NoError(t, err)
-	require.Equal(t, []int64{1024, 1024}, throttler.acquired)
+	require.Equal(t, []int64{4096, 4096, 4096}, throttler.acquired)
 	require.Equal(t, int64(2048), throttler.released)
-	require.Equal(t, int64(1024), insert.ctr.s3MemGranted)
-	require.Equal(t, 2, throttler.forceRefresh)
+	require.Equal(t, int64(4096), insert.ctr.s3MemGranted)
+	require.Equal(t, 1, throttler.forceRefresh)
+}
+
+func TestInsertAcquireS3WriteMemoryCapsReservationToS3Threshold(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler: throttler,
+		},
+	}
+
+	size := colexec.WriteS3Threshold * 4
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(colexec.WriteS3Threshold)}, throttler.acquired)
+	require.Equal(t, int64(colexec.WriteS3Threshold), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
+
+	err = insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(colexec.WriteS3Threshold)}, throttler.acquired)
+}
+
+func TestInsertAcquireS3WriteMemoryDoesNotCapPipelineFlush(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler:      throttler,
+			s3MemNoThresholdCap: true,
+		},
+	}
+
+	size := colexec.WriteS3Threshold * 4
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(size)}, throttler.acquired)
+	require.Equal(t, int64(size), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
 }
