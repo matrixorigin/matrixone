@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"bytes"
-	"context"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -161,20 +160,12 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(dispatch.RemoteRegs)
 	for cnt > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeoutCause(context.Background(), waitNotifyTimeout, moerr.CauseWaitRemoteRegsReady)
 		select {
-		case <-timeoutCtx.Done():
-			err := moerr.AttachCause(timeoutCtx, moerr.NewInternalErrorNoCtx("wait notify message timeout"))
-			timeoutCancel()
-			return false, err
-
 		case <-proc.Ctx.Done():
-			timeoutCancel()
 			dispatch.ctr.prepared = true
 			return true, nil
 
 		case csinfo := <-dispatch.ctr.remoteInfo:
-			timeoutCancel()
 			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, csinfo)
 			cnt--
 		}

@@ -514,7 +514,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Nil(t, p)
 		require.Nil(t, c)
@@ -531,25 +531,11 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: cctx,
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
+		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
 		require.Nil(t, err)
 		require.Nil(t, p)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-	}
-
-	{
-		// if receiver gets proc timeout, should exit.
-		// 1. return error.
-		receiver := &messageReceiverOnServer{
-			connectionCtx: context.TODO(),
-		}
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
-		require.NotNil(t, err)
-		require.Nil(t, p)
-
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
@@ -567,7 +553,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
 		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
 
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Equal(t, p0, p)
 		require.Equal(t, c0, c)

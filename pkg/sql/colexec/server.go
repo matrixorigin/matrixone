@@ -43,14 +43,16 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	}
 	s = &Server{
 		hakeeper:      client,
-		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
+		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024), changed: make(chan struct{})},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32, 1024)},
 		receivedRunningPipeline: RunningPipelineMapForRemoteNode{
 			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
 			sessionCleanupWaiters:          make(map[morpc.ClientSession]struct{}, 128),
 		},
 	}
-	Set(s)
+	if !srv.CompareAndSwap(nil, s) {
+		return srv.Load()
+	}
 	return s
 }
 
@@ -60,6 +62,10 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, process.RemotePipelineInformationChannel, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
+	return srv.getProcByUuidLocked(u, forcedDelete)
+}
+
+func (srv *Server) getProcByUuidLocked(u uuid.UUID, forcedDelete bool) (*process.Process, process.RemotePipelineInformationChannel, bool) {
 	p, ok := srv.uuidCsChanMap.mp[u]
 	if !ok {
 		if forcedDelete {
@@ -80,17 +86,36 @@ func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Proce
 	return result1, result2, true
 }
 
-func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
+// GetProcByUuidOrWait atomically looks up a uuid and, if not found, returns
+// a channel that will be closed on the next map insertion. This avoids a race
+// where an insert between a failed lookup and a separate WaitForChange call
+// would be missed.
+func (srv *Server) GetProcByUuidOrWait(u uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, bool, <-chan struct{}) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
+	proc, ch, ok := srv.getProcByUuidLocked(u, false)
+	if ok {
+		return proc, ch, true, nil
+	}
+	return nil, nil, false, srv.uuidCsChanMap.changed
+}
+
+func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
+	srv.uuidCsChanMap.Lock()
 	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
 		delete(srv.uuidCsChanMap.mp, u)
+		srv.uuidCsChanMap.Unlock()
 		return moerr.NewInternalErrorNoCtx("remote receiver already done")
 	}
 
 	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch}
+	old := srv.uuidCsChanMap.changed
+	srv.uuidCsChanMap.changed = make(chan struct{})
+	srv.uuidCsChanMap.Unlock()
+	close(old)
 	return nil
 }
+
 
 func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 	srv.uuidCsChanMap.Lock()
