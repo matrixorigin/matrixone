@@ -121,13 +121,18 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 	return insert.insert_table(proc, analyzer)
 }
 
-func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	defer func() {
+		if err != nil {
+			insert.releaseS3MemGrant()
+		}
+	}()
 
-	result := vm.NewCallResult()
+	result = vm.NewCallResult()
 	result.Batch = insert.ctr.buf
 
 	if insert.ctr.state == vm.Build {
@@ -259,11 +264,16 @@ func forcedRefresh(throttler interface{ Refresh() }) {
 	throttler.Refresh()
 }
 
-func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analyzer process.Analyzer) error {
+func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analyzer process.Analyzer) (err error) {
 	if insert.isMemoryTable() || insert.ctr.s3Writer == nil {
 		insert.releaseS3MemGrant()
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			insert.releaseS3MemGrant()
+		}
+	}()
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
