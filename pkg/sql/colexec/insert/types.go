@@ -16,6 +16,7 @@ package insert
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -38,6 +39,8 @@ type container struct {
 	partitionS3Writers []*colexec.CNS3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
 	affectedRows       uint64
+	s3MemGranted       int64
+	s3MemThrottler     rscthrottler.RSCThrottler
 
 	source engine.Relation
 }
@@ -98,6 +101,7 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil
 	}
+	insert.releaseS3MemGrant()
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
 			writer.Close()
@@ -118,6 +122,7 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil
 	}
+	insert.releaseS3MemGrant()
 
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
@@ -132,6 +137,13 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 		insert.ctr.buf = nil
 	}
 	insert.ctr.source = nil
+}
+
+func (insert *Insert) releaseS3MemGrant() {
+	if insert.ctr.s3MemThrottler != nil && insert.ctr.s3MemGranted > 0 {
+		insert.ctr.s3MemThrottler.Release(insert.ctr.s3MemGranted)
+		insert.ctr.s3MemGranted = 0
+	}
 }
 
 func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

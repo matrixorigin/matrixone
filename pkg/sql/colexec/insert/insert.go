@@ -19,6 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -64,6 +67,11 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			sinkerOpts...)
 
 		insert.ctr.s3Writer = s3Writer
+		insert.ctr.s3MemGranted = 0
+		insert.ctr.s3MemThrottler = nil
+		if throttler, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.CNMemoryThrottler); ok {
+			insert.ctr.s3MemThrottler = throttler.(rscthrottler.RSCThrottler)
+		}
 
 		if insert.ctr.buf == nil {
 			insert.initBufForS3()
@@ -116,6 +124,9 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	result := vm.NewCallResult()
+	result.Batch = insert.ctr.buf
+
 	if insert.ctr.state == vm.Build {
 		for {
 			input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
@@ -138,6 +149,10 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
+			if err = insert.acquireS3WriteMemory(proc, analyzer, input.Batch.Size()); err != nil {
+				insert.ctr.state = vm.End
+				return vm.CancelResult, err
+			}
 			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
@@ -146,8 +161,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 		}
 	}
 
-	result := vm.NewCallResult()
-	result.Batch = insert.ctr.buf
 	if insert.ctr.state == vm.Eval {
 		writer := insert.ctr.s3Writer
 		// handle the last Batch that batchSize less than DefaultBlockMaxRows
@@ -159,6 +172,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			insert.ctr.state = vm.End
 			return result, err
 		}
+		insert.releaseS3MemGrant()
 		insert.ctr.state = vm.End
 		return result, nil
 	}
@@ -168,6 +182,75 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 	}
 
 	panic("bug")
+}
+
+type forceRefreshThrottler interface {
+	ForceRefresh()
+}
+
+func (insert *Insert) acquireS3WriteMemory(proc *process.Process, analyzer process.Analyzer, size int) error {
+	if insert.isMemoryTable() || insert.ctr.s3MemThrottler == nil || size <= 0 {
+		return nil
+	}
+
+	ask := int64(size)
+	forcedRefresh(insert.ctr.s3MemThrottler)
+	if _, ok := insert.ctr.s3MemThrottler.Acquire(ask); ok {
+		insert.ctr.s3MemGranted += ask
+		return nil
+	}
+
+	if err := insert.flushS3WriterOnMemoryPressure(proc, analyzer); err != nil {
+		return err
+	}
+
+	forcedRefresh(insert.ctr.s3MemThrottler)
+	if _, ok := insert.ctr.s3MemThrottler.Acquire(ask); ok {
+		insert.ctr.s3MemGranted += ask
+		return nil
+	}
+
+	return moerr.NewInternalErrorf(proc.Ctx,
+		"CN S3 write memory is exhausted, available %d bytes, ask %d bytes",
+		insert.ctr.s3MemThrottler.Available(), ask)
+}
+
+func forcedRefresh(throttler interface{ Refresh() }) {
+	if refresher, ok := throttler.(forceRefreshThrottler); ok {
+		refresher.ForceRefresh()
+		return
+	}
+	throttler.Refresh()
+}
+
+func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analyzer process.Analyzer) error {
+	if insert.isMemoryTable() || insert.ctr.s3Writer == nil {
+		insert.releaseS3MemGrant()
+		return nil
+	}
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+
+	blockInfoBat, err := insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+	if err != nil {
+		return err
+	}
+
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
+	analyzer.AddDiskIO(crs)
+
+	if blockInfoBat != nil && blockInfoBat.RowCount() > 0 {
+		insert.ctr.buf, err = insert.ctr.buf.Append(proc.Ctx, proc.GetMPool(), blockInfoBat)
+		if err != nil {
+			return err
+		}
+		insert.ctr.s3Writer.ResetBlockInfoBat()
+	}
+
+	insert.releaseS3MemGrant()
+	return nil
 }
 
 func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

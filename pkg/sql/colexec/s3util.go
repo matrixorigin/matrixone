@@ -226,6 +226,30 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 	return
 }
 
+func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	w.ResetBlockInfoBat()
+	if len(stats) == 0 {
+		return w.blockInfoBat, nil
+	}
+
+	if err = ExpandObjectStatsToBatch(
+		w.sinker.GetMPool(),
+		w.isTombstone,
+		w.blockInfoBat,
+		true,
+		stats...,
+	); err != nil {
+		return nil, err
+	}
+
+	return w.blockInfoBat, nil
+}
+
 func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {

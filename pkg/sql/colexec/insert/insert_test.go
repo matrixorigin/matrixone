@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -165,4 +166,78 @@ func TestInsert_initBufForS3(t *testing.T) {
 			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
 		})
 	}
+}
+
+type testS3MemThrottler struct {
+	grants       []bool
+	acquired     []int64
+	released     int64
+	forceRefresh int
+}
+
+func (t *testS3MemThrottler) Refresh() {}
+
+func (t *testS3MemThrottler) ForceRefresh() {
+	t.forceRefresh++
+}
+
+func (t *testS3MemThrottler) PrintUsage() {}
+
+func (t *testS3MemThrottler) Acquire(size int64) (int64, bool) {
+	t.acquired = append(t.acquired, size)
+	if len(t.grants) == 0 {
+		return 0, false
+	}
+	grant := t.grants[0]
+	t.grants = t.grants[1:]
+	return 0, grant
+}
+
+func (t *testS3MemThrottler) Release(size int64) int64 {
+	t.released += size
+	return 0
+}
+
+func (t *testS3MemThrottler) Available() int64 {
+	return 0
+}
+
+func TestInsertAcquireS3WriteMemory(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler: throttler,
+		},
+	}
+
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1024}, throttler.acquired)
+	require.Equal(t, int64(1024), insert.ctr.s3MemGranted)
+	require.Equal(t, 1, throttler.forceRefresh)
+}
+
+func TestInsertAcquireS3WriteMemoryFlushesBeforeRetry(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{false, true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemGranted:   2048,
+			s3MemThrottler: throttler,
+		},
+	}
+
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1024, 1024}, throttler.acquired)
+	require.Equal(t, int64(2048), throttler.released)
+	require.Equal(t, int64(1024), insert.ctr.s3MemGranted)
+	require.Equal(t, 2, throttler.forceRefresh)
 }
