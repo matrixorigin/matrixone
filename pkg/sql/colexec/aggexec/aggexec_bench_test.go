@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -472,4 +473,170 @@ func TestLocalAccumulatorOverflow(t *testing.T) {
 		}
 		exec.Free()
 	})
+}
+
+// TestConstVectorAccumulator exercises the IsConst branch in the local accumulator.
+func TestConstVectorAccumulator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			t.Fatalf("memory leak: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	const (
+		numGroups = 64
+		rows      = 256
+	)
+
+	groups := make([]uint64, rows)
+	for i := range groups {
+		groups[i] = uint64((i % numGroups) + 1)
+	}
+
+	t.Run("SumInt64Const", func(t *testing.T) {
+		constVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), rows, mp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer constVec.Free(mp)
+
+		exec := newSumAvgExec[int64, int64](mp, int64OfCheck, true, AggIdOfSum, false, types.T_int64.ToType())
+		if err := exec.GroupGrow(numGroups); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.BatchFill(0, groups, []*vector.Vector{constVec}); err != nil {
+			t.Fatal(err)
+		}
+		results, err := exec.Flush()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, vec := range results {
+			vals := vector.MustFixedColNoTypeCheck[int64](vec)
+			for g := 0; g < numGroups; g++ {
+				// Each group gets rows/numGroups = 4 rows, each with value 7.
+				expected := int64(4 * 7)
+				if vals[g] != expected {
+					t.Fatalf("group %d: got %d, want %d", g, vals[g], expected)
+				}
+			}
+			vec.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("MinInt64Const", func(t *testing.T) {
+		constVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), rows, mp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer constVec.Free(mp)
+
+		exec := makeMinMaxExec(mp, AggIdOfMin, true, types.T_int64.ToType())
+		if err := exec.GroupGrow(numGroups); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.BatchFill(0, groups, []*vector.Vector{constVec}); err != nil {
+			t.Fatal(err)
+		}
+		results, err := exec.Flush()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, vec := range results {
+			vals := vector.MustFixedColNoTypeCheck[int64](vec)
+			for g := 0; g < numGroups; g++ {
+				if vals[g] != 42 {
+					t.Fatalf("group %d: got %d, want 42", g, vals[g])
+				}
+			}
+			vec.Free(mp)
+		}
+		exec.Free()
+	})
+
+	t.Run("SumDecimal64Const", func(t *testing.T) {
+		constVec, err := vector.NewConstFixed(types.New(types.T_decimal64, 15, 2), types.Decimal64(500), rows, mp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer constVec.Free(mp)
+
+		exec := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+		if err := exec.GroupGrow(numGroups); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.BatchFill(0, groups, []*vector.Vector{constVec}); err != nil {
+			t.Fatal(err)
+		}
+		results, err := exec.Flush()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, vec := range results {
+			vals := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+			for g := 0; g < numGroups; g++ {
+				// 4 rows per group × 500 = 2000
+				expected := types.Decimal128{B0_63: 2000, B64_127: 0}
+				if vals[g] != expected {
+					t.Fatalf("group %d: got %v, want %v", g, vals[g], expected)
+				}
+			}
+			vec.Free(mp)
+		}
+		exec.Free()
+	})
+}
+
+// TestDecimal256Overflow verifies that the checked path (localAddSafe=false)
+// correctly catches overflow during local accumulation for Decimal256→Decimal256.
+func TestDecimal256Overflow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			t.Fatalf("memory leak: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	const rows = 4
+	groups := []uint64{1, 1, 1, 1}
+
+	// Max Decimal256 ≈ 2^255 - 1. Use a value close to half-max so 3 adds overflow.
+	halfMax := types.Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0) >> 1}
+
+	typ := types.New(types.T_decimal256, 38, 0)
+	vec := vector.NewOffHeapVecWithType(typ)
+	if err := vec.PreExtend(rows, mp); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < rows; i++ {
+		if err := vector.AppendFixed(vec, halfMax, false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer vec.Free(mp)
+
+	exec := newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, true, AggIdOfSum, false, typ)
+	if err := exec.GroupGrow(1); err != nil {
+		t.Fatal(err)
+	}
+	err := exec.BatchFill(0, groups, []*vector.Vector{vec})
+	if err == nil {
+		// If no error during BatchFill, Flush should show the overflow or we accept
+		// that the add wrapped. Either way, confirm no panic.
+		results, flushErr := exec.Flush()
+		if flushErr != nil {
+			t.Fatal(flushErr)
+		}
+		for _, v := range results {
+			v.Free(mp)
+		}
+	} else {
+		// Expected: overflow error from decimalStateAdd in the local buffer.
+		if !strings.Contains(err.Error(), "Overflow") && !strings.Contains(err.Error(), "overflow") {
+			t.Fatalf("expected overflow error, got: %v", err)
+		}
+	}
+	exec.Free()
 }

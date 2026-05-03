@@ -208,12 +208,18 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 		}
 	}
 
+	lastX := -1
+	var sums *[AggBatchSize]T
+	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[T](exec.state[x].vecs[0])
+			sumVec = exec.state[x].vecs[0]
+		}
 		y := g & aggBatchSizeMask
-
-		sums := chunkArr[T](exec.state[x].vecs[0])
 		old := sums[y]
 		add := localSums[s]
 		result := old + add
@@ -222,8 +228,8 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 		}
 		sums[y] = result
 
-		if exec.state[x].vecs[0].IsNull(y) {
-			exec.state[x].vecs[0].UnsetNull(y)
+		if sumVec.IsNull(y) {
+			sumVec.UnsetNull(y)
 		}
 	}
 	return nil
@@ -308,12 +314,18 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 		}
 	}
 
+	lastX := -1
+	var sums *[AggBatchSize]T
+	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[T](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
 		y := g & aggBatchSizeMask
-
-		sums := chunkArr[T](exec.state[x].vecs[0])
 		old := sums[y]
 		add := localSums[s]
 		result := old + add
@@ -321,8 +333,6 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 			return err
 		}
 		sums[y] = result
-
-		cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 		cnts[y] += localCnts[s]
 	}
 	return nil
@@ -644,12 +654,18 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 		}
 	}
 
+	lastX := -1
+	var sums *[AggBatchSize]S
+	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[S](exec.state[x].vecs[0])
+			sumVec = exec.state[x].vecs[0]
+		}
 		y := g & aggBatchSizeMask
-		sums := chunkArr[S](exec.state[x].vecs[0])
-		sumVec := exec.state[x].vecs[0]
 		if sumVec.IsNull(y) {
 			sumVec.UnsetNull(y)
 			sums[y] = localSums[s]
@@ -743,16 +759,22 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 		}
 	}
 
+	lastX := -1
+	var sums *[AggBatchSize]S
+	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
 		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[S](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
 		y := g & aggBatchSizeMask
-		sums := chunkArr[S](exec.state[x].vecs[0])
 		var err error
 		if sums[y], err = decimalStateAdd(sums[y], localSums[s]); err != nil {
 			return err
 		}
-		cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 		cnts[y] += localCnts[s]
 	}
 	return nil
@@ -999,10 +1021,12 @@ func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool,
 	var exec sumAvgDecExec[A, S]
 	exec.mp = mp
 	exec.isSum = isSum
-	// Local buffer overflow is impossible when state is wider than arg:
+	// Local buffer overflow is impossible when sizeof(S) > sizeof(A):
 	//   Decimal64→Decimal128: 255 × 10^18 < 10^38 ✓
 	//   Decimal128→Decimal256: 255 × 10^38 < 10^76 ✓
 	//   Decimal256→Decimal256: 255 × 10^76 > 10^76 ✗
+	// Valid instantiations: [Decimal64,Decimal128], [Decimal128,Decimal256], [Decimal256,Decimal256].
+	// If a [Decimal128,Decimal128] instantiation is ever added, this must be updated.
 	var a A
 	switch any(a).(type) {
 	case types.Decimal64, types.Decimal128:
