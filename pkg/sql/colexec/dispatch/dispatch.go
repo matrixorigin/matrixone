@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -157,13 +158,22 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, err
 }
 
+const waitRemoteRegTimeout = 30 * time.Second
+
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(dispatch.RemoteRegs)
+	deadline := time.NewTimer(waitRemoteRegTimeout)
+	defer deadline.Stop()
+
 	for cnt > 0 {
 		select {
 		case <-proc.Ctx.Done():
 			dispatch.ctr.prepared = true
 			return true, nil
+
+		case <-deadline.C:
+			return false, moerr.NewInternalErrorf(proc.Ctx,
+				"remote receiver not ready within %s, remote CN may have failed", waitRemoteRegTimeout)
 
 		case csinfo := <-dispatch.ctr.remoteInfo:
 			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, csinfo)

@@ -147,6 +147,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
+			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
 		case <-dispatchProc.Ctx.Done():
 		}
 
@@ -518,7 +519,17 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
+// waitRegistrationTimeout bounds how long we wait for the dispatch operator
+// to register itself via PutProcIntoUuidMap. Under normal operation this
+// happens within seconds. A 5-minute timeout detects a fundamentally broken
+// remote CN (crash, network partition) without the false positives of a short
+// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+const waitRegistrationTimeout = 30 * time.Second
+
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	deadline := time.NewTimer(waitRegistrationTimeout)
+	defer deadline.Stop()
+
 	for {
 		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
 		if ok {
@@ -529,6 +540,10 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
 			return nil, nil, nil
+		case <-deadline.C:
+			colexec.Get().GetProcByUuid(uid, true)
+			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
+				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
 		case <-changed:
 		}
 	}
