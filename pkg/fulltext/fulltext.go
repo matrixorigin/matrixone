@@ -847,11 +847,11 @@ func GetResultCountFromPattern(ps []*Pattern) int {
 // rewrite: short tokens map directly to TEXT lookups since the index stores
 // jieba-segmented words rather than overlapping bigrams.
 //
-// Query-time tokenization runs with HMM enabled so unknown terms in the user's
-// search string still resolve to candidate words; the index build path uses
-// HMM=false for stable, reproducible segmentation.
+// HMM is disabled here so the query and index sides segment the same way; with
+// HMM on the query side, traditional-Chinese bigrams (e.g. 教學, 中華) appear at
+// query time but not in the index, producing queries that can never match.
 func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
-	tok := tokenizer.SharedJiebaTokenizer(true)
+	tok := tokenizer.SharedJiebaTokenizer(false)
 	list := make([]*Pattern, 0, 8)
 	for t := range tok.Tokenize([]byte(pattern)) {
 		slen := t.TokenBytes[0]

@@ -36,6 +36,7 @@ mo-tool
 /mo-service
 /mo-service.log
 /mo-debug
+/bug.sql
 cube*/
 store/
 mo-data/

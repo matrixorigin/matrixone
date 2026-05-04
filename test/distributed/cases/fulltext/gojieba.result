@@ -24,40 +24,64 @@ create fulltext index ftidx03 on src (body, title) with parser gojieba;
 not supported: Fulltext index are not allowed to use the same column
 select * from src where match(body, title) against('red');
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 select * from src where match(body, title) against('彩圖' in natural language mode);
 id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('遠東' in natural language mode);
 id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('版一、二冊' in natural language mode);
 id    body    title
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.6247623
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.8123811
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.552894
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('re*' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 id    body    title
+0    color is red    t1
 select * from src where match(body, title) against('+red +blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red ~blue' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select * from src where match(body, title) against('"red"' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 select * from src where match(body, title) against('+教學指引 -短篇小說' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('"is  not red"' in boolean mode);
@@ -66,9 +90,11 @@ select * from src where match(body, title) against('"blue is red"' in boolean mo
 id    body    title
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
-0
+2
 explain select match(body, title) against('red') from src where match(body, title) against('red');
 TP QUERY PLAN
 Project
@@ -96,45 +122,72 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 select * from src where match(body) against('red');
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select match(body) against('red') from src;
 MATCH (body) AGAINST (red)
+0.42668658
+0.42668658
 select * from src where match(body, title) against('red');
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 select * from src where match(body, title) against('彩圖' in natural language mode);
 id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('遠東' in natural language mode);
 id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('版一、二冊' in natural language mode);
 id    body    title
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.6247623
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.8123811
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    4.552894
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('re*' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 id    body    title
+0    color is red    t1
 select * from src where match(body, title) against('+red +blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red ~blue' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
-0
+2
 explain select match(body, title) against('red') from src where match(body, title) against('red');
 TP QUERY PLAN
 Project
@@ -161,17 +214,23 @@ insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('i
 create fulltext index ftidx2 on src2 (body, title) with parser gojieba;
 select * from src2 where match(body, title) against('red');
 id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
 select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
+id2    2    blue    t3    0.09061906
+id3    3    blue red    t4    0.09061906
 update src2 set body = 'orange' where id1='id0';
 select * from src2 where match(body, title) against('red');
 id1    id2    body    title
+id3    3    blue red    t4
 delete from src2 where id1='id3';
 select * from src2 where match(body, title) against('t4');
 id1    id2    body    title
 insert into src2 values ('id4', 4, 'light brown', 't5');
 select * from src2 where match(body, title) against('t5');
 id1    id2    body    title
+id4    4    light brown    t5
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx2`(`body`,`title`) WITH PARSER gojieba\n)
@@ -193,39 +252,61 @@ select *, match(title, body) against('+CC_BY +(<-1.0 >-SA-1.0)' in boolean mode)
 internal error: double operator
 select * from src where match(body, title) against('red');
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 select * from src where match(body, title) against('彩圖' in natural language mode);
 id    body    title
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('遠東' in natural language mode);
 id    body    title
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
 select * from src where match(body, title) against('版一、二冊' in natural language mode);
 id    body    title
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.6247623
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.8123811
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('re*' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 id    body    title
+0    color is red    t1
 select * from src where match(body, title) against('+red +blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red ~blue' in boolean mode);
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select * from src where match(body, title) against('+red -(<blue >is)' in boolean mode);
 id    body    title
 select * from src where match(body, title) against('+red +(<blue >is)' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('"is not red"' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
-0
+2
 explain select match(body, title) against('red') from src where match(body, title) against('red');
 TP QUERY PLAN
 Project
@@ -241,6 +322,7 @@ Project
 update src set body='color is brown' where id=0;
 select * from src where match(body, title) against('brown');
 id    body    title
+0    color is brown    t1
 delete from src where id = 0;
 select * from src where match(body, title) against('brown');
 id    body    title
@@ -250,6 +332,7 @@ id    body    title
 update src set title='a good title' where id=11;
 select * from src where match(body, title) against('brown');
 id    body    title
+11    color is brown    a good title
 delete from src;
 select count(*) from src;
 count(*)
@@ -262,8 +345,12 @@ create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary 
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
 select * from src2 where match(body, title) against('red');
 id1    id2    body    title
+id0    0    red    t1
+id3    3    blue red    t4
 select src2.*, match(body, title) against('blue') from src2;
 id1    id2    body    title    MATCH (body, title) AGAINST (blue)
+id2    2    blue    t3    0.09061906
+id3    3    blue red    t4    0.09061906
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`) WITH PARSER gojieba\n)
@@ -274,7 +361,7 @@ insert into t1 select result, "test create big fulltext index" from generate_ser
 create fulltext index ftidx on t1 (b) with parser gojieba;
 select count(*) from t1 where match(b) against ('test create' in natural language mode);
 count(*)
-0
+3840001
 drop table t1;
 CREATE TABLE IF NOT EXISTS nation (
 `n_nationkey`  INT,
@@ -287,6 +374,7 @@ insert into nation values (0, 'china', 1, 'china beijing', 'dummy'), (1, 'korea'
 create fulltext index ftidx on nation(n_comment) with parser gojieba;
 select * from nation where match(n_comment) against('china');
 n_nationkey    n_name    n_regionkey    n_comment    n_dummy
+0    china    1    china beijing    dummy
 delete from nation where n_nationkey = 0;
 select * from nation where match(n_comment) against('china');
 n_nationkey    n_name    n_regionkey    n_comment    n_dummy
@@ -297,10 +385,10 @@ insert into t1 select result, "pushdown limit is fast" from generate_series(3000
 create fulltext index ftidx on t1 (b) with parser gojieba;
 select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode);
 count(*)
-0
+30001
 select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
 count(*)
-0
+30001
 drop table t1;
 drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
@@ -317,13 +405,16 @@ insert into src values (0, 'SGB11型号的检验报告在对素材文件进行�
 (3, '索引肥胖的原因都是因为摄入fat多导致的吗说明');
 select id from src where match(body) against('+SGB11型号的检验报告' IN BOOLEAN MODE);
 id
+0
 select id from src where match(body) against('肥胖的原因都是因为摄入脂肪多导致的吗' IN NATURAL LANGUAGE MODE);
 id
 2
 select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
 id
+1
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 id
+3
 drop table src;
 CREATE TABLE example_table (id INT PRIMARY KEY,english_text TEXT, chinese_text TEXT,json_data JSON);
 INSERT INTO example_table (id, english_text, chinese_text, json_data) VALUES(1, 'Hello, world!', '你好世界', '{"name": "Alice", "age": 30}'),(2, 'This is a test.', '这是一个测试', '{"name": "Bob", "age": 25}'),(3, 'Full-text search is powerful.', '全文搜索很强大', '{"name": "Charlie", "age": 35}');
@@ -331,6 +422,8 @@ CREATE FULLTEXT INDEX idx_english_text ON example_table (english_text) WITH PARS
 CREATE FULLTEXT INDEX idx_chinese_text ON example_table (chinese_text) WITH PARSER gojieba;
 (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) union all (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) ;
 id    english_text    chinese_text    json_data
+2    This is a test.    这是一个测试    {"age": 25, "name": "Bob"}
+2    This is a test.    这是一个测试    {"age": 25, "name": "Bob"}
 SELECT id, chinese_text FROM example_table WHERE MATCH(chinese_text) AGAINST('全文搜索' IN NATURAL LANGUAGE MODE);
 id    chinese_text
 3    全文搜索很强大
@@ -351,19 +444,30 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 create fulltext index ftidx on src (body, title) with parser gojieba;
 select * from src where match(body, title) against('red');
 id    body    title
+0    color is red    t1
+3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
+0    color is red    t1    2.5699196
 select * from src where match(body, title) against('教學指引');
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    2.1168313
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.3810165
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
+0    color is red    t1
 select * from src where match(body, title) against('+red -blue' in boolean mode);
 id    body    title
+0    color is red    t1
 select * from src where match(body, title) against('+red +blue' in boolean mode);
 id    body    title
+3    blue is not red    colorful
 select * from src where match(body, title) against('+教學指引 +短篇小說' in boolean mode);
 id    body    title
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 drop table src;
 set ft_relevancy_algorithm="TF-IDF";
