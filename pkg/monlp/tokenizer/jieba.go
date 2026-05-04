@@ -17,6 +17,7 @@ package tokenizer
 import (
 	"iter"
 	"strings"
+	"sync"
 
 	"github.com/yanyiwu/gojieba"
 )
@@ -24,6 +25,45 @@ import (
 type JiebaTokenizer struct {
 	jieba  *gojieba.Jieba
 	useHmm bool
+	shared bool
+}
+
+var (
+	sharedJiebaHmmOnce   sync.Once
+	sharedJiebaHmm       *JiebaTokenizer
+	sharedJiebaNoHmmOnce sync.Once
+	sharedJiebaNoHmm     *JiebaTokenizer
+)
+
+// SharedJiebaTokenizer returns a process-wide JiebaTokenizer. Two singletons
+// are maintained — one with HMM enabled and one without — and each is loaded
+// lazily on first use (~1s for dictionary loading). The returned tokenizer is
+// safe for concurrent Tokenize calls and must not be Free'd.
+//
+// Choose useHmm by intent:
+//   - false at index build time: dictionary-only segmentation gives stable,
+//     reproducible tokens that don't drift across deployments.
+//   - true at query time: HMM new-word discovery broadens recall for terms
+//     not in the dictionary.
+func SharedJiebaTokenizer(useHmm bool) *JiebaTokenizer {
+	if useHmm {
+		sharedJiebaHmmOnce.Do(func() {
+			sharedJiebaHmm = &JiebaTokenizer{
+				jieba:  gojieba.NewJieba(),
+				useHmm: true,
+				shared: true,
+			}
+		})
+		return sharedJiebaHmm
+	}
+	sharedJiebaNoHmmOnce.Do(func() {
+		sharedJiebaNoHmm = &JiebaTokenizer{
+			jieba:  gojieba.NewJieba(),
+			useHmm: false,
+			shared: true,
+		}
+	})
+	return sharedJiebaNoHmm
 }
 
 // NewJiebaTokenizer constructs a JiebaTokenizer backed by gojieba.
@@ -40,7 +80,11 @@ func NewJiebaTokenizer(useHmm bool) *JiebaTokenizer {
 }
 
 // Free releases the underlying gojieba resources. Subsequent calls are no-ops.
+// Free is a no-op for the shared tokenizer returned by SharedJiebaTokenizer.
 func (t *JiebaTokenizer) Free() {
+	if t.shared {
+		return
+	}
 	if t.jieba != nil {
 		t.jieba.Free()
 		t.jieba = nil

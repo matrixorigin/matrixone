@@ -145,7 +145,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	switch u.param.Parser {
-	case "", "ngram", "default":
+	case "", "ngram", "default", "gojieba":
 
 		var content bytes.Buffer
 		for i := 1; i < vlen; i++ {
@@ -174,7 +174,15 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 
-		tok := tokenizer.NewSimpleTokenizer()
+		var tok tokenizer.Tokenizer
+		if u.param.Parser == "gojieba" {
+			// Build path uses HMM=false: dictionary-only segmentation
+			// gives stable tokens across runs and avoids HMM-discovered
+			// "new words" that wouldn't match a query-time tokenization.
+			tok = tokenizer.SharedJiebaTokenizer(false)
+		} else {
+			tok = tokenizer.NewSimpleTokenizer()
+		}
 		for t := range tok.Tokenize(content.Bytes()) {
 
 			slen := t.TokenBytes[0]

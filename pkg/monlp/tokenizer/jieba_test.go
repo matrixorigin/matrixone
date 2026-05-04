@@ -123,6 +123,33 @@ func TestJiebaTokenizerImplementsInterface(t *testing.T) {
 	var _ Tokenizer = (*JiebaTokenizer)(nil)
 }
 
+func TestSharedJiebaTokenizerSeparatesByHmm(t *testing.T) {
+	hmm := SharedJiebaTokenizer(true)
+	noHmm := SharedJiebaTokenizer(false)
+	if hmm == noHmm {
+		t.Fatalf("SharedJiebaTokenizer(true) and (false) returned the same instance")
+	}
+	if !hmm.useHmm || noHmm.useHmm {
+		t.Fatalf("useHmm flags wrong: hmm=%v noHmm=%v", hmm.useHmm, noHmm.useHmm)
+	}
+	// "网易杭研大厦" — "杭研" is not in the dictionary; HMM glues it together,
+	// dictionary-only mode keeps the chars separate.
+	in := "他来到了网易杭研大厦"
+	hmmTokens := collectJieba(hmm, in)
+	noHmmTokens := collectJieba(noHmm, in)
+	if len(hmmTokens) >= len(noHmmTokens) {
+		t.Errorf("HMM should produce fewer tokens than dictionary-only mode for %q (hmm=%d, noHmm=%d)",
+			in, len(hmmTokens), len(noHmmTokens))
+	}
+	// Free is a no-op for shared instances; calling it must not invalidate
+	// the singleton for other callers.
+	hmm.Free()
+	noHmm.Free()
+	if got := collectJieba(SharedJiebaTokenizer(true), in); len(got) != len(hmmTokens) {
+		t.Errorf("shared HMM tokenizer broken after Free: got %d, want %d", len(got), len(hmmTokens))
+	}
+}
+
 func TestJiebaTokenizerFreeIdempotent(t *testing.T) {
 	tknz := NewJiebaTokenizer(true)
 	tknz.Free()
