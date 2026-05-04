@@ -1,6 +1,7 @@
 .idea/
 .kiro/
 .cursor/
+CLAUDE.md
 *.o
 *.a
 *.exe

@@ -832,14 +832,14 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	}
 
 	list := make([]*Pattern, 0, 32)
-	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
+	tok := tokenizer.NewSimpleTokenizer()
 
 	currBytePos := int32(0)
 	currEndBytePos := int32(0)
 
 	overlaps := make([]tokenizer.Token, 0, 8)
 
-	for t := range tok.Tokenize() {
+	for t := range tok.Tokenize([]byte(pattern)) {
 
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])

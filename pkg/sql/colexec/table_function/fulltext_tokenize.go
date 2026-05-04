@@ -174,8 +174,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 
-		tok, _ := tokenizer.NewSimpleTokenizer(content.Bytes())
-		for t := range tok.Tokenize() {
+		tok := tokenizer.NewSimpleTokenizer()
+		for t := range tok.Tokenize(content.Bytes()) {
 
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
@@ -205,8 +205,8 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
 				// tokenize the value
-				tok, _ := tokenizer.NewSimpleTokenizer(t.TokenBytes[1 : jslen+1])
-				for tt := range tok.Tokenize() {
+				tok := tokenizer.NewSimpleTokenizer()
+				for tt := range tok.Tokenize(t.TokenBytes[1 : jslen+1]) {
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
 					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
