@@ -122,25 +122,57 @@ func (t *JiebaTokenizer) Tokenize(input []byte) iter.Seq[Token] {
 			return
 		}
 
-		words := t.jieba.Tokenize(string(input), gojieba.DefaultMode, t.useHmm)
 		var tokenPos int32
-		for _, w := range words {
-			if isAllBreaker(w.Str) {
+		emit := func(word string, bytePos int32) bool {
+			lowered := strings.ToLower(word)
+			bs := truncateUTF8([]byte(lowered), MAX_TOKEN_SIZE)
+			var tk Token
+			tk.TokenBytes[0] = byte(len(bs))
+			copy(tk.TokenBytes[1:], bs)
+			tk.TokenPos = tokenPos
+			tk.BytePos = bytePos
+			tokenPos++
+			return yield(tk)
+		}
+
+		// gojieba is a Chinese-first segmenter: with HMM=false an English
+		// word like "color" has no dictionary entry and falls through to
+		// per-character tokens. Pre-split the input into pure-ASCII spans
+		// (handled by SimpleTokenizer's Latin path) and the rest (handed
+		// to gojieba). This boundary always lands on a UTF-8 char edge
+		// because every multi-byte UTF-8 byte is >= 0x80.
+		i := 0
+		for i < len(input) {
+			ascii := input[i] < 0x80
+			j := i + 1
+			for j < len(input) && (input[j] < 0x80) == ascii {
+				j++
+			}
+			chunk := input[i:j]
+			chunkOff := int32(i)
+			i = j
+
+			if ascii {
+				sub := NewSimpleTokenizer()
+				for tk := range sub.Tokenize(chunk) {
+					slen := tk.TokenBytes[0]
+					word := string(tk.TokenBytes[1 : slen+1])
+					if !emit(word, chunkOff+tk.BytePos) {
+						return
+					}
+				}
 				continue
 			}
 
-			lowered := strings.ToLower(w.Str)
-			bs := truncateUTF8([]byte(lowered), MAX_TOKEN_SIZE)
-
-			var token Token
-			token.TokenBytes[0] = byte(len(bs))
-			copy(token.TokenBytes[1:], bs)
-			token.TokenPos = tokenPos
-			token.BytePos = int32(w.Start)
-			if !yield(token) {
-				return
+			words := t.jieba.Tokenize(string(chunk), gojieba.DefaultMode, t.useHmm)
+			for _, w := range words {
+				if isAllBreaker(w.Str) {
+					continue
+				}
+				if !emit(w.Str, chunkOff+int32(w.Start)) {
+					return
+				}
 			}
-			tokenPos++
 		}
 	}
 }
