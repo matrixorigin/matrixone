@@ -621,7 +621,7 @@ func avx512D256AddChecked(a, b, r []uint64) int {
 		rW2, c2 := avx512AddCarryStage(aW2, bW2, c1, sb)
 		rW3 := avx512AddCarryStageNoOut(aW3, bW3, c2)
 
-		ofAcc = ofAcc.Or(aW3.Xor(rW3).AndNot(aW3.Xor(bW3)))
+		ofAcc = ofAcc.Or(aW3.Xor(bW3).AndNot(aW3.Xor(rW3)))
 
 		rV0, rV1, rV2, rV3 := transpose8x4Inverse(rW0, rW1, rW2, rW3)
 		rV0.Store((*[8]int64)(unsafe.Add(pr, off)))
@@ -1216,7 +1216,7 @@ func avx512D256AddScalarChecked(s0, s1, s2, s3 uint64, v, r []uint64) int {
 		rW1, c1 := avx512AddCarryStage(aW1, bW1, c0, sb)
 		rW2, c2 := avx512AddCarryStage(aW2, bW2, c1, sb)
 		rW3 := avx512AddCarryStageNoOut(aW3, bW3, c2)
-		ofAcc = ofAcc.Or(aW3.Xor(rW3).AndNot(aW3.Xor(bW3)))
+		ofAcc = ofAcc.Or(aW3.Xor(bW3).AndNot(aW3.Xor(rW3)))
 
 		rV0, rV1, rV2, rV3 := transpose8x4Inverse(rW0, rW1, rW2, rW3)
 		rV0.Store((*[8]int64)(unsafe.Add(pr, off)))

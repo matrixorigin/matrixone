@@ -19,6 +19,7 @@ package simdkernels
 import (
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/cpu"
@@ -291,56 +292,42 @@ func benchD64Checked(b *testing.B, fn func(a, bb, r []uint64) int, n int) {
 
 func BenchmarkD64AddUnchecked(b *testing.B) {
 	for _, n := range d64BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, scalarD64AddUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx2D64AddUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, scalarD64AddUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx2D64AddUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx512D64AddUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx512D64AddUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD64SubUnchecked(b *testing.B) {
 	for _, n := range d64BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, scalarD64SubUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx2D64SubUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, scalarD64SubUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx2D64SubUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx512D64SubUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Unchecked(b, avx512D64SubUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD64AddChecked(b *testing.B) {
 	for _, n := range d64BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, scalarD64AddChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, avx2D64AddChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, scalarD64AddChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, avx2D64AddChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, avx512D64AddChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, avx512D64AddChecked, n) })
 		}
 	}
 }
 
 func BenchmarkD64SubChecked(b *testing.B) {
 	for _, n := range d64BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, scalarD64SubChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, avx2D64SubChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, scalarD64SubChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, avx2D64SubChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD64Checked(b, avx512D64SubChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD64Checked(b, avx512D64SubChecked, n) })
 		}
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }
 
 // ---------------------------------------------------------------------------
@@ -675,14 +662,14 @@ func TestD64SumReduceToD128Variants(t *testing.T) {
 func BenchmarkD64SumReduceToD128(b *testing.B) {
 	for _, n := range d64BenchSizes {
 		v := makeRandD64Bounded(n, 1)
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) {
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) {
 			b.SetBytes(int64(n) * 8)
 			for i := 0; i < b.N; i++ {
 				_, _ = scalarD64SumReduceToD128(v)
 			}
 		})
 		if cpu.X86.HasAVX2 {
-			b.Run("avx2/n="+itoa(n), func(b *testing.B) {
+			b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) {
 				b.SetBytes(int64(n) * 8)
 				for i := 0; i < b.N; i++ {
 					_, _ = avx2D64SumReduceToD128(v)
@@ -690,7 +677,7 @@ func BenchmarkD64SumReduceToD128(b *testing.B) {
 			})
 		}
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) {
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) {
 				b.SetBytes(int64(n) * 8)
 				for i := 0; i < b.N; i++ {
 					_, _ = avx512D64SumReduceToD128(v)

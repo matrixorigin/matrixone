@@ -19,6 +19,7 @@ package simdkernels
 import (
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 )
 
@@ -147,7 +148,7 @@ func BenchmarkD64ScaleUnchecked(b *testing.B) {
 	f := pow10[6]
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
 		for _, im := range d64ScaleImpls() {
-			b.Run(im.name+"/n="+itoa(n), func(b *testing.B) {
+			b.Run(im.name+"/n="+strconv.Itoa(n), func(b *testing.B) {
 				benchmarkD64Scale(b, im.fn, n, f)
 			})
 		}

@@ -431,7 +431,7 @@ func avx512D128AddChecked(a, b, r []uint64) int {
 		bHi := b0.InterleaveHiGrouped(b1)
 
 		rLo, rHi := avx512D128AddCarry(aLo, aHi, bLo, bHi, sb)
-		ofAcc = ofAcc.Or(aHi.Xor(rHi).AndNot(aHi.Xor(bHi)))
+		ofAcc = ofAcc.Or(aHi.Xor(bHi).AndNot(aHi.Xor(rHi)))
 
 		r0 := rLo.InterleaveLoGrouped(rHi)
 		r1 := rLo.InterleaveHiGrouped(rHi)
@@ -969,7 +969,7 @@ func avx512D128AddScalarChecked(slo, shi uint64, v, r []uint64) int {
 		aHi := v0.InterleaveHiGrouped(v1)
 
 		rLo, rHi := avx512D128AddCarry(aLo, aHi, bLo, bHi, sb)
-		ofAcc = ofAcc.Or(aHi.Xor(rHi).AndNot(aHi.Xor(bHi)))
+		ofAcc = ofAcc.Or(aHi.Xor(bHi).AndNot(aHi.Xor(rHi)))
 
 		r0 := rLo.InterleaveLoGrouped(rHi)
 		r1 := rLo.InterleaveHiGrouped(rHi)

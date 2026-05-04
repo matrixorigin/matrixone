@@ -19,6 +19,7 @@ package simdkernels
 import (
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/cpu"
@@ -300,40 +301,40 @@ func benchD128Checked(b *testing.B, fn func(a, bb, r []uint64) int, n int) {
 
 func BenchmarkD128AddUnchecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, scalarD128AddUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx2D128AddUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, scalarD128AddUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx2D128AddUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx512D128AddUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx512D128AddUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD128SubUnchecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, scalarD128SubUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx2D128SubUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, scalarD128SubUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx2D128SubUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx512D128SubUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Unchecked(b, avx512D128SubUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD128AddChecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, scalarD128AddChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, avx2D128AddChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, scalarD128AddChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, avx2D128AddChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, avx512D128AddChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, avx512D128AddChecked, n) })
 		}
 	}
 }
 
 func BenchmarkD128SubChecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, scalarD128SubChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, avx2D128SubChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, scalarD128SubChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, avx2D128SubChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128Checked(b, avx512D128SubChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128Checked(b, avx512D128SubChecked, n) })
 		}
 	}
 }
@@ -646,30 +647,30 @@ func benchD128SubScalarU(b *testing.B, fn func(v []uint64, slo, shi uint64, r []
 
 func BenchmarkD128AddScalarUnchecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, scalarD128AddScalarUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx2D128AddScalarUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, scalarD128AddScalarUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx2D128AddScalarUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx512D128AddScalarUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx512D128AddScalarUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD128SubScalarUnchecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128SubScalarU(b, scalarD128SubScalarUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128SubScalarU(b, avx2D128SubScalarUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128SubScalarU(b, scalarD128SubScalarUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128SubScalarU(b, avx2D128SubScalarUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128SubScalarU(b, avx512D128SubScalarUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128SubScalarU(b, avx512D128SubScalarUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD128ScalarSubUnchecked(b *testing.B) {
 	for _, n := range d128BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, scalarD128ScalarSubUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx2D128ScalarSubUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, scalarD128ScalarSubUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx2D128ScalarSubUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx512D128ScalarSubUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD128AddScalarU(b, avx512D128ScalarSubUnchecked, n) })
 		}
 	}
 }
@@ -718,14 +719,14 @@ func TestD128SumReduceVariants(t *testing.T) {
 func BenchmarkD128SumReduce(b *testing.B) {
 	for _, n := range d128BenchSizes {
 		v := makeRandD128(n, 1)
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) {
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) {
 			b.SetBytes(int64(n) * 16)
 			for i := 0; i < b.N; i++ {
 				_, _ = scalarD128SumReduce(v)
 			}
 		})
 		if cpu.X86.HasAVX2 {
-			b.Run("avx2/n="+itoa(n), func(b *testing.B) {
+			b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) {
 				b.SetBytes(int64(n) * 16)
 				for i := 0; i < b.N; i++ {
 					_, _ = avx2D128SumReduce(v)
@@ -733,7 +734,7 @@ func BenchmarkD128SumReduce(b *testing.B) {
 			})
 		}
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) {
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) {
 				b.SetBytes(int64(n) * 16)
 				for i := 0; i < b.N; i++ {
 					_, _ = avx512D128SumReduce(v)

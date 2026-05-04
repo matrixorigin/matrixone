@@ -18,6 +18,7 @@ package simdkernels
 
 import (
 	"math"
+	"strconv"
 	"testing"
 )
 
@@ -148,7 +149,7 @@ func benchmarkD128Unary(b *testing.B, name string, fn func(src, dst []uint64), n
 func BenchmarkD128Negate(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
 		for _, im := range d128NegateImpls() {
-			b.Run(im.name+"/n="+itoa(n), func(b *testing.B) {
+			b.Run(im.name+"/n="+strconv.Itoa(n), func(b *testing.B) {
 				benchmarkD128Unary(b, im.name, im.fn, n)
 			})
 		}
@@ -158,7 +159,7 @@ func BenchmarkD128Negate(b *testing.B) {
 func BenchmarkD128Abs(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
 		for _, im := range d128AbsImpls() {
-			b.Run(im.name+"/n="+itoa(n), func(b *testing.B) {
+			b.Run(im.name+"/n="+strconv.Itoa(n), func(b *testing.B) {
 				benchmarkD128Unary(b, im.name, im.fn, n)
 			})
 		}

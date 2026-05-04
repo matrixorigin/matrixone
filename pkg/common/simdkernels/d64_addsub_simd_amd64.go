@@ -313,7 +313,9 @@ func avx512D64AddChecked(a, b, r []uint64) int {
 		av := archsimd.LoadInt64x8((*[8]int64)(unsafe.Add(pa, off)))
 		bv := archsimd.LoadInt64x8((*[8]int64)(unsafe.Add(pb, off)))
 		rv := av.Add(bv)
-		ofAcc = ofAcc.Or(av.Xor(rv).AndNot(av.Xor(bv)))
+		// Int64x8.AndNot has inverted operand semantics (computes ~receiver & arg).
+		// We want (a^r) & ~(a^b), so use (a^b).AndNot(a^r).
+		ofAcc = ofAcc.Or(av.Xor(bv).AndNot(av.Xor(rv)))
 		rv.Store((*[8]int64)(unsafe.Add(pr, off)))
 	}
 	vecEnd := i
@@ -713,7 +715,7 @@ func avx512D64AddScalarChecked(s uint64, v, r []uint64) int {
 		off := uintptr(i) * 8
 		vv := archsimd.LoadInt64x8((*[8]int64)(unsafe.Add(pv, off)))
 		rv := sv.Add(vv)
-		ofAcc = ofAcc.Or(sv.Xor(rv).AndNot(sv.Xor(vv)))
+		ofAcc = ofAcc.Or(sv.Xor(vv).AndNot(sv.Xor(rv)))
 		rv.Store((*[8]int64)(unsafe.Add(pr, off)))
 	}
 	vecEnd := i

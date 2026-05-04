@@ -19,6 +19,7 @@ package simdkernels
 import (
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/cpu"
@@ -298,40 +299,40 @@ func benchD256Checked(b *testing.B, fn func(a, bb, r []uint64) int, n int) {
 
 func BenchmarkD256AddUnchecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, scalarD256AddUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx2D256AddUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, scalarD256AddUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx2D256AddUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx512D256AddUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx512D256AddUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD256SubUnchecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, scalarD256SubUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx2D256SubUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, scalarD256SubUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx2D256SubUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx512D256SubUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Unchecked(b, avx512D256SubUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD256AddChecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, scalarD256AddChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, avx2D256AddChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, scalarD256AddChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, avx2D256AddChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, avx512D256AddChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, avx512D256AddChecked, n) })
 		}
 	}
 }
 
 func BenchmarkD256SubChecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, scalarD256SubChecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, avx2D256SubChecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, scalarD256SubChecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, avx2D256SubChecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256Checked(b, avx512D256SubChecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256Checked(b, avx512D256SubChecked, n) })
 		}
 	}
 }
@@ -640,30 +641,30 @@ func benchD256SubScalarU(b *testing.B, fn func(v []uint64, s0, s1, s2, s3 uint64
 
 func BenchmarkD256AddScalarUnchecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, scalarD256AddScalarUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx2D256AddScalarUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, scalarD256AddScalarUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx2D256AddScalarUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx512D256AddScalarUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx512D256AddScalarUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD256SubScalarUnchecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256SubScalarU(b, scalarD256SubScalarUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256SubScalarU(b, avx2D256SubScalarUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256SubScalarU(b, scalarD256SubScalarUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256SubScalarU(b, avx2D256SubScalarUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256SubScalarU(b, avx512D256SubScalarUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256SubScalarU(b, avx512D256SubScalarUnchecked, n) })
 		}
 	}
 }
 
 func BenchmarkD256ScalarSubUnchecked(b *testing.B) {
 	for _, n := range d256BenchSizes {
-		b.Run("scalar/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, scalarD256ScalarSubUnchecked, n) })
-		b.Run("avx2/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx2D256ScalarSubUnchecked, n) })
+		b.Run("scalar/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, scalarD256ScalarSubUnchecked, n) })
+		b.Run("avx2/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx2D256ScalarSubUnchecked, n) })
 		if cpu.X86.HasAVX512 {
-			b.Run("avx512/n="+itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx512D256ScalarSubUnchecked, n) })
+			b.Run("avx512/n="+strconv.Itoa(n), func(b *testing.B) { benchD256AddScalarU(b, avx512D256ScalarSubUnchecked, n) })
 		}
 	}
 }

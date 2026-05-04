@@ -17,6 +17,7 @@ package simdkernels
 import (
 	"math"
 	"math/rand"
+	"strconv"
 	"testing"
 )
 
@@ -107,21 +108,21 @@ func benchD64Cmp(b *testing.B, fn func(a, b []uint64, out []bool), n int) {
 
 func BenchmarkD64Eq_Scalar(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
-		b.Run(itoa(n), func(b *testing.B) { benchD64Cmp(b, scalarD64Eq, n) })
+		b.Run(strconv.Itoa(n), func(b *testing.B) { benchD64Cmp(b, scalarD64Eq, n) })
 	}
 }
 func BenchmarkD64Eq_Dispatch(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
-		b.Run(itoa(n), func(b *testing.B) { benchD64Cmp(b, D64Eq, n) })
+		b.Run(strconv.Itoa(n), func(b *testing.B) { benchD64Cmp(b, D64Eq, n) })
 	}
 }
 func BenchmarkD64Lt_Scalar(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
-		b.Run(itoa(n), func(b *testing.B) { benchD64Cmp(b, scalarD64Lt, n) })
+		b.Run(strconv.Itoa(n), func(b *testing.B) { benchD64Cmp(b, scalarD64Lt, n) })
 	}
 }
 func BenchmarkD64Lt_Dispatch(b *testing.B) {
 	for _, n := range []int{16, 64, 256, 1024, 4096} {
-		b.Run(itoa(n), func(b *testing.B) { benchD64Cmp(b, D64Lt, n) })
+		b.Run(strconv.Itoa(n), func(b *testing.B) { benchD64Cmp(b, D64Lt, n) })
 	}
 }

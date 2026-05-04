@@ -20,6 +20,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand/v2"
+	"strconv"
 	"testing"
 )
 
@@ -152,7 +153,7 @@ func TestD64MulCorrectness(t *testing.T) {
 	impls := d64MulImpls()
 
 	for _, sa := range scaleAdjs {
-		t.Run("scaleAdj="+itoa(int(sa)), func(t *testing.T) {
+		t.Run("scaleAdj="+strconv.Itoa(int(sa)), func(t *testing.T) {
 			for _, n := range d64MulSizes() {
 				a := makeRandInt64Slice(n, 0xC0FFEE^uint64(n), 1<<40)
 				b := makeRandInt64Slice(n, 0xBADBEEF^uint64(n), 1<<40)
@@ -214,10 +215,10 @@ func BenchmarkD64Mul(b *testing.B) {
 	scaleAdjs := []int32{0, -8}
 	for _, sa := range scaleAdjs {
 		for _, n := range sizes {
-			b.Run("scalar/sa="+itoa(int(sa))+"/n="+itoa(n), func(b *testing.B) {
+			b.Run("scalar/sa="+strconv.Itoa(int(sa))+"/n="+strconv.Itoa(n), func(b *testing.B) {
 				benchD64Mul(b, scalarD64MulNoBroadcast, n, sa)
 			})
-			b.Run("dispatch/sa="+itoa(int(sa))+"/n="+itoa(n), func(b *testing.B) {
+			b.Run("dispatch/sa="+strconv.Itoa(int(sa))+"/n="+strconv.Itoa(n), func(b *testing.B) {
 				benchD64Mul(b, D64MulNoBroadcast, n, sa)
 			})
 		}
