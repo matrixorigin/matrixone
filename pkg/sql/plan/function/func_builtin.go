@@ -2285,10 +2285,58 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 
 }
 
+// getConstInt64 checks if the parameter is a constant int64 value and returns it.
+func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
+	sv := p.GetSourceVector()
+	if sv.IsConst() && !sv.IsConstNull() {
+		v, _ := p.GetValue(0)
+		return v, true
+	}
+	return 0, false
+}
+
 func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
+
+	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
+	if p2.WithAnyNullValue() {
+		// fall through to slow path
+	} else if constIdx, isConst := getConstInt64(p2); isConst {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null := p1.GetStrValue(i)
+			if null {
+				var nilVal T
+				if err := result.Append(nilVal, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			el, schema, err := types.UnpackNthElement(v1, int(constIdx))
+			if err != nil {
+				return err
+			}
+
+			if schema == types.T_any {
+				var nilVal T
+				if err = result.Append(nilVal, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if value, ok := el.(T); ok {
+				if err := result.Append(value, false); err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+			}
+		}
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
@@ -2333,6 +2381,43 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+
+	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
+	if p2.WithAnyNullValue() {
+		// fall through to slow path
+	} else if constIdx, isConst := getConstInt64(p2); isConst {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null := p1.GetStrValue(i)
+			if null {
+				if err := result.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			el, schema, err := types.UnpackNthElement(v1, int(constIdx))
+			if err != nil {
+				return err
+			}
+
+			if schema == types.T_any {
+				if err = result.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if value, ok := el.([]byte); ok {
+				if err := result.AppendBytes(value, false); err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+			}
+		}
+		return nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)
