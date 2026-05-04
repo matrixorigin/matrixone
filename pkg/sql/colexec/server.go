@@ -116,7 +116,6 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch proces
 	return nil
 }
 
-
 func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
