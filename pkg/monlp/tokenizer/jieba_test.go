@@ -19,7 +19,7 @@ import (
 )
 
 func collectJieba(tknz *JiebaTokenizer, input string) []Token {
-	var out []Token
+	out := make([]Token, 0, 16)
 	for tk := range tknz.Tokenize([]byte(input)) {
 		out = append(out, tk)
 	}

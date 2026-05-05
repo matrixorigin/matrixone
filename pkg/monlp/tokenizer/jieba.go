@@ -46,10 +46,11 @@ var (
 //   - true at query time: HMM new-word discovery broadens recall for terms
 //     not in the dictionary.
 func SharedJiebaTokenizer(useHmm bool) *JiebaTokenizer {
+	paths := jiebaDictPaths()
 	if useHmm {
 		sharedJiebaHmmOnce.Do(func() {
 			sharedJiebaHmm = &JiebaTokenizer{
-				jieba:  gojieba.NewJieba(),
+				jieba:  gojieba.NewJieba(paths[:]...),
 				useHmm: true,
 				shared: true,
 			}
@@ -58,7 +59,7 @@ func SharedJiebaTokenizer(useHmm bool) *JiebaTokenizer {
 	}
 	sharedJiebaNoHmmOnce.Do(func() {
 		sharedJiebaNoHmm = &JiebaTokenizer{
-			jieba:  gojieba.NewJieba(),
+			jieba:  gojieba.NewJieba(paths[:]...),
 			useHmm: false,
 			shared: true,
 		}
@@ -73,8 +74,9 @@ func SharedJiebaTokenizer(useHmm bool) *JiebaTokenizer {
 // The returned tokenizer holds C resources that are released either when
 // Free is called explicitly or when the value is garbage collected.
 func NewJiebaTokenizer(useHmm bool) *JiebaTokenizer {
+	paths := jiebaDictPaths()
 	return &JiebaTokenizer{
-		jieba:  gojieba.NewJieba(),
+		jieba:  gojieba.NewJieba(paths[:]...),
 		useHmm: useHmm,
 	}
 }
