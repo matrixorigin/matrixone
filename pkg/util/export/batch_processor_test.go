@@ -261,7 +261,13 @@ func TestNewMOCollector_BufferCnt(t *testing.T) {
 	cfg := getDummyOBCollectorConfig()
 	cfg.ShowStatsInterval.Duration = 5 * time.Second
 	cfg.BufferCnt = 2
-	collector := NewMOCollector(ctx, "", WithOBCollectorConfig(cfg))
+	// The test stalls two batches inside GetBatch concurrently, so it needs at
+	// least 2 generator workers regardless of host CPU count. Pin them
+	// explicitly to keep the test deterministic on small CI runners.
+	collector := NewMOCollector(ctx, "",
+		WithOBCollectorConfig(cfg),
+		WithGeneratorCnt(2),
+	)
 	collector.Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector.Start()
 

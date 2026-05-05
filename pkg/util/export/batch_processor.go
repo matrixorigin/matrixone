@@ -457,10 +457,16 @@ func NewMOCollector(
 func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	var totalNum = math.Ceil(float64(numCpu) * 0.1)
 	unit := float64(totalNum) / (100.0)
-	// set default value if non-set
-	c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
-	c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
-	c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
+	// set default value if non-set; explicit cnt (set via WithCollectorCnt/etc.) wins.
+	if c.collectorCnt <= 0 {
+		c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
+	}
+	if c.generatorCnt <= 0 {
+		c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
+	}
+	if c.exporterCnt <= 0 {
+		c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
+	}
 	if c.collectorCnt <= 0 {
 		c.collectorCnt = 1
 	}
@@ -491,6 +497,19 @@ func WithGeneratorCntP(p int) MOCollectorOption {
 }
 func WithExporterCntP(p int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
+}
+
+// WithCollectorCnt sets the collector worker count directly, bypassing the
+// percent-based calculation. Mainly useful for tests that need deterministic
+// worker counts independent of runtime.NumCPU().
+func WithCollectorCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = n })
+}
+func WithGeneratorCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = n })
+}
+func WithExporterCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = n })
 }
 
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
