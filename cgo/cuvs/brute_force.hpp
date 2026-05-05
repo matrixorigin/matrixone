@@ -505,6 +505,201 @@ public:
         return search_res;
     }
 
+    // Filtered search variants — mirror search() / search_float() but
+    // additionally evaluate preds_json against filter_host_ (and AND in any
+    // soft-deletes), then pass the resulting bitset to cuvs::neighbors::
+    // brute_force::search as a native prefilter mask. Empty preds_json
+    // collapses to the deletes-only path (or unfiltered if no deletes).
+    search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
+                                       uint32_t query_dimension, uint32_t limit,
+                                       const brute_force_search_params_t& sp,
+                                       const std::string& preds_json) {
+        if (preds_json.empty()) {
+            return this->search(queries_data, num_queries, query_dimension, limit, sp);
+        }
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        if (!this->is_loaded_ || !index_) return search_result_t{};
+
+        auto task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal_with_filter(handle, queries_data, num_queries, limit, sp, preds_json);
+        };
+        uint64_t job_id = this->worker->submit(task);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
+    uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
+                                      uint32_t /*query_dimension*/, uint32_t limit,
+                                      const brute_force_search_params_t& sp,
+                                      const std::string& preds_json) {
+        if (preds_json.empty()) {
+            return this->search_async(queries_data, num_queries, /*query_dim*/0, limit, sp);
+        }
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!this->is_loaded_ || !index_) return 0;
+
+        auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
+        auto preds_copy   = preds_json;
+
+        auto task = [this, num_queries, limit, sp, queries_copy, preds_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal_with_filter(handle, queries_copy->data(), num_queries, limit, sp, preds_copy);
+        };
+        return this->worker->submit(task);
+    }
+
+    search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
+                                             uint32_t query_dimension, uint32_t limit,
+                                             const brute_force_search_params_t& sp,
+                                             const std::string& preds_json) {
+        if constexpr (std::is_same_v<T, float>) {
+            return this->search_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        }
+        if (preds_json.empty()) {
+            return this->search_float(queries_data, num_queries, query_dimension, limit, sp);
+        }
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        if (!this->is_loaded_ || !index_) return search_result_t{};
+
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal_with_filter(handle, queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        };
+        uint64_t job_id = this->worker->submit(task);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
+    }
+
+    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+                                            uint32_t query_dimension, uint32_t limit,
+                                            const brute_force_search_params_t& sp,
+                                            const std::string& preds_json) {
+        if constexpr (std::is_same_v<T, float>) {
+            return this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        }
+        if (preds_json.empty()) {
+            return this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+        }
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!this->is_loaded_ || !index_) return 0;
+
+        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto preds_copy   = preds_json;
+
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, preds_copy](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal_with_filter(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, preds_copy);
+        };
+        return this->worker->submit(task);
+    }
+
+    search_result_t search_internal_with_filter(raft_handle_wrapper_t& handle,
+                                                const T* queries_data, uint64_t num_queries,
+                                                uint32_t limit,
+                                                const brute_force_search_params_t& /*sp*/,
+                                                const std::string& preds_json) {
+        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        auto res = handle.get_raft_resources();
+
+        search_result_t search_res;
+        search_res.neighbors.resize(num_queries * limit);
+        search_res.distances.resize(num_queries * limit);
+
+        auto queries_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_queries, (int64_t)this->dimension);
+        raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        raft::resource::sync_stream(*res);
+
+        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+
+        cuvs::neighbors::brute_force::search_params bf_sp;
+        // brute_force is SINGLE_GPU only — start_row=0, shard_sz=count.
+        auto bs_ptr = this->build_search_bitset(handle, preds_json, /*start_row*/0, this->count);
+        if (bs_ptr) {
+            auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                 raft::make_const_mdspan(queries_device.view()),
+                                                 neighbors_device.view(), distances_device.view(), filter);
+        } else {
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                 raft::make_const_mdspan(queries_device.view()),
+                                                 neighbors_device.view(), distances_device.view());
+        }
+
+        raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+        raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        handle.sync();
+
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != -1) {
+                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                }
+            }
+        }
+        this->transform_distance(this->metric, search_res.distances);
+        return search_res;
+    }
+
+    search_result_t search_float_internal_with_filter(raft_handle_wrapper_t& handle,
+                                                      const float* queries_data, uint64_t num_queries,
+                                                      uint32_t /*query_dimension*/, uint32_t limit,
+                                                      const brute_force_search_params_t& /*sp*/,
+                                                      const std::string& preds_json) {
+        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        auto res = handle.get_raft_resources();
+
+        auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+
+        if constexpr (std::is_same_v<T, float>) {
+            raft::copy(*res, q_dev_t.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+        } else {
+            auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
+            raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+                this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
+            } else {
+                raft::copy(*res, q_dev_t.view(), q_dev_f.view());
+            }
+        }
+        raft::resource::sync_stream(*res);
+
+        search_result_t search_res;
+        search_res.neighbors.resize(num_queries * limit);
+        search_res.distances.resize(num_queries * limit);
+
+        auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+        auto distances_device = raft::make_device_matrix<float, int64_t>(*res, (int64_t)num_queries, (int64_t)limit);
+
+        cuvs::neighbors::brute_force::search_params bf_sp;
+        auto bs_ptr = this->build_search_bitset(handle, preds_json, /*start_row*/0, this->count);
+        if (bs_ptr) {
+            auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                 raft::make_const_mdspan(q_dev_t.view()),
+                                                 neighbors_device.view(), distances_device.view(), filter);
+        } else {
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+                                                 raft::make_const_mdspan(q_dev_t.view()),
+                                                 neighbors_device.view(), distances_device.view());
+        }
+
+        raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
+        raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+        handle.sync();
+
+        if (!this->host_ids.empty()) {
+            for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+                if (search_res.neighbors[i] != -1) {
+                    search_res.neighbors[i] = (int64_t)this->host_ids[search_res.neighbors[i]];
+                }
+            }
+        }
+        this->transform_distance(this->metric, search_res.distances);
+        return search_res;
+    }
+
     void destroy() override {
         if (this->worker) this->worker->stop();
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
