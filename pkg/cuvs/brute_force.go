@@ -128,23 +128,34 @@ func (gb *GpuBruteForce[T]) Build() error {
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64) error {
+// If ids is non-nil it must have length chunkCount and supplies external int64
+// ids (e.g. pkids) that the brute-force search will return in `neighbors`
+// instead of the internal 0..N-1 row index.
+func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
 	if gb.cIndex == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(chunk) == 0 || chunkCount == 0 {
 		return nil
 	}
+	if ids != nil && uint64(len(ids)) != chunkCount {
+		return moerr.NewInternalErrorNoCtx("ids length does not match chunkCount")
+	}
 
 	var errmsg *C.char
+	var idsPtr *C.int64_t
+	if ids != nil {
+		idsPtr = (*C.int64_t)(&ids[0])
+	}
 	C.gpu_brute_force_add_chunk(
 		gb.cIndex,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
-		nil,
+		idsPtr,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -155,23 +166,32 @@ func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64) error {
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly conversion if needed.
-func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
+// See AddChunk for the meaning of ids.
+func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gb.cIndex == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(chunk) == 0 || chunkCount == 0 {
 		return nil
 	}
+	if ids != nil && uint64(len(ids)) != chunkCount {
+		return moerr.NewInternalErrorNoCtx("ids length does not match chunkCount")
+	}
 
 	var errmsg *C.char
+	var idsPtr *C.int64_t
+	if ids != nil {
+		idsPtr = (*C.int64_t)(&ids[0])
+	}
 	C.gpu_brute_force_add_chunk_float(
 		gb.cIndex,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
-		nil,
+		idsPtr,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -363,6 +383,120 @@ func (gb *GpuBruteForce[T]) SearchWait(jobID uint64, numQueries uint64, limit ui
 	C.gpu_brute_force_free_search_result(cResult)
 
 	return neighbors, distances, nil
+}
+
+// SetFilterColumns registers filter-column metadata before AddFilterChunk.
+// colMetaJSON is a JSON array of {"name":"...","type":N} entries with the
+// same shape consumed by GpuCagra.SetFilterColumns. Must be called after
+// Start() and before Build().
+func (gb *GpuBruteForce[T]) SetFilterColumns(colMetaJSON string, totalCount uint64) error {
+	if gb.cIndex == nil {
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	var errmsg *C.char
+	cMeta := C.CString(colMetaJSON)
+	defer C.free(unsafe.Pointer(cMeta))
+	C.gpu_brute_force_set_filter_columns(gb.cIndex, cMeta, C.uint64_t(totalCount), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// AddFilterChunk appends nrows raw values for filter column colIdx. data is a
+// row-major byte slice; nullBitmap is a packed []uint32 (LSB-first; bit i = 1
+// means row i IS NULL) of ceil(nrows/32) entries, or nil for no nulls.
+func (gb *GpuBruteForce[T]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+	if gb.cIndex == nil {
+		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(data) == 0 || nrows == 0 {
+		return nil
+	}
+	var errmsg *C.char
+	var cNullBitmap *C.uint32_t
+	if len(nullBitmap) > 0 {
+		cNullBitmap = (*C.uint32_t)(unsafe.Pointer(&nullBitmap[0]))
+	}
+	C.gpu_brute_force_add_filter_chunk(
+		gb.cIndex,
+		C.uint32_t(colIdx),
+		unsafe.Pointer(&data[0]),
+		cNullBitmap,
+		C.uint64_t(nrows),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(data)
+	runtime.KeepAlive(nullBitmap)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return nil
+}
+
+// SearchWithFilterAsync runs a filtered K-NN brute-force search asynchronously.
+// predsJSON is the same predicate-array shape consumed by
+// GpuCagra.SearchFloatWithFilter. Empty predsJSON collapses to SearchAsync.
+func (gb *GpuBruteForce[T]) SearchWithFilterAsync(queries []T, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error) {
+	if gb.cIndex == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+	var errmsg *C.char
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+	jobID := C.gpu_brute_force_search_with_filter_async(
+		gb.cIndex,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(jobID), nil
+}
+
+// SearchFloat32WithFilterAsync runs a filtered K-NN brute-force search with
+// float32 queries asynchronously. Empty predsJSON collapses to SearchFloat32Async.
+func (gb *GpuBruteForce[T]) SearchFloat32WithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error) {
+	if gb.cIndex == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+	var errmsg *C.char
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+	jobID := C.gpu_brute_force_search_float_with_filter_async(
+		gb.cIndex,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(jobID), nil
 }
 
 // Cap returns the capacity of the index buffer

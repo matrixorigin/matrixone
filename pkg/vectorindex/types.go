@@ -47,6 +47,26 @@ const (
 	CDC_DELETE = "D"
 )
 
+type ChunkTag int64
+
+const (
+	Tag_ModelChunk ChunkTag = 0
+	// Tag_CdcEvents stores an ordered event log of CDC mutations. Each chunk
+	// is a sequence of op-tagged records; replay in chunk_id order produces
+	// the (deleted, overflow) state used by the load path. Replaces the
+	// earlier two-stream design (separate deleted-pkid list + insert
+	// overflow), which lost temporal ordering between DELETE/INSERT events
+	// for the same pkid. See cuvs_cdc.md for the full record format.
+	Tag_CdcEvents ChunkTag = 1
+)
+
+// CdcTailId is the literal index_id under which CDC writes tag=1 event-log
+// rows in the storage table for cagra/ivfpq indexes. CDC is single-threaded
+// and re-index quiesces it, so this fixed sentinel removes the per-sub-index
+// "active id" coordination problem entirely — search reads it once at Load
+// time alongside the real sub-index models.
+const CdcTailId = "cdc_tail"
+
 type DistributionMode uint16
 
 const (
@@ -247,21 +267,28 @@ func (h *VectorIndexCdc[T]) Full() bool {
 	return len(h.Data) >= cap(h.Data)
 }
 
-func (h *VectorIndexCdc[T]) Insert(key int64, v []T) {
+// Insert appends a CDC INSERT event. includeBytes carries the row's INCLUDE
+// column values for cuvs CAGRA / IVF-PQ in row-major + trailing null-mask
+// layout (see EncodeEventRecord in cuvs_cdc.go for the format). Pass nil for
+// HNSW or for indexes without INCLUDE columns.
+func (h *VectorIndexCdc[T]) Insert(key int64, v []T, includeBytes []byte) {
 	e := VectorIndexCdcEntry[T]{
-		Type: CDC_INSERT,
-		PKey: key,
-		Vec:  v,
+		Type:         CDC_INSERT,
+		PKey:         key,
+		Vec:          v,
+		IncludeBytes: includeBytes,
 	}
 
 	h.Data = append(h.Data, e)
 }
 
-func (h *VectorIndexCdc[T]) Upsert(key int64, v []T) {
+// Upsert appends a CDC UPSERT event. See Insert for includeBytes semantics.
+func (h *VectorIndexCdc[T]) Upsert(key int64, v []T, includeBytes []byte) {
 	e := VectorIndexCdcEntry[T]{
-		Type: CDC_UPSERT,
-		PKey: key,
-		Vec:  v,
+		Type:         CDC_UPSERT,
+		PKey:         key,
+		Vec:          v,
+		IncludeBytes: includeBytes,
 	}
 
 	h.Data = append(h.Data, e)
@@ -289,6 +316,10 @@ type VectorIndexCdcEntry[T types.RealNumbers] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`
+	// IncludeBytes carries this row's INCLUDE column values (row-major
+	// in column-meta order + trailing null mask). Empty/omitted for HNSW
+	// and for cuvs indexes with no INCLUDE columns.
+	IncludeBytes []byte `json:"i,omitempty"`
 }
 
 type HnswCdcParam struct {

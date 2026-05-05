@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -42,6 +43,15 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32] {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	// LoadIndex always fires the tag=1 CDC event-log SELECT in parallel
+	// with the model tar load. Mock it to return empty for the duration of
+	// the LoadIndex call.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
 
 	loader := &CagraModel[float32]{
 		Id:       id,
@@ -177,9 +187,12 @@ func TestCagraSearchLoad(t *testing.T) {
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 
-	// Mock runSql for LoadMetadata.
+	// Mock runSql for LoadMetadata + tag=1 CDC event log (returns empty).
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{

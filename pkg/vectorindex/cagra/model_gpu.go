@@ -63,6 +63,26 @@ type CagraModel[T cuvs.VectorType] struct {
 	Dirty bool
 	View  bool
 	Len   int64
+
+	// CDC delete state — pkids that the unified-log replay marked for deletion
+	// (DELETE record with no later INSERT). Replayed through Index.DeleteIds
+	// after Unpack to apply to the in-memory cuvs deleted_bitset_.
+	DeletedPkids []int64
+
+	// CDC insert overflow — pkids that the replay left in the brute-force
+	// overflow (INSERT record with no later DELETE). Brute-force searched at
+	// query time and merged with main-index results. F32 regardless of T
+	// (quantizer params live in the model tar, not available at CDC write
+	// time).
+	OverflowPkids []int64
+	OverflowVecs  []float32 // len = len(OverflowPkids) * dim
+
+	// INCLUDE column data carried alongside each overflow row. Layout
+	// matches the EncodeEventRecord INSERT-record include section:
+	// row-major in column-meta order, then ceil(ncols/8) trailing bytes per
+	// row for the null mask. Empty when the index has no INCLUDE columns.
+	OverflowIncludeBytes []byte
+	IncludeBytesPerRow   int
 }
 
 // NewCagraModelForBuild creates a CagraModel ready for bulk-build.
@@ -281,7 +301,7 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 			chunksz = filesz - offset
 		}
 		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
+		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), %d)", idx.Id, chunkid, url, vectorindex.Tag_ModelChunk)
 		values = append(values, tuple)
 		offset += chunksz
 		chunkid++
@@ -378,6 +398,11 @@ func (idx *CagraModel[T]) loadChunk(ctx context.Context,
 // LoadIndex downloads the tar from the database, unpacks it, and loads the CAGRA index into GPU memory.
 // Mirrors HnswModel.LoadIndex.
 // idx.Devices must be set before calling LoadIndex.
+//
+// Two storage tags are loaded in parallel:
+//   - tag=0: model tar chunks (streaming, multi-GB)
+//   - tag=1: CDC event log (small KB–MB; replayed once after Unpack to derive
+//     the deleted-pkid set and the brute-force overflow)
 func (idx *CagraModel[T]) LoadIndex(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
@@ -405,10 +430,32 @@ func (idx *CagraModel[T]) LoadIndex(
 		return moerr.NewInternalErrorNoCtx("CagraModel: checksum is empty; cannot load from database")
 	}
 
+	// Fire the tag=1 event-log fetch in parallel with the model tar streaming.
+	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
+	// deferred until after Unpack — we only fetch the raw chunks here.
+	var (
+		cdcWg     sync.WaitGroup
+		cdcErr    error
+		dim       = int(idxcfg.CuvsCagra.Dimensions)
+		eventChunks []vectorindex.EventChunk
+	)
+
+	cdcWg.Add(1)
+	go func() {
+		defer cdcWg.Done()
+		chunks, e := idx.loadCdcEventsFromDB(sqlproc, tblcfg)
+		if e != nil {
+			cdcErr = e
+			return
+		}
+		eventChunks = chunks
+	}()
+
 	if len(idx.Path) == 0 {
 		// Download the tar file from the database via streaming SQL.
 		fp, err = os.CreateTemp("", "cagra")
 		if err != nil {
+			cdcWg.Wait()
 			return err
 		}
 		fname = fp.Name()
@@ -426,11 +473,12 @@ func (idx *CagraModel[T]) LoadIndex(
 		}()
 
 		if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
+			cdcWg.Wait()
 			return err
 		}
 
-		sql := fmt.Sprintf("SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s'",
-			tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s' AND tag = %d",
+			tblcfg.DbName, tblcfg.IndexTable, idx.Id, vectorindex.Tag_ModelChunk)
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -471,12 +519,19 @@ func (idx *CagraModel[T]) LoadIndex(
 			}
 		}
 		if err != nil {
+			cdcWg.Wait()
 			return
 		}
 
 		idx.Path = fp.Name()
 		fp.Close()
 		fp = nil
+	}
+
+	// Wait for CDC deltas; surface any error before we touch the GPU.
+	cdcWg.Wait()
+	if cdcErr != nil {
+		return cdcErr
 	}
 
 	// Verify checksum.
@@ -522,12 +577,45 @@ func (idx *CagraModel[T]) LoadIndex(
 
 	gi.SetBatchWindow(tblcfg.BatchWindow)
 
+	// The model tar carries the INCLUDE col meta; pull it and replay the
+	// fetched tag=1 event log at the right INSERT-record size.
+	colMetaJSON := gi.GetFilterColMetaJSON()
+	includeBytesPerRow := 0
+	if colMetaJSON != "" {
+		ibpr, e := vectorindex.CdcIncludeBytesPerRow(colMetaJSON)
+		if e != nil {
+			gi.Destroy()
+			return e
+		}
+		includeBytesPerRow = ibpr
+	}
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(eventChunks, dim, includeBytesPerRow)
+	if err != nil {
+		gi.Destroy()
+		return err
+	}
+	idx.DeletedPkids = delPkids
+	idx.OverflowPkids = ovPkids
+	idx.OverflowVecs = ovVecs
+	idx.OverflowIncludeBytes = ovInc
+	idx.IncludeBytesPerRow = includeBytesPerRow
+
+	// Replay CDC deletes onto the freshly-loaded cuvs index. delete_id is
+	// idempotent and silently no-ops on pkids the cuvs id_map doesn't know
+	// (e.g. a row that was inserted post-build and now lives only in
+	// OverflowPkids — that case is handled at search time).
+	if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
+		gi.Destroy()
+		return err
+	}
+
 	idx.Index = gi
 	idx.View = view
 	idx.Len = int64(gi.Len())
 	idx.MaxCapacity = uint64(gi.Cap())
 
-	logutil.Debugf("CagraModel.LoadIndex idx %s, len = %d\n", idx.Id, idx.Len)
+	logutil.Debugf("CagraModel.LoadIndex idx %s, len = %d, deletes = %d, overflow = %d\n",
+		idx.Id, idx.Len, len(idx.DeletedPkids), len(idx.OverflowPkids))
 
 	if view {
 		// Remove the local tar; the index is fully in GPU memory.
@@ -558,6 +646,78 @@ func (idx *CagraModel[T]) Unload() error {
 		idx.Index = nil
 	}
 	return nil
+}
+
+// loadCdcEventsFromDB reads the tag=1 event-log rows for this index and
+// returns one EventChunk per row. The caller (LoadIndex / search) sorts by
+// chunk_id before replay since record ordering across chunks encodes the
+// temporal ordering between DELETE and INSERT events for the same pkid.
+func (idx *CagraModel[T]) loadCdcEventsFromDB(
+	sqlproc *sqlexec.SqlProcess,
+	tblcfg vectorindex.IndexTableConfig,
+) ([]vectorindex.EventChunk, error) {
+	sql := vectorindex.CdcLoadEventsSql(tblcfg, idx.Id)
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var chunks []vectorindex.EventChunk
+	for _, bat := range res.Batches {
+		idVec := bat.Vecs[0]
+		dataVec := bat.Vecs[1]
+		for i := 0; i < bat.RowCount(); i++ {
+			raw := dataVec.GetRawBytesAt(i)
+			cp := make([]byte, len(raw))
+			copy(cp, raw)
+			chunks = append(chunks, vectorindex.EventChunk{
+				ChunkId: vector.GetFixedAtWithTypeCheck[int64](idVec, i),
+				Data:    cp,
+			})
+		}
+	}
+	return chunks, nil
+}
+
+// replayEventChunks sorts the chunks by chunk_id, replays the records, and
+// flattens the (deleted, overflow) replay state into the parallel slices the
+// CagraModel struct carries (pkids/vecs/include layout that buildOverflow
+// expects). Pass includeBytesPerRow=0 for indexes without INCLUDE columns.
+func replayEventChunks(
+	chunks []vectorindex.EventChunk,
+	dim int,
+	includeBytesPerRow int,
+) ([]int64, []int64, []float32, []byte, error) {
+	if len(chunks) == 0 {
+		return nil, nil, nil, nil, nil
+	}
+	vectorindex.SortChunks(chunks)
+	state, err := vectorindex.ReplayEventLog(chunks, dim, includeBytesPerRow)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	deletedPkids := state.Deleted
+	if len(deletedPkids) == 0 {
+		deletedPkids = nil
+	}
+	if len(state.Overflow) == 0 {
+		return deletedPkids, nil, nil, nil, nil
+	}
+	ovPkids := make([]int64, len(state.Overflow))
+	ovVecs := make([]float32, len(state.Overflow)*dim)
+	var ovInc []byte
+	if includeBytesPerRow > 0 {
+		ovInc = make([]byte, len(state.Overflow)*includeBytesPerRow)
+	}
+	for i, e := range state.Overflow {
+		ovPkids[i] = e.Pkid
+		copy(ovVecs[i*dim:(i+1)*dim], e.Vec)
+		if includeBytesPerRow > 0 {
+			copy(ovInc[i*includeBytesPerRow:(i+1)*includeBytesPerRow], e.Include)
+		}
+	}
+	return deletedPkids, ovPkids, ovVecs, ovInc, nil
 }
 
 // LoadMetadata loads CagraModel descriptors from the metadata table.

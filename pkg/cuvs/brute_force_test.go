@@ -88,7 +88,7 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize)
+		err = index.AddChunkFloat(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -161,6 +161,89 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 	}
 }
 
+// TestGpuBruteForceFilter exercises the new SetFilterColumns / AddFilterChunk /
+// SearchFloat32WithFilterAsync path. We build a 100-row index with a single
+// int64 INCLUDE column "tier" (values 0..99); ask for the nearest neighbor
+// among rows where tier > 50. The expected behavior: the prefilter mask drops
+// rows 0..50 inside the brute-force kernel, so even a query closest to row 0
+// returns row 51 (the next closest pkid that passes the filter).
+func TestGpuBruteForceFilter(t *testing.T) {
+	dimension := uint32(2)
+	nVectors := uint64(100)
+
+	dataset := make([]float32, nVectors*uint64(dimension))
+	pkids := make([]int64, nVectors)
+	for i := uint64(0); i < nVectors; i++ {
+		dataset[i*uint64(dimension)] = float32(i)
+		dataset[i*uint64(dimension)+1] = float32(i)
+		pkids[i] = int64(1000 + i)
+	}
+
+	idx, err := NewGpuBruteForceEmpty[float32](nVectors, dimension, L2Expanded, 1, 0)
+	if err != nil {
+		t.Fatalf("NewGpuBruteForceEmpty: %v", err)
+	}
+	defer idx.Destroy()
+	if err = idx.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	colMetaJSON := `[{"name":"tier","type":1}]` // 1 = int64
+	if err = idx.SetFilterColumns(colMetaJSON, nVectors); err != nil {
+		t.Fatalf("SetFilterColumns: %v", err)
+	}
+	if err = idx.AddChunkFloat(dataset, nVectors, pkids); err != nil {
+		t.Fatalf("AddChunkFloat: %v", err)
+	}
+	// One column of int64; row i value = i. No nulls.
+	colData := make([]byte, int(nVectors)*8)
+	for i := uint64(0); i < nVectors; i++ {
+		// little-endian int64
+		v := int64(i)
+		for b := 0; b < 8; b++ {
+			colData[int(i)*8+b] = byte(v >> (8 * b))
+		}
+	}
+	if err = idx.AddFilterChunk(0, colData, nil, nVectors); err != nil {
+		t.Fatalf("AddFilterChunk: %v", err)
+	}
+	if err = idx.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Query closest to row 0; without filter NN would be pkid 1000 (row 0).
+	queries := []float32{0.0, 0.0}
+	predsJSON := `[{"col":0,"op":">","val":50}]`
+	jobID, err := idx.SearchFloat32WithFilterAsync(queries, 1, dimension, 1, predsJSON)
+	if err != nil {
+		t.Fatalf("SearchFloat32WithFilterAsync: %v", err)
+	}
+	neighbors, _, err := idx.SearchWait(jobID, 1, 1)
+	if err != nil {
+		t.Fatalf("SearchWait: %v", err)
+	}
+	if len(neighbors) != 1 {
+		t.Fatalf("expected 1 neighbor, got %d", len(neighbors))
+	}
+	// pkid 1051 is row 51 — the smallest tier > 50.
+	if neighbors[0] != 1051 {
+		t.Fatalf("filter prefilter failed: expected pkid 1051, got %d", neighbors[0])
+	}
+
+	// Sanity: empty preds JSON falls through to unfiltered NN (pkid 1000).
+	jobID2, err := idx.SearchFloat32WithFilterAsync(queries, 1, dimension, 1, "")
+	if err != nil {
+		t.Fatalf("SearchFloat32WithFilterAsync (no preds): %v", err)
+	}
+	neighbors2, _, err := idx.SearchWait(jobID2, 1, 1)
+	if err != nil {
+		t.Fatalf("SearchWait: %v", err)
+	}
+	if neighbors2[0] != 1000 {
+		t.Fatalf("unfiltered NN expected pkid 1000, got %d", neighbors2[0])
+	}
+}
+
 func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	const dimension = 1024
 	const totalCount = 100000
@@ -185,7 +268,7 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize)); err != nil {
+		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}

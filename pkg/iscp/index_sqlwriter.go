@@ -481,7 +481,7 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	w.cdc.Insert(key, v)
+	w.cdc.Insert(key, v, nil)
 	return nil
 }
 
@@ -509,7 +509,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	w.cdc.Upsert(key, v)
+	w.cdc.Upsert(key, v, nil)
 	return nil
 }
 

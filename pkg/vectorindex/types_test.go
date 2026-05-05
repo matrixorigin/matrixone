@@ -37,7 +37,7 @@ func TestCdc(t *testing.T) {
 	cdc := NewVectorIndexCdc[float32](8192)
 
 	// Insert
-	cdc.Insert(key, v)
+	cdc.Insert(key, v, nil)
 
 	js, err := cdc.ToJson()
 	require.Nil(t, err)
@@ -52,7 +52,7 @@ func TestCdc(t *testing.T) {
 	require.Equal(t, js, `{"cdc":[{"t":"I","pk":0,"v":[0,1,2]},{"t":"D","pk":0}]}`)
 
 	// upsert
-	cdc.Upsert(key2, v2)
+	cdc.Upsert(key2, v2, nil)
 
 	js, err = cdc.ToJson()
 	require.Nil(t, err)

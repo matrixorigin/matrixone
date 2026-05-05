@@ -3325,9 +3325,10 @@ func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 
 		tableDefs[1].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.Ivfpq_TblCol_Storage_Index_Id,
-				catalog.Ivfpq_TblCol_Storage_Chunk_Id},
+				catalog.Ivfpq_TblCol_Storage_Chunk_Id,
+				catalog.Ivfpq_TblCol_Storage_Tag},
 			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[3],
+			CompPkeyCol: tableDefs[1].Cols[4],
 		}
 
 		properties := []*plan.Property{
@@ -3597,9 +3598,10 @@ func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, col
 
 		tableDefs[1].Pkey = &PrimaryKeyDef{
 			Names: []string{catalog.Cagra_TblCol_Storage_Index_Id,
-				catalog.Cagra_TblCol_Storage_Chunk_Id},
+				catalog.Cagra_TblCol_Storage_Chunk_Id,
+				catalog.Cagra_TblCol_Storage_Tag},
 			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[3],
+			CompPkeyCol: tableDefs[1].Cols[4],
 		}
 
 		properties := []*plan.Property{

@@ -299,18 +299,39 @@ func mergeMultiResults(allNeighbors [][]int64, allDistances [][]float32, numQuer
 // Brute-force fallback is NOT supported in the filter path — it would require
 // a post-filter scan and is not needed for any current caller.
 
+// runBruteForceFilter dispatches the brute-force filter search asynchronously
+// (so it can run alongside the main per-index loop) and returns a closure
+// that blocks for its result. Returns nil collector when bruteForce is nil
+// — caller skips append.
+func runBruteForceFilter[T VectorType](
+	bf *GpuBruteForce[T], queries []float32, numQueries uint64, dimension uint32,
+	limit uint32, predsJSON string,
+) (func() ([]int64, []float32, error), error) {
+	if bf == nil {
+		return nil, nil
+	}
+	jobID, err := bf.SearchFloat32WithFilterAsync(queries, numQueries, dimension, limit, predsJSON)
+	if err != nil {
+		return nil, err
+	}
+	return func() ([]int64, []float32, error) {
+		return bf.SearchWait(jobID, numQueries, limit)
+	}, nil
+}
+
 func (mi *MultiGpuCagra[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
 	if dimension != mi.dimension {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query dimension mismatch")
 	}
-	if mi.bruteForce != nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuCagra.SearchFloat32WithFilter: brute-force fallback not supported with filter")
-	}
-	if len(mi.indices) == 0 {
+	if len(mi.indices) == 0 && mi.bruteForce == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("no indices in MultiIndex")
 	}
-	allNeighbors := make([][]int64, 0, len(mi.indices))
-	allDistances := make([][]float32, 0, len(mi.indices))
+	bfWait, err := runBruteForceFilter(mi.bruteForce, queries, numQueries, dimension, limit, predsJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	allNeighbors := make([][]int64, 0, len(mi.indices)+1)
+	allDistances := make([][]float32, 0, len(mi.indices)+1)
 	for _, idx := range mi.indices {
 		res, err := idx.SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
 		if err != nil {
@@ -318,6 +339,14 @@ func (mi *MultiGpuCagra[T]) SearchFloat32WithFilter(queries []float32, numQuerie
 		}
 		allNeighbors = append(allNeighbors, res.Neighbors)
 		allDistances = append(allDistances, res.Distances)
+	}
+	if bfWait != nil {
+		n, d, err := bfWait()
+		if err != nil {
+			return nil, nil, err
+		}
+		allNeighbors = append(allNeighbors, n)
+		allDistances = append(allDistances, d)
 	}
 	n, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)
 	return n, d, nil
@@ -327,14 +356,15 @@ func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQuer
 	if dimension != mi.dimension {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query dimension mismatch")
 	}
-	if mi.bruteForce != nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuIvfFlat.SearchFloat32WithFilter: brute-force fallback not supported with filter")
-	}
-	if len(mi.indices) == 0 {
+	if len(mi.indices) == 0 && mi.bruteForce == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("no indices in MultiIndex")
 	}
-	allNeighbors := make([][]int64, 0, len(mi.indices))
-	allDistances := make([][]float32, 0, len(mi.indices))
+	bfWait, err := runBruteForceFilter(mi.bruteForce, queries, numQueries, dimension, limit, predsJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	allNeighbors := make([][]int64, 0, len(mi.indices)+1)
+	allDistances := make([][]float32, 0, len(mi.indices)+1)
 	for _, idx := range mi.indices {
 		res, err := idx.SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
 		if err != nil {
@@ -342,6 +372,14 @@ func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQuer
 		}
 		allNeighbors = append(allNeighbors, res.Neighbors)
 		allDistances = append(allDistances, res.Distances)
+	}
+	if bfWait != nil {
+		n, d, err := bfWait()
+		if err != nil {
+			return nil, nil, err
+		}
+		allNeighbors = append(allNeighbors, n)
+		allDistances = append(allDistances, d)
 	}
 	n, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)
 	return n, d, nil
@@ -351,14 +389,15 @@ func (mi *MultiGpuIvfPq[T]) SearchFloat32WithFilter(queries []float32, numQuerie
 	if dimension != mi.dimension {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query dimension mismatch")
 	}
-	if mi.bruteForce != nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("MultiGpuIvfPq.SearchFloat32WithFilter: brute-force fallback not supported with filter")
-	}
-	if len(mi.indices) == 0 {
+	if len(mi.indices) == 0 && mi.bruteForce == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("no indices in MultiIndex")
 	}
-	allNeighbors := make([][]int64, 0, len(mi.indices))
-	allDistances := make([][]float32, 0, len(mi.indices))
+	bfWait, err := runBruteForceFilter(mi.bruteForce, queries, numQueries, dimension, limit, predsJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	allNeighbors := make([][]int64, 0, len(mi.indices)+1)
+	allDistances := make([][]float32, 0, len(mi.indices)+1)
 	for _, idx := range mi.indices {
 		res, err := idx.SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
 		if err != nil {
@@ -366,6 +405,14 @@ func (mi *MultiGpuIvfPq[T]) SearchFloat32WithFilter(queries []float32, numQuerie
 		}
 		allNeighbors = append(allNeighbors, res.Neighbors)
 		allDistances = append(allDistances, res.Distances)
+	}
+	if bfWait != nil {
+		n, d, err := bfWait()
+		if err != nil {
+			return nil, nil, err
+		}
+		allNeighbors = append(allNeighbors, n)
+		allDistances = append(allDistances, d)
 	}
 	n, d := mergeMultiResults(allNeighbors, allDistances, numQueries, limit)
 	return n, d, nil

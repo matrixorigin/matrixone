@@ -31,6 +31,7 @@ type IvfpqSearch[T cuvs.VectorType] struct {
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*IvfpqModel[T]
 	MultiIndex    *cuvs.MultiGpuIvfPq[T]
+	Overflow      *cuvs.GpuBruteForce[T] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
@@ -134,7 +135,166 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	s.Indexes = indexes
+	if err = s.loadCdcTail(sqlproc); err != nil {
+		return err
+	}
+	if err = s.buildOverflow(); err != nil {
+		return err
+	}
 	s.MultiIndex = s.buildMultiIndex()
+	return nil
+}
+
+// loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the
+// architectural commentary. Differs only in the IndexConfig type slot and
+// the GpuIvfPq element type.
+func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
+	var (
+		includeBytesPerRow int
+		hasSubIndex        bool
+	)
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			includeBytesPerRow = m.IncludeBytesPerRow
+			hasSubIndex = true
+			break
+		}
+	}
+	if !hasSubIndex {
+		return nil
+	}
+
+	stub := &IvfpqModel[T]{Id: vectorindex.CdcTailId}
+	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
+	if err != nil {
+		return err
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	dim := int(s.Idxcfg.CuvsIvfpq.Dimensions)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	if err != nil {
+		return err
+	}
+	if len(delPkids) == 0 && len(ovPkids) == 0 {
+		return nil
+	}
+
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			if err = m.Index.DeleteIds(delPkids); err != nil {
+				return err
+			}
+		}
+	}
+
+	s.Indexes = append(s.Indexes, &IvfpqModel[T]{
+		Id:                   vectorindex.CdcTailId,
+		DeletedPkids:         delPkids,
+		OverflowPkids:        ovPkids,
+		OverflowVecs:         ovVecs,
+		OverflowIncludeBytes: ovInc,
+		IncludeBytesPerRow:   includeBytesPerRow,
+	})
+	return nil
+}
+
+// addOverflowFilterChunks — see cagra/search_gpu.go for docs.
+func addOverflowFilterChunks[T cuvs.VectorType](
+	bf *cuvs.GpuBruteForce[T],
+	colMetaJSON string,
+	includeBytes []byte,
+	nrows uint64,
+	includeBytesPerRow int,
+) error {
+	colData, colNulls, err := vectorindex.SplitIncludeBytes(colMetaJSON, includeBytes, nrows, includeBytesPerRow)
+	if err != nil {
+		return err
+	}
+	for i := range colData {
+		if err = bf.AddFilterChunk(uint32(i), colData[i], colNulls[i], nrows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildOverflow assembles a single GpuBruteForce index from the union of every
+// loaded model's CDC insert overflow. When the underlying index has INCLUDE
+// columns, the brute-force is set up with the matching FilterStore so a
+// filtered query can prefilter overflow rows.
+func (s *IvfpqSearch[T]) buildOverflow() error {
+	total := uint64(0)
+	for _, m := range s.Indexes {
+		total += uint64(len(m.OverflowPkids))
+	}
+	if total == 0 {
+		s.Overflow = nil
+		return nil
+	}
+
+	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("IvfpqSearch: unsupported metric type for overflow")
+	}
+	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
+
+	device := 0
+	if len(s.Devices) > 0 {
+		device = s.Devices[0]
+	}
+
+	bf, err := cuvs.NewGpuBruteForceEmpty[T](
+		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
+	if err != nil {
+		return err
+	}
+	if err = bf.Start(); err != nil {
+		bf.Destroy()
+		return err
+	}
+
+	var (
+		colMetaJSON        string
+		includeBytesPerRow int
+	)
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			colMetaJSON = m.Index.GetFilterColMetaJSON()
+			includeBytesPerRow = m.IncludeBytesPerRow
+			break
+		}
+	}
+	if colMetaJSON != "" && includeBytesPerRow > 0 {
+		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
+			bf.Destroy()
+			return err
+		}
+	}
+
+	for _, m := range s.Indexes {
+		if len(m.OverflowPkids) == 0 {
+			continue
+		}
+		count := uint64(len(m.OverflowPkids))
+		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+			bf.Destroy()
+			return err
+		}
+		if colMetaJSON != "" && includeBytesPerRow > 0 {
+			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
+				bf.Destroy()
+				return err
+			}
+		}
+	}
+	if err = bf.Build(); err != nil {
+		bf.Destroy()
+		return err
+	}
+	s.Overflow = bf
 	return nil
 }
 
@@ -150,11 +310,11 @@ func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
 			gpuIndices = append(gpuIndices, model.Index)
 		}
 	}
-	if len(gpuIndices) == 0 {
+	if len(gpuIndices) == 0 && s.Overflow == nil {
 		return nil
 	}
 	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
-	return cuvs.NewMultiGpuIvfPq(gpuIndices, nil, dim, cuvsMetric)
+	return cuvs.NewMultiGpuIvfPq(gpuIndices, s.Overflow, dim, cuvsMetric)
 }
 
 // loadIndexes loads each model's index data from the database.
@@ -174,6 +334,10 @@ func (s *IvfpqSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*Ivf
 // Destroy implements cache.VectorIndexSearchIf.
 func (s *IvfpqSearch[T]) Destroy() {
 	s.MultiIndex = nil
+	if s.Overflow != nil {
+		s.Overflow.Destroy()
+		s.Overflow = nil
+	}
 	for _, idx := range s.Indexes {
 		idx.Destroy()
 	}
