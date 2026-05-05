@@ -166,9 +166,7 @@ func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm
 			}
 		} else {
 			if ap.JoinType == LoopLeft || ap.JoinType == LoopSingle {
-				if err := vector.SetConstNull(ctr.rbat.Vecs[i], ctr.inbat.RowCount(), proc.Mp()); err != nil {
-					return err
-				}
+				vector.SetConstNull(ctr.rbat.Vecs[i], ctr.inbat.RowCount(), proc.Mp())
 			} else if ap.JoinType == LoopMark {
 				err := vector.SetConstFixed(ctr.rbat.Vecs[i], false, ctr.inbat.RowCount(), proc.Mp())
 				if err != nil {
