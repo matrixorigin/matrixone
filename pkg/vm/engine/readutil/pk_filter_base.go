@@ -325,6 +325,17 @@ func ConstructBasePKFilter(
 			filter.UB = vals[1]
 			filter.Oid = oid
 
+		case "prefix_in_range":
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			if !ok {
+				return
+			}
+			filter.Valid = true
+			filter.Op = function.PREFIX_BETWEEN
+			filter.LB = vals[0]
+			filter.UB = vals[1]
+			filter.Oid = oid
+
 		default:
 			//panic(name)
 		}

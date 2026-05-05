@@ -1,0 +1,409 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(id int primary key, val int, name varchar(50));
+create index idx_val on t1(val);
+insert into t1 select result, result * 10, concat('row', result) from generate_series(1, 100) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+-- @regex("prefix_between",true)
+explain select * from t1 where val >= 50 and val <= 80;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val >= 50), (t1.val <= 80)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where val >= 50 and val <= 80 order by id;
+id    val    name
+5    50    row5
+6    60    row6
+7    70    row7
+8    80    row8
+-- @regex("prefix_in_range",true)
+explain select * from t1 where val > 50 and val < 80;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val > 50), (t1.val < 80)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where val > 50 and val < 80 order by id;
+id    val    name
+6    60    row6
+7    70    row7
+-- @regex("prefix_in_range",true)
+explain select * from t1 where val >= 50 and val < 80;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val >= 50), (t1.val < 80)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where val >= 50 and val < 80 order by id;
+id    val    name
+5    50    row5
+6    60    row6
+7    70    row7
+-- @regex("prefix_in_range",true)
+explain select * from t1 where val > 50 and val <= 80;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val > 50), (t1.val <= 80)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where val > 50 and val <= 80 order by id;
+id    val    name
+6    60    row6
+7    70    row7
+8    80    row8
+-- @regex("Index",true)
+explain select * from t1 where val >= 900;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val >= 900)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: (t1.val >= 900)
+-- @sortkey:0
+select * from t1 where val >= 900 order by id;
+id    val    name
+90    900    row90
+91    910    row91
+92    920    row92
+93    930    row93
+94    940    row94
+95    950    row95
+96    960    row96
+97    970    row97
+98    980    row98
+99    990    row99
+100    1000    row100
+-- @regex("Index",true)
+explain select * from t1 where val < 30;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val < 30)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: (t1.val < 30)
+-- @sortkey:0
+select * from t1 where val < 30 order by id;
+id    val    name
+1    10    row1
+2    20    row2
+-- @regex("prefix_between",true)
+explain select * from t1 where 50 <= val and 80 >= val;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: (t1.val >= 50), (t1.val <= 80)
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where 50 <= val and 80 >= val order by id;
+id    val    name
+5    50    row5
+6    60    row6
+7    70    row7
+8    80    row8
+-- @regex("prefix_between",true)
+explain select * from t1 where val between 200 and 300;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t1.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1 [ForceOneCN]
+              Filter Cond: t1.val BETWEEN 200 AND 300
+              Runtime Filter Probe: t1.id
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t1 where val between 200 and 300 order by id;
+id    val    name
+20    200    row20
+21    210    row21
+22    220    row22
+23    230    row23
+24    240    row24
+25    250    row25
+26    260    row26
+27    270    row27
+28    280    row28
+29    290    row29
+30    300    row30
+-- @sortkey:0
+select * from t1 where val >= 990 and val <= 1000 order by id;
+id    val    name
+99    990    row99
+100    1000    row100
+-- @sortkey:0
+select * from t1 where val > 990 and val < 1000 order by id;
+id    val    name
+-- @sortkey:0
+select * from t1 where val >= 1000 and val <= 1000 order by id;
+id    val    name
+100    1000    row100
+drop table if exists t2;
+create table t2(id int primary key, a int, b int, c varchar(30));
+create index idx_ab on t2(a, b);
+insert into t2 values(1, 10, 100, 'x');
+insert into t2 values(2, 10, 200, 'y');
+insert into t2 values(3, 20, 100, 'z');
+insert into t2 values(4, 20, 200, 'w');
+insert into t2 values(5, 30, 150, 'v');
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+-- @regex("prefix_between",true)
+explain select * from t2 where a >= 10 and a <= 20;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t2.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t2 [ForceOneCN]
+              Filter Cond: (t2.a >= 10), (t2.a <= 20)
+              Runtime Filter Probe: t2.id
+        ->  Index Table Scan on t2.idx_ab [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t2 where a >= 10 and a <= 20 order by id;
+id    a    b    c
+1    10    100    x
+2    10    200    y
+3    20    100    z
+4    20    200    w
+-- @regex("prefix_in_range",true)
+explain select * from t2 where a > 10 and a < 30;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t2.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t2 [ForceOneCN]
+              Filter Cond: (t2.a > 10), (t2.a < 30)
+              Runtime Filter Probe: t2.id
+        ->  Index Table Scan on t2.idx_ab [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t2 where a > 10 and a < 30 order by id;
+id    a    b    c
+3    20    100    z
+4    20    200    w
+drop table if exists t3;
+create table t3(id varchar(30) primary key, city varchar(50), score int);
+create index idx_city on t3(city);
+insert into t3 values('a', 'Boston', 85);
+insert into t3 values('b', 'Chicago', 92);
+insert into t3 values('c', 'Denver', 78);
+insert into t3 values('d', 'Boston', 90);
+insert into t3 values('e', 'Chicago', 88);
+insert into t3 values('f', 'Austin', 95);
+select mo_ctl('dn', 'flush', 'd1.t3');
+mo_ctl(dn, flush, d1.t3)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+-- @regex("prefix_between",true)
+explain select * from t3 where city >= 'Boston' and city <= 'Denver';
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t3.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t3 [ForceOneCN]
+              Filter Cond: (t3.city >= 'Boston'), (t3.city <= 'Denver')
+              Runtime Filter Probe: t3.id
+        ->  Index Table Scan on t3.idx_city [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t3 where city >= 'Boston' and city <= 'Denver' order by id;
+id    city    score
+a    Boston    85
+b    Chicago    92
+c    Denver    78
+d    Boston    90
+e    Chicago    88
+-- @regex("prefix_in_range",true)
+explain select * from t3 where city > 'Austin' and city < 'Denver';
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t3.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t3 [ForceOneCN]
+              Filter Cond: (t3.city > 'Austin'), (t3.city < 'Denver')
+              Runtime Filter Probe: t3.id
+        ->  Index Table Scan on t3.idx_city [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t3 where city > 'Austin' and city < 'Denver' order by id;
+id    city    score
+a    Boston    85
+b    Chicago    92
+d    Boston    90
+e    Chicago    88
+-- @regex("Index",true)
+explain select * from t3 where city >= 'Chicago';
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t3.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t3 [ForceOneCN]
+              Filter Cond: (t3.city >= 'Chicago')
+              Runtime Filter Probe: t3.id
+        ->  Index Table Scan on t3.idx_city [ForceOneCN]
+              Filter Cond: (t3.city >= 'Chicago')
+-- @sortkey:0
+select * from t3 where city >= 'Chicago' order by id;
+id    city    score
+b    Chicago    92
+c    Denver    78
+e    Chicago    88
+-- @regex("Index",true)
+explain select * from t3 where city < 'Chicago';
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t3.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t3 [ForceOneCN]
+              Filter Cond: (t3.city < 'Chicago')
+              Runtime Filter Probe: t3.id
+        ->  Index Table Scan on t3.idx_city [ForceOneCN]
+              Filter Cond: (t3.city < 'Chicago')
+-- @sortkey:0
+select * from t3 where city < 'Chicago' order by id;
+id    city    score
+a    Boston    85
+d    Boston    90
+f    Austin    95
+drop table if exists t4;
+create table t4(x int, y int);
+create index idx_x on t4(x);
+insert into t4 select result, result * 2 from generate_series(1, 50) g;
+select mo_ctl('dn', 'flush', 'd1.t4');
+mo_ctl(dn, flush, d1.t4)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+Sleep(1)
+0
+-- @regex("prefix_between",true)
+explain select * from t4 where x >= 10 and x <= 20;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t4.__mo_fake_pk_col = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t4 [ForceOneCN]
+              Filter Cond: (t4.x >= 10), (t4.x <= 20)
+              Runtime Filter Probe: t4.__mo_fake_pk_col
+        ->  Index Table Scan on t4.idx_x [ForceOneCN]
+              Filter Cond: prefix_between(__mo_index_idx_col)
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
+-- @sortkey:0
+select * from t4 where x >= 10 and x <= 20 order by x;
+x    y
+10    20
+11    22
+12    24
+13    26
+14    28
+15    30
+16    32
+17    34
+18    36
+19    38
+20    40
+-- @regex("prefix_in_range",true)
+explain select * from t4 where x > 45 and x < 50;
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (t4.__mo_fake_pk_col = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t4 [ForceOneCN]
+              Filter Cond: (t4.x > 45), (t4.x < 50)
+              Runtime Filter Probe: t4.__mo_fake_pk_col
+        ->  Index Table Scan on t4.idx_x [ForceOneCN]
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
+              Block Filter Cond: prefix_in_range(__mo_index_idx_col)
+-- @sortkey:0
+select * from t4 where x > 45 and x < 50 order by x;
+x    y
+46    92
+47    94
+48    96
+49    98
+drop database d1;
