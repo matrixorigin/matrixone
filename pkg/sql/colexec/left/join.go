@@ -178,8 +178,9 @@ func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, result *vm
 				return err
 			}
 		} else {
-			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.rbat.Vecs[i].SetLength(ctr.inbat.RowCount())
+			if err := vector.SetConstNull(ctr.rbat.Vecs[i], ctr.inbat.RowCount(), proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.rbat.AddRowCount(ap.ctr.inbat.RowCount())

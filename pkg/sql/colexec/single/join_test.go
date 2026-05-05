@@ -190,6 +190,60 @@ func TestSingleJoinResetAfterEmptyProbe(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestSingleJoinConstNullAfterNonEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	}, [][]*plan.Expr{
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+	})
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs())
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs())
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs())
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.True(t, res.Batch.Vecs[1].IsConstNull())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 /*
 func BenchmarkJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {

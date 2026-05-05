@@ -160,8 +160,9 @@ func (singleJoin *SingleJoin) build(analyzer process.Analyzer, proc *process.Pro
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
-			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.rbat.Vecs[i].SetLength(bat.RowCount())
+			if err := vector.SetConstNull(ctr.rbat.Vecs[i], bat.RowCount(), nil); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
