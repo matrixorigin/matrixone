@@ -128,6 +128,60 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestLoopMarkResetAfterEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	tc.arg.JoinType = LoopMark
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs())
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.True(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs())
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs())
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+
+	expectedInput := colexec.MakeMockBatchs().Vecs[0]
+	expectedMark := testutil.MakeBoolVector([]bool{true, true}, nil)
+	require.Equal(t, expectedInput.GetType().Oid, res.Batch.Vecs[0].GetType().Oid)
+	require.Equal(t, bytes.Compare(expectedInput.UnsafeGetRawData(), res.Batch.Vecs[0].UnsafeGetRawData()), 0)
+	require.Equal(t, expectedMark.GetType().Oid, res.Batch.Vecs[1].GetType().Oid)
+	require.Equal(t, bytes.Compare(expectedMark.UnsafeGetRawData(), res.Batch.Vecs[1].UnsafeGetRawData()), 0)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 /*
 	func BenchmarkJoin(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -240,14 +294,20 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 }
 
 func resetChildren(arg *LoopJoin) {
-	bat := colexec.MakeMockBatchs()
+	resetChildrenWithBatch(arg, colexec.MakeMockBatchs())
+}
+
+func resetHashBuildChildren(arg *hashbuild.HashBuild) {
+	resetHashBuildChildrenWithBatch(arg, colexec.MakeMockBatchs())
+}
+
+func resetChildrenWithBatch(arg *LoopJoin, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

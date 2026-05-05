@@ -113,6 +113,9 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
+				for i := range ctr.rbat.Vecs {
+					ctr.rbat.Vecs[i].ResetWithSameType()
+				}
 			}
 			for i, rp := range singleJoin.Result {
 				if rp.Rel == 0 {

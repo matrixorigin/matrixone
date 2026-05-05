@@ -117,6 +117,9 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
+				for i := range ctr.rbat.Vecs {
+					ctr.rbat.Vecs[i].ResetWithSameType()
+				}
 				for i, rp := range leftJoin.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
