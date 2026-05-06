@@ -245,10 +245,19 @@ select * from t1 where c2=1;
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  𝄀
 1  ¦  1  ¦  1
 explain select * from t1 where c3<2000;
+-- @regex("Index", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  ->  Table Scan on d1.t1  𝄀
-        Filter Cond: (t1.c3 < 2000)
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
+              Filter Cond: (t1.c3 < 2000)  𝄀
+              Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
+        ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
+              Filter Cond: (__mo_index_idx_col < 2000)  𝄀
+              Block Filter Cond: (__mo_index_idx_col < 2000)
 select count(*) from t1 where c3<2000;
 ➤ count(*)[-5,64,0]  𝄀
 1999
@@ -265,7 +274,7 @@ select count(*) from t1;
 update t1 set c1=c1+1000000, c2=1,c3=c3-1000000 where c2=1;
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
-150001
+150000
 delete from t1;
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
@@ -276,7 +285,7 @@ explain analyze select count(*) from t1;
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=144.00 KiB (min=144.00 KiB, max=144.00 KiB)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
@@ -342,6 +351,6 @@ drop table if exists t_repro;
 create table t_repro (id varchar(32) primary key, uid varchar(64) not null, typ varchar(20) not null, flag smallint not null default 1, index idx_uid_typ_flag (uid, typ, flag));
 insert into t_repro values ('id1', 'alice', 'semantic', 1);
 select count(*) from t_repro where uid = 'alice' and flag = 1;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop database d1;

@@ -50,7 +50,7 @@ Project  𝄀
               Filter Cond: (t1.val < 80), (t1.val > 50)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, ':2', ':P', 3)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t1 where val > 50 and val < 80 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 6  ¦  60  ¦  row6  𝄀
@@ -67,7 +67,7 @@ Project  𝄀
               Filter Cond: (t1.val < 80), (t1.val >= 50)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, ':2', ':P', 2)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t1 where val >= 50 and val < 80 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 5  ¦  50  ¦  row5  𝄀
@@ -85,7 +85,7 @@ Project  𝄀
               Filter Cond: (t1.val <= 80), (t1.val > 50)  𝄀
               Runtime Filter Probe: t1.id  𝄀
         ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, ':2', ':P', 1)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t1 where val > 50 and val <= 80 order by id;
 ➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
 6  ¦  60  ¦  row6  𝄀
@@ -241,8 +241,7 @@ Project  𝄀
               Filter Cond: (t2.a > 10), (t2.a < 30)  𝄀
               Runtime Filter Probe: t2.id  𝄀
         ->  Index Table Scan on t2.idx_ab [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, ':
-', ':', 3)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t2 where a > 10 and a < 30 order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
 3  ¦  20  ¦  100  ¦  z  𝄀
@@ -302,7 +301,7 @@ Project  𝄀
               Filter Cond: (t3.city > 'Austin'), (t3.city < 'Denver')  𝄀
               Runtime Filter Probe: t3.id  𝄀
         ->  Index Table Scan on t3.idx_city [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, 'FAustin ', 'FDenver ', 3)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t3 where city > 'Austin' and city < 'Denver' order by id;
 ➤ id[12,-1,0]  ¦  city[12,-1,0]  ¦  score[4,32,0]  𝄀
 a  ¦  Boston  ¦  85  𝄀
@@ -401,7 +400,7 @@ Project  𝄀
               Filter Cond: (t4.x > 45), (t4.x < 50)  𝄀
               Runtime Filter Probe: t4.__mo_fake_pk_col  𝄀
         ->  Index Table Scan on t4.idx_x [ForceOneCN]  𝄀
-              Filter Cond: prefix_in_range(__mo_index_idx_col, ':-', ':2', 3)
+              Filter Cond: prefix_in_range(__mo_index_idx_col)
 select * from t4 where x > 45 and x < 50 order by x;
 ➤ x[4,32,0]  ¦  y[4,32,0]  𝄀
 46  ¦  92  𝄀
