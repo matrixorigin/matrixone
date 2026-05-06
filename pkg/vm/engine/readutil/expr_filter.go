@@ -665,7 +665,7 @@ func CompileFilterExpr(
 			) (bool, bool, error) {
 				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
 			}
-		case "between":
+		case "in_range", "between":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
