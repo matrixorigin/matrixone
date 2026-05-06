@@ -635,7 +635,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 			// ok
-		case "between":
+		case "in_range", "between":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
