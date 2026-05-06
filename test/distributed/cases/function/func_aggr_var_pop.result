@@ -122,7 +122,7 @@ fld1    var_pop(fld2)
 drop table t1;
 SELECT var_pop(1)<var_pop(2);
 var_pop(1) < var_pop(2)
-false
+0
 CREATE TABLE t1(i INT);
 INSERT INTO t1 VALUES (NULL),(1);
 SELECT var_pop(i)+0 as splus0, i+0 as plain FROM t1 GROUP BY i ;

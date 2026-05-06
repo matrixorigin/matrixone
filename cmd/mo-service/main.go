@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -96,6 +97,14 @@ func main() {
 	if *heapProfilePathFlag != "" {
 		defer writeHeapProfile()
 	}
+	if *blockProfileRate > 0 {
+		goruntime.SetBlockProfileRate(*blockProfileRate)
+		logutil.Infof("Block profiling enabled with rate: %d", *blockProfileRate)
+	}
+	if *mutexProfileFraction > 0 {
+		goruntime.SetMutexProfileFraction(*mutexProfileFraction)
+		logutil.Infof("Mutex profiling enabled with fraction: %d", *mutexProfileFraction)
+	}
 	if *httpListenAddr != "" {
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
@@ -142,6 +151,16 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		//dump goroutine before stopping services
 		routineProfilePath := saveProfile(profile.GOROUTINE)
 		detail += " routine profile: " + routineProfilePath
+		//dump block profile before stopping services if enabled
+		if *blockProfileRate > 0 {
+			blockProfilePath := saveProfile(profile.BLOCK)
+			detail += " block profile: " + blockProfilePath
+		}
+		//dump mutex profile before stopping services if enabled
+		if *mutexProfileFraction > 0 {
+			mutexProfilePath := saveProfile(profile.MUTEX)
+			detail += " mutex profile: " + mutexProfilePath
+		}
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper

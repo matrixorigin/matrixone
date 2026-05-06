@@ -84,10 +84,10 @@ match_with_original
 DROP TABLE t_datetime_where;
 SELECT CAST('2024-01-15 12:34:56' AS DATETIME(0)) = CAST('2024-01-15 12:34:56.000000' AS DATETIME(6)) AS datetime_0_eq_6_same;
 datetime_0_eq_6_same
-true
+1
 SELECT CAST('2024-01-15 12:34:56' AS DATETIME(0)) = CAST('2024-01-15 12:34:56.123456' AS DATETIME(6)) AS datetime_0_eq_6_diff;
 datetime_0_eq_6_diff
-false
+0
 DROP TABLE IF EXISTS t_datetime_half;
 CREATE TABLE t_datetime_half (
 id INT,

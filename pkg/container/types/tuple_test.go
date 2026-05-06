@@ -1083,3 +1083,73 @@ func TestDecodeTupleWithSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestUnpackNthElement(t *testing.T) {
+	uuid, _ := BuildUuid()
+	tuple := Tuple{
+		[]byte("hello"),
+		int32(42),
+		true,
+		float64(3.14),
+		[]byte("world"),
+		uuid,
+	}
+
+	packer := NewPacker()
+	encodeBufToPacker(tuple, packer)
+	encoded := packer.GetBuf()
+
+	// Verify against full unpack
+	fullTuple, fullSchema, err := UnpackWithSchema(encoded)
+	require.NoError(t, err)
+
+	for i := 0; i < len(fullTuple); i++ {
+		el, schema, err := UnpackNthElement(encoded, i)
+		require.NoError(t, err, "UnpackNthElement(%d) should not error", i)
+		require.Equal(t, fullSchema[i], schema, "schema mismatch at index %d", i)
+		require.Equal(t, fullTuple[i], el, "value mismatch at index %d", i)
+	}
+
+	// Out of range
+	_, _, err = UnpackNthElement(encoded, len(fullTuple))
+	require.Error(t, err)
+
+	// Single element tuple
+	packer2 := NewPacker()
+	encodeBufToPacker(Tuple{[]byte("single")}, packer2)
+	el, schema, err := UnpackNthElement(packer2.GetBuf(), 0)
+	require.NoError(t, err)
+	require.Equal(t, T_varchar, schema)
+	require.Equal(t, []byte("single"), el)
+
+	// Multi-type tuple
+	packer3 := NewPacker()
+	encodeBufToPacker(Tuple{int32(7), int64(99)}, packer3)
+	el, schema, err = UnpackNthElement(packer3.GetBuf(), 0)
+	require.NoError(t, err)
+	require.Equal(t, T_int32, schema)
+	require.Equal(t, int32(7), el)
+
+	el2, schema2, err := UnpackNthElement(packer3.GetBuf(), 1)
+	require.NoError(t, err)
+	require.Equal(t, T_int64, schema2)
+	require.Equal(t, int64(99), el2)
+
+	// Decimal128 followed by string (regression: decodeDecimal128 offset was double-counted)
+	packer4 := NewPacker()
+	packer4.EncodeDecimal128(Decimal128{1, 0})
+	packer4.EncodeStringType([]byte("after_dec128"))
+	el3, schema3, err := UnpackNthElement(packer4.GetBuf(), 1)
+	require.NoError(t, err)
+	require.Equal(t, T_varchar, schema3)
+	require.Equal(t, []byte("after_dec128"), el3)
+
+	// Decimal64 followed by string
+	packer5 := NewPacker()
+	packer5.EncodeDecimal64(Decimal64(42))
+	packer5.EncodeStringType([]byte("after_decimal"))
+	el4, schema4, err := UnpackNthElement(packer5.GetBuf(), 1)
+	require.NoError(t, err)
+	require.Equal(t, T_varchar, schema4)
+	require.Equal(t, []byte("after_decimal"), el4)
+}

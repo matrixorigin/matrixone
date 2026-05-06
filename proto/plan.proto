@@ -881,6 +881,9 @@ message Node {
 	string dedup_col_name = 67;
 	repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
 	bool rollup_filter = 69;
+
+	repeated string origin_views = 71;
+	string direct_view = 72;
 }
 
 message SnapshotExtraInfo {
