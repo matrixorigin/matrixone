@@ -356,7 +356,7 @@ func ConstructBasePKFilter(
 
 		case "prefix_in_range":
 			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
-			if !ok || len(vals) < 3 {
+			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				return
 			}
 			filter.Valid = true
