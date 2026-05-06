@@ -753,6 +753,7 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 
 -- Test 5: BETWEEN with trailing zeros - should use index
+-- @regex("prefix_between",true)
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 

@@ -135,9 +135,9 @@ INSERT INTO t1 (id,a) VALUES
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
-[unknown result because it is related to issue#4383]
+➤ id[4,32,0]  ¦  a[3,21,0]  ¦  b[12,-1,0]
 select a,count(a) from t1 group by a having count(a)>=2;
-[unknown result because it is related to issue#4383]
+➤ a[3,21,0]  ¦  count(a)[-5,64,0]
 CREATE TABLE t_decimal(id decimal(10,5));
 INSERT INTO t_decimal VALUES (1), (2),(1.099999999),(2.20000000001);
 select * from t_decimal;
@@ -214,11 +214,17 @@ drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
-[unknown result because it is related to issue#3185]
+➤ a[3,2,1]  𝄀
+0.9  𝄀
+0.9
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
-[unknown result because it is related to issue#3185]
+➤ a[3,2,1]  𝄀
+0.9  𝄀
+0.9
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
-[unknown result because it is related to issue#3185]
+➤ a[3,2,1]  𝄀
+0.9  𝄀
+0.9
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 ➤ a[3,2,1]  𝄀
 0.9  𝄀
@@ -1230,11 +1236,26 @@ SELECT -0.487794599999999999999999999999999945451154 * col2 FROM decimal18;
 -4.8779459999999999999999999999999994550  𝄀
 4.5765056404090315799999999999999994887
 SELECT col1 * col2 FROM decimal18;
-[unknown result because it is related to issue#8516]
+➤ col1 * col2[3,38,37]  𝄀
+0.1221212134567890987654321333546543213  𝄀
+0.1484484651187895121879845615156784548  𝄀
+0E-37  𝄀
+3.7283784274376200000000000000000000000  𝄀
+3.4979314916658955850103159923577553319
 SELECT col3 * col2 FROM decimal18;
-[unknown result because it is related to issue#8516]
+➤ col3 * col2[8,54,0]  𝄀
+1278945.25  𝄀
+229.3758562273983  𝄀
+0.0  𝄀
+0.0  𝄀
+3.0945498936745635E12
 SELECT col2 * col4 FROM decimal18;
-[unknown result because it is related to issue#8516]
+➤ col2 * col4[8,53,16]  𝄀
+7.815317849845612E7  𝄀
+130.61903846394287  𝄀
+0.0  𝄀
+-4544.9845  𝄀
+-0.0
 SELECT col1 / col2 FROM decimal18;
 ➤ col1 / col2[3,38,37]  𝄀
 0.1221212134567890987654321333546543213  𝄀
@@ -1464,10 +1485,18 @@ SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
+-- @regex("prefix_between", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  ->  Table Scan on decimal.decimal_opt_test  𝄀
-        Filter Cond: (decimal_opt_test.price <= 299.990000), (decimal_opt_test.price >= 99.990000)
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
+              Filter Cond: (decimal_opt_test.price <= 299.990000), (decimal_opt_test.price >= 99.990000)  𝄀
+              Runtime Filter Probe: decimal_opt_test.id  𝄀
+        ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
+              Filter Cond: prefix_between(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀

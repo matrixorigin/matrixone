@@ -2542,3 +2542,52 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.Empty(t, result)
 	})
 }
+
+func TestCompileFilterExpr_PrefixInRange(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "test_idx",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"__mo_index_idx_col"},
+			PkeyColName: "__mo_index_idx_col",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:   "__mo_index_idx_col",
+				ColId:  0,
+				Seqnum: 0,
+				Typ:    plan.Type{Id: int32(types.T_varchar)},
+			},
+		},
+	}
+
+	expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar, "__mo_index_idx_col"),
+		plan2.MakePlan2StringConstExprWithType("aaa"),
+		plan2.MakePlan2StringConstExprWithType("zzz"),
+		plan2.MakePlan2Uint8ConstExprWithType(3),
+	})
+
+	m := mpool.MustNew(t.Name())
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	var exes []colexec.ExpressionExecutor
+	plan2.ReplaceFoldExpr(proc, expr, &exes)
+	plan2.EvalFoldExpr(proc, expr, &exes)
+	for _, exe := range exes {
+		defer exe.Free()
+	}
+
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile, "prefix_in_range should be compilable")
+	require.NotNil(t, loadOp, "loadOp should be set")
+	require.NotNil(t, objectFilterOp, "objectFilterOp should be set")
+	require.NotNil(t, blockFilterOp, "blockFilterOp should be set")
+	_ = fastFilterOp
+
+	// Also verify ConstructBasePKFilter maps it to PREFIX_BETWEEN
+	basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
+	require.NoError(t, err)
+	require.True(t, basePKFilter.Valid, "prefix_in_range should produce a valid PK filter")
+	require.Equal(t, function.PREFIX_BETWEEN, basePKFilter.Op, "prefix_in_range should map to PREFIX_BETWEEN op")
+	require.Equal(t, []byte("aaa"), basePKFilter.LB)
+	require.Equal(t, []byte("zzz"), basePKFilter.UB)
+}
