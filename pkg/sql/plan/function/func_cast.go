@@ -5398,10 +5398,6 @@ func strToStr(
 		}
 		return nil
 	}
-	// Get source type to check if it's TEXT
-	fromType := from.GetSourceVector().GetType()
-	isSourceText := fromType.Oid == types.T_text
-
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -5411,26 +5407,8 @@ func strToStr(
 				}
 				continue
 			}
-			// check the length.
 			s := convertByteSliceToString(v)
-			// For explicit CAST operations (e.g., CAST(text_col AS CHAR(1))), we should
-			// always perform length validation, even if source is TEXT, because the user
-			// explicitly requested a specific type with a length limit.
-			//
-			// However, for implicit conversions in UPDATE statements where the target
-			// column is actually TEXT but misidentified as CHAR/VARCHAR, we should skip
-			// length validation. We distinguish this by checking the target width:
-			// - Small widths (like 1, 10, etc.) are likely explicit CASTs and should be validated
-			// - Large widths (>= 255) might be misidentified TEXT columns in UPDATE operations
-			//
-			// The threshold of 255 is chosen because:
-			// 1. It's a common default width for TEXT columns that get misidentified
-			// 2. Explicit CASTs to CHAR(255) are rare, and when they occur, the user
-			//    likely expects validation (though we skip it for compatibility)
-			// 3. This allows UPDATE operations on TEXT columns to work correctly
-			shouldSkipLengthCheck := isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 255
-
-			if !shouldSkipLengthCheck && utf8.RuneCountInString(s) > destLen {
+			if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -5558,12 +5536,14 @@ func blobToArray[T types.RealNumbers](
 }
 
 func arrayToArray[I types.RealNumbers, O types.RealNumbers](
-	_ context.Context,
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
 
 	var i uint64
 	var l = uint64(length)
+	targetWidth := int(to.GetType().Width)
+
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -5573,18 +5553,16 @@ func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 			continue
 		}
 
-		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
-		// `to.GetType().Width != from.GetType().Width`
-		// cases b/b and b+sqrt(b) fails.
+		_v := types.BytesToArray[I](v)
+		if targetWidth > 0 && len(_v) != targetWidth {
+			return moerr.NewOutOfRangef(ctx, "array", "array dimension %d does not match target dimension %d", len(_v), targetWidth)
+		}
 
 		if from.GetType().Oid == to.GetType().Oid {
-			// Eg:- VECF32(3) --> VECF32(3)
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		} else {
-			// Eg:- VECF32(3) --> VECF64(3)
-			_v := types.BytesToArray[I](v)
 			cast, err := moarray.Cast[I, O](_v)
 			if err != nil {
 				return err

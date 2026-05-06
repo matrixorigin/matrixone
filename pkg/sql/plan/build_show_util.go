@@ -528,14 +528,9 @@ func ConstructCreateTableSQL(
 				}
 			}
 
-			// escape only handles the two byte-level specials (NUL, backslash)
-			// from the original encoding; single-quote escaping is done by
-			// formatStrLit when we wrap the result.
 			escape := func(value byte) string {
 				if value == byte(0) {
 					return ""
-				} else if value == byte('\\') {
-					return "\\\\"
 				}
 				return fmt.Sprintf("%c", value)
 			}
@@ -553,11 +548,7 @@ func ConstructCreateTableSQL(
 				line += " STARTING BY " + formatStrLit(param.Tail.Lines.StartingBy)
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-					line += " TERMINATED BY '\\\\n'"
-				} else {
-					line += " TERMINATED BY " + formatStrLit(param.Tail.Lines.TerminatedBy.Value)
-				}
+				line += " TERMINATED BY " + formatStrLit(param.Tail.Lines.TerminatedBy.Value)
 			}
 		}
 
@@ -696,11 +687,27 @@ func formatIdent(s string) string {
 // '...' concatenation instead; do not switch them to this helper without
 // also rethinking the pre-escape contract.
 func formatStrLit(s string) string {
-	// Order matters: escape backslashes first, otherwise the \\ inserted by
-	// the single-quote step would itself be re-escaped.
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "'", "''")
-	return "'" + s + "'"
+	var buf strings.Builder
+	buf.Grow(len(s) + 2)
+	buf.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\'':
+			buf.WriteString("''")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\x00':
+			buf.WriteString("\\0")
+		default:
+			buf.WriteByte(s[i])
+		}
+	}
+	buf.WriteByte('\'')
+	return buf.String()
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

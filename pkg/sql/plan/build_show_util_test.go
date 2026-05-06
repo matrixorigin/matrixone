@@ -347,6 +347,21 @@ func TestOnUpdateOriginString(t *testing.T) {
 	require.Contains(t, got, "ON UPDATE CURRENT_TIMESTAMP()")
 }
 
+func TestFormatStrLitBackslashNoDoubleEscape(t *testing.T) {
+	require.Equal(t, `'\\'`, formatStrLit(`\`))
+	require.Equal(t, `'"'`, formatStrLit(`"`))
+}
+
+func TestFormatStrLitCRLF(t *testing.T) {
+	require.Equal(t, `'\r\n'`, formatStrLit("\r\n"))
+	require.Equal(t, `'\n'`, formatStrLit("\n"))
+	require.NotEqual(t, formatStrLit("\n"), formatStrLit("\r\n"))
+}
+
+func TestFormatStrLitNUL(t *testing.T) {
+	require.Equal(t, `'\0'`, formatStrLit("\x00"))
+}
+
 // TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
 // loop only lower-cases the leading "SET" keyword and keeps the declared
 // member-name case, so SET('Read','Write') round-trips as set('Read','Write')

@@ -3141,3 +3141,97 @@ func Test_strToUnsigned_Binary_NarrowOverflow(t *testing.T) {
 		})
 	}
 }
+
+func Test_arrayToArray_WidthCheck(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// vecf32(3) -> vecf32(3): dimension match should succeed
+	tc1 := tcTemp{
+		info: "vecf32(3) -> vecf32(3) - match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{{1, 2, 3}}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), false,
+			[][]float32{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc1.inputs, tc1.expect, NewCast)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc1.info, info))
+
+	// vecf32(5) -> vecf32(3): dimension mismatch should fail
+	tc2 := tcTemp{
+		info: "vecf32(5) -> vecf32(3) - mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 5, 0), [][]float32{{1, 2, 3, 4, 5}}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float32, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc2.inputs, tc2.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc2.info, info))
+
+	// vecf32(3) -> vecf64(3): cross-type with matching width should succeed
+	tc3 := tcTemp{
+		info: "vecf32(3) -> vecf64(3) - cross-type match",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{{1, 2, 3}}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), false,
+			[][]float64{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc3.inputs, tc3.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc3.info, info))
+
+	// vecf32(5) -> vecf64(3): cross-type with mismatching width should fail
+	tc4 := tcTemp{
+		info: "vecf32(5) -> vecf64(3) - cross-type mismatch should error",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 5, 0), [][]float32{{1, 2, 3, 4, 5}}, nil),
+			NewFunctionTestInput(types.New(types.T_array_float64, 3, 0), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_array_float64, 3, 0), true, nil, nil),
+	}
+	fcTC = NewFunctionTestCase(proc, tc4.inputs, tc4.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc4.info, info))
+}
+
+func Test_strToStr_TextLengthCheck(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	// TEXT -> VARCHAR(5): value fits, should succeed
+	inputVec := testutil.MakeVarlenaVector([][]byte{[]byte("hello")}, nil, mp)
+	defer inputVec.Free(mp)
+	inputVec.GetType().Oid = types.T_text
+
+	from := vector.GenerateFunctionStrParameter(inputVec)
+	toType := types.New(types.T_varchar, 5, 0)
+	resultVec := vector.NewFunctionResultWrapper(toType, mp)
+	to := resultVec.(*vector.FunctionResult[types.Varlena])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(1))
+
+	err := strToStr(ctx, from, to, 1, toType)
+	require.NoError(t, err)
+
+	// TEXT -> VARCHAR(3): value too long, should fail
+	inputVec2 := testutil.MakeVarlenaVector([][]byte{[]byte("hello")}, nil, mp)
+	defer inputVec2.Free(mp)
+	inputVec2.GetType().Oid = types.T_text
+
+	from2 := vector.GenerateFunctionStrParameter(inputVec2)
+	toType2 := types.New(types.T_varchar, 3, 0)
+	resultVec2 := vector.NewFunctionResultWrapper(toType2, mp)
+	to2 := resultVec2.(*vector.FunctionResult[types.Varlena])
+	defer to2.Free()
+	require.NoError(t, to2.PreExtendAndReset(1))
+
+	err = strToStr(ctx, from2, to2, 1, toType2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "larger than Dest length")
+}
