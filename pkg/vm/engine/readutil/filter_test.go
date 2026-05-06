@@ -2587,7 +2587,7 @@ func TestCompileFilterExpr_PrefixInRange(t *testing.T) {
 	basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
 	require.NoError(t, err)
 	require.True(t, basePKFilter.Valid, "prefix_in_range should produce a valid PK filter")
-	require.Equal(t, function.PREFIX_BETWEEN, basePKFilter.Op, "prefix_in_range should map to PREFIX_BETWEEN op")
+	require.Equal(t, PrefixRangeBothOpen, basePKFilter.Op, "prefix_in_range with flag=3 should map to PrefixRangeBothOpen op")
 	require.Equal(t, []byte("aaa"), basePKFilter.LB)
 	require.Equal(t, []byte("zzz"), basePKFilter.UB)
 }

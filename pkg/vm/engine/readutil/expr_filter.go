@@ -602,7 +602,7 @@ func CompileFilterExpr(
 				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(vals[0]), nil
 			}
 			// TODO: define seekOp
-		case "prefix_between":
+		case "prefix_between", "prefix_in_range":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
@@ -634,37 +634,6 @@ func CompileFilterExpr(
 				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
 			}
 			// TODO: define seekOp
-			// ok
-		case "prefix_in_range":
-			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok || len(vals) < 2 {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			_, isSorted := isSortedKey(colDef)
-			if isSorted {
-				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
-						return true, nil
-					}
-					return obj.SortKeyZoneMap().PrefixBetween(vals[0], vals[1]), nil
-				}
-			}
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				if isSorted {
-					return true, nil
-				}
-				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
-			}
 		case "in_range", "between":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
 			if !ok {

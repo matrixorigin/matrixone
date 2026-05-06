@@ -641,6 +641,86 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 	}
 }
 
+func CollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint int) func(*Vector) []int64 {
+	return func(lvec *Vector) []int64 {
+		lvlen := lvec.Length()
+		if lvlen == 0 {
+			return nil
+		}
+		lcol, larea := MustVarlenaRawData(lvec)
+		var start, end int
+		switch hint {
+		case 0: // [lb, ub]
+			start = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), lb) >= 0
+			})
+			end = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), ub) > 0
+			})
+		case 1: // (lb, ub]
+			start = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), lb) > 0
+			})
+			end = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), ub) > 0
+			})
+		case 2: // [lb, ub)
+			start = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), lb) >= 0
+			})
+			end = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), ub) >= 0
+			})
+		case 3: // (lb, ub)
+			start = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), lb) > 0
+			})
+			end = sort.Search(lvlen, func(i int) bool {
+				return types.PrefixCompare(lcol[i].GetByteSlice(larea), ub) >= 0
+			})
+		}
+		if start >= end {
+			return nil
+		}
+		sels := make([]int64, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int64(i)
+		}
+		return sels
+	}
+}
+
+func LinearCollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint int) func(*Vector) []int64 {
+	return func(vector *Vector) []int64 {
+		var sels []int64
+		vecLen := vector.Length()
+		if vecLen == 0 {
+			return sels
+		}
+		col, area := MustVarlenaRawData(vector)
+		for x := 0; x < vecLen; x++ {
+			bb := col[x].GetByteSlice(area)
+			cmpLB := types.PrefixCompare(bb, lb)
+			cmpUB := types.PrefixCompare(bb, ub)
+			var match bool
+			switch hint {
+			case 0:
+				match = cmpLB >= 0 && cmpUB <= 0
+			case 1:
+				match = cmpLB > 0 && cmpUB <= 0
+			case 2:
+				match = cmpLB >= 0 && cmpUB < 0
+			case 3:
+				match = cmpLB > 0 && cmpUB < 0
+			}
+			if match {
+				sels = append(sels, int64(x))
+			}
+		}
+		return sels
+	}
+}
+
 func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal | types.Uuid](lval, rval T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		vecLen := vec.Length()
