@@ -2151,8 +2151,12 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
@@ -2258,8 +2262,12 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
