@@ -1978,20 +1978,20 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		errMsg    string
 	}{
 		{
-			name:     "TEXT to CHAR(255) with length 260 - should succeed",
+			name:     "TEXT to CHAR(255) with length 260 - should fail",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			want:     []string{longString260}, // Should keep original length
-			wantErr:  false,
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
 		},
 		{
-			name:     "TEXT to VARCHAR(255) with length 260 - should succeed",
+			name:     "TEXT to VARCHAR(255) with length 260 - should fail",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_varchar, 255, 0),
-			want:     []string{longString260}, // Should keep original length
-			wantErr:  false,
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
 		},
 		{
 			name:      "TEXT to CHAR(255) with NULL - should handle NULL",
@@ -2044,12 +2044,12 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "TEXT to CHAR(255) with multiple values",
-			inputs:   []string{"short", longString260, "medium length string"},
+			name:     "TEXT to CHAR(255) with value exceeding limit",
+			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			want:     []string{"short", longString260, "medium length string"},
-			wantErr:  false,
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
 		},
 	}
 
@@ -3198,6 +3198,34 @@ func Test_arrayToArray_WidthCheck(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, tc4.inputs, tc4.expect, NewCast)
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc4.info, info))
+
+	// vecf32(3) -> vecf32(unsized/MaxDim): should succeed (bypass dimension check)
+	tc5 := tcTemp{
+		info: "vecf32(3) -> vecf32(MaxDim) - unsized target should accept any dimension",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 3, 0), [][]float32{{1, 2, 3}}, nil),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{{1, 2, 3}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc5.inputs, tc5.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc5.info, info))
+
+	// vecf32(5) -> vecf64(unsized/MaxDim): cross-type unsized should succeed
+	tc6 := tcTemp{
+		info: "vecf32(5) -> vecf64(MaxDim) - cross-type unsized should accept any dimension",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_array_float32, 5, 0), [][]float32{{1, 2, 3, 4, 5}}, nil),
+			NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{}, nil),
+		},
+		expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			[][]float64{{1, 2, 3, 4, 5}}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc6.inputs, tc6.expect, NewCast)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc6.info, info))
 }
 
 func Test_strToStr_TextLengthCheck(t *testing.T) {

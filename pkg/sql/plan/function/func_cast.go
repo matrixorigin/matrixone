@@ -5554,7 +5554,7 @@ func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 		}
 
 		_v := types.BytesToArray[I](v)
-		if targetWidth > 0 && len(_v) != targetWidth {
+		if targetWidth > 0 && targetWidth != types.MaxArrayDimension && len(_v) != targetWidth {
 			return moerr.NewOutOfRangef(ctx, "array", "array dimension %d does not match target dimension %d", len(_v), targetWidth)
 		}
 

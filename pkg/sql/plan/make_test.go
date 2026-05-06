@@ -48,3 +48,31 @@ func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
 	require.Equal(t, "[1,2,3]", actual)
 }
+
+func Test_isSameColumnType(t *testing.T) {
+	// Same type entirely
+	require.True(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+	))
+	// Different Id
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_int32)},
+		plan.Type{Id: int32(types.T_int64)},
+	))
+	// Same Id, different Width
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+		plan.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 2},
+	))
+	// Same Id, different Scale
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+		plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 4},
+	))
+	// VARCHAR with different widths
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_varchar), Width: 100},
+		plan.Type{Id: int32(types.T_varchar), Width: 255},
+	))
+}

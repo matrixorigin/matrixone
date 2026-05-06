@@ -811,10 +811,7 @@ func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}
-	if t1.Width == t2.Width && t1.Scale == t2.Scale {
-		return true
-	}
-	return true
+	return t1.Width == t2.Width && t1.Scale == t2.Scale
 }
 
 // GetColDefFromTable Find the target column definition from the predefined
