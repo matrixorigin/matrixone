@@ -427,7 +427,9 @@ func TestObjectRefEqualNil(t *testing.T) {
 
 // TestApplyDistributivityIsBinNotFactored verifies that applyDistributivity
 // does NOT factor out expressions that differ only in IsBin. Given:
-//   (cast(a as int64) = _binary '1' AND p) OR (cast(a as int64) = '1' AND q)
+//
+//	(cast(a as int64) = _binary '1' AND p) OR (cast(a as int64) = '1' AND q)
+//
 // the two equality exprs must remain separate (not extracted as common).
 func TestApplyDistributivityIsBinNotFactored(t *testing.T) {
 	ctx := context.Background()
