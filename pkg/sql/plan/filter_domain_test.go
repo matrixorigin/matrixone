@@ -1030,8 +1030,14 @@ func TestRewriteInDomainCastUint8OverflowSkipped(t *testing.T) {
 	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
 	require.Equal(t, "in", builder.qry.Nodes[0].FilterList[0].GetF().Func.ObjName)
 	// `<>` may remain OR may be const-folded to TRUE; what must NOT happen is
-	// collapsing into a narrower IN(0) / IN(1) because 256 wrapped around to 0.
+	// collapsing into a narrower IN(0) / IN(1) because 256 wrapped around to 0,
+	// nor should it be erroneously rewritten to FALSE.
 	second := builder.qry.Nodes[0].FilterList[1]
+	if boolLit := second.GetLit(); boolLit != nil {
+		if bv, ok := boolLit.Value.(*planpb.Literal_Bval); ok {
+			require.True(t, bv.Bval, "overflow must not collapse predicate to FALSE")
+		}
+	}
 	if second.GetF() != nil && second.GetF().Func.ObjName == "in" {
 		list := second.GetF().Args[1].GetList()
 		require.NotNil(t, list)
@@ -1063,6 +1069,45 @@ func TestRewriteInDomainCastUint8NegativeFoldsFalse(t *testing.T) {
 	for _, f := range builder.qry.Nodes[0].FilterList {
 		require.False(t, exprMentionsInt64Value(f, -1), "no filter should carry -1 after rewrite")
 	}
+}
+
+// TestRewriteInDomainCastBinaryLiteralNotFolded verifies that _binary '1' and
+// '1' are not folded into the same domain key. IsBin literals use byte-value
+// semantics when cast to int (0x31 = 49), while text literals use decimal
+// parsing ('1' = 1). They must remain distinct.
+func TestRewriteInDomainCastBinaryLiteralNotFolded(t *testing.T) {
+	ctx, builder, tag, colExpr := setupUint8InDomainRewriteTest(t)
+
+	domainExpr := makeUint8InExpr(t, ctx, colExpr, 0, 1, 2)
+
+	int64Typ := planpb.Type{Id: int32(types.T_int64)}
+	castExpr, err := appendCastBeforeExpr(ctx.GetContext(), DeepCopyExpr(colExpr), int64Typ)
+	require.NoError(t, err)
+
+	binLit := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar), Width: 1},
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}, IsBin: true},
+		},
+	}
+	neqExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "!=", []*planpb.Expr{
+		DeepCopyExpr(castExpr),
+		binLit,
+	})
+	require.NoError(t, err)
+
+	setSingleScanFilters(builder, tag, domainExpr, neqExpr)
+	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
+	builder.rewriteInDomainNotInFilters(0)
+
+	// The binary literal must NOT be absorbed into the uint8 IN domain.
+	// The IN(0,1,2) must remain with all 3 values intact.
+	require.Len(t, builder.qry.Nodes[0].FilterList, 2)
+	first := builder.qry.Nodes[0].FilterList[0]
+	require.Equal(t, "in", first.GetF().Func.ObjName)
+	list := first.GetF().Args[1].GetList()
+	require.NotNil(t, list)
+	require.Len(t, list.List, 3, "_binary literal must not shrink IN domain")
 }
 
 // exprMentionsInt64Value walks the expression tree and returns true if any

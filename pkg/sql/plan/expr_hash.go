@@ -172,6 +172,11 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 		writeByte(h, 11)
 		_, _ = h.Write([]byte(v.Sval))
 		writeByte(h, 0)
+		if lit.IsBin {
+			writeByte(h, 1)
+		} else {
+			writeByte(h, 0)
+		}
 	case *plan.Literal_Bval:
 		writeByte(h, 12)
 		if v.Bval {
@@ -338,7 +343,7 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Fval == bv.Fval
 	case *plan.Literal_Sval:
 		bv, ok := b.Value.(*plan.Literal_Sval)
-		return ok && av.Sval == bv.Sval
+		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin
 	case *plan.Literal_Bval:
 		bv, ok := b.Value.(*plan.Literal_Bval)
 		return ok && av.Bval == bv.Bval

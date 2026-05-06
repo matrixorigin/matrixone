@@ -152,6 +152,29 @@ func TestExprStructuralHashLiteralVariants(t *testing.T) {
 	}
 }
 
+func binStrLit(v string) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64},
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: v}, IsBin: true},
+		},
+	}
+}
+
+func TestExprStructuralHashDistinguishesIsBin(t *testing.T) {
+	a := strLit("1")
+	b := binStrLit("1")
+
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b),
+		"hash must differ for same Sval but different IsBin")
+	require.False(t, exprStructuralEqual(a, b),
+		"equal must return false for same Sval but different IsBin")
+
+	c := binStrLit("1")
+	require.Equal(t, exprStructuralHash(b), exprStructuralHash(c))
+	require.True(t, exprStructuralEqual(b, c))
+}
+
 // TestExprStructuralEqualNullAndTypeMismatch covers the null-vs-non-null and
 // cross-variant paths (e.g. literal vs function, literal vs column).
 func TestExprStructuralEqualNullAndTypeMismatch(t *testing.T) {

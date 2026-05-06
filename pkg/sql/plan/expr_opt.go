@@ -1035,6 +1035,9 @@ func literalStringValue(lit *plan.Literal, typ plan.Type) (string, bool) {
 	default:
 		return "", false
 	}
+	if lit.IsBin {
+		return "", false
+	}
 	if _, ok := lit.Value.(*plan.Literal_Sval); !ok {
 		return "", false
 	}
