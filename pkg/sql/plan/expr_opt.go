@@ -1295,14 +1295,18 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				continue
 			}
 
-			col2filter[col.ColPos] = i
+			if _, ok := col2filter[col.ColPos]; !ok {
+				col2filter[col.ColPos] = i
+			}
 		} else if funcName == "in_range" {
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) || !isRuntimeConstExpr(fn.Args[2]) {
 				continue
 			}
 
-			col2filter[col.ColPos] = i
+			if _, ok := col2filter[col.ColPos]; !ok {
+				col2filter[col.ColPos] = i
+			}
 		} else if funcName == "in" {
 			if fn.Args[0].GetCol() == nil {
 				continue
@@ -1547,6 +1551,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
 
+		if len(filterIdx) < numParts && len(serialArgs) == 0 {
+			return filters
+		}
+
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
 		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[1])
 		leftArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
@@ -1572,10 +1580,14 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
 
+		if len(filterIdx) < numParts && len(serialArgs) == 0 {
+			return filters
+		}
+
 		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFilter.GetF().Args[1])
 		boundArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
 
-		if len(filterIdx) < numParts && len(serialArgs) > 0 {
+		if len(filterIdx) < numParts {
 			prefixArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
 			var flag byte
