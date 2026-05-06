@@ -151,5 +151,94 @@ explain select * from t4 where x > 45 and x < 50;
 -- @sortkey:0
 select * from t4 where x > 45 and x < 50 order by x;
 
+-- 21. OR-of-range on multi-part composite index should NOT use unsafe <= / >
+-- The guard must recurse into OR arms and reject composite index usage
+-- @regex("Table Scan",true)
+explain select * from t2 where a <= 10 or a > 25;
+-- @sortkey:0
+select * from t2 where a <= 10 or a > 25 order by id;
+
+-- 22. OR-of-range with safe ops (>= and <) on composite index SHOULD use index
+-- @regex("Index",true)
+explain select * from t2 where a >= 10 and a < 25;
+-- @sortkey:0
+select * from t2 where a >= 10 and a < 25 order by id;
+
+-- 23. NULL values in indexed column
+drop table if exists t5;
+create table t5(id int primary key, val int, key idx_val(val));
+insert into t5 values(1, NULL);
+insert into t5 values(2, 10);
+insert into t5 values(3, NULL);
+insert into t5 values(4, 20);
+insert into t5 values(5, 30);
+select mo_ctl('dn', 'flush', 'd1.t5');
+select Sleep(1);
+
+-- NULL should not appear in range results
+-- @sortkey:0
+select * from t5 where val >= 10 and val <= 30 order by id;
+-- @sortkey:0
+select * from t5 where val > 10 and val < 30 order by id;
+select count(*) from t5 where val is null;
+
+-- 24. Empty range (lower > upper) should return no rows
+select * from t5 where val >= 100 and val <= 50;
+select * from t5 where val > 30 and val < 10;
+
+-- 25. Unique index with open range (exercises in_range on single-part PK)
+drop table if exists t6;
+create table t6(id int primary key, val int unique key);
+insert into t6 select result, result * 5 from generate_series(1, 100) g;
+select mo_ctl('dn', 'flush', 'd1.t6');
+select Sleep(1);
+
+-- @regex("Index Table Scan",true)
+explain select * from t6 where val > 100 and val < 200;
+-- @sortkey:0
+select * from t6 where val > 100 and val < 200 order by id;
+-- @sortkey:0
+select * from t6 where val >= 100 and val <= 200 order by id;
+
+-- 26. DATE column with secondary index
+drop table if exists t7;
+create table t7(id int primary key, d date, key idx_d(d));
+insert into t7 values(1, '2024-01-01');
+insert into t7 values(2, '2024-03-15');
+insert into t7 values(3, '2024-06-30');
+insert into t7 values(4, '2024-09-01');
+insert into t7 values(5, '2024-12-31');
+select mo_ctl('dn', 'flush', 'd1.t7');
+select Sleep(1);
+
+-- @regex("Index Table Scan",true)
+explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
+-- @sortkey:0
+select * from t7 where d >= '2024-03-01' and d <= '2024-09-30' order by id;
+-- @regex("prefix_in_range",true)
+explain select * from t7 where d > '2024-01-01' and d < '2024-12-31';
+-- @sortkey:0
+select * from t7 where d > '2024-01-01' and d < '2024-12-31' order by id;
+
+-- 27. DECIMAL column with secondary index
+drop table if exists t8;
+create table t8(id int primary key, price decimal(10,2), key idx_price(price));
+insert into t8 values(1, 9.99);
+insert into t8 values(2, 19.99);
+insert into t8 values(3, 29.99);
+insert into t8 values(4, 49.99);
+insert into t8 values(5, 99.99);
+select mo_ctl('dn', 'flush', 'd1.t8');
+select Sleep(1);
+
+-- @regex("prefix_between",true)
+explain select * from t8 where price >= 19.99 and price <= 49.99;
+-- @sortkey:0
+select * from t8 where price >= 19.99 and price <= 49.99 order by id;
+-- @regex("prefix_in_range",true)
+explain select * from t8 where price > 9.99 and price < 99.99;
+-- @sortkey:0
+select * from t8 where price > 9.99 and price < 99.99 order by id;
+
 -- Cleanup
 drop database d1;
