@@ -17,18 +17,20 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/require"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -53,6 +55,7 @@ func TestBuildAlterView(t *testing.T) {
 	vData, err := json.Marshal(ViewData{
 		"create view v as select a from a",
 		"db",
+		"DEFINER",
 	})
 	assert.NoError(t, err)
 
@@ -67,6 +70,7 @@ func TestBuildAlterView(t *testing.T) {
 	vxData, err := json.Marshal(ViewData{
 		"create view vx as select a from v",
 		"db",
+		"DEFINER",
 	})
 	assert.NoError(t, err)
 	store["db.vx"] = arg{&plan.ObjectRef{},
@@ -160,6 +164,152 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
+}
+
+func TestBuildShowCreateViewSecurityType(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(context.Background())
+	ctx.dbs["db"] = true
+
+	makePlan := func(stmtSQL, securityType string) *Plan {
+		vData, err := json.Marshal(ViewData{
+			Stmt:            stmtSQL,
+			DefaultDatabase: "db",
+			SecurityType:    securityType,
+		})
+		require.NoError(t, err)
+
+		ctx.tables["v"] = &plan.TableDef{
+			TableType: catalog.SystemViewRel,
+			ViewSql: &plan.ViewDef{
+				View: string(vData),
+			},
+		}
+
+		stmt := tree.NewShowCreateView(tree.NewUnresolvedObjectName("db", "v"))
+		pl, err := buildShowCreateView(stmt, ctx)
+		require.NoError(t, err)
+		return pl
+	}
+
+	pl := makePlan("create view v as select 1", "INVOKER")
+	require.True(t, planStringLiteralsContain(pl, "SQL SECURITY INVOKER"))
+
+	pl = makePlan("create view v as select 1", "")
+	require.True(t, planStringLiteralsContain(pl, "SQL SECURITY DEFINER"))
+
+	pl = makePlan("create SQL SECURITY DEFINER view v as select 1", "DEFINER")
+	var matched string
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, "SQL SECURITY DEFINER") {
+			matched = lit
+			break
+		}
+	}
+	require.NotEmpty(t, matched)
+	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+
+	pl = makePlan("create /* SQL SECURITY INVOKER */ view v as select 1", "")
+	matched = ""
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, "SQL SECURITY DEFINER") {
+			matched = lit
+			break
+		}
+	}
+	require.NotEmpty(t, matched)
+	require.Contains(t, matched, "create /* SQL SECURITY INVOKER */ SQL SECURITY DEFINER view v as select 1")
+	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+
+	pl = makePlan("/*!50001 CREATE DEFINER = `root`@`%` VIEW v AS select 1 */", "")
+	matched = ""
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, "SQL SECURITY DEFINER") {
+			matched = lit
+			break
+		}
+	}
+	require.NotEmpty(t, matched)
+	require.Contains(t, matched, "/*!50001 CREATE DEFINER = `root`@`%` SQL SECURITY DEFINER VIEW v AS select 1 */")
+	require.Equal(t, 1, strings.Count(matched, "SQL SECURITY DEFINER"))
+}
+
+func TestOverrideViewDefSecurityTypeNoOpCases(t *testing.T) {
+	tableDef := &plan.TableDef{}
+	overrideViewDefSecurityType(tableDef, "invoker")
+	require.Nil(t, tableDef.ViewSql)
+
+	tableDef = &plan.TableDef{
+		ViewSql: &plan.ViewDef{View: "not-json"},
+	}
+	overrideViewDefSecurityType(tableDef, "invoker")
+	require.Equal(t, "not-json", tableDef.ViewSql.View)
+
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            "create view v as select 1",
+		DefaultDatabase: "db",
+	})
+	require.NoError(t, err)
+
+	tableDef = &plan.TableDef{
+		ViewSql: &plan.ViewDef{View: string(viewData)},
+	}
+	overrideViewDefSecurityType(tableDef, "invoker")
+
+	var got ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.ViewSql.View), &got))
+	require.Equal(t, "INVOKER", got.SecurityType)
+}
+
+func TestFormatViewKeyWithSnapshot(t *testing.T) {
+	require.Equal(t, "db.v", FormatViewKeyWithSnapshot("db.v", nil))
+	require.Equal(t, "db.v", FormatViewKeyWithSnapshot("db.v", &Snapshot{}))
+
+	snapshot := &Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	require.Equal(t, "db.v@ts=42", FormatViewKeyWithSnapshot("db.v", snapshot))
+}
+
+func planStringLiteralsContain(pl *Plan, want string) bool {
+	for _, lit := range collectPlanStringLiterals(pl) {
+		if strings.Contains(lit, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectPlanStringLiterals(pl *Plan) []string {
+	query, ok := pl.Plan.(*plan.Plan_Query)
+	if !ok {
+		return nil
+	}
+	var literals []string
+	for _, node := range query.Query.Nodes {
+		for _, expr := range node.ProjectList {
+			collectExprStringLiterals(expr, &literals)
+		}
+	}
+	return literals
+}
+
+func collectExprStringLiterals(expr *plan.Expr, literals *[]string) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		if lit := impl.Lit; lit != nil {
+			if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+				*literals = append(*literals, sval.Sval)
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			collectExprStringLiterals(arg, literals)
+		}
+	}
 }
 
 func TestBuildLockTables(t *testing.T) {

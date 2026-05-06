@@ -1,10 +1,10 @@
 SELECT EXISTS(SELECT 1+1);
 exists (select 1 + 1)
-true
+1
 create view v1 as SELECT EXISTS(SELECT 1+1);
 select * from v1;
 exists (select 1 + 1)
-true
+1
 drop view v1;
 drop table if exists t1;
 drop table if exists t2;
@@ -549,37 +549,37 @@ CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
 exists (select a from t1 where b = 2 and a.a > t1.a) is null
-false
-false
-false
+0
+0
+0
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
 exists (select a from t1 where b = 2 and a.a < t1.a) is not null
-true
-true
-true
+1
+1
+1
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
 exists (select a from t1 where b = 2 and a.a = t1.a) is null
-false
-false
-false
+0
+0
+0
 create view v1 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
 create view v2 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
 create view v3 as SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
 select * from v1;
 exists (select a from t1 where b = 2 and a.a > t1.a) is null
-false
-false
-false
+0
+0
+0
 select * from v2;
 exists (select a from t1 where b = 2 and a.a < t1.a) is not null
-true
-true
-true
+1
+1
+1
 select * from v3;
 exists (select a from t1 where b = 2 and a.a = t1.a) is null
-false
-false
-false
+0
+0
+0
 drop view v1;
 drop view v2;
 drop view v3;
