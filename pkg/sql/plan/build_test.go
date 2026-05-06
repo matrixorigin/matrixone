@@ -488,9 +488,10 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select 1 as c,  1/2, abs(-2)",
 
 		"select date('2022-01-01'), adddate(time'00:00:00', interval 1 day), subdate(time'00:00:00', interval 1 week), '2007-01-01' + interval 1 month, '2007-01-01' -  interval 1 hour",
-		"SELECT '2024-01-01' + INTERVAL (n_nationkey % 365) DAY FROM nation",
 		"SELECT '2024-01-01' + INTERVAL n_nationkey DAY FROM nation",
 		"SELECT '2024-01-01' - INTERVAL n_nationkey HOUR FROM nation",
+		"SELECT '2024-01-01' + INTERVAL n_nationkey % 365 DAY FROM nation",
+		"SELECT '2024-01-01' + INTERVAL (n_nationkey % 365) DAY FROM nation",
 		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
