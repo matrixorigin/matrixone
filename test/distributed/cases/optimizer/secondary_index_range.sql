@@ -158,11 +158,17 @@ explain select * from t2 where a <= 10 or a > 25;
 -- @sortkey:0
 select * from t2 where a <= 10 or a > 25 order by id;
 
--- 22. OR-of-range with safe ops (>= and <) on composite index SHOULD use index
+-- 22. AND-of-range with safe ops (>= and <) on composite index SHOULD use index
 -- @regex("Index",true)
 explain select * from t2 where a >= 10 and a < 25;
 -- @sortkey:0
 select * from t2 where a >= 10 and a < 25 order by id;
+
+-- 22b. OR-of-range with safe ops (>= and <) on single-part index SHOULD use index
+-- @regex("Index",true)
+explain select * from t1 where val >= 5 or val < 2;
+-- @sortkey:0
+select * from t1 where val >= 5 or val < 2 order by id;
 
 -- 23. NULL values in indexed column
 drop table if exists t5;
@@ -183,6 +189,8 @@ select * from t5 where val > 10 and val < 30 order by id;
 select count(*) from t5 where val is null;
 
 -- 24. Empty range (lower > upper) should return no rows
+-- @regex("Index",true)
+explain select * from t5 where val >= 100 and val <= 50;
 select * from t5 where val >= 100 and val <= 50;
 select * from t5 where val > 30 and val < 10;
 

@@ -1518,6 +1518,12 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 
 // hasUnsafeRangeOp returns true if fn (or any OR arm within it) uses <= or >
 // which are unsafe on serialized multi-part composite index keys.
+// hasUnsafeRangeOp checks whether a filter expression contains <= or > operators
+// that cannot be safely converted to prefix_between on a multi-part composite index.
+// Only recurses into OR arms; AND arms are safe because checkIndexFilter pre-rejects
+// any AND-nested expression that isn't a simple comparison on an indexed column.
+// in_range is intentionally not flagged: it is only emitted for numParts == 1 (single-
+// part unique indexes) where prefix correctness is not a concern.
 func hasUnsafeRangeOp(fn *plan.Function) bool {
 	if fn == nil {
 		return false

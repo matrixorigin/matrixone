@@ -437,6 +437,121 @@ select * from t2 where a >= 10 and a < 25 order by id;
 2  ¦  10  ¦  200  ¦  y  𝄀
 3  ¦  20  ¦  100  ¦  z  𝄀
 4  ¦  20  ¦  200  ¦  w
+explain select * from t1 where val >= 5 or val < 2;
+-- @regex("Index", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (t1.id = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
+              Filter Cond: ((t1.val >= 5) or (t1.val < 2))  𝄀
+              Runtime Filter Probe: t1.id  𝄀
+        ->  Index Table Scan on t1.idx_val [ForceOneCN]  𝄀
+              Filter Cond: ((__mo_index_idx_col >= ':') or (__mo_index_idx_col < ':'))
+select * from t1 where val >= 5 or val < 2 order by id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  10  ¦  row1  𝄀
+2  ¦  20  ¦  row2  𝄀
+3  ¦  30  ¦  row3  𝄀
+4  ¦  40  ¦  row4  𝄀
+5  ¦  50  ¦  row5  𝄀
+6  ¦  60  ¦  row6  𝄀
+7  ¦  70  ¦  row7  𝄀
+8  ¦  80  ¦  row8  𝄀
+9  ¦  90  ¦  row9  𝄀
+10  ¦  100  ¦  row10  𝄀
+11  ¦  110  ¦  row11  𝄀
+12  ¦  120  ¦  row12  𝄀
+13  ¦  130  ¦  row13  𝄀
+14  ¦  140  ¦  row14  𝄀
+15  ¦  150  ¦  row15  𝄀
+16  ¦  160  ¦  row16  𝄀
+17  ¦  170  ¦  row17  𝄀
+18  ¦  180  ¦  row18  𝄀
+19  ¦  190  ¦  row19  𝄀
+20  ¦  200  ¦  row20  𝄀
+21  ¦  210  ¦  row21  𝄀
+22  ¦  220  ¦  row22  𝄀
+23  ¦  230  ¦  row23  𝄀
+24  ¦  240  ¦  row24  𝄀
+25  ¦  250  ¦  row25  𝄀
+26  ¦  260  ¦  row26  𝄀
+27  ¦  270  ¦  row27  𝄀
+28  ¦  280  ¦  row28  𝄀
+29  ¦  290  ¦  row29  𝄀
+30  ¦  300  ¦  row30  𝄀
+31  ¦  310  ¦  row31  𝄀
+32  ¦  320  ¦  row32  𝄀
+33  ¦  330  ¦  row33  𝄀
+34  ¦  340  ¦  row34  𝄀
+35  ¦  350  ¦  row35  𝄀
+36  ¦  360  ¦  row36  𝄀
+37  ¦  370  ¦  row37  𝄀
+38  ¦  380  ¦  row38  𝄀
+39  ¦  390  ¦  row39  𝄀
+40  ¦  400  ¦  row40  𝄀
+41  ¦  410  ¦  row41  𝄀
+42  ¦  420  ¦  row42  𝄀
+43  ¦  430  ¦  row43  𝄀
+44  ¦  440  ¦  row44  𝄀
+45  ¦  450  ¦  row45  𝄀
+46  ¦  460  ¦  row46  𝄀
+47  ¦  470  ¦  row47  𝄀
+48  ¦  480  ¦  row48  𝄀
+49  ¦  490  ¦  row49  𝄀
+50  ¦  500  ¦  row50  𝄀
+51  ¦  510  ¦  row51  𝄀
+52  ¦  520  ¦  row52  𝄀
+53  ¦  530  ¦  row53  𝄀
+54  ¦  540  ¦  row54  𝄀
+55  ¦  550  ¦  row55  𝄀
+56  ¦  560  ¦  row56  𝄀
+57  ¦  570  ¦  row57  𝄀
+58  ¦  580  ¦  row58  𝄀
+59  ¦  590  ¦  row59  𝄀
+60  ¦  600  ¦  row60  𝄀
+61  ¦  610  ¦  row61  𝄀
+62  ¦  620  ¦  row62  𝄀
+63  ¦  630  ¦  row63  𝄀
+64  ¦  640  ¦  row64  𝄀
+65  ¦  650  ¦  row65  𝄀
+66  ¦  660  ¦  row66  𝄀
+67  ¦  670  ¦  row67  𝄀
+68  ¦  680  ¦  row68  𝄀
+69  ¦  690  ¦  row69  𝄀
+70  ¦  700  ¦  row70  𝄀
+71  ¦  710  ¦  row71  𝄀
+72  ¦  720  ¦  row72  𝄀
+73  ¦  730  ¦  row73  𝄀
+74  ¦  740  ¦  row74  𝄀
+75  ¦  750  ¦  row75  𝄀
+76  ¦  760  ¦  row76  𝄀
+77  ¦  770  ¦  row77  𝄀
+78  ¦  780  ¦  row78  𝄀
+79  ¦  790  ¦  row79  𝄀
+80  ¦  800  ¦  row80  𝄀
+81  ¦  810  ¦  row81  𝄀
+82  ¦  820  ¦  row82  𝄀
+83  ¦  830  ¦  row83  𝄀
+84  ¦  840  ¦  row84  𝄀
+85  ¦  850  ¦  row85  𝄀
+86  ¦  860  ¦  row86  𝄀
+87  ¦  870  ¦  row87  𝄀
+88  ¦  880  ¦  row88  𝄀
+89  ¦  890  ¦  row89  𝄀
+90  ¦  900  ¦  row90  𝄀
+91  ¦  910  ¦  row91  𝄀
+92  ¦  920  ¦  row92  𝄀
+93  ¦  930  ¦  row93  𝄀
+94  ¦  940  ¦  row94  𝄀
+95  ¦  950  ¦  row95  𝄀
+96  ¦  960  ¦  row96  𝄀
+97  ¦  970  ¦  row97  𝄀
+98  ¦  980  ¦  row98  𝄀
+99  ¦  990  ¦  row99  𝄀
+100  ¦  1000  ¦  row100
 drop table if exists t5;
 create table t5(id int primary key, val int, key idx_val(val));
 insert into t5 values(1, NULL);
@@ -469,6 +584,12 @@ select * from t5 where val > 10 and val < 30 order by id;
 select count(*) from t5 where val is null;
 ➤ count(*)[-5,64,0]  𝄀
 2
+explain select * from t5 where val >= 100 and val <= 50;
+-- @regex("Index", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t5.idx_val  𝄀
+        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
 select * from t5 where val >= 100 and val <= 50;
 ➤ id[4,32,0]  ¦  val[4,32,0]
 select * from t5 where val > 30 and val < 10;
