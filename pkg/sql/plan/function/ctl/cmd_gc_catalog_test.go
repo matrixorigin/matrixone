@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,16 +33,17 @@ type mockGCEngine struct {
 	ago    time.Duration
 }
 
-func (m *mockGCEngine) GCCatalogCache(_ context.Context, ago time.Duration) {
+func (m *mockGCEngine) GCCatalogCache(_ context.Context, ago time.Duration) error {
 	m.called = true
 	m.ago = ago
+	return nil
 }
 
 func TestHandleGCCatalogCache_WrongService(t *testing.T) {
 	proc := &process.Process{Base: &process.BaseProcess{}}
 	proc.Ctx = context.Background()
 	_, err := handleGCCatalogCache(proc, tn, "", nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongService))
 }
 
 func TestHandleGCCatalogCache_Default(t *testing.T) {
@@ -85,6 +87,13 @@ func TestHandleGCCatalogCache_InvalidParam(t *testing.T) {
 	proc.Ctx = context.Background()
 	_, err := handleGCCatalogCache(proc, cn, "abc", nil)
 	require.Error(t, err)
+}
+
+func TestHandleGCCatalogCache_OverflowParam(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	proc.Ctx = context.Background()
+	_, err := handleGCCatalogCache(proc, cn, strconv.FormatInt(maxGCCatalogCacheMinutes+1, 10), nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestHandleGCCatalogCache_EngineNotSupported(t *testing.T) {

@@ -16,6 +16,7 @@ package ctl
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxGCCatalogCacheMinutes = int64(math.MaxInt64 / int64(time.Minute))
 
 // handleGCCatalogCache triggers an immediate GC of the CN catalog cache.
 //
@@ -38,8 +41,7 @@ func handleGCCatalogCache(
 	_ requestSender,
 ) (Result, error) {
 	if service != cn {
-		return Result{}, moerr.NewNotSupportedf(
-			proc.Ctx, "GCCatalogCache only supports CN service")
+		return Result{}, moerr.NewWrongServiceNoCtx("CN", string(service))
 	}
 
 	ago := 20 * time.Minute
@@ -51,6 +53,10 @@ func handleGCCatalogCache(
 		}
 		if minutes < 1 {
 			minutes = 1
+		}
+		if minutes > maxGCCatalogCacheMinutes {
+			return Result{}, moerr.NewInvalidInputf(
+				proc.Ctx, "minutes too large: %s", p)
 		}
 		ago = time.Duration(minutes) * time.Minute
 	}
@@ -64,7 +70,9 @@ func handleGCCatalogCache(
 		}, nil
 	}
 
-	gcer.GCCatalogCache(proc.Ctx, ago)
+	if err := gcer.GCCatalogCache(proc.Ctx, ago); err != nil {
+		return Result{}, err
+	}
 
 	return Result{
 		Method: GCCatalogCacheMethod,

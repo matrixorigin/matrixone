@@ -1210,7 +1210,7 @@ type VectorPool interface {
 // CatalogCacheGCer is an optional interface for engines that support
 // on-demand GC of the in-memory catalog cache.
 type CatalogCacheGCer interface {
-	GCCatalogCache(ctx context.Context, ago time.Duration)
+	GCCatalogCache(ctx context.Context, ago time.Duration) error
 }
 
 type Hints struct {

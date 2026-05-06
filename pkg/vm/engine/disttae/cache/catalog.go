@@ -97,6 +97,9 @@ type GCReport struct {
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
+	cc.gcMu.Lock()
+	defer cc.gcMu.Unlock()
+
 	/*
 							GC
 		-----------------+--------> ts
