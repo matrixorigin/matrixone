@@ -959,10 +959,15 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
-		if fn == nil {
+		if fn == nil || len(fn.Args) < 2 {
 			continue
 		}
+		colArgIdx := 0
 		col := fn.Args[0].GetCol()
+		if col == nil {
+			col = fn.Args[1].GetCol()
+			colArgIdx = 1
+		}
 		if col == nil {
 			continue
 		}
@@ -971,11 +976,10 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			if colIdx != col.ColPos {
 				continue
 			}
-			// it's an extra filter and can be applied on index
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[0] = deserialExpr
+			newFilter.GetF().Args[colArgIdx] = deserialExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
 		}
@@ -983,23 +987,20 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 
-		//if this is extra filter on PK
 		if len(node.TableDef.Pkey.Names) == 1 {
-			//single pk
 			if col.Name == node.TableDef.Pkey.PkeyColName {
 				idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
 				newFilter := DeepCopyExpr(node.FilterList[i])
-				newFilter.GetF().Args[0] = idxColExpr
+				newFilter.GetF().Args[colArgIdx] = idxColExpr
 				idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			}
 		} else {
-			//composite pk
 			for k := range node.TableDef.Pkey.Names {
 				if col.Name == node.TableDef.Pkey.Names[k] {
 					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
 					newFilter := DeepCopyExpr(node.FilterList[i])
-					newFilter.GetF().Args[0] = deserialExpr
+					newFilter.GetF().Args[colArgIdx] = deserialExpr
 					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 					continue
 				}
@@ -1260,13 +1261,11 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
 	// <= under-fetches (misses rows at boundary), > over-fetches.
 	// Only allow these when paired (handled by getIndexForNonEquiCond).
+	// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
 	if !leadingEqualCond && numParts > 1 && len(leadingPos) == 1 {
 		fn := node.FilterList[leadingPos[0]].GetF()
-		if fn != nil {
-			op := canonicalRangeOp(fn)
-			if op == "<=" || op == ">" {
-				return -1
-			}
+		if fn != nil && hasUnsafeRangeOp(fn) {
+			return -1
 		}
 	}
 
@@ -1434,6 +1433,9 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
+	if fn == nil || len(fn.Args) < 2 {
+		return nil, false
+	}
 	op := canonicalRangeOp(fn)
 	if !isLowerBoundOp(op) && !isUpperBoundOp(op) {
 		return nil, false
@@ -1504,8 +1506,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 			fn := node.FilterList[i].GetF()
 			if fn != nil {
 				numParts := len(indexes[idxPos].Parts)
-				op := canonicalRangeOp(fn)
-				if numParts > 1 && (op == "<=" || op == ">") {
+				if numParts > 1 && hasUnsafeRangeOp(fn) {
 					continue
 				}
 			}
@@ -1513,6 +1514,24 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		}
 	}
 	return -1, nil
+}
+
+// hasUnsafeRangeOp returns true if fn (or any OR arm within it) uses <= or >
+// which are unsafe on serialized multi-part composite index keys.
+func hasUnsafeRangeOp(fn *plan.Function) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.Func.ObjName == "or" {
+		for _, arg := range fn.Args {
+			if hasUnsafeRangeOp(arg.GetF()) {
+				return true
+			}
+		}
+		return false
+	}
+	op := canonicalRangeOp(fn)
+	return op == "<=" || op == ">"
 }
 
 func canonicalRangeOp(fn *plan.Function) string {
@@ -1561,6 +1580,8 @@ func (builder *QueryBuilder) replaceRangePairCondition(filterList []*plan.Expr, 
 	lowerVal := DeepCopyExpr(rangeFilterConstValue(lowerFn))
 	upperVal := DeepCopyExpr(rangeFilterConstValue(upperFn))
 
+	compositeFilterSel := filterList[filterIdx[0]].Selectivity * filterList[filterIdx[1]].Selectivity
+
 	if numParts > 1 {
 		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{lowerVal})
 		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{upperVal})
@@ -1573,6 +1594,7 @@ func (builder *QueryBuilder) replaceRangePairCondition(filterList []*plan.Expr, 
 			funcName = "prefix_between"
 		}
 		expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
+		expr.Selectivity = compositeFilterSel
 		return expr
 	}
 
@@ -1589,6 +1611,7 @@ func (builder *QueryBuilder) replaceRangePairCondition(filterList []*plan.Expr, 
 		funcName = "prefix_in_range"
 	}
 	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
+	expr.Selectivity = compositeFilterSel
 	return expr
 }
 
