@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -422,4 +423,60 @@ func TestObjectRefEqualNil(t *testing.T) {
 
 	require.False(t, objectRefEqual(nil, ref))
 	require.False(t, objectRefEqual(ref, nil))
+}
+
+// TestApplyDistributivityIsBinNotFactored verifies that applyDistributivity
+// does NOT factor out expressions that differ only in IsBin. Given:
+//   (cast(a as int64) = _binary '1' AND p) OR (cast(a as int64) = '1' AND q)
+// the two equality exprs must remain separate (not extracted as common).
+func TestApplyDistributivityIsBinNotFactored(t *testing.T) {
+	ctx := context.Background()
+
+	col := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "a"},
+		},
+	}
+
+	mkEq := func(isBin bool) *planpb.Expr {
+		lit := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 1},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}, IsBin: isBin},
+			},
+		}
+		eq, _ := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+			DeepCopyExpr(col), lit,
+		})
+		return eq
+	}
+
+	p := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "p"},
+		},
+	}
+	q := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: 1, ColPos: 1, Name: "q"},
+		},
+	}
+
+	// (eq_binary AND p) OR (eq_text AND q)
+	left, _ := BindFuncExprImplByPlanExpr(ctx, "and", []*planpb.Expr{mkEq(true), p})
+	right, _ := BindFuncExprImplByPlanExpr(ctx, "and", []*planpb.Expr{mkEq(false), q})
+	orExpr, _ := BindFuncExprImplByPlanExpr(ctx, "or", []*planpb.Expr{left, right})
+
+	result := applyDistributivity(ctx, orExpr)
+
+	// If factoring happened incorrectly, the result would be:
+	//   eq AND (p OR q)   — a top-level "and"
+	// Correct result keeps the OR at top level since no common factor exists.
+	fn := result.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "or", fn.Func.ObjName,
+		"_binary '1' and '1' must not be factored as common; OR must remain at top")
 }

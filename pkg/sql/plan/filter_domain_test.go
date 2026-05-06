@@ -1062,13 +1062,28 @@ func TestRewriteInDomainCastUint8NegativeFoldsFalse(t *testing.T) {
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, false)
 	builder.rewriteInDomainNotInFilters(0)
 
-	// Two acceptable outcomes: the whole FilterList collapses to FALSE, or the
-	// original IN is kept with the second conjunct folded to FALSE. Either way,
-	// IN(0,1) must not be expanded to contain -1 (which would happen on buggy
-	// sign-wrap). Verify no filter mentions -1.
+	// Two acceptable outcomes:
+	//   a) The whole FilterList collapses to a single FALSE literal.
+	//   b) The original IN is kept with the second conjunct folded to FALSE.
+	// Either way, IN(0,1) must not be expanded to contain -1 (which would
+	// happen on buggy sign-wrap).
 	for _, f := range builder.qry.Nodes[0].FilterList {
 		require.False(t, exprMentionsInt64Value(f, -1), "no filter should carry -1 after rewrite")
 	}
+
+	// The result must actually be unsatisfiable: either a single FALSE, or
+	// [IN, FALSE]. Verify that at least one filter IS FALSE.
+	hasFalse := false
+	for _, f := range builder.qry.Nodes[0].FilterList {
+		if lit := f.GetLit(); lit != nil {
+			if bv, ok := lit.Value.(*planpb.Literal_Bval); ok && !bv.Bval {
+				hasFalse = true
+				break
+			}
+		}
+	}
+	require.True(t, hasFalse,
+		"cast(u as int64) = -1 is unsatisfiable for uint8; result must contain FALSE")
 }
 
 // TestRewriteInDomainCastBinaryLiteralNotFolded verifies that _binary '1' and
