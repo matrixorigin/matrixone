@@ -277,6 +277,76 @@ func TestEscapeFormatEscapesBackslashes(t *testing.T) {
 	require.Equal(t, `a\\b`, EscapeFormat(`a\b`))
 }
 
+func TestCommentBackslashEscape(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name:    "c1",
+		Comment: `path\to\file`,
+		Typ:     plan.Type{Id: int32(22)}, // T_int32
+		Default: &plan.Default{NullAbility: true},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_comment",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, `COMMENT 'path\\to\\file'`)
+}
+
+func TestTableCommentBackslashEscape(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name:    "c1",
+		Typ:     plan.Type{Id: int32(22)}, // T_int32
+		Default: &plan.Default{NullAbility: true},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_tbl_comment",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+		Defs: []*plan.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{Key: catalog.SystemRelAttr_Comment, Value: `back\slash`},
+						},
+					},
+				},
+			},
+		},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, `COMMENT='back\\slash'`)
+}
+
+func TestOnUpdateOriginString(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name: "updated_at",
+		Typ:  plan.Type{Id: int32(53)}, // T_timestamp
+		Default: &plan.Default{
+			NullAbility:  true,
+			OriginString: "CURRENT_TIMESTAMP()",
+		},
+		OnUpdate: &plan.OnUpdate{
+			Expr:         &plan.Expr{},
+			OriginString: "CURRENT_TIMESTAMP()",
+		},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_on_update",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "ON UPDATE CURRENT_TIMESTAMP()")
+}
+
 // TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
 // loop only lower-cases the leading "SET" keyword and keeps the declared
 // member-name case, so SET('Read','Write') round-trips as set('Read','Write')

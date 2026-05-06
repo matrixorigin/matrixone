@@ -1637,8 +1637,7 @@ func decimal128ToOthers(ctx context.Context,
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := source.GetSourceVector()
-			v.SetType(toType)
+			rs.TempSetType(toType)
 			return nil
 		}
 		return decimal128ToDecimal128(source, rs, length, selectList)
@@ -4696,6 +4695,20 @@ func strToSigned[T constraints.Signed](
 					}
 				}
 				r = int64(num)
+				switch bitSize {
+				case 8:
+					if r < math.MinInt8 || r > math.MaxInt8 {
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%d'", r)
+					}
+				case 16:
+					if r < math.MinInt16 || r > math.MaxInt16 {
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%d'", r)
+					}
+				case 32:
+					if r < math.MinInt32 || r > math.MaxInt32 {
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value '%d'", r)
+					}
+				}
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
@@ -4747,6 +4760,22 @@ func strToUnsigned[T constraints.Unsigned](
 				s := hex.EncodeToString(v)
 				res = &s
 				val, tErr = strconv.ParseUint(s, 16, 64)
+				if tErr == nil {
+					switch bitSize {
+					case 8:
+						if val > math.MaxUint8 {
+							return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", s)
+						}
+					case 16:
+						if val > math.MaxUint16 {
+							return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", s)
+						}
+					case 32:
+						if val > math.MaxUint32 {
+							return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", s)
+						}
+					}
+				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s

@@ -3057,3 +3057,87 @@ func TestNumericToBitRejectsInvalidFloat(t *testing.T) {
 	run(t, math.Pow(2, 64), true, "float64(2^64) -> bit must be rejected")
 	run(t, 3.0, false, "valid small float rounds to 3")
 }
+
+func Test_strToSigned_Binary_NarrowOverflow(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name    string
+		input   []byte
+		bitSize int
+		wantErr bool
+	}{
+		{"int8 max valid", []byte{0x7F}, 8, false},
+		{"int8 overflow 128", []byte{0x00, 0x80}, 8, true},
+		{"int16 max valid", []byte{0x7F, 0xFF}, 16, false},
+		{"int16 overflow 32768", []byte{0x00, 0x80, 0x00}, 16, true},
+		{"int32 max valid", []byte{0x7F, 0xFF, 0xFF, 0xFF}, 32, false},
+		{"int32 overflow", []byte{0x00, 0x80, 0x00, 0x00, 0x00}, 32, true},
+		{"int64 valid small", []byte{0x01, 0x00}, 64, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector([][]byte{tt.input}, nil, mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			from := vector.GenerateFunctionStrParameter(inputVec)
+			resultType := types.T_int64.ToType()
+			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[int64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToSigned(ctx, from, to, tt.bitSize, 1, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "out of range")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func Test_strToUnsigned_Binary_NarrowOverflow(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name    string
+		input   []byte
+		bitSize int
+		wantErr bool
+	}{
+		{"uint8 max valid 255", []byte{0xFF}, 8, false},
+		{"uint8 overflow 256", []byte{0x01, 0x00}, 8, true},
+		{"uint16 max valid", []byte{0xFF, 0xFF}, 16, false},
+		{"uint16 overflow", []byte{0x01, 0x00, 0x00}, 16, true},
+		{"uint32 max valid", []byte{0xFF, 0xFF, 0xFF, 0xFF}, 32, false},
+		{"uint32 overflow", []byte{0x01, 0x00, 0x00, 0x00, 0x00}, 32, true},
+		{"uint64 valid small", []byte{0x01, 0x00}, 64, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector([][]byte{tt.input}, nil, mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			from := vector.GenerateFunctionStrParameter(inputVec)
+			resultType := types.T_uint64.ToType()
+			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[uint64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToUnsigned(ctx, from, to, tt.bitSize, 1, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "out of range")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

@@ -245,7 +245,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: types.EncodeEnumValues(n.InternalType.EnumValues)}, nil
 		case defines.MYSQL_TYPE_SET:
 			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
 			if err != nil {
@@ -402,9 +402,12 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		}
 	}
 
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(expr, expr, false)
+
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
-		OriginString: tree.String(expr, dialect.MYSQL),
+		OriginString: fmtCtx.String(),
 	}
 	return ret, nil
 }

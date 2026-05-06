@@ -989,3 +989,23 @@ func TestScalarOpOverflow(t *testing.T) {
 		t.Errorf("expected ErrOutOfRange, got %v", err)
 	}
 }
+
+func TestScalarOpNaN(t *testing.T) {
+	// 0 * Inf produces NaN, must be rejected
+	_, err := ScalarOp[float64]([]float64{0}, "*", math.Inf(1))
+	if err == nil {
+		t.Fatal("expected out-of-range error for NaN result, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// float32: 0 * Inf also produces NaN
+	_, err = ScalarOp[float32]([]float32{0}, "*", float64(math.Inf(-1)))
+	if err == nil {
+		t.Fatal("expected out-of-range error for float32 NaN result, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+}

@@ -145,9 +145,12 @@ func ConstructCreateTableSQL(
 			// col.Comment has already been passed through
 			// util.DealCommentString at parse time (see AttributeComment
 			// production in mysql_sql.y), so any embedded single quote
-			// is stored in pre-doubled MySQL string-literal form. Emit it
-			// between single quotes without re-escaping.
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			// is stored in pre-doubled MySQL string-literal form.
+			// Backslashes still need escaping: the MySQL scanner interprets
+			// \n, \t, \\ etc. inside string literals, so a raw backslash
+			// must be emitted as \\ to round-trip correctly.
+			escaped := strings.ReplaceAll(col.Comment, "\\", "\\\\")
+			buf.WriteString(" COMMENT '" + escaped + "'")
 		}
 
 		createStr += buf.String()
@@ -412,8 +415,10 @@ func ConstructCreateTableSQL(
 					// Like col.Comment, the table-level comment stored in
 					// kv.Value has already been DealCommentString'd at parse
 					// time, so it is in pre-doubled MySQL string-literal
-					// form; emit between single quotes without re-escaping.
-					comment = " COMMENT='" + kv.Value + "'"
+					// form. Backslashes still need escaping for the MySQL
+					// scanner to round-trip correctly.
+					escaped := strings.ReplaceAll(kv.Value, "\\", "\\\\")
+					comment = " COMMENT='" + escaped + "'"
 				}
 			}
 		}
@@ -595,7 +600,7 @@ func FormatColType(colType plan.Type) string {
 	suffix := ""
 	switch types.T(colType.Id) {
 	case types.T_enum:
-		elements := strings.Split(colType.GetEnumvalues(), ",")
+		elements, _ := types.DecodeEnumValues(colType.GetEnumvalues())
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
