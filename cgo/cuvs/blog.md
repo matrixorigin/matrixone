@@ -209,7 +209,7 @@ So the recommendation under filters: **IVF-Flat below ~10M, IVF-PQ above** — o
 | Quantization | f32 / f16 | f16 | f32 |
 | GPU | 1× L40S (48 GB) — *build + search* | 8× L40S (sharded) — *build + search* | 1× L40S (48 GB) — *build only* |
 | Instance | `g6e.16xlarge` | `g6e.48xlarge` | `g6e.16xlarge` |
-| Host RAM / usable DB cache | 512 GB / ~256 GB | — | 512 GB / ~256 GB |
+| Host RAM | 512 GB | 1536 GB | 512 GB |
 | Storage | local SSD (~2 GB/s read) | local SSD (~2 GB/s read) | local SSD (~2 GB/s read) |
 
 The 88M IVF-PQ deployment runs **sharded across 8 GPUs at ~3.5 GB VRAM each** — well under the 48 GB per-GPU budget — leaving headroom for concurrent workloads.
