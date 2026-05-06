@@ -99,8 +99,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
-              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c2 > 10)  𝄀
-              Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c2 > 10)
+              Filter Cond: prefix_in_range(t1.__mo_cbkey_002c1002c2)  𝄀
+              Block Filter Cond: prefix_in_range(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 = 5 and c2 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -138,7 +138,7 @@ select count(*) from t2 where c1 = 1;
 ➤ count(*)[-5,64,0]  𝄀
 10000
 explain select count(*) from t2 where c1 > 10;
-➤ AP QUERY PLAN ON ONE CN(24 core)[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
@@ -187,8 +187,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c2 > 10)  𝄀
-              Block Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c2 > 10)
+              Filter Cond: prefix_in_range(t2.__mo_cpkey_col)  𝄀
+              Block Filter Cond: prefix_in_range(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 = 5 and c2 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 9999

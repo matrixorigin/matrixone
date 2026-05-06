@@ -1587,44 +1587,37 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFilter.GetF().Args[1])
 		boundArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
 
-		if len(filterIdx) < numParts {
-			prefixArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+		prefixArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
 
-			var flag byte
-			var leftArg, rightArg *plan.Expr
-			switch lastFuncName {
-			case "<":
-				leftArg = prefixArg
-				rightArg = boundArg
-				flag = 2 // RightOpen
-			case "<=":
-				leftArg = prefixArg
-				rightArg = boundArg
-				flag = 0 // both closed
-			case ">":
-				leftArg = boundArg
-				rightArg = prefixArg
-				flag = 1 // LeftOpen
-			case ">=":
-				leftArg = boundArg
-				rightArg = prefixArg
-				flag = 0 // both closed
-			}
-
-			flagExpr := makePlan2Uint8ConstExprWithType(flag)
-
-			compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", []*plan.Expr{
-				pkExpr,
-				leftArg,
-				rightArg,
-				flagExpr,
-			})
-		} else {
-			compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), lastFuncName, []*plan.Expr{
-				pkExpr,
-				boundArg,
-			})
+		var flag byte
+		var leftArg, rightArg *plan.Expr
+		switch lastFuncName {
+		case "<":
+			leftArg = prefixArg
+			rightArg = boundArg
+			flag = 2 // RightOpen
+		case "<=":
+			leftArg = prefixArg
+			rightArg = boundArg
+			flag = 0 // both closed
+		case ">":
+			leftArg = boundArg
+			rightArg = prefixArg
+			flag = 1 // LeftOpen
+		case ">=":
+			leftArg = boundArg
+			rightArg = prefixArg
+			flag = 0 // both closed
 		}
+
+		flagExpr := makePlan2Uint8ConstExprWithType(flag)
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", []*plan.Expr{
+			pkExpr,
+			leftArg,
+			rightArg,
+			flagExpr,
+		})
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
 		for i := range filterIdx {
