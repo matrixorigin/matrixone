@@ -320,7 +320,7 @@ func CompileFilterExpr(
 				pos := int(meta.BlockCount())
 				for idx := range seekOps {
 					if seekOps[idx] == nil {
-						continue
+						return 0
 					}
 					pp := seekOps[idx](meta)
 					pos = min(pos, pp)
