@@ -215,12 +215,12 @@ cast(date(col2) as int)
 19464
 null
 select cast(date_add(col2,interval 45 day) as int) from test14;
-cast(date_add(col2, interval(45, day)) as int)
+cast(date_add(col2, interval 45 day) as int)
 1582806059
 1685581305
 null
 select cast(date_sub(col2,interval 45 day) as int) from test14;
-cast(date_sub(col2, interval(45, day)) as int)
+cast(date_sub(col2, interval 45 day) as int)
 1575030059
 1677805305
 null
