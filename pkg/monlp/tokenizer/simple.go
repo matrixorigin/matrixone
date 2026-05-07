@@ -34,6 +34,10 @@ type Token struct {
 	BytePos    int32
 }
 
+type Tokenizer interface {
+	Tokenize(input []byte) iter.Seq[Token]
+}
+
 type SimpleTokenizer struct {
 	// input and output
 	input []byte
@@ -47,11 +51,8 @@ type SimpleTokenizer struct {
 	Err  error
 }
 
-func NewSimpleTokenizer(input []byte) (*SimpleTokenizer, error) {
-	if len(input) > 1024*1024*1024 {
-		return nil, moerr.NewInternalErrorNoCtx("input too large")
-	}
-	return &SimpleTokenizer{input: input}, nil
+func NewSimpleTokenizer() *SimpleTokenizer {
+	return &SimpleTokenizer{}
 }
 
 func isBreakerRune(rune rune) bool {
@@ -201,8 +202,20 @@ func (t *SimpleTokenizer) outputCJK(pos int, yield func(Token) bool) {
 	}
 }
 
-func (t *SimpleTokenizer) Tokenize() iter.Seq[Token] {
+func (t *SimpleTokenizer) Tokenize(input []byte) iter.Seq[Token] {
 	return func(yield func(Token) bool) {
+		t.input = input
+		t.begin = 0
+		t.currTokenPos = 0
+		t.latinBuf.Reset()
+		t.Done = false
+		t.Err = nil
+
+		if len(input) > 1024*1024*1024 {
+			t.Err = moerr.NewInternalErrorNoCtx("input too large")
+			return
+		}
+
 		if len(t.input) == 0 {
 			return
 		}
