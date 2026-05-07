@@ -336,7 +336,9 @@ func (e *Engine) loadDatabaseFromStorage(
 	}
 	if row := res.Batches[0].RowCount(); row != 1 {
 		logerror()
-		panic("FIND_TABLE loadDatabaseFromStorage failed: table result row cnt != 1")
+		return nil, moerr.NewInternalErrorf(ctx,
+			"catalog-load loadDatabaseFromStorage: unexpected row count %d for %s.%v",
+			row, name, accountID)
 	}
 	bat := res.Batches[0]
 
@@ -400,7 +402,8 @@ func (e *Engine) Database(
 	catalog := e.GetLatestCatalogCache()
 
 	if ok := catalog.GetDatabase(item); !ok {
-		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
+		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) ||
+			!e.pClient.CanServeAccount(accountId, op.SnapshotTS()) {
 			logutil.Info(
 				"engine.database.load.from.storage",
 				zap.String("name", name),
@@ -557,7 +560,8 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
 				zap.String("txn", op.Txn().DebugString()),
 			)
-		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
+		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) ||
+			!e.pClient.CanServeAccount(accountId, op.SnapshotTS()) {
 			// not found in cache, try storage
 			logutil.Info(
 				"engine.relation.load.from.storage",
@@ -900,6 +904,11 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 
 func (e *Engine) PushClient() *PushClient {
 	return &e.pClient
+}
+
+// ActivateTenantCatalog implements engine.TenantCatalogActivator.
+func (e *Engine) ActivateTenantCatalog(ctx context.Context, accountID uint32) error {
+	return e.pClient.ActivateTenantCatalog(ctx, e, accountID)
 }
 
 // TryToSubscribeTable implements the LogtailEngine interface.

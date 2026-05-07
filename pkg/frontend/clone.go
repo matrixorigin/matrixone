@@ -252,6 +252,12 @@ func handleCloneTable(
 		return
 	}
 
+	// Activate the target account's catalog so internal SQL that runs under
+	// the target account context can find per-account system tables.
+	if err = activateAccountCatalogIfNeeded(reqCtx, ses, toAccountId); err != nil {
+		return
+	}
+
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	sql := execCtx.input.sql
@@ -363,6 +369,13 @@ func handleCloneDatabase(
 
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
 		err = moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
+		return
+	}
+
+	// Activate the target account's catalog so internal SQL that runs under
+	// the target account context (e.g. FK resolution) can find per-account
+	// system tables like mo_foreign_keys.
+	if err = activateAccountCatalogIfNeeded(reqCtx, ses, toAccountId); err != nil {
 		return
 	}
 

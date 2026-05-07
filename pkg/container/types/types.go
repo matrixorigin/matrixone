@@ -316,7 +316,7 @@ type FixedBytes interface {
 }
 
 type Ints interface {
-	int8 | int16 | int32 | int64
+	int8 | int16 | int32 | int64 | MoYear
 }
 
 type UInts interface {

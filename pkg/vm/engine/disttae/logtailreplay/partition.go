@@ -126,6 +126,10 @@ func (p *Partition) Snapshot() *PartitionState {
 	return p.state.Load()
 }
 
+func (p *Partition) IsCheckpointConsumed() bool {
+	return p.checkpointConsumed.Load()
+}
+
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
 }

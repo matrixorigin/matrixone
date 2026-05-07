@@ -28,11 +28,25 @@ option (gogoproto.protosizer_all) = true;
 // SubscribeRequest is the request for subscription.
 message SubscribeRequest {
     api.TableID table = 1;
+    bool lazy_catalog = 2;
+    repeated uint32 initial_active_accounts = 3;
 }
 
 // UnsubscribeRequest is the request for unsubscription.
 message UnsubscribeRequest {
     api.TableID table = 1;
+}
+
+message ActivateAccountForCatalogRequest {
+    uint32 account_id = 1;
+    uint64 seq = 2;
+}
+
+message ActivateAccountForCatalogResponse {
+    uint32 account_id = 1;
+    uint64 seq = 2;
+    timestamp.Timestamp target_ts = 3;
+    repeated TableLogtail tails = 4 [(gogoproto.nullable) = false];
 }
 
 // TableLogtail describes total or additional logtail for a table.
@@ -84,8 +98,9 @@ message UnSubscribeResponse {
 message LogtailRequest {
     uint64 request_id = 1;
     oneof request {
-        SubscribeRequest subscribe_table     = 2;
-        UnsubscribeRequest unsubscribe_table = 3;
+        SubscribeRequest subscribe_table                    = 2;
+        UnsubscribeRequest unsubscribe_table                = 3;
+        ActivateAccountForCatalogRequest activate_account_for_catalog = 4;
     }
 };
 
@@ -93,10 +108,11 @@ message LogtailRequest {
 message LogtailResponse {
     uint64 response_id = 1;
     oneof response {
-        SubscribeResponse subscribe_response     = 2;
-        UnSubscribeResponse unsubscribe_response = 3;
-        UpdateResponse update_response           = 4;
-        ErrorResponse error                      = 5;
+        SubscribeResponse subscribe_response                          = 2;
+        UnSubscribeResponse unsubscribe_response                      = 3;
+        UpdateResponse update_response                                = 4;
+        ErrorResponse error                                           = 5;
+        ActivateAccountForCatalogResponse activate_account_for_catalog_response = 6;
     }
 };
 

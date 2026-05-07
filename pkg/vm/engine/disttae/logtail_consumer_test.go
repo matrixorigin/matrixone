@@ -319,6 +319,7 @@ func TestBlockInfoSlice(t *testing.T) {
 
 func TestDca(t *testing.T) {
 	pClient := &PushClient{}
+	pClient.dcaReset()
 
 	signalCnt := 0
 	assert.True(t, pClient.dcaTryDelay(true, func() { signalCnt++ }))  // skip for sub response
@@ -327,6 +328,23 @@ func TestDca(t *testing.T) {
 	assert.Equal(t, 1, signalCnt)
 	assert.False(t, pClient.dcaTryDelay(false, func() {})) // skip for finished replay
 
+}
+
+func TestDcaConfirmAndApplyDrainsNewClosuresBeforeReplay(t *testing.T) {
+	pClient := &PushClient{}
+	pClient.dcaReset()
+
+	order := make([]int, 0, 2)
+	assert.True(t, pClient.dcaTryDelay(false, func() {
+		order = append(order, 1)
+		assert.True(t, pClient.dcaTryDelay(false, func() {
+			order = append(order, 2)
+		}))
+	}))
+
+	pClient.dcaConfirmAndApply()
+	assert.Equal(t, []int{1, 2}, order)
+	assert.False(t, pClient.dcaTryDelay(false, func() {}))
 }
 
 type testHAKeeperClient struct {

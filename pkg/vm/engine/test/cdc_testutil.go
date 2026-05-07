@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -34,6 +35,18 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+// activateTenantFromCtx activates lazy catalog for the tenant in ctx if it
+// is a non-system account. Unit tests bypass the frontend, which is the
+// normal activation point, so test helpers must do it explicitly before
+// issuing tenant-scoped DDL/DML through the internal executor.
+func activateTenantFromCtx(de *testutil.TestDisttaeEngine, ctx context.Context) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil || accountID == 0 {
+		return nil
+	}
+	return de.Engine.ActivateTenantCatalog(ctx, accountID)
+}
 
 type internalExecResult struct {
 	batch     *batch.Batch
@@ -134,6 +147,9 @@ func mock_mo_intra_system_change_propagation_log(
 ) (err error) {
 	sql := frontend.MoCatalogMoISCPLogDDL
 
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return err
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -166,6 +182,9 @@ func exec_sql(
 	sql string,
 ) (err error) {
 
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return err
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -201,6 +220,9 @@ func mock_mo_indexes(
 		"PRIMARY KEY (`table_id`,`column_name`)" + // use table_id as primary key instead of id to avoid duplicate
 		")"
 
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return err
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -260,6 +282,9 @@ func execSql(
 	ctx context.Context,
 	sql string,
 ) (result executor.Result, err error) {
+	if err = activateTenantFromCtx(de, ctx); err != nil {
+		return
+	}
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -357,6 +382,7 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	assert.NoError(t, activateTenantFromCtx(de, ctx))
 	_, err := exec.Exec(ctx, createDBSql, executor.Options{})
 	assert.NoError(t, err)
 	_, err = exec.Exec(ctx, createTableSql, executor.Options{})

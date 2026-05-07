@@ -983,7 +983,24 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
-	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+	sub, err := getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lazy catalog: if this is a subscription database, ensure the
+	// publisher's account catalog is activated on this CN so that any
+	// subsequent catalog queries (show tables, desc, select) can see
+	// the publisher's table metadata.
+	if sub != nil && sub.AccountId != 0 {
+		if activator, ok := tcc.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+			if err = activator.ActivateTenantCatalog(tempCtx, uint32(sub.AccountId)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return sub, nil
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
@@ -1041,7 +1058,24 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 	if snapshot := tcc.GetSnapshot(); snapshot != nil && snapshot.GetTenant() != nil {
 		tenantCtx = defines.AttachAccount(tenantCtx, snapshot.Tenant.TenantID, GetAdminUserId(), GetAccountAdminRoleId())
 	}
-	return doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
+	snap, err := doResolveSnapshotWithSnapshotName(tenantCtx, tcc.GetSession(), snapshotName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lazy catalog: if the snapshot targets a non-sys tenant account,
+	// activate its catalog on this CN so that cross-account snapshot
+	// reads (show databases/tables {snapshot = 'xxx'}) can see the
+	// target account's metadata.
+	if snap != nil && snap.GetTenant() != nil && snap.Tenant.TenantID != 0 {
+		if activator, ok := tcc.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+			if err = activator.ActivateTenantCatalog(tenantCtx, snap.Tenant.TenantID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return snap, nil
 }
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {

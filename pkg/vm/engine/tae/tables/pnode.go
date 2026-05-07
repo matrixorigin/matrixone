@@ -222,6 +222,136 @@ func (node *persistedNode) Scan(
 	return
 }
 
+// ScanDataInRange is the pnode counterpart of memoryNode.getDataWindowOnWriteSchema
+// for appendable data objects that have been flushed to disk but whose rows still
+// fall inside a logtail request range [start, end].
+//
+// This is used by the lazy-catalog-tail path: when visitObjMeta decides to emit
+// an aobj whose DeleteNode is out of the request range but whose CreateNode is
+// visible, the caller needs per-row inserts for that aobj. For mnode we read
+// from the in-memory node.data + appendMVCC; after TryUpgrade the mnode is gone
+// and the data only lives on disk, so we must fetch it from the persisted block.
+func (node *persistedNode) ScanDataInRange(
+	ctx context.Context,
+	batches map[uint32]*containers.BatchWithVersion,
+	start, end types.TS,
+	mp *mpool.MPool,
+) (err error) {
+	meta := node.object.meta.Load()
+	if !meta.IsAppendable() || meta.IsTombstone {
+		return nil
+	}
+	createAt := meta.GetCreatedAt()
+	deleteAt := meta.GetDeleteAt()
+	if createAt.GT(&end) {
+		return nil
+	}
+	if !deleteAt.IsEmpty() && deleteAt.LT(&start) {
+		return nil
+	}
+
+	readSchema := meta.GetTable().GetLastestSchema(false)
+	colIdxes := make([]int, 0, len(readSchema.ColDefs))
+	for i := range readSchema.ColDefs {
+		colIdxes = append(colIdxes, i)
+	}
+
+	id := meta.AsCommonID()
+	id.SetBlockOffset(0)
+	location, err := node.object.buildMetalocation(0)
+	if err != nil {
+		return err
+	}
+	if location.IsEmpty() {
+		return nil
+	}
+
+	vecs, _, _, err := LoadPersistedColumnData(
+		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil, true,
+	)
+	if err != nil {
+		return err
+	}
+	closeVecs := func() {
+		for i := range vecs {
+			if vecs[i] != nil {
+				vecs[i].Close()
+			}
+		}
+	}
+
+	commitTSVec, err := node.object.LoadPersistedCommitTS(0)
+	if err != nil {
+		closeVecs()
+		return err
+	}
+	if commitTSVec == nil {
+		closeVecs()
+		return nil
+	}
+	defer commitTSVec.Close()
+
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	total := len(commitTSs)
+	if total == 0 {
+		closeVecs()
+		return nil
+	}
+
+	var toDelete *nulls.Nulls
+	selected := 0
+	for i := 0; i < total; i++ {
+		ts := commitTSs[i]
+		if ts.GE(&start) && ts.LE(&end) {
+			selected++
+			continue
+		}
+		if toDelete == nil {
+			toDelete = nulls.NewWithSize(total)
+		}
+		toDelete.Add(uint64(i))
+	}
+	if selected == 0 {
+		closeVecs()
+		return nil
+	}
+
+	srcTSVec := node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
+	if err = vector.AppendFixedList(
+		srcTSVec.GetDownstreamVector(), commitTSs, nil, mp,
+	); err != nil {
+		srcTSVec.Close()
+		closeVecs()
+		return err
+	}
+
+	src := containers.NewBatch()
+	for i, colIdx := range colIdxes {
+		src.AddVector(readSchema.ColDefs[colIdx].Name, vecs[i])
+	}
+	src.AddVector(objectio.TombstoneAttr_CommitTs_Attr, srcTSVec)
+	if toDelete != nil && !toDelete.IsEmpty() {
+		src.Deletes = toDelete
+		src.Compact()
+	}
+
+	dest, ok := batches[readSchema.Version]
+	if ok {
+		dest.Extend(src)
+		src.Close()
+		return nil
+	}
+	seqnums := readSchema.AllSeqnums()
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
+	batches[readSchema.Version] = &containers.BatchWithVersion{
+		Version:    readSchema.Version,
+		NextSeqnum: uint16(readSchema.Extra.NextColSeqnum),
+		Seqnums:    seqnums,
+		Batch:      src,
+	}
+	return nil
+}
+
 func (node *persistedNode) CollectObjectTombstoneInRange(
 	ctx context.Context,
 	start, end types.TS,

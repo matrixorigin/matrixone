@@ -260,8 +260,19 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 		return nil
 	})
 
-	if e.IsAppendable() && !e.HasDropCommitted() {
-		return false, nil
+	if e.IsAppendable() {
+		// Scan the aobj's in-memory rows unless its drop is visible within
+		// our snapshot window [b.start, b.end]. Using the global
+		// HasDropCommitted() races with concurrent compaction: if the drop
+		// commits AFTER b.end, the aobj is still alive at b.end and its rows
+		// must be included in this pull. Otherwise both this aobj (skipped)
+		// and the new merged nobj (CreateNode > b.end, so also out of range)
+		// fall outside the window, and the rows are silently dropped from the
+		// response. This was the root cause of the lazy-catalog partial-rows
+		// bug seen in mo_columns during high-concurrent CREATE/DROP ACCOUNT.
+		if e.DeleteNode.IsEmpty() || !e.DeleteNode.IsCommitted() || e.DeleteNode.End.GT(&b.end) {
+			return false, nil
+		}
 	}
 	return true, nil
 }

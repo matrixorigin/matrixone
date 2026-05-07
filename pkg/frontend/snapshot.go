@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type tableType string
@@ -554,6 +555,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	return err
 }
 
+// activateAccountCatalogIfNeeded ensures the lazy catalog for the given
+// account is activated before restore runs internal SQL as that account.
+// Without this, logtail entries for the target account's catalog tables
+// would be delayed and invisible to background SQL sessions.
+func activateAccountCatalogIfNeeded(ctx context.Context, ses *Session, accountID uint32) error {
+	if accountID == 0 {
+		return nil // sys account is always activated
+	}
+	if activator, ok := ses.GetTxnHandler().GetStorage().(engine.TenantCatalogActivator); ok {
+		return activator.ActivateTenantCatalog(ctx, accountID)
+	}
+	return nil
+}
+
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	bh.SetRestore(true)
@@ -618,6 +633,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 				return
 			}
 		}
+
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s]restore cluster success", snapshotName))
 		return
 	}
@@ -630,7 +646,21 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+
 		return
+	}
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, toAccountId); err != nil {
+		return
+	}
+
+	// Activate the source (restore) account's catalog — same rationale as
+	// restoreAccountUsingClusterSnapshotToNew.
+	if restoreAccount != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, restoreAccount); err != nil {
+			return
+		}
 	}
 
 	// drop foreign key related tables first
@@ -2035,6 +2065,28 @@ func getFkDeps(
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(newCtx, sql); err != nil {
+		// getFkDeps is called exclusively from the restore flow
+		// (deleteCurFkTables and fkTablesTopoSort).  The source or
+		// target account's catalog data may not be fully available:
+		//
+		// - ErrNoSuchTable / ErrBadDB: dropped-account data compacted.
+		// - ErrInvalidInput ("column X does not exist"): a transient
+		//   catalog-cache race.  Push logtail delivers mo_tables and
+		//   mo_columns as separate entries; during DCA flush or between
+		//   the two push entries, InsertTable creates a cache item with
+		//   nil/partial column definitions.  A concurrent reader can
+		//   then observe a table whose columns are incomplete.
+		//
+		// Returning empty FK deps is safe: restore drops all tables
+		// (DROP TABLE IF EXISTS) so ordering is best-effort, and tables
+		// are recreated from the snapshot with correct FK constraints.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+			moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+			moerr.IsMoErrCode(err, moerr.ErrInvalidInput) ||
+			moerr.IsMoErrCode(err, moerr.ErrParseError) {
+			getLogger("").Warn(fmt.Sprintf("FK dep query failed (source catalog unavailable), proceeding without FK ordering: %v", err))
+			return make(map[string][]string), nil
+		}
 		return
 	}
 
@@ -2405,6 +2457,24 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+
+	// activate the target account's catalog so internal SQL can see its tables
+	if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(toAccountId)); err != nil {
+		return
+	}
+
+	// Activate the source (from) account's catalog so restore queries
+	// (SHOW DATABASES, SHOW TABLES, CLONE TABLE, etc.) can discover the
+	// from-account's databases and tables in the partition state.
+	// If TN checkpoint has compacted the dropped account's data, the
+	// activation will return empty data — the restore will find no
+	// databases/tables and effectively do nothing for that account.
+	// The downstream FK and table-resolution code handles that gracefully.
+	if uint64(fromAccount) != toAccountId {
+		if err = activateAccountCatalogIfNeeded(ctx, ses, uint32(fromAccount)); err != nil {
+			return
+		}
+	}
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
