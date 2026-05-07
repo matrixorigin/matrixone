@@ -250,6 +250,30 @@ type DecoderOutput struct {
 	checkpointBat  *batch.Batch
 	insertAtmBatch *AtomicBatch
 	deleteAtmBatch *AtomicBatch
+	mp             *mpool.MPool // mpool for snapshot batch cleanup
+}
+
+// Close releases batch resources held by the DecoderOutput.
+// Called when ownership was NOT transferred to a Command (early-return paths in Sink).
+func (d *DecoderOutput) Close() {
+	if d == nil {
+		return
+	}
+	if d.checkpointBat != nil {
+		if d.mp != nil {
+			d.checkpointBat.Clean(d.mp)
+		}
+		d.checkpointBat = nil
+		d.mp = nil
+	}
+	if d.insertAtmBatch != nil {
+		d.insertAtmBatch.Close()
+		d.insertAtmBatch = nil
+	}
+	if d.deleteAtmBatch != nil {
+		d.deleteAtmBatch.Close()
+		d.deleteAtmBatch = nil
+	}
 }
 
 type RowType int

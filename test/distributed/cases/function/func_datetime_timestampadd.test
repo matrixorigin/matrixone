@@ -1,0 +1,9 @@
+-- @suit
+-- @case
+-- @desc:test for TIMESTAMPADD
+-- @label:bvt
+
+select cast(timestampadd(day, 1, cast('2024-01-01' as date)) as char) q1;
+select cast(timestampadd(hour, 1, cast('2024-01-01' as date)) as char) q2;
+select timestampadd(minute, 30, '2024-01-01 00:00:00') q3;
+select cast(timestampadd(day, 1, '2024-01-31') as char) q4;

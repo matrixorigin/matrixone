@@ -219,6 +219,10 @@ from dept_rankings
 where dept_rank <= 2
 order by department, dept_rank;
 emp_name    department    monthly_sales    dept_rank
+David    Marketing    12000.0    1
+Eve    Marketing    9000.0    2
+Bob    Sales    15000.0    1
+Alice    Sales    10000.0    2
 drop table employee_sales;
 drop table if exists sales;
 create table sales (

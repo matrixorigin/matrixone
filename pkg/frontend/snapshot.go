@@ -682,7 +682,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 
 		if err = restoreViews(
-			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView,
+			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView, false,
 		); err != nil {
 			return
 		}
@@ -1295,6 +1295,7 @@ func restoreViews(
 	viewMap map[string]*tableInfo,
 	toAccountId uint32,
 	sortedViews []string,
+	skipIfDependencyMissing bool,
 ) (err error) {
 
 	getLogger(ses.GetService()).Info("start to restore views")
@@ -1321,6 +1322,12 @@ func restoreViews(
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
 			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
+					getLogger(ses.GetService()).Info(fmt.Sprintf(
+						"[%s] skip restore view %v because dependency is missing: %v",
+						snapshotName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] restore view: %v success", snapshotName, tblInfo.tblName))
@@ -1328,6 +1335,24 @@ func restoreViews(
 	}
 
 	return nil
+}
+
+func canSkipRestoreViewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		return true
+	}
+
+	errMsg := strings.ToLower(err.Error())
+	if strings.Contains(errMsg, "no such table") || strings.Contains(errMsg, "unknown database") {
+		return true
+	}
+
+	return moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+		strings.Contains(errMsg, "does not exist") &&
+		(strings.Contains(errMsg, "table ") || strings.Contains(errMsg, "database "))
 }
 
 func sortedViewInfos(

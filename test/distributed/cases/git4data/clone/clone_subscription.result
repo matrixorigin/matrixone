@@ -111,3 +111,60 @@ drop database if exists sub_fk_chain;
 drop publication pub_fk_chain;
 drop account acc_chain;
 drop database sys_fk_chain;
+drop database if exists view_src;
+drop publication if exists pub_view_src;
+drop account if exists acc_view;
+create database view_src;
+create table view_src.t1(a int primary key);
+insert into view_src.t1 values(1),(2);
+create view view_src.v1 as select * from view_src.t1;
+create account acc_view admin_name "rootv" identified by "111";
+create publication pub_view_src database view_src account acc_view;
+create database sub_view_src from sys publication pub_view_src;
+show full tables from sub_view_src;
+Tables_in_sub_view_src    Table_type
+t1    BASE TABLE
+create database clone_view_src clone sub_view_src;
+show full tables from clone_view_src;
+Tables_in_clone_view_src    Table_type
+t1    BASE TABLE
+v1    VIEW
+select * from clone_view_src.v1;
+a
+1
+2
+drop database if exists clone_view_src;
+drop database if exists sub_view_src;
+drop publication pub_view_src;
+drop account acc_view;
+drop database view_src;
+drop database if exists base_dep;
+drop database if exists view_skip_src;
+drop publication if exists pub_view_skip;
+drop account if exists acc_skip;
+create database base_dep;
+create table base_dep.ref_t(a int primary key);
+insert into base_dep.ref_t values(10),(20);
+create database view_skip_src;
+create table view_skip_src.marker(id int primary key);
+insert into view_skip_src.marker values(1);
+create view view_skip_src.v_skip as select a from base_dep.ref_t;
+create account acc_skip admin_name "roots" identified by "111";
+create publication pub_view_skip database view_skip_src account acc_skip;
+create database sub_view_skip from sys publication pub_view_skip;
+show full tables from sub_view_skip;
+Tables_in_sub_view_skip    Table_type
+marker    BASE TABLE
+create database clone_view_skip clone sub_view_skip;
+show full tables from clone_view_skip;
+Tables_in_clone_view_skip    Table_type
+marker    BASE TABLE
+select * from clone_view_skip.marker;
+id
+1
+drop database if exists clone_view_skip;
+drop database if exists sub_view_skip;
+drop publication pub_view_skip;
+drop account acc_skip;
+drop database view_skip_src;
+drop database base_dep;

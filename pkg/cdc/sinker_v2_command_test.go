@@ -81,7 +81,7 @@ func TestNewInsertBatchCommand(t *testing.T) {
 	fromTs := types.BuildTS(100, 0)
 	toTs := types.BuildTS(200, 0)
 
-	cmd := NewInsertBatchCommand(bat, fromTs, toTs)
+	cmd := NewInsertBatchCommand(bat, nil, fromTs, toTs)
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, CmdInsertBatch, cmd.Type)
@@ -175,7 +175,7 @@ func TestCommand_String(t *testing.T) {
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
-		cmd := NewInsertBatchCommand(bat, fromTs, toTs)
+		cmd := NewInsertBatchCommand(bat, nil, fromTs, toTs)
 
 		str := cmd.String()
 		assert.Contains(t, str, "INSERT_BATCH")
@@ -314,5 +314,43 @@ func TestCommand_Validate(t *testing.T) {
 		err := cmd.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown command type")
+	})
+}
+
+func TestCommand_Close(t *testing.T) {
+	t.Run("NilCommand", func(t *testing.T) {
+		var cmd *Command
+		assert.NotPanics(t, func() { cmd.Close() })
+	})
+
+	t.Run("InsertBatchWithMp", func(t *testing.T) {
+		bat := &batch.Batch{
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+		}
+		bat.SetRowCount(1)
+		cmd := NewInsertBatchCommand(bat, nil, types.BuildTS(1, 0), types.BuildTS(2, 0))
+		cmd.Close()
+		assert.Nil(t, cmd.InsertBatch)
+		assert.Nil(t, cmd.Mp)
+	})
+
+	t.Run("InsertDeleteBatch", func(t *testing.T) {
+		insertBatch := NewAtomicBatch(nil)
+		deleteBatch := NewAtomicBatch(nil)
+		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
+		cmd.Close()
+		assert.Nil(t, cmd.InsertAtmBatch)
+		assert.Nil(t, cmd.DeleteAtmBatch)
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		cmd := NewInsertDeleteBatchCommand(NewAtomicBatch(nil), nil, types.BuildTS(1, 0), types.BuildTS(2, 0))
+		cmd.Close()
+		assert.NotPanics(t, func() { cmd.Close() })
+	})
+
+	t.Run("EmptyCommand", func(t *testing.T) {
+		cmd := NewBeginCommand()
+		assert.NotPanics(t, func() { cmd.Close() })
 	})
 }

@@ -139,6 +139,7 @@ var _ taskservice.TaskServiceHolder = new(testHolder)
 
 type testHolder struct {
 	ts taskservice.TaskService
+	ok bool
 }
 
 func (holder *testHolder) Close() error {
@@ -147,7 +148,7 @@ func (holder *testHolder) Close() error {
 }
 
 func (holder *testHolder) Get() (taskservice.TaskService, bool) {
-	return holder.ts, true
+	return holder.ts, holder.ok
 }
 
 func (holder *testHolder) Create(command pb.CreateTaskService) error {
@@ -226,13 +227,15 @@ func (ts *testTS) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask)
 }
 
 func (ts *testTS) StartScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTS) StartScheduleSQLTask() {
 }
 
 func (ts *testTS) StopScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTS) StopScheduleSQLTask() {
 }
 
 func (ts *testTS) TruncateCompletedTasks(ctx context.Context) error {
@@ -299,7 +302,29 @@ func Test_registerExecutorsLocked(t *testing.T) {
 
 	sv.task.holder = &testHolder{
 		ts: ts,
+		ok: true,
 	}
 
 	sv.registerExecutorsLocked()
+}
+
+func Test_startTaskRunnerRequiresReadyAndHolder(t *testing.T) {
+	conf := &Config{}
+	sv := &service{cfg: conf}
+
+	sv.startTaskRunner()
+	assert.Nil(t, sv.task.runner)
+
+	sv.task.holder = &testHolder{ts: &testTS{}}
+	sv.startTaskRunner()
+	assert.Nil(t, sv.task.runner)
+
+	sv.task.runnerReady.Store(true)
+	sv.task.holder = &testHolder{ok: false}
+	sv.startTaskRunner()
+	assert.Nil(t, sv.task.runner)
+
+	sv.task.holder = nil
+	sv.startTaskRunner()
+	assert.Nil(t, sv.task.runner)
 }

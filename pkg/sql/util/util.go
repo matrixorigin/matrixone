@@ -143,12 +143,12 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 }
 
 func BuildSysStatementInfoFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	equalAccount := makeStringEqualAst("account", acctName)
 	return equalAccount
 }
 
 func BuildSysMetricFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
+	equalAccount := makeStringEqualAst("account", acctName)
 	return equalAccount
 }
 

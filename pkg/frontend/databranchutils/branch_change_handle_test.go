@@ -55,7 +55,7 @@ func TestBranchChangeHandleNextWithoutUnderlying(t *testing.T) {
 	require.Equal(t, engine.ChangesHandle_Hint(0), hint)
 }
 
-func TestBranchChangeHandleNextWithFilter(t *testing.T) {
+func TestBranchChangeHandleNextPassthrough(t *testing.T) {
 	ctx := context.Background()
 	bat := &batch.Batch{}
 	fake := &fakeChangesHandle{
@@ -63,37 +63,15 @@ func TestBranchChangeHandleNextWithFilter(t *testing.T) {
 		tombstone: &batch.Batch{},
 		hint:      engine.ChangesHandle_Tail_done,
 	}
-	var called bool
 	h := &BranchChangeHandle{
 		handle: fake,
-		filterData: func(b *batch.Batch) error {
-			require.Equal(t, bat, b)
-			called = true
-			return nil
-		},
 	}
 
 	data, tomb, hint, err := h.Next(ctx, nil)
 	require.NoError(t, err)
-	require.True(t, called)
 	require.Equal(t, bat, data)
 	require.Equal(t, fake.tombstone, tomb)
 	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
-}
-
-func TestBranchChangeHandleNextFilterError(t *testing.T) {
-	ctx := context.Background()
-	filterErr := moerr.NewInternalErrorNoCtx("filter failed")
-
-	h := &BranchChangeHandle{
-		handle: &fakeChangesHandle{data: &batch.Batch{}},
-		filterData: func(*batch.Batch) error {
-			return filterErr
-		},
-	}
-
-	_, _, _, err := h.Next(ctx, nil)
-	require.ErrorIs(t, err, filterErr)
 }
 
 func TestBranchChangeHandleNextUnderlyingError(t *testing.T) {

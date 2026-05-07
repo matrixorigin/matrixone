@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/exp/rand"
 
@@ -1514,6 +1515,38 @@ func TestCopy(t *testing.T) {
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // string null with stale varlena metadata
+		v := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(v, []byte("seed"), false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_varchar.ToType())
+		err = AppendBytes(w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 8)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // array null with stale varlena metadata
+		v := NewVec(types.T_array_float64.ToType())
+		err := AppendArray[float64](v, []float64{1, 2}, false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_array_float64.ToType())
+		err = AppendArray[float64](w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 16)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 }
 
 func TestCloneWindow(t *testing.T) {
@@ -2855,9 +2888,12 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // timestamp
 		v := NewVec(types.T_timestamp.ToType())
-		err := AppendFixedList(v, []types.Timestamp{1, types.Timestamp(types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), 3, 4}, nil, mp)
+		utc := time.UTC
+		ts := types.FromClockZone(utc, 1970, 1, 1, 0, 0, 0, 0)
+		err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "1970-01-01 00:00:00", v.RowToString(1))
+		expectedStr := time.Unix(0, 0).In(time.Local).Format("2006-01-02 15:04:05")
+		require.Equal(t, expectedStr, v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

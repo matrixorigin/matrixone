@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate
@@ -412,6 +418,31 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
+	}
+}
+
+func (prepareStmt *PrepareStmt) resetBinaryParamState() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil {
+		prepareStmt.params.GetNulls().Reset()
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil && proc != nil {
+		prepareStmt.params.Free(proc.Mp())
+		prepareStmt.params = nil
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
 	}
 }
 

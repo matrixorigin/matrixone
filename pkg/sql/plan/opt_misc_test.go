@@ -51,7 +51,7 @@ func TestRemapWindowClause(t *testing.T) {
 		},
 		optimizationHistory: []string{"test optimization history"},
 	}
-	err := b.remapWindowClause(f, 1, 1, colMap, nil)
+	err := b.remapWindowClause(f, 1, 0, 1, colMap, nil)
 	t.Log(err)
 	require.Error(t, err)
 }

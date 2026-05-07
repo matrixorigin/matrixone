@@ -238,6 +238,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase:
 		return true, nil
+	case *tree.DataBranchPick:
+		return false, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

@@ -202,6 +202,7 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		checkpointBat: data.InsertBatch,
 		fromTs:        dp.fromTs,
 		toTs:          dp.toTs,
+		mp:            dp.mp,
 	})
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership

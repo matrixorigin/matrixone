@@ -352,4 +352,4 @@ a << 20
 2097152
 select !true;
 !true
-false
+0

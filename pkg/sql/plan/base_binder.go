@@ -43,6 +43,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -641,6 +648,35 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				} else {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
+			}
+		}
+
+	case tree.NULL_SAFE_EQUAL:
+		op = "<=>"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := 0; i < len(leftexpr.Exprs); i++ {
+						expr2, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						if i == 0 {
+							expr1 = expr2
+							continue
+						}
+						expr1, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				}
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 			}
 		}
 
@@ -1867,6 +1903,25 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			for i := range argsType {
 				if int(argsType[i].Oid) == int(types.T_time) && int(argsCastType[i].Oid) == int(types.T_datetime) {
 					return nil, moerr.NewInvalidInput(ctx, name+" function have invalid input args type")
+				}
+			}
+		}
+
+	case "timestampadd":
+		// MySQL behavior: DATE input + date unit returns DATE, while time units return DATETIME.
+		if len(args) >= 3 && argsType[2].Oid == types.T_date {
+			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
+				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
+					unitStr := strings.ToUpper(sval.Sval)
+					iTyp, err := types.IntervalTypeOf(unitStr)
+					if err == nil {
+						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
+							iTyp == types.Month || iTyp == types.Quarter ||
+							iTyp == types.Year
+						if isDateUnit {
+							returnType = types.T_date.ToType()
+						}
+					}
 				}
 			}
 		}
