@@ -1710,6 +1710,22 @@ func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) in
 	} else if parallelSize < cpuNum {
 		return parallelSize
 	}
+
+	// Cap parallelism by available mpool memory: each worker uses roughly
+	// the adaptive S3 threshold (staged data) + 64MB (arena + sort buffers).
+	// Use only 1/3 of global cap for load workers to leave room for baseline
+	// mpool consumers (metadata, caches) and spill overhead.
+	memPerWorker := int64(colexec.AdaptiveWriteS3Threshold()) + 64*mpool.MB
+	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < 1<<62 {
+		memLimit := int(globalCap / 3 / memPerWorker)
+		if memLimit < 1 {
+			memLimit = 1
+		}
+		if cpuNum > memLimit {
+			cpuNum = memLimit
+		}
+	}
+
 	return cpuNum
 }
 
@@ -1772,6 +1788,18 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 	} else if parallelSize < cpuNum {
 		return parallelSize
 	}
+
+	memPerWorker := int64(colexec.WriteS3Threshold) + 32*mpool.MB
+	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < 1<<62 {
+		memLimit := int(globalCap / 2 / memPerWorker)
+		if memLimit < 1 {
+			memLimit = 1
+		}
+		if cpuNum > memLimit {
+			cpuNum = memLimit
+		}
+	}
+
 	return cpuNum
 }
 

@@ -48,12 +48,17 @@ type WriteArena struct {
 	serialBuf      bytes.Buffer // reused for column serialization across write cycles
 	totalRequested int          // sum of all Alloc sizes in the current cycle
 	sizeLimit      int          // max data growth; 0 means arenaMaxSize
+	dataOnHeap     bool         // true if data was allocated on Go heap (mpool OOM fallback)
+	cbufOnHeap     bool         // true if compressBuf was allocated on Go heap
 }
 
 func NewArena(size int) *WriteArena {
 	data, err := arenaMPool.Alloc(size, true)
 	if err != nil {
-		panic(err)
+		return &WriteArena{
+			data:       make([]byte, size),
+			dataOnHeap: true,
+		}
 	}
 	return &WriteArena{
 		data: data,
@@ -90,12 +95,17 @@ func (a *WriteArena) Reset() {
 		if newCap > limit {
 			newCap = limit
 		}
-		arenaMPool.Free(a.data)
-		a.data = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
+		if !a.dataOnHeap {
+			arenaMPool.Free(a.data)
+		}
+		a.data = nil
 		var err error
 		a.data, err = arenaMPool.Alloc(newCap, true)
 		if err != nil {
-			panic(err)
+			a.data = make([]byte, newCap)
+			a.dataOnHeap = true
+		} else {
+			a.dataOnHeap = false
 		}
 	}
 	a.usedOffset = 0
@@ -122,14 +132,17 @@ func arenaNextPow2(n int) int {
 // power of 2 so that minor size variations don't trigger repeated allocations.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
-		if a.compressBuf != nil {
+		if a.compressBuf != nil && !a.cbufOnHeap {
 			arenaMPool.Free(a.compressBuf)
-			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
 		}
+		a.compressBuf = nil
 		var err error
 		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
 		if err != nil {
-			panic(err)
+			a.compressBuf = make([]byte, arenaNextPow2(minSize))
+			a.cbufOnHeap = true
+		} else {
+			a.cbufOnHeap = false
 		}
 	}
 	return a.compressBuf[:minSize]
@@ -138,14 +151,16 @@ func (a *WriteArena) CompressBuf(minSize int) []byte {
 // FreeBuffers releases the off-heap data and compressBuf allocations.
 // Call this before dropping an arena that won't be returned to the pool.
 func (a *WriteArena) FreeBuffers() {
-	if a.data != nil {
+	if a.data != nil && !a.dataOnHeap {
 		arenaMPool.Free(a.data)
-		a.data = nil
 	}
-	if a.compressBuf != nil {
+	a.data = nil
+	a.dataOnHeap = false
+	if a.compressBuf != nil && !a.cbufOnHeap {
 		arenaMPool.Free(a.compressBuf)
-		a.compressBuf = nil
 	}
+	a.compressBuf = nil
+	a.cbufOnHeap = false
 }
 
 type objectWriterV1 struct {

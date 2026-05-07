@@ -44,6 +44,26 @@ const (
 	FaultInjectedS3Threshold = 512 * mpool.KB
 )
 
+// AdaptiveWriteS3Threshold returns a memory threshold for S3 writes that is
+// reduced when the global mpool cap is limited, to avoid OOM during high-
+// parallelism loads.
+func AdaptiveWriteS3Threshold() int {
+	cap := mpool.GlobalCap()
+	if cap <= 0 || cap >= 1<<62 {
+		return WriteS3Threshold
+	}
+	// With limited memory, use a smaller threshold: cap / 128 gives each of
+	// ~64 potential workers a fair share. Floor at 16MB to avoid excessive spills.
+	threshold := int(cap / 128)
+	if threshold < 16*mpool.MB {
+		threshold = 16 * mpool.MB
+	}
+	if threshold > WriteS3Threshold {
+		threshold = WriteS3Threshold
+	}
+	return threshold
+}
+
 type CNS3Writer struct {
 	sinker              *ioutil.Sinker
 	isTombstone         bool
@@ -88,7 +108,7 @@ func NewCNS3TombstoneWriter(
 	}
 
 	if memoryThreshold < 0 {
-		memoryThreshold = WriteS3Threshold
+		memoryThreshold = AdaptiveWriteS3Threshold()
 	}
 
 	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
@@ -179,7 +199,7 @@ func NewCNS3DataWriter(
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
 	if memoryThreshold < 0 {
-		memoryThreshold = WriteS3Threshold
+		memoryThreshold = AdaptiveWriteS3Threshold()
 	}
 
 	if faultInjected, _ := objectio.LogCNFlushSmallObjsInjected(
