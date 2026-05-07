@@ -5711,8 +5711,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_date},
+				overloadId:      0,
+				args:            []types.T{types.T_date},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -5721,13 +5722,105 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_datetime},
+				overloadId:      1,
+				args:            []types.T{types.T_datetime},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToWeek
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_date, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateToWeek
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatetimeToWeek
+				},
+			},
+		},
+	},
+
+	// function `yearweek`
+	{
+		functionId: YEARWEEK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDate
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_date, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDate
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDatetime
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekDatetime
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekTimestamp
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_timestamp, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return YearWeekTimestamp
 				},
 			},
 		},
