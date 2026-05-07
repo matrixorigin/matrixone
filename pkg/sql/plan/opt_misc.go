@@ -1140,6 +1140,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
+	builder.rewriteInDomainNotInFilters(rootID)
 	builder.mergeFiltersOnCompositeKey(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
