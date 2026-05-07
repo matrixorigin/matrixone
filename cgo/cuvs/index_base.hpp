@@ -435,52 +435,41 @@ public:
         }
     }
 
-    // Build a raft::core::bitset<uint32_t, int64_t> for rows [start_row, start_row+shard_sz)
-    // that represents (user_filter AND NOT deleted). Dispatches on four cases:
+    // ---------------------------------------------------------------------
+    // Filter bitmap construction — split into CPU and GPU halves.
     //
-    //   no filter, no deletes    → returns nullptr (caller runs the unfiltered search path)
-    //   no filter, has deletes   → reuses the cached device delete bitset (shared_ptr aliased)
-    //   filter, no deletes       → evaluates CPU bitmap, uploads H2D, returns a new owning bitset
-    //   filter + deletes         → evaluates CPU bitmap, ANDs with host delete slice on the CPU,
-    //                              uploads the already-combined bitmap in one H2D copy —
-    //                              no device-side thrust::transform. Faster than the old
-    //                              device-AND path: one fewer kernel launch per search, and
-    //                              the IVF-PQ post-filter can reuse *out_user_mask directly
-    //                              without re-ANDing.
-    //
-    // `start_row`, `shard_sz` match the shard-local slicing used by sync_shard_bitset:
-    //   - SINGLE_GPU / REPLICATED: start_row=0, shard_sz=current_offset_
-    //   - SHARDED:                 start_row aligned to 32, shard_sz from shard_sizes_
-    //
-    // Caller is responsible for holding the returned shared_ptr alive for the duration
-    // of the cuVS search call.
-    //
-    // `out_user_mask` (optional): if non-null AND a user filter is present, the
-    // function populates *out_user_mask with the packed host bitmap uploaded to
-    // the device — i.e. (user_filter AND NOT deleted) when both are present, or
-    // user_filter alone when no deletes. The IVF-PQ post-filter reuses this to
-    // suppress the bitset_filter padding quirk. Left empty on the deletes-only
-    // and unfiltered paths (the cached device delete bitset is enough there).
-    // out_popcount (optional, IVF-PQ only): when the user-filter path runs,
-    // receives popcount(host_mask) — the number of rows that pass the combined
-    // (user_filter AND NOT deleted) mask in this shard. IVF-PQ uses it to
-    // gate the apply_pq_post_filter_locked() pass: when popcount is
-    // comfortably above num_queries * limit, the cuVS bitset_filter leak
-    // quirk cannot trigger and the post-filter pass can be skipped. Left
-    // untouched on the unfiltered and deletes-only paths (callers default it
-    // to 0 and only consult it when out_user_mask is non-empty).
-    std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
-    build_search_bitset(raft_handle_wrapper_t& handle,
-                        const std::string& preds_json,
-                        uint64_t start_row,
-                        uint64_t shard_sz,
-                        std::vector<uint32_t>* out_user_mask = nullptr,
-                        uint64_t* out_popcount = nullptr) {
-        using bs_t = raft::core::bitset<uint32_t, int64_t>;
-        auto res   = handle.get_raft_resources();  // shared_ptr<raft::resources>
-        int dev_id = handle.get_device_id();
+    // The original build_search_bitset (kept below as a thin wrapper for
+    // CAGRA / IVF-Flat callers that already run inside a worker callback)
+    // did three things in sequence: parse predicates, eval an OpenMP host
+    // bitmap (AND-merged with the delete slice), and upload H2D + sync. For
+    // IVF-PQ those three phases are split so the CPU work can run on the
+    // calling Go-routine's thread while the worker thread stays focused on
+    // GPU work. See cgo/cuvs/ivf_pq.hpp:search_with_filter for the use site.
+    // ---------------------------------------------------------------------
 
-        // Parse user preds outside the lock; empty JSON → no user filter.
+    // Output of build_filter_host_mask. `mask` is empty unless `has_filter`.
+    // `deletes_only` distinguishes the no-user / has-deletes case — the
+    // caller resolves the device bitset via acquire_delete_bitset_device on
+    // a worker thread instead of uploading anything.
+    struct host_mask_bundle_t {
+        std::vector<uint32_t> mask;
+        uint64_t              popcount = 0;
+        bool                  has_filter = false;
+        bool                  deletes_only = false;
+    };
+
+    // CPU-only half of build_search_bitset. Safe to call from any thread:
+    // touches no GPU handle, only filter_host_ (post-build immutable) and a
+    // brief shared_lock on mutex_ for host_ids / deleted_bitset_ access.
+    // Returns has_filter=false on the unfiltered path and on the deletes-only
+    // path (with deletes_only=true in the latter case so the caller dispatches
+    // to acquire_delete_bitset_device instead of upload_host_mask).
+    host_mask_bundle_t
+    build_filter_host_mask(const std::string& preds_json,
+                           uint64_t start_row,
+                           uint64_t shard_sz) {
+        host_mask_bundle_t out;
+
         std::vector<PredOp> preds;
         if (!preds_json.empty()) preds = parse_preds(preds_json);
         const bool has_user = !preds.empty();
@@ -493,38 +482,16 @@ public:
         const bool has_del = del_count > 0;
 
         if (!has_user && !has_del) {
-            return nullptr;  // unfiltered path — caller skips the bitset arg
+            return out;  // unfiltered path
         }
-
-        const bool sharded = (this->dist_mode == DistributionMode_SHARDED);
-
-        // Deletes-only path: reuse the cached delete bitset without copying.
         if (!has_user) {
-            if (sharded) {
-                this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
-                return std::static_pointer_cast<bs_t>(
-                    this->get_device_shard_bitset_info(dev_id)->ptr);
-            }
-            this->sync_device_bitset(dev_id, *res);
-            return std::static_pointer_cast<bs_t>(
-                this->get_device_bitset_info(dev_id)->ptr);
+            out.deletes_only = true;
+            return out;  // worker resolves cached device delete bitset
         }
 
         // User-filter path: evaluate on CPU, AND in the delete slice on CPU
-        // (when present), then upload the already-combined bitmap. Keeping the
-        // AND on the host is cheaper than a device thrust::transform — one
-        // fewer kernel launch — and lets the IVF-PQ post-filter reuse the
-        // combined host bitmap without any further work.
-        //
-        // Lock-scope optimization: filter_host_ is post-build immutable (see
-        // class doc), so eval_filter_bitmap_cpu only needs the index mutex_
-        // when at least one predicate references the synthetic
-        // __mo_pk_host_id column (kHostIdColIdx) — that's the one input that
-        // can race with a concurrent extend() reallocating host_ids. When no
-        // predicate references it, snapshot just the deleted_bitset_ slice
-        // under a brief shared_lock and run the OpenMP eval + AND-merge
-        // unlocked, so concurrent extend() / set_deleted() writers don't have
-        // to wait the ~1-3 ms eval cost.
+        // (when present). Same lock-scope optimization as before — only the
+        // PK-predicate slow path holds mutex_ across eval.
         bool needs_host_ids = false;
         for (const auto& p : preds) {
             if (p.col_idx == kHostIdColIdx) { needs_host_ids = true; break; }
@@ -532,13 +499,7 @@ public:
 
         std::vector<uint32_t> host_mask;
         if (needs_host_ids) {
-            // Slow path: host_ids may move under us; hold lock across eval.
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            // Expose host_ids to the filter evaluator so predicates on the
-            // virtual __mo_pk_host_id column (col_idx == kHostIdColIdx)
-            // compare directly against the PK array without a duplicate
-            // FilterStore column. All current index types use IdT=int64_t
-            // for external host_ids.
             HostIdsView hv;
             if (!this->host_ids.empty()) {
                 static_assert(std::is_same_v<IdT, int64_t>,
@@ -550,8 +511,6 @@ public:
             host_mask = eval_filter_bitmap_cpu(
                 this->filter_host_, preds, start_row, shard_sz, hv);
             if (has_del && !this->deleted_bitset_.empty()) {
-                // start_row is 0 (non-SHARDED) or a multiple of 32 (SHARDED),
-                // so start_word is always an integer (see class-level doc).
                 const uint64_t start_word = start_row / 32;
                 const uint64_t del_words  = this->deleted_bitset_.size();
                 for (uint64_t w = 0; w < host_mask.size(); ++w) {
@@ -562,11 +521,6 @@ public:
                 }
             }
         } else {
-            // Fast path: no PK predicate. Snapshot only the deleted_bitset_
-            // slice under the shared_lock, then release before the OpenMP
-            // eval and AND-merge. eval reads filter_host_ which is post-build
-            // immutable, and host_ids is unused on this path so a concurrent
-            // extend() reallocating it is harmless.
             std::vector<uint32_t> del_slice;
             if (has_del) {
                 const uint64_t nwords     = (shard_sz + 31) / 32;
@@ -582,7 +536,6 @@ public:
                     }
                 }
             }
-            // Lock released. eval and AND-merge run unlocked.
             HostIdsView hv;  // unused on this path
             host_mask = eval_filter_bitmap_cpu(
                 this->filter_host_, preds, start_row, shard_sz, hv);
@@ -593,31 +546,100 @@ public:
             }
         }
 
-        // Popcount of the final combined mask. IVF-PQ uses this to skip its
-        // post-filter pass when the cuVS bitset_filter leak quirk cannot
-        // trigger (popcount comfortably above num_queries * limit). Cheap —
-        // one __builtin_popcount per 32-bit word, and host_mask is cache-hot
-        // from the AND-merge above.
-        if (out_popcount) {
-            uint64_t pc = 0;
-            for (auto w : host_mask) pc += static_cast<uint64_t>(__builtin_popcount(w));
-            *out_popcount = pc;
-        }
-        const uint64_t nwords = host_mask.size();
+        uint64_t pc = 0;
+        for (auto w : host_mask) pc += static_cast<uint64_t>(__builtin_popcount(w));
 
-        auto bs = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz));
+        out.mask       = std::move(host_mask);
+        out.popcount   = pc;
+        out.has_filter = true;
+        return out;
+    }
 
-        // Upload H2D on the search stream (same mechanism as sync_device_bitset).
+    // GPU half — must run on the worker thread. Allocates a device bitset on
+    // the handle's stream and queues the H2D copy. Does NOT sync the stream:
+    // the caller must keep `host_mask` alive until the search kernel and the
+    // terminal handle.sync() finish. In the new IVF-PQ filter path the mask
+    // lives in a host_mask_bundle_t owned by a shared_ptr captured in the
+    // worker lambda, so it outlives the kernel naturally.
+    std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
+    upload_host_mask(raft_handle_wrapper_t& handle,
+                     const std::vector<uint32_t>& host_mask,
+                     uint64_t shard_sz) {
+        using bs_t = raft::core::bitset<uint32_t, int64_t>;
+        auto res = handle.get_raft_resources();
+        auto bs  = std::make_shared<bs_t>(*res, static_cast<int64_t>(shard_sz));
         raft::copy(
             *res,
             raft::make_device_vector_view<uint32_t, int64_t>(
-                bs->data(), static_cast<int64_t>(nwords)),
+                bs->data(), static_cast<int64_t>(host_mask.size())),
             raft::make_host_vector_view<const uint32_t, int64_t>(
-                host_mask.data(), static_cast<int64_t>(nwords)));
-        // Drain the H2D DMA before host_mask (stack-local) goes out of scope at return.
+                host_mask.data(), static_cast<int64_t>(host_mask.size())));
+        return bs;
+    }
+
+    // Deletes-only path: returns the cached device delete bitset (alias).
+    // Must run on the worker thread because sync_shard_bitset /
+    // sync_device_bitset touch the GPU stream.
+    std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
+    acquire_delete_bitset_device(raft_handle_wrapper_t& handle,
+                                 uint64_t start_row,
+                                 uint64_t shard_sz) {
+        using bs_t = raft::core::bitset<uint32_t, int64_t>;
+        auto res   = handle.get_raft_resources();
+        int dev_id = handle.get_device_id();
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            this->sync_shard_bitset(dev_id, start_row, shard_sz, *res);
+            return std::static_pointer_cast<bs_t>(
+                this->get_device_shard_bitset_info(dev_id)->ptr);
+        }
+        this->sync_device_bitset(dev_id, *res);
+        return std::static_pointer_cast<bs_t>(
+            this->get_device_bitset_info(dev_id)->ptr);
+    }
+
+    // Build a raft::core::bitset<uint32_t, int64_t> for rows [start_row, start_row+shard_sz)
+    // that represents (user_filter AND NOT deleted). Dispatches on four cases:
+    //
+    //   no filter, no deletes    → returns nullptr (caller runs the unfiltered search path)
+    //   no filter, has deletes   → reuses the cached device delete bitset (shared_ptr aliased)
+    //   filter, no deletes       → evaluates CPU bitmap, uploads H2D, returns a new owning bitset
+    //   filter + deletes         → evaluates CPU bitmap, ANDs with host delete slice on the CPU,
+    //                              uploads the already-combined bitmap in one H2D copy.
+    //
+    // This entry point preserves the original "compute + upload + sync inside the
+    // worker callback" semantics for CAGRA / IVF-Flat. IVF-PQ's filtered path
+    // calls build_filter_host_mask + upload_host_mask directly so the CPU half
+    // can run off-worker; see cgo/cuvs/ivf_pq.hpp.
+    //
+    // `out_user_mask` (optional): if non-null AND a user filter is present, the
+    // function populates *out_user_mask with the packed host bitmap uploaded to
+    // the device. out_popcount (optional, IVF-PQ only): receives popcount of
+    // the combined mask so the post-filter skip-fast can gate.
+    std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
+    build_search_bitset(raft_handle_wrapper_t& handle,
+                        const std::string& preds_json,
+                        uint64_t start_row,
+                        uint64_t shard_sz,
+                        std::vector<uint32_t>* out_user_mask = nullptr,
+                        uint64_t* out_popcount = nullptr) {
+        auto bundle = this->build_filter_host_mask(preds_json, start_row, shard_sz);
+
+        if (!bundle.has_filter && !bundle.deletes_only) {
+            return nullptr;  // unfiltered
+        }
+        if (bundle.deletes_only) {
+            return this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+        }
+
+        if (out_popcount) *out_popcount = bundle.popcount;
+        auto bs = this->upload_host_mask(handle, bundle.mask, shard_sz);
+        // Drain the H2D DMA before bundle.mask (function-local) goes out of scope.
+        // The new IVF-PQ filter path skips this wrapper and keeps the bundle alive
+        // via shared_ptr capture, so it does not pay this sync.
+        auto res = handle.get_raft_resources();
         raft::resource::sync_stream(*res);
 
-        if (out_user_mask) *out_user_mask = std::move(host_mask);
+        if (out_user_mask) *out_user_mask = std::move(bundle.mask);
         return bs;
     }
 
