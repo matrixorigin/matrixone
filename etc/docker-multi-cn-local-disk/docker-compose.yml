@@ -64,8 +64,8 @@ services:
     entrypoint: [ "/mo-service" ]
     command: [ "-cfg", "/etc/docker-multi-cn-local-disk/log.toml" ]
     ports:
-      - "32001:32001" # HAKeeper port
-      - "7001:7001" # Status port
+      - "32011:32001" # HAKeeper port (host 32011 → container 32001)
+      - "7021:7001" # Status port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -133,6 +133,10 @@ services:
       - "-debug-http=:6061"
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
+    deploy:
+      resources:
+        limits:
+          memory: 16g
     ports:
       - "16001:16001" # SQL port
       - "6061:6061" # HTTP profiling endpoint
@@ -144,6 +148,7 @@ services:
       # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
+      - GOMEMLIMIT=4GiB
     networks:
       - matrixone-net
     depends_on:
@@ -167,6 +172,10 @@ services:
       - "-debug-http=:6062"
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
+    deploy:
+      resources:
+        limits:
+          memory: 16g
     ports:
       - "16002:16002" # SQL port
       - "6062:6062" # HTTP profiling endpoint
@@ -178,6 +187,7 @@ services:
       # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
+      - GOMEMLIMIT=4GiB
     networks:
       - matrixone-net
     depends_on:

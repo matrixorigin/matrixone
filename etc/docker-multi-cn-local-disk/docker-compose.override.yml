@@ -1,0 +1,98 @@
+services:
+  # Override log service
+  mo-log:
+    user: "54340:54346"
+
+  # Override TN
+  mo-tn:
+    user: "54340:54346"
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/tn.toml"
+      - "-debug-http=:6063"
+
+  # Override CN1
+  mo-cn1:
+    restart: on-failure:3
+    user: "54340:54346"
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/cn1.toml"
+      - "-debug-http=:6061"
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+      - /data2/mo-load-data:/data2/mo-load-data:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - GOMEMLIMIT=4GiB
+      - GODEBUG=gctrace=1
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+  # Override CN2
+  mo-cn2:
+    restart: on-failure:3
+    user: "54340:54346"
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/cn2.toml"
+      - "-debug-http=:6062"
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+      - /data2/mo-load-data:/data2/mo-load-data:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - GOMEMLIMIT=4GiB
+      - GODEBUG=gctrace=1
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+
+  # Add CN3
+  mo-cn3:
+    restart: on-failure:3
+    image: ${IMAGE_NAME:-matrixorigin/matrixone:local}
+    container_name: jxm-mo-cn3
+    hostname: jxm-mo-cn3
+    profiles:
+      - matrixone
+    user: "54340:54346"
+    entrypoint: [ "/mo-service" ]
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/cn3.toml"
+      - "-debug-http=:6064"
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "16003:16003"
+      - "6064:6064"
+    volumes:
+      - ../../mo-data:/mo-data
+      - ../../logs:/logs
+      - .:/etc/docker-multi-cn-local-disk:ro
+      - /data2/mo-load-data:/data2/mo-load-data:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - GOMEMLIMIT=4GiB
+      - GODEBUG=gctrace=1
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+    networks:
+      - matrixone-net
+    depends_on:
+      mo-log:
+        condition: service_healthy
+
+  # Override Proxy
+  mo-proxy:
+    user: "54340:54346"

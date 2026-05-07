@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
@@ -48,7 +49,11 @@ func setupServiceRuntime(
 	cfg *Config,
 	stopper *stopper.Stopper,
 ) error {
-	mpool.InitCap(int64(cfg.Limit.Memory))
+	if int64(cfg.Limit.Memory) >= int64(defaultMemoryLimit) {
+		mpool.InitCapAuto(system.MemoryTotal())
+	} else {
+		mpool.InitCap(int64(cfg.Limit.Memory))
+	}
 	r, err := newRuntime(cfg, stopper)
 	if err != nil {
 		return err

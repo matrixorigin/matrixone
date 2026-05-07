@@ -286,6 +286,7 @@ func startCNService(
 ) error {
 	// start up system module to do some calculation.
 	system.Run(stopper)
+	system.StartMallocTrimLoop(context.Background())
 
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err

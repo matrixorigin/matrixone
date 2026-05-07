@@ -21,6 +21,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -171,15 +173,36 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			continue
 		}
 
-		// Store original batch
-		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
-		if err != nil {
-			return err
+		// Reserve memory before allocation so concurrent operators see the pressure
+		estimatedSize := int64(result.Batch.Size())
+		reservation := mpool.Reserve(estimatedSize)
+
+		// Check spill AFTER reservation so other operators see our intent
+		shouldSpill := hashBuild.shouldSpillBatches()
+		if !shouldSpill {
+			// Store original batch
+			err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
+			if err != nil {
+				reservation.Cancel()
+				return err
+			}
+			reservation.Commit()
+
+			// Periodic logging
+			if ctr.hashmapBuilder.InputBatchRowCount%500000 == 0 {
+				logutil.Infof("hashbuild build loop: rows=%d, memUsed=%dMB, CanSpill=%v, IsShuffle=%v",
+					ctr.hashmapBuilder.InputBatchRowCount, ctr.memUsed()/1024/1024, hashBuild.CanSpill, hashBuild.IsShuffle)
+			}
+			// Post-alloc check
+			shouldSpill = hashBuild.shouldSpillBatches()
+		} else {
+			reservation.Cancel()
 		}
 
-		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.shouldSpillBatches() {
+		if shouldSpill {
 			spillMode = true
+			logutil.Infof("hashbuild entering spill: memUsed=%dMB, rowCnt=%d, threshold=%dMB, IsShuffle=%v",
+				ctr.memUsed()/1024/1024, ctr.hashmapBuilder.InputBatchRowCount, ctr.spillThreshold/1024/1024, hashBuild.IsShuffle)
 			// Initialize spill executors once for reuse across all batches
 			if ctr.spillExprExecs == nil {
 				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
@@ -206,6 +229,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			}
 			// Clear batches to save memory
 			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+			system.MallocTrimIfTight()
 		}
 	}
 
@@ -246,6 +270,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if err != nil {
 			return err
 		}
+		logutil.Infof("hashbuild BuildHashmap done: rows=%d, batchMem=%dMB, hashmapSize=%dMB, IsShuffle=%v",
+			ctr.hashmapBuilder.InputBatchRowCount, ctr.hashmapBuilder.Batches.MemSize/1024/1024,
+			ctr.hashmapBuilder.GetSize()/1024/1024, hashBuild.IsShuffle)
 	}
 
 	if !hashBuild.NeedBatches {

@@ -383,12 +383,13 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
-		// 0 means auto config
-		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
-		// min 128MB
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
+		totalMem := int64(system.MemoryTotal())
+		mem := totalMem / 128
+		if mem < common.MiB*64 {
+			mem = common.MiB * 64
+		}
+		if mem > common.MiB*512 {
+			mem = common.MiB * 512
 		}
 		ctr.spillThreshold = mem
 	} else {

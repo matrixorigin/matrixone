@@ -4716,6 +4716,13 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+
+	if len(viewStmt.ColNames) > 0 && len(viewStmt.ColNames) <= len(viewCtx.headings) {
+		for i, name := range viewStmt.ColNames {
+			viewCtx.headings[i] = string(name)
+		}
+	}
+
 	ctx.recordViews([]string{schema + "#" + table})
 	ctx.recordViews(viewCtx.views)
 	return

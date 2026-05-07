@@ -20,11 +20,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -43,15 +47,25 @@ const (
 	spillMagic      = 0x12345678DEADBEEF
 	spillMaxPass    = 3
 	// spillRowBufferSize is the number of rows accumulated in memory before
-	// flushing to a spill file during scatter. Keeping this at 8192 rows
-	// balances memory pressure vs write-syscall frequency.
-	spillRowBufferSize = 8192
+	// flushing to a spill file during scatter. Keeping this at 1024 rows
+	// limits per-bucket buffer memory for wide-row queries (e.g. multi-join).
+	spillRowBufferSize = 1024
 	// spillIOBufferSize is the size of the bufio.Reader read-ahead buffer used
 	// when reading spill files. A large buffer reduces the number of read()
 	// syscalls when scanning multi-hundred-MB spill files during multi-level
 	// re-spill.
 	spillIOBufferSize = 4 * 1024 * 1024
+	// rebuildConcurrency limits the number of operators that can simultaneously
+	// rebuild hash maps from spilled data. With DOP=64, without this limit all
+	// operators rebuild at once creating a memory spike. Limiting to 4 keeps peak
+	// memory bounded while still allowing parallelism.
+	rebuildConcurrency = 4
 )
+
+// rebuildSem limits concurrent hash map rebuilds across all hashjoin operators
+// in this process. Acquired before loading spill data + building hash map,
+// released after the join map is constructed (or on error/re-spill).
+var rebuildSem = make(chan struct{}, rebuildConcurrency)
 
 // getSpillFS returns the cached spill file service, initialising it on first call.
 // Caching avoids a registry lookup, an EnsureDir syscall, and a subPathFS heap
@@ -373,6 +387,10 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	if err != nil {
 		return 0, err
 	}
+	// Advise kernel to drop page cache for spill data immediately.
+	// In cgroup-limited containers, page cache counts toward the memory limit
+	// and can trigger OOM even when the Go heap is well within budget.
+	unix.Fadvise(int(w.file.Fd()), 0, 0, unix.FADV_DONTNEED)
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)
 
@@ -438,6 +456,8 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) e
 //   - threshold <= 0: never re-spill
 //   - threshold <= 100000: treat as a row-count limit
 //   - threshold > 100000: treat as a memory-size limit
+var reSpillCheckCounter uint64
+
 func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if ctr.spillThreshold <= 0 {
 		return false
@@ -451,7 +471,25 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 			sz += int64(b.Size())
 		}
 	}
-	return sz > ctr.spillThreshold
+	if sz > ctr.spillThreshold {
+		return true
+	}
+	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/5 {
+		return true
+	}
+	used := int64(system.MemoryUsed())
+	total := int64(system.MemoryTotal())
+	if used > total/2 {
+		logutil.Infof("shouldReSpill: system trigger used=%dMB > total/2=%dMB, builderRows=%d",
+			used/1024/1024, total/2/1024/1024, builder.InputBatchRowCount)
+		return true
+	}
+	cnt := atomic.AddUint64(&reSpillCheckCounter, 1)
+	if cnt%500 == 0 {
+		logutil.Infof("shouldReSpill check #%d: sz=%dMB, threshold=%dMB, rows=%d, sysMem=%dMB",
+			cnt, sz/1024/1024, ctr.spillThreshold/1024/1024, builder.InputBatchRowCount, used/1024/1024)
+	}
+	return false
 }
 
 // rebuildHashmapForBucket loads a spill bucket into a JoinMap.
@@ -460,6 +498,14 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket spillBucket, analyzer process.Analyzer) (jm *message.JoinMap, reSpilled bool, err error) {
 	ctr := &hashJoin.ctr
 	logutil.Debugf("rebuilding hashmap for spill bucket: %s, depth: %d", bucket.baseName, bucket.depth)
+
+	// Limit concurrent rebuilds to prevent thundering-herd memory spikes.
+	select {
+	case rebuildSem <- struct{}{}:
+	case <-proc.Ctx.Done():
+		return nil, false, proc.Ctx.Err()
+	}
+	defer func() { <-rebuildSem }()
 
 	// Create a temporary hashmap builder
 	builder := &hashbuild.HashmapBuilder{}
@@ -504,6 +550,26 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 
 		// Check threshold mid-build (only if we can go deeper)
 		if bucket.depth < spillMaxPass && ctr.shouldReSpill(builder) {
+			_, reSpillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
+			cleanupBuilder()
+			return nil, true, reSpillErr
+		}
+	}
+
+	// Before building the hashmap, check global memory pressure. With DOP=64,
+	// all operators may finish loading their (small) buckets and call BuildHashmap
+	// simultaneously. BuildHashmap allocates a hash table proportional to row count
+	// which, across 64 operators, causes a memory spike. Re-spill if system memory
+	// is already high to prevent the thundering-herd OOM.
+	if bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
+		used := int64(system.MemoryUsed())
+		total := int64(system.MemoryTotal())
+		if used > total/2 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/5 {
+			logutil.Infof("rebuildHashmap: pre-BuildHashmap re-spill triggered, used=%dMB, total=%dMB, rows=%d, bucket=%s",
+				used/1024/1024, total/2/1024/1024, builder.InputBatchRowCount, bucket.baseName)
+			// Reader is already at EOF since we read all batches above.
+			// reSpillBucket will re-partition from builder.Batches.Buf and
+			// the reader loop will immediately hit EOF — no double-counting.
 			_, reSpillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
 			cleanupBuilder()
 			return nil, true, reSpillErr

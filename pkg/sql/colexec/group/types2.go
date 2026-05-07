@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -158,17 +157,13 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	}
 
 	if m == 0 {
-		// 0 means auto config.
-		// Use 1/4 of per-core available memory as spill threshold.
-		// Previous divisor of 8 was too aggressive — on memory-constrained
-		// containers (e.g. 25GB with 15GB file cache) it forced premature
-		// spilling, and the simultaneous spill IO from all partitions
-		// actually increased peak memory due to temporary buffers.
-		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 4
-		// min 128MB
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
+		totalMem := int64(system.MemoryTotal())
+		mem := totalMem / 128
+		if mem < common.MiB*64 {
+			mem = common.MiB * 64
+		}
+		if mem > common.MiB*512 {
+			mem = common.MiB * 512
 		}
 		ctr.spillMem = mem
 	} else {

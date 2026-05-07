@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -256,6 +257,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 						group.OpAnalyzer.Spill(bytes)
 						group.OpAnalyzer.SpillRows(rows)
 					}
+					system.MallocTrimIfTight()
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.

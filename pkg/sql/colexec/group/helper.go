@@ -664,9 +664,10 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	if ctr.spillMem < 10000 {
 		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
 	} else {
-		// Trigger spill at 80% of threshold to leave headroom for
-		// temporary allocations during the spill process itself.
 		needSpill = memUsed > ctr.spillMem*4/5
+	}
+	if !needSpill {
+		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/5
 	}
 
 	return needSpill

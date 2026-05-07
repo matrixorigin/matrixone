@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -269,7 +270,11 @@ func (d *DiskCache) Read(
 	openedFiles := make(map[string]*os.File)
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
+		tight := memoryTight()
 		for _, file := range openedFiles {
+			if tight {
+				unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+			}
 			_ = file.Close()
 		}
 		LogEvent(ctx, str_close_disk_files_end)

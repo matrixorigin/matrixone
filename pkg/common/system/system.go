@@ -37,6 +37,8 @@ var (
 	cpuNum atomic.Int32
 	// memoryTotal is the total memory of this node.
 	memoryTotal atomic.Uint64
+	// lastMallocTrim tracks the last time MallocTrim was called (UnixNano).
+	lastMallocTrim atomic.Int64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
 
@@ -108,6 +110,47 @@ func MemoryUsed() uint64 {
 		logutil.Errorf("failed to get memory stats: %v", err)
 	}
 	return mem.Used
+}
+
+// MallocTrimIfTight calls malloc_trim(0) if container memory usage > 75%.
+// Rate-limited to at most once per 5 seconds to avoid excessive overhead.
+func MallocTrimIfTight() {
+	total := MemoryTotal()
+	if total == 0 {
+		return
+	}
+	used := MemoryUsed()
+	if used > total*3/4 {
+		now := time.Now().UnixNano()
+		last := lastMallocTrim.Load()
+		if now-last > 5_000_000_000 && lastMallocTrim.CompareAndSwap(last, now) {
+			MallocTrim()
+		}
+	}
+}
+
+// StartMallocTrimLoop starts a background goroutine that periodically calls
+// malloc_trim(0) when container memory usage exceeds 75%.
+func StartMallocTrimLoop(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				total := MemoryTotal()
+				if total == 0 {
+					continue
+				}
+				used := MemoryUsed()
+				if used > total*3/4 {
+					MallocTrim()
+				}
+			}
+		}
+	}()
 }
 
 // MemoryGolang returns the total size of golang's memory.

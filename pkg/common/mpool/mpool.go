@@ -375,7 +375,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
-			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too big, global cap %d", cap, globalCap.Load())
+			cap = GlobalCap()
 		}
 	}
 
@@ -459,6 +459,47 @@ var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
+var globalPending atomic.Int64
+
+// Reservation represents a pending memory reservation that signals intent
+// to allocate. Other operators see this pending amount in their spill checks,
+// solving the concurrent allocation window problem.
+type Reservation struct {
+	size int64
+}
+
+// Reserve declares intent to allocate size bytes. The pending amount is
+// immediately visible to GlobalPending() callers. Call Commit() after the
+// actual allocation succeeds, or Cancel() if the allocation is skipped.
+func Reserve(size int64) Reservation {
+	globalPending.Add(size)
+	return Reservation{size: size}
+}
+
+// Commit removes the pending reservation (the actual alloc is now tracked
+// by mpool's NumCurrBytes).
+func (r *Reservation) Commit() {
+	if r.size > 0 {
+		globalPending.Add(-r.size)
+		r.size = 0
+	}
+}
+
+// Cancel removes the pending reservation without allocation.
+func (r *Reservation) Cancel() {
+	r.Commit()
+}
+
+// GlobalPending returns the current total pending reservation bytes.
+func GlobalPending() int64 {
+	return globalPending.Load()
+}
+
+// GlobalUsedWithPending returns NumCurrBytes + pending, giving a more
+// accurate picture of imminent memory pressure.
+func GlobalUsedWithPending() int64 {
+	return globalStats.NumCurrBytes.Load() + globalPending.Load()
+}
 
 // Sharded pointer map to reduce lock contention
 const numPtrShards = 128
@@ -487,6 +528,28 @@ func InitCap(cap int64) {
 	} else {
 		globalCap.Store(cap)
 	}
+	logutil.Infof("mpool InitCap: explicit cap=%dMB", globalCap.Load()/1024/1024)
+}
+
+func InitCapAuto(sysMem uint64) {
+	total := int64(sysMem)
+	goLimit := debug.SetMemoryLimit(-1) // read without changing
+	var budget int64
+	if goLimit > 0 && goLimit < total {
+		// Reserve goLimit for Go heap + 2GB for page cache/kernel overhead
+		budget = total - goLimit - 2*GB
+	} else {
+		budget = total / 2
+	}
+	if budget < GB {
+		budget = GB
+	}
+	if budget > total*3/4 {
+		budget = total * 3 / 4
+	}
+	globalCap.Store(budget)
+	logutil.Infof("mpool InitCapAuto: sysMem=%dMB, goLimit=%dMB, globalCap=%dMB",
+		total/1024/1024, goLimit/1024/1024, budget/1024/1024)
 }
 
 func GlobalStats() *MPoolStats {
@@ -747,6 +810,43 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 	}
 	detailk := mp.getDetailK()
 	mp.freePtr(detailk, unsafe.Pointer(&bs[0]))
+}
+
+// ReportTopPools returns the top N pools by current memory usage.
+func ReportTopPools(topN int) string {
+	type poolInfo struct {
+		tag      string
+		currBytes int64
+	}
+	var pools []poolInfo
+	globalPools.Range(func(key, value any) bool {
+		mp := value.(*MPool)
+		curr := mp.stats.NumCurrBytes.Load()
+		if curr > 0 {
+			pools = append(pools, poolInfo{tag: mp.tag, currBytes: curr})
+		}
+		return true
+	})
+	// simple selection sort for top N
+	for i := 0; i < len(pools) && i < topN; i++ {
+		maxIdx := i
+		for j := i + 1; j < len(pools); j++ {
+			if pools[j].currBytes > pools[maxIdx].currBytes {
+				maxIdx = j
+			}
+		}
+		pools[i], pools[maxIdx] = pools[maxIdx], pools[i]
+	}
+	n := min(topN, len(pools))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("global=%dMB top_pools: ", globalStats.NumCurrBytes.Load()/1024/1024))
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%s=%dMB", pools[i].tag, pools[i].currBytes/1024/1024))
+	}
+	return sb.String()
 }
 
 // Report memory usage in json.

@@ -52,5 +52,8 @@ func getBufferLength(cnt uint32) uint32 {
 	if cnt <= 2 {
 		return 2
 	}
+	if cnt > 4 {
+		return 4
+	}
 	return cnt
 }

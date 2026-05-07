@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"golang.org/x/sys/unix"
 
 	"go.uber.org/zap"
 
@@ -545,7 +546,12 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if memoryTight() {
+			unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+		}
+		file.Close()
+	}()
 
 	numNotDoneEntries := 0
 	defer func() {

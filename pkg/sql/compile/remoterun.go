@@ -1163,6 +1163,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
+		arg.CanSpill = t.IsShuffle && t.NeedHashMap
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
