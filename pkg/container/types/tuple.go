@@ -625,6 +625,145 @@ func UnpackWithSchema(b []byte) (Tuple, []T, error) {
 	return t, schema, err
 }
 
+// UnpackNthElement decodes only up to the nth element (0-based) and returns
+// just that element plus its type. This avoids deserializing the entire tuple
+// when only one element is needed, which is critical for performance in
+// GROUP BY serial_extract(__mo_index_idx_col, 0, VARCHAR) queries.
+func UnpackNthElement(b []byte, n int) (any, T, error) {
+	checkBytes := func(pos, need int) error {
+		if pos+need > len(b) {
+			return moerr.NewInternalErrorNoCtxf("insufficient bytes: need %d at position %d, but only %d bytes available", need, pos, len(b)-pos)
+		}
+		return nil
+	}
+
+	decodeWithOffset := func(i int, decodeFn func(byte, []byte) (any, int), code byte) (any, int, error) {
+		if err := checkBytes(i, 2); err != nil {
+			return nil, 0, err
+		}
+		el, off := decodeFn(code, b[i+1:])
+		return el, off + 1, nil
+	}
+
+	idx := 0
+	i := 0
+	for i < len(b) {
+		var el any
+		var off int
+		var err error
+		var schema T
+
+		switch b[i] {
+		case nilCode:
+			schema, el, off = T_any, nil, 1
+		case int8Code:
+			schema = T_int8
+			el, off, err = decodeWithOffset(i, decodeInt, int8Code)
+		case int16Code:
+			schema = T_int16
+			el, off, err = decodeWithOffset(i, decodeInt, int16Code)
+		case int32Code:
+			schema = T_int32
+			el, off, err = decodeWithOffset(i, decodeInt, int32Code)
+		case int64Code:
+			schema = T_int64
+			el, off, err = decodeWithOffset(i, decodeInt, int64Code)
+		case uint8Code:
+			schema = T_uint8
+			el, off, err = decodeWithOffset(i, decodeUint, uint8Code)
+		case uint16Code:
+			schema = T_uint16
+			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+		case uint32Code:
+			schema = T_uint32
+			el, off, err = decodeWithOffset(i, decodeUint, uint32Code)
+		case uint64Code:
+			schema = T_uint64
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+		case trueCode:
+			schema, el, off = T_bool, true, 1
+		case falseCode:
+			schema, el, off = T_bool, false, 1
+		case float32Code:
+			if err = checkBytes(i, 5); err != nil {
+				return nil, 0, err
+			}
+			schema = T_float32
+			el, off = decodeFloat32(b[i:])
+		case float64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, 0, err
+			}
+			schema = T_float64
+			el, off = decodeFloat64(b[i:])
+		case dateCode:
+			schema = T_date
+			el, off, err = decodeWithOffset(i, decodeInt, dateCode)
+		case datetimeCode:
+			schema = T_datetime
+			el, off, err = decodeWithOffset(i, decodeInt, datetimeCode)
+		case timestampCode:
+			schema = T_timestamp
+			el, off, err = decodeWithOffset(i, decodeInt, timestampCode)
+		case timeCode:
+			schema = T_time
+			el, off, err = decodeWithOffset(i, decodeInt, timeCode)
+		case decimal64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal64
+			el, off = decodeDecimal64(b[i+1:])
+		case decimal128Code:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal128
+			el, off = decodeDecimal128(b[i+1:])
+		case stringTypeCode:
+			if err = checkBytes(i, 2); err != nil {
+				return nil, 0, err
+			}
+			schema = T_varchar
+			el, off = decodeBytes(b[i+1:])
+			off += 1
+		case bitCode:
+			schema = T_bit
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+		case enumCode:
+			schema = T_enum
+			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+		case uuidCode:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, 0, err
+			}
+			schema = T_uuid
+			el, off = decodeUuid(b[i:])
+		case objectIdCode:
+			if err = checkBytes(i, 19); err != nil {
+				return nil, 0, err
+			}
+			schema = T_Objectid
+			el, off = decodeObjectid(b[i:])
+		default:
+			return nil, 0, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
+		}
+
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if idx == n {
+			return el, schema, nil
+		}
+
+		idx++
+		i += off
+	}
+
+	return nil, 0, moerr.NewInternalErrorNoCtx("index out of range")
+}
+
 func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 	items := make([]string, len(types))
 

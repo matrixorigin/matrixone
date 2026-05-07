@@ -383,6 +383,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
+//
+// Conjuncts are compared via a structural fingerprint (exprStructuralHash +
+// exprStructuralEqual) rather than proto serialization. For deeply nested
+// IN/OR trees the old Marshal path walked every expression twice (ProtoSize
+// + writeTo) per lookup and dominated CPU; hashing traverses once with no
+// allocation and collisions are rare enough that Equal rarely runs.
 func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -397,11 +403,24 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
 		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
 
-		condMap := make(map[string]int)
+		// Bucket right conjuncts by structural hash. Each bucket stores the
+		// original expr + the per-bucket side state, so the left scan can
+		// collision-check with exprStructuralEqual against the few conds
+		// sharing a hash (normally 1).
+		type rightEntry struct {
+			cond *plan.Expr
+			side int
+		}
+		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
+		rightEntries := make([]*rightEntry, len(rightConds))
 
 		relPos := int32(-1)
-		for _, cond := range rightConds {
-			condMap[cond.String()] = JoinSideRight
+		for i, cond := range rightConds {
+			h := exprStructuralHash(cond)
+			entry := &rightEntry{cond: cond, side: JoinSideRight}
+			rightEntries[i] = entry
+			rightBuckets[h] = append(rightBuckets[h], entry)
+
 			args := cond.GetF().GetArgs()
 			if len(args) != 2 {
 				continue
@@ -421,19 +440,28 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
 
 		for _, cond := range leftConds {
-			exprStr := cond.String()
-
-			if condMap[exprStr] == JoinSideRight {
+			h := exprStructuralHash(cond)
+			bucket := rightBuckets[h]
+			var matched *rightEntry
+			for _, entry := range bucket {
+				if entry.side != JoinSideRight {
+					continue
+				}
+				if exprStructuralEqual(entry.cond, cond) {
+					matched = entry
+					break
+				}
+			}
+			if matched != nil {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = JoinSideBoth
+				matched.side = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
-		for _, cond := range rightConds {
-			if condMap[cond.String()] == JoinSideRight {
+		for i, cond := range rightConds {
+			if rightEntries[i].side == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}
