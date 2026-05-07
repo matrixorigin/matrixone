@@ -973,7 +973,7 @@ public:
     // filter-excluded nearest neighbors instead of returning sentinels.
     // So rows explicitly excluded by predicate or by soft-delete can still
     // appear in search_res.neighbors.
-    //   Canonical reproducer: FilteredSearchAndDeletionCombine in
+    //   Canonical reproducer: FilteredSearchCombinesWithDeleteBitset in
     //   cgo/cuvs/test/ivf_pq_test.cu.
     //
     // Mitigation: re-apply the combined (user_filter AND NOT deleted) mask
@@ -982,6 +982,16 @@ public:
     // callers see a result array with fewer than `limit` valid neighbors,
     // not a corrupted one. Only IVF-PQ is patched; IVF-Flat and CAGRA paths
     // correctly write -1 for filter-excluded slots natively.
+    //
+    // Skip-fast: the quirk can only trigger when popcount(combined_mask) is
+    // strictly less than num_queries * limit. build_search_bitset returns
+    // the popcount via out_popcount; callers gate this function behind
+    //   popcount >= num_queries * limit * kPqPostFilterSkipFactor
+    // (with kPqPostFilterSkipFactor = 4 for empirical headroom). At moderate
+    // selectivity (5–50% pass), this skips the post-filter pass and its
+    // shared_lock acquisition entirely. The canonical reproducer above sits
+    // well below the threshold (popcount=2, n*limit=5) so it still exercises
+    // this function.
     //
     // Mask sources (after build_search_bitset refactor):
     //   * User filter present — user_host_mask already holds (user ∧ ¬deleted)
@@ -1086,6 +1096,7 @@ public:
         // (see WARNING comment below).
         uint64_t start_row = 0, shard_sz = this->count;
         std::vector<uint32_t> user_host_mask;  // populated by build_search_bitset when user filter is present
+        uint64_t user_filter_popcount = 0;     // popcount(user_filter ∧ ¬deleted); see WARNING above
 
         if (local_index) {
             auto queries_device = raft::make_device_matrix<T, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
@@ -1101,7 +1112,7 @@ public:
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask);
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask, &user_filter_popcount);
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1127,7 +1138,22 @@ public:
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
 
-            apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+            // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
+            // comfortably above num_queries * limit — the cuVS bitset_filter
+            // leak quirk cannot trigger in that regime (see WARNING above for
+            // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
+            // paths leave user_host_mask empty and fall through to the
+            // existing function.
+            constexpr uint64_t kPqPostFilterSkipFactor = 4;
+            const bool skip_pq_post_filter =
+                !user_host_mask.empty() &&
+                user_filter_popcount >=
+                    static_cast<uint64_t>(num_queries) *
+                    static_cast<uint64_t>(limit) *
+                    kPqPostFilterSkipFactor;
+            if (!skip_pq_post_filter) {
+                apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+            }
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int64_t offset = 0;
@@ -1368,6 +1394,7 @@ public:
         // (see WARNING comment below).
         uint64_t start_row = 0, shard_sz = this->count;
         std::vector<uint32_t> user_host_mask;  // populated by build_search_bitset when user filter is present
+        uint64_t user_filter_popcount = 0;     // popcount(user_filter ∧ ¬deleted); see WARNING above
 
         if (local_index) {
             auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
@@ -1379,7 +1406,7 @@ public:
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask);
+            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &user_host_mask, &user_filter_popcount);
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1406,7 +1433,22 @@ public:
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
 
-            apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+            // Skip the post-filter pass when popcount(user ∧ ¬deleted) is
+            // comfortably above num_queries * limit — the cuVS bitset_filter
+            // leak quirk cannot trigger in that regime (see WARNING above for
+            // kPqPostFilterSkipFactor rationale). Deletes-only and unfiltered
+            // paths leave user_host_mask empty and fall through to the
+            // existing function.
+            constexpr uint64_t kPqPostFilterSkipFactor = 4;
+            const bool skip_pq_post_filter =
+                !user_host_mask.empty() &&
+                user_filter_popcount >=
+                    static_cast<uint64_t>(num_queries) *
+                    static_cast<uint64_t>(limit) *
+                    kPqPostFilterSkipFactor;
+            if (!skip_pq_post_filter) {
+                apply_pq_post_filter_locked(search_res, start_row, shard_sz, user_host_mask);
+            }
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int64_t offset = 0;

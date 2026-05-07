@@ -461,12 +461,21 @@ public:
     // user_filter alone when no deletes. The IVF-PQ post-filter reuses this to
     // suppress the bitset_filter padding quirk. Left empty on the deletes-only
     // and unfiltered paths (the cached device delete bitset is enough there).
+    // out_popcount (optional, IVF-PQ only): when the user-filter path runs,
+    // receives popcount(host_mask) — the number of rows that pass the combined
+    // (user_filter AND NOT deleted) mask in this shard. IVF-PQ uses it to
+    // gate the apply_pq_post_filter_locked() pass: when popcount is
+    // comfortably above num_queries * limit, the cuVS bitset_filter leak
+    // quirk cannot trigger and the post-filter pass can be skipped. Left
+    // untouched on the unfiltered and deletes-only paths (callers default it
+    // to 0 and only consult it when out_user_mask is non-empty).
     std::shared_ptr<raft::core::bitset<uint32_t, int64_t>>
     build_search_bitset(raft_handle_wrapper_t& handle,
                         const std::string& preds_json,
                         uint64_t start_row,
                         uint64_t shard_sz,
-                        std::vector<uint32_t>* out_user_mask = nullptr) {
+                        std::vector<uint32_t>* out_user_mask = nullptr,
+                        uint64_t* out_popcount = nullptr) {
         using bs_t = raft::core::bitset<uint32_t, int64_t>;
         auto res   = handle.get_raft_resources();  // shared_ptr<raft::resources>
         int dev_id = handle.get_device_id();
@@ -506,17 +515,30 @@ public:
         // AND on the host is cheaper than a device thrust::transform — one
         // fewer kernel launch — and lets the IVF-PQ post-filter reuse the
         // combined host bitmap without any further work.
+        //
+        // Lock-scope optimization: filter_host_ is post-build immutable (see
+        // class doc), so eval_filter_bitmap_cpu only needs the index mutex_
+        // when at least one predicate references the synthetic
+        // __mo_pk_host_id column (kHostIdColIdx) — that's the one input that
+        // can race with a concurrent extend() reallocating host_ids. When no
+        // predicate references it, snapshot just the deleted_bitset_ slice
+        // under a brief shared_lock and run the OpenMP eval + AND-merge
+        // unlocked, so concurrent extend() / set_deleted() writers don't have
+        // to wait the ~1-3 ms eval cost.
+        bool needs_host_ids = false;
+        for (const auto& p : preds) {
+            if (p.col_idx == kHostIdColIdx) { needs_host_ids = true; break; }
+        }
+
         std::vector<uint32_t> host_mask;
-        {
+        if (needs_host_ids) {
+            // Slow path: host_ids may move under us; hold lock across eval.
             std::shared_lock<std::shared_mutex> lock(mutex_);
             // Expose host_ids to the filter evaluator so predicates on the
             // virtual __mo_pk_host_id column (col_idx == kHostIdColIdx)
             // compare directly against the PK array without a duplicate
             // FilterStore column. All current index types use IdT=int64_t
-            // for external host_ids. Empty host_ids (sequential-ID indexes)
-            // leaves hv.data==nullptr — eval_pred_word falls through to
-            // "all match" and the planner's residual filter remains
-            // authoritative.
+            // for external host_ids.
             HostIdsView hv;
             if (!this->host_ids.empty()) {
                 static_assert(std::is_same_v<IdT, int64_t>,
@@ -539,6 +561,47 @@ public:
                     host_mask[w] &= del_w;
                 }
             }
+        } else {
+            // Fast path: no PK predicate. Snapshot only the deleted_bitset_
+            // slice under the shared_lock, then release before the OpenMP
+            // eval and AND-merge. eval reads filter_host_ which is post-build
+            // immutable, and host_ids is unused on this path so a concurrent
+            // extend() reallocating it is harmless.
+            std::vector<uint32_t> del_slice;
+            if (has_del) {
+                const uint64_t nwords     = (shard_sz + 31) / 32;
+                const uint64_t start_word = start_row / 32;
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                if (!this->deleted_bitset_.empty()) {
+                    const uint64_t del_words = this->deleted_bitset_.size();
+                    del_slice.resize(nwords);
+                    for (uint64_t w = 0; w < nwords; ++w) {
+                        del_slice[w] = (start_word + w < del_words)
+                                         ? this->deleted_bitset_[start_word + w]
+                                         : 0xFFFFFFFFu;
+                    }
+                }
+            }
+            // Lock released. eval and AND-merge run unlocked.
+            HostIdsView hv;  // unused on this path
+            host_mask = eval_filter_bitmap_cpu(
+                this->filter_host_, preds, start_row, shard_sz, hv);
+            if (!del_slice.empty()) {
+                for (uint64_t w = 0; w < host_mask.size(); ++w) {
+                    host_mask[w] &= del_slice[w];
+                }
+            }
+        }
+
+        // Popcount of the final combined mask. IVF-PQ uses this to skip its
+        // post-filter pass when the cuVS bitset_filter leak quirk cannot
+        // trigger (popcount comfortably above num_queries * limit). Cheap —
+        // one __builtin_popcount per 32-bit word, and host_mask is cache-hot
+        // from the AND-merge above.
+        if (out_popcount) {
+            uint64_t pc = 0;
+            for (auto w : host_mask) pc += static_cast<uint64_t>(__builtin_popcount(w));
+            *out_popcount = pc;
         }
         const uint64_t nwords = host_mask.size();
 
