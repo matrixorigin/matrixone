@@ -2369,7 +2369,7 @@ value    sum(id) over (partition by id order by id rows unbounded preceding)
 11    77
 select id value,
 sum(id) over (partition by id order by id rows unbounded preceding)
-from dense_rank01 full join dense_rank02;
+from dense_rank01 `full` join dense_rank02;
 value    sum(id) over (partition by id order by id rows unbounded preceding)
 1    1
 1    2

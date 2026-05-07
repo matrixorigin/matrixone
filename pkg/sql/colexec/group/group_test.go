@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -61,11 +62,100 @@ func newGroupOp(proc *process.Process, groupBy []*plan.Expr, aggs []aggexec.AggF
 	return g
 }
 
+func newMergeGroupOp(aggs []aggexec.AggFuncExecExpression) *MergeGroup {
+	mg := NewArgumentMergeGroup()
+	mg.Aggs = aggs
+	mg.OperatorBase = vm.OperatorBase{
+		OperatorInfo: vm.OperatorInfo{Idx: 0, IsFirst: false, IsLast: false},
+	}
+	return mg
+}
+
 func resetChildren(g *Group, proc *process.Process) {
 	bat := colexec.MakeMockBatchs(proc.Mp())
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	g.Children = nil
 	g.AppendChild(op)
+}
+
+func collectBatches(t *testing.T, op vm.Operator, proc *process.Process) []*batch.Batch {
+	t.Helper()
+
+	var result []*batch.Batch
+	for {
+		ret, err := vm.Exec(op, proc)
+		require.NoError(t, err)
+		if ret.Status == vm.ExecStop || ret.Batch == nil {
+			return result
+		}
+		result = append(result, ret.Batch)
+	}
+}
+
+func cloneBatch(t *testing.T, proc *process.Process, bat *batch.Batch) *batch.Batch {
+	t.Helper()
+
+	cloned, err := bat.Dup(proc.Mp())
+	require.NoError(t, err)
+	cloned.ExtraBuf = append(cloned.ExtraBuf[:0], bat.ExtraBuf...)
+	return cloned
+}
+
+func buildPartialGroupBatches(t *testing.T, proc *process.Process, sources []*batch.Batch, forceGroupTypesNotNull bool) []*batch.Batch {
+	t.Helper()
+
+	groupBy := []*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)}
+	partialBatches := make([]*batch.Batch, 0, len(sources))
+	for _, source := range sources {
+		partial := newGroupOp(proc, groupBy, []aggexec.AggFuncExecExpression{countStarAgg()})
+		partial.NeedEval = false
+		partial.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{source}))
+		require.NoError(t, partial.Prepare(proc))
+		rawPartialBatches := collectBatches(t, partial, proc)
+		require.Len(t, rawPartialBatches, 1)
+		for _, bat := range rawPartialBatches {
+			cloned := cloneBatch(t, proc, bat)
+			if forceGroupTypesNotNull {
+				cloned.Vecs[0].GetType().SetNotNull(true)
+				cloned.Vecs[1].GetType().SetNotNull(true)
+			}
+			partialBatches = append(partialBatches, cloned)
+		}
+		partial.Free(proc, false, nil)
+	}
+	return partialBatches
+}
+
+func assertMergedTicketCounts(t *testing.T, finals []*batch.Batch, wantNull, wantNonNull int64) {
+	t.Helper()
+
+	var nullCount, nonNullCount int64
+	totalRows := 0
+	for _, final := range finals {
+		if final == nil || final.RowCount() == 0 || len(final.Vecs) == 0 {
+			continue
+		}
+		require.Len(t, final.Vecs, 3)
+
+		tickets := vector.MustFixedColNoTypeCheck[int32](final.Vecs[0])
+		customers := vector.MustFixedColNoTypeCheck[int32](final.Vecs[1])
+		counts := vector.MustFixedColNoTypeCheck[int64](final.Vecs[2])
+		totalRows += final.RowCount()
+
+		for i := 0; i < final.RowCount(); i++ {
+			require.Equal(t, int32(1), tickets[i])
+			if final.Vecs[1].GetNulls().Contains(uint64(i)) {
+				nullCount = counts[i]
+				continue
+			}
+			require.Equal(t, int32(10), customers[i])
+			nonNullCount = counts[i]
+		}
+	}
+
+	require.Equal(t, 2, totalRows)
+	require.Equal(t, wantNull, nullCount)
+	require.Equal(t, wantNonNull, nonNullCount)
 }
 
 func TestGroupString(t *testing.T) {
@@ -152,6 +242,31 @@ func TestGroupResetAndReuse(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{0, 0}, []uint64{0, 1}, proc.Mp())
+	second.SetRowCount(2)
+
+	partialBatches := buildPartialGroupBatches(t, proc, []*batch.Batch{first, second}, true)
+
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partialBatches))
+	require.NoError(t, merge.Prepare(proc))
+	finalBatches := collectBatches(t, merge, proc)
+	require.Len(t, finalBatches, 1)
+	assertMergedTicketCounts(t, finalBatches, 2, 2)
+	merge.Free(proc, false, nil)
 }
 
 func TestFreeAggListPartial(t *testing.T) {

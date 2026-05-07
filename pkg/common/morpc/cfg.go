@@ -177,6 +177,7 @@ func (c Config) NewServer(
 	}
 	opts = append(opts,
 		WithServerLogger(getLogger(sid).RawLogger().Named(name)),
+		WithServerMessageReleaseFunc(responseReleaseFunc),
 		WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(RPCMessage)
 			if !m.InternalMessage() {

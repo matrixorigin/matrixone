@@ -35,9 +35,11 @@ type fakeChangesHandle struct {
 	hint      engine.ChangesHandle_Hint
 	err       error
 	closed    bool
+	lastCtx   context.Context
 }
 
-func (f *fakeChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+func (f *fakeChangesHandle) Next(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	f.lastCtx = ctx
 	return f.data, f.tombstone, f.hint, f.err
 }
 
@@ -72,6 +74,26 @@ func TestBranchChangeHandleNextPassthrough(t *testing.T) {
 	require.Equal(t, bat, data)
 	require.Equal(t, fake.tombstone, tomb)
 	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+}
+
+func TestBranchChangeHandleNextReappliesPolicies(t *testing.T) {
+	fake := &fakeChangesHandle{}
+	pkFilter := &engine.PKFilter{
+		Segments:      [][]byte{{1, 2, 3}},
+		PrimarySeqnum: 7,
+	}
+	h := &BranchChangeHandle{
+		handle:             fake,
+		snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+		retainRowID:        true,
+		pkFilter:           pkFilter,
+	}
+
+	_, _, _, err := h.Next(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(fake.lastCtx))
+	require.True(t, engine.RetainRowIDFromContext(fake.lastCtx))
+	require.Same(t, pkFilter, engine.PKFilterFromContext(fake.lastCtx))
 }
 
 func TestBranchChangeHandleNextUnderlyingError(t *testing.T) {
@@ -121,6 +143,8 @@ func TestCollectChangesRange(t *testing.T) {
 
 	actual := handle.(*BranchChangeHandle)
 	require.Equal(t, fake, actual.handle)
+	require.Equal(t, engine.SnapshotReadPolicyVisibleState, actual.snapshotReadPolicy)
+	require.True(t, actual.retainRowID)
 }
 
 func TestCollectChangesSkipsEmptyRange(t *testing.T) {
@@ -162,4 +186,43 @@ func TestCollectChangesPropagatesError(t *testing.T) {
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.Nil(t, handle)
 	require.ErrorIs(t, err, expectedErr)
+}
+
+func TestCollectChangesWithPKFilterPropagatesPoliciesToHandle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	rel := mock_frontend.NewMockRelation(ctrl)
+	from := types.BuildTS(1, 0)
+	end := types.BuildTS(2, 0)
+	fake := &fakeChangesHandle{}
+	pkFilter := &engine.PKFilter{
+		Segments:      [][]byte{{4, 5, 6}},
+		PrimarySeqnum: 3,
+	}
+
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).DoAndReturn(
+		func(
+			ctx context.Context,
+			_ types.TS,
+			_ types.TS,
+			_ bool,
+			_ *mpool.MPool,
+		) (engine.ChangesHandle, error) {
+			require.Equal(t, engine.SnapshotReadPolicyVisibleState, engine.SnapshotReadPolicyFromContext(ctx))
+			require.True(t, engine.RetainRowIDFromContext(ctx))
+			require.Same(t, pkFilter, engine.PKFilterFromContext(ctx))
+			return fake, nil
+		},
+	)
+
+	handle, err := CollectChangesWithPKFilter(context.Background(), rel, from, end, nil, pkFilter)
+	require.NoError(t, err)
+	require.IsType(t, &BranchChangeHandle{}, handle)
+
+	actual := handle.(*BranchChangeHandle)
+	require.Equal(t, fake, actual.handle)
+	require.Equal(t, engine.SnapshotReadPolicyVisibleState, actual.snapshotReadPolicy)
+	require.True(t, actual.retainRowID)
+	require.Same(t, pkFilter, actual.pkFilter)
 }

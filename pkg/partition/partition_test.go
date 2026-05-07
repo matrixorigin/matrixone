@@ -151,3 +151,128 @@ func TestPartition(t *testing.T) {
 	require.Equal(t, []int64{0, 1}, partitions)
 
 }
+
+// TestPartitionAccumulatesDiffs verifies that successive Partition calls on
+// the same diffs slice OR new boundaries on top of existing ones rather than
+// overwriting them. This is the contract relied on by ORDER BY multi-key sort
+// in pkg/sql/colexec/order/order.go::sortAndSend (and similarly by window).
+//
+// Regression test for issue #24248: ORDER BY a, b on rows where the primary
+// key has adjacent NULLs would lose the secondary boundary because the
+// "both NULL" case used to overwrite diffs[i] = false.
+func TestPartitionAccumulatesDiffs(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("fixed_width_null_null_preserves_prior_boundary", func(t *testing.T) {
+		// Simulates the multi-key path in sortAndSend.
+		// First key: int32 [1, 1, 2, 2] → boundary at indices 0 and 2.
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+
+		// Second key: int32 with all NULLs → on its own would be one
+		// partition, but it must NOT erase k1's boundaries.
+		k2 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k2, []int32{0, 0, 0, 0},
+			[]bool{true, true, true, true}, mp))
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 2}, ps,
+			"both-NULL second key must not erase first key's boundary")
+	})
+
+	t.Run("fixed_width_const_preserves_prior_boundary", func(t *testing.T) {
+		// First key: int32 [1, 1, 2, 2].
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+
+		// Second key: const non-null. Must preserve k1's boundaries.
+		k2, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 4, mp)
+		require.NoError(t, err)
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 2}, ps, "const second key must not collapse partitions")
+	})
+
+	t.Run("fixed_width_const_null_preserves_prior_boundary", func(t *testing.T) {
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+
+		k2 := vector.NewConstNull(types.T_int32.ToType(), 4, mp)
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 2}, ps,
+			"const-NULL second key must not collapse partitions")
+	})
+
+	t.Run("bytes_null_null_preserves_prior_boundary", func(t *testing.T) {
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+
+		k2 := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendStringList(k2,
+			[]string{"", "", "", ""},
+			[]bool{true, true, true, true}, mp))
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 2}, ps,
+			"both-NULL bytes second key must not erase first key's boundary")
+	})
+
+	t.Run("bytes_const_preserves_prior_boundary", func(t *testing.T) {
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+
+		k2, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("x"), 4, mp)
+		require.NoError(t, err)
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 2}, ps, "const bytes second key must not collapse")
+	})
+
+	t.Run("fixed_width_or_with_existing_diff", func(t *testing.T) {
+		// Both keys contribute new boundaries; final partitioning is the union.
+		k1 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
+		k2 := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(k2, []int32{5, 6, 7, 7}, nil, mp))
+
+		sels := []int64{0, 1, 2, 3}
+		ds := make([]bool, len(sels))
+		ps := make([]int64, 0, 4)
+
+		ps = Partition(sels, ds, ps, k1)
+		require.Equal(t, []int64{0, 2}, ps)
+		ps = Partition(sels, ds, ps, k2)
+		require.Equal(t, []int64{0, 1, 2}, ps)
+	})
+}

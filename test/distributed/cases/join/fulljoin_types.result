@@ -1,0 +1,212 @@
+drop database if exists fulljoin_types_db;
+create database fulljoin_types_db;
+use fulljoin_types_db;
+drop table if exists it1;
+drop table if exists it2;
+create table it1(
+k_tiny   tinyint,
+k_small  smallint,
+k_int    int,
+k_big    bigint,
+k_utiny  tinyint unsigned,
+k_uint   int unsigned,
+v        varchar(10)
+);
+create table it2 like it1;
+insert into it1 values (1, 100, 1000, 10000, 1, 1000, 'a'),
+(2, 200, 2000, 20000, 2, 2000, 'b'),
+(NULL, NULL, NULL, NULL, NULL, NULL, 'n');
+insert into it2 values (2, 200, 2000, 20000, 2, 2000, 'B'),
+(3, 300, 3000, 30000, 3, 3000, 'C'),
+(NULL, NULL, NULL, NULL, NULL, NULL, 'N');
+select 'tinyint'  as tag; select * from it1 full outer join it2 on it1.k_tiny   = it2.k_tiny   order by it1.k_tiny, it2.k_tiny;
+➤ tag[12,-1,0]  𝄀
+tinyint
+select 'smallint' as tag; select * from it1 full outer join it2 on it1.k_small  = it2.k_small  order by it1.k_small, it2.k_small;
+➤ tag[12,-1,0]  𝄀
+smallint
+select 'int'      as tag; select * from it1 full outer join it2 on it1.k_int    = it2.k_int    order by it1.k_int, it2.k_int;
+➤ tag[12,-1,0]  𝄀
+int
+select 'bigint'   as tag; select * from it1 full outer join it2 on it1.k_big    = it2.k_big    order by it1.k_big, it2.k_big;
+➤ tag[12,-1,0]  𝄀
+bigint
+select 'utinyint' as tag; select * from it1 full outer join it2 on it1.k_utiny  = it2.k_utiny  order by it1.k_utiny, it2.k_utiny;
+➤ tag[12,-1,0]  𝄀
+utinyint
+select 'uint'     as tag; select * from it1 full outer join it2 on it1.k_uint   = it2.k_uint   order by it1.k_uint, it2.k_uint;
+➤ tag[12,-1,0]  𝄀
+uint
+drop table if exists ft1;
+drop table if exists ft2;
+create table ft1(k_flt float, k_dbl double, k_dec decimal(12,4), v varchar(5));
+create table ft2 like ft1;
+insert into ft1 values (1.1, 1.1, 1.1000, 'a'),(2.2, 2.2, 2.2000, 'b'),(NULL,NULL,NULL,'n');
+insert into ft2 values (2.2, 2.2, 2.2000, 'B'),(3.3, 3.3, 3.3000, 'C'),(NULL,NULL,NULL,'N');
+select 'float'   as tag; select * from ft1 full outer join ft2 on ft1.k_flt = ft2.k_flt order by ft1.k_flt, ft2.k_flt;
+➤ tag[12,-1,0]  𝄀
+float
+select 'double'  as tag; select * from ft1 full outer join ft2 on ft1.k_dbl = ft2.k_dbl order by ft1.k_dbl, ft2.k_dbl;
+➤ tag[12,-1,0]  𝄀
+double
+select 'decimal' as tag; select * from ft1 full outer join ft2 on ft1.k_dec = ft2.k_dec order by ft1.k_dec, ft2.k_dec;
+➤ tag[12,-1,0]  𝄀
+decimal
+drop table if exists bl1;
+drop table if exists bl2;
+create table bl1(k_bool bool, k_bit bit(8), v varchar(5));
+create table bl2 like bl1;
+insert into bl1 values (true, b'00000001', 'a'),(false, b'00000010', 'b'),(NULL, NULL, 'n');
+insert into bl2 values (false, b'00000010','B'),(true, b'00000100','C'),(NULL, NULL, 'N');
+select 'bool' as tag; select * from bl1 full outer join bl2 on bl1.k_bool = bl2.k_bool order by bl1.k_bool, bl2.k_bool;
+➤ tag[12,-1,0]  𝄀
+bool
+select 'bit'  as tag;
+➤ tag[12,-1,0]  𝄀
+bit
+select cast(bl1.k_bit as unsigned) l, bl1.v, cast(bl2.k_bit as unsigned) r, bl2.v
+from bl1 full outer join bl2 on bl1.k_bit = bl2.k_bit
+order by l, r;
+➤ l[-5,64,0]  ¦  v[12,-1,0]  ¦  r[-5,64,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  N  𝄀
+null  ¦  n  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  4  ¦  C  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  2  ¦  B
+drop table if exists st1;
+drop table if exists st2;
+create table st1(k_char char(5), k_vc varchar(10), k_text text, v varchar(5));
+create table st2 like st1;
+insert into st1 values ('abc', 'abc', 'abc','a'),('def','def','def','b'),(NULL,NULL,NULL,'n');
+insert into st2 values ('abc', 'abc', 'abc','B'),('xyz','xyz','xyz','C'),(NULL,NULL,NULL,'N');
+select 'char'    as tag; select * from st1 full outer join st2 on st1.k_char = st2.k_char order by st1.k_char, st2.k_char;
+➤ tag[12,-1,0]  𝄀
+char
+select 'varchar' as tag; select * from st1 full outer join st2 on st1.k_vc   = st2.k_vc   order by st1.k_vc, st2.k_vc;
+➤ tag[12,-1,0]  𝄀
+varchar
+select 'text'    as tag; select * from st1 full outer join st2 on st1.k_text = st2.k_text order by st1.k_text, st2.k_text;
+➤ tag[12,-1,0]  𝄀
+text
+drop table if exists cv1;
+drop table if exists cv2;
+create table cv1(k varchar(10));
+create table cv2(k char(10));
+insert into cv1 values ('abc'),('def  '),('  ghi');
+insert into cv2 values ('abc'),('def'),('ghi');
+select 'char_vs_varchar' as tag;
+➤ tag[12,-1,0]  𝄀
+char_vs_varchar
+select * from cv1 full outer join cv2 on cv1.k = cv2.k order by cv1.k, cv2.k;
+➤ k[12,-1,0]  ¦  k[1,10,0]  𝄀
+null  ¦  def  𝄀
+null  ¦  ghi  𝄀
+  ghi  ¦  null  𝄀
+abc  ¦  abc  𝄀
+def    ¦  null
+drop table if exists bn1;
+drop table if exists bn2;
+create table bn1(k_bin binary(4), k_vbin varbinary(20), k_blob blob, v varchar(5));
+create table bn2 like bn1;
+insert into bn1 values (x'01020304', x'AABBCC', x'DEADBEEF', 'a'),(x'0A0B0C0D', x'112233', x'CAFEBABE', 'b');
+insert into bn2 values (x'01020304', x'AABBCC', x'DEADBEEF', 'B'),(x'99887766', x'FFEEDD', x'BAADF00D', 'C');
+select 'binary'    as tag; select hex(bn1.k_bin)  l, bn1.v, hex(bn2.k_bin)  r, bn2.v from bn1 full outer join bn2 on bn1.k_bin  = bn2.k_bin  order by l, r;
+➤ tag[12,-1,0]  𝄀
+binary
+select 'varbinary' as tag; select hex(bn1.k_vbin) l, bn1.v, hex(bn2.k_vbin) r, bn2.v from bn1 full outer join bn2 on bn1.k_vbin = bn2.k_vbin order by l, r;
+➤ tag[12,-1,0]  𝄀
+varbinary
+select 'blob'      as tag; select hex(bn1.k_blob) l, bn1.v, hex(bn2.k_blob) r, bn2.v from bn1 full outer join bn2 on bn1.k_blob = bn2.k_blob order by l, r;
+➤ tag[12,-1,0]  𝄀
+blob
+drop table if exists ts1;
+drop table if exists ts2;
+create table ts1(k_date date, k_dt datetime, k_ts timestamp null, k_tm time, v varchar(5));
+create table ts2 like ts1;
+insert into ts1 values ('2024-01-01','2024-01-01 10:00:00','2024-01-01 10:00:00','10:00:00','a'),
+('2024-02-02','2024-02-02 11:00:00','2024-02-02 11:00:00','11:00:00','b'),
+(NULL,NULL,NULL,NULL,'n');
+insert into ts2 values ('2024-02-02','2024-02-02 11:00:00','2024-02-02 11:00:00','11:00:00','B'),
+('2024-03-03','2024-03-03 12:00:00','2024-03-03 12:00:00','12:00:00','C'),
+(NULL,NULL,NULL,NULL,'N');
+select 'date'      as tag; select * from ts1 full outer join ts2 on ts1.k_date = ts2.k_date order by ts1.k_date, ts2.k_date;
+➤ tag[12,-1,0]  𝄀
+date
+select 'datetime'  as tag; select * from ts1 full outer join ts2 on ts1.k_dt   = ts2.k_dt   order by ts1.k_dt, ts2.k_dt;
+➤ tag[12,-1,0]  𝄀
+datetime
+select 'timestamp' as tag; select * from ts1 full outer join ts2 on ts1.k_ts   = ts2.k_ts   order by ts1.k_ts, ts2.k_ts;
+➤ tag[12,-1,0]  𝄀
+timestamp
+select 'time'      as tag; select * from ts1 full outer join ts2 on ts1.k_tm   = ts2.k_tm   order by ts1.k_tm, ts2.k_tm;
+➤ tag[12,-1,0]  𝄀
+time
+drop table if exists ue1;
+drop table if exists ue2;
+create table ue1(k_uuid uuid, k_enum enum('a','b','c','d'), v varchar(5));
+create table ue2 like ue1;
+insert into ue1 values ('019dd796-0f4b-7e6b-98fc-ee6d17304000','a','r1'),
+('019dd796-0f4b-7e6b-98fc-ee6d17304001','b','r2'),
+(NULL, NULL, 'n');
+insert into ue2 values ('019dd796-0f4b-7e6b-98fc-ee6d17304001','b','R1'),
+('019dd796-0f4b-7e6b-98fc-ee6d17304002','c','R2'),
+(NULL, NULL, 'N');
+select 'uuid' as tag; select * from ue1 full outer join ue2 on ue1.k_uuid = ue2.k_uuid order by ue1.k_uuid, ue2.k_uuid;
+➤ tag[12,-1,0]  𝄀
+uuid
+select 'enum' as tag; select * from ue1 full outer join ue2 on ue1.k_enum = ue2.k_enum order by ue1.k_enum, ue2.k_enum;
+➤ tag[12,-1,0]  𝄀
+enum
+drop table if exists js1;
+drop table if exists js2;
+create table js1(id int, j json);
+create table js2(id int, j json);
+insert into js1 values (1,'{"k":1}'),(2,'{"k":2}'),(3,'{"k":3}');
+insert into js2 values (2,'{"k":2}'),(3,'{"k":33}'),(4,'{"k":4}');
+select 'json_on_id'    as tag; select * from js1 full outer join js2 on js1.id = js2.id order by js1.id, js2.id;
+➤ tag[12,-1,0]  𝄀
+json_on_id
+select 'json_on_value' as tag;
+➤ tag[12,-1,0]  𝄀
+json_on_value
+select js1.id, cast(json_extract(js1.j,'$.k') as char) l,
+js2.id, cast(json_extract(js2.j,'$.k') as char) r
+from js1 full outer join js2
+on cast(json_extract(js1.j,'$.k') as char) = cast(json_extract(js2.j,'$.k') as char)
+order by js1.id, js2.id;
+➤ id[4,32,0]  ¦  l[12,-1,0]  ¦  id[4,32,0]  ¦  r[12,-1,0]  𝄀
+null  ¦  null  ¦  3  ¦  33  𝄀
+null  ¦  null  ¦  4  ¦  4  𝄀
+1  ¦  1  ¦  null  ¦  null  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  null  ¦  null
+drop table if exists vc1;
+drop table if exists vc2;
+create table vc1(id int primary key, e32 vecf32(3), e64 vecf64(3));
+create table vc2(id int primary key, label varchar(5));
+insert into vc1 values (1,'[1,2,3]','[1,2,3]'),(2,'[4,5,6]','[4,5,6]'),(3,'[7,8,9]','[7,8,9]');
+insert into vc2 values (2,'X'),(3,'Y'),(4,'Z');
+select 'vec_payload' as tag;
+➤ tag[12,-1,0]  𝄀
+vec_payload
+select vc1.id, vc1.e32, vc2.id, vc2.label
+from vc1 full outer join vc2 on vc1.id = vc2.id
+order by vc1.id, vc2.id;
+➤ id[4,32,0]  ¦  e32[12,3,0]  ¦  id[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  4  ¦  Z  𝄀
+1  ¦  [1, 2, 3]  ¦  null  ¦  null  𝄀
+2  ¦  [4, 5, 6]  ¦  2  ¦  X  𝄀
+3  ¦  [7, 8, 9]  ¦  3  ¦  Y
+drop table if exists n1;
+drop table if exists n2;
+create table n1(i int, d date, s varchar(5));
+create table n2(i int, d date, s varchar(5));
+insert into n1 values (1,'2024-01-01','x'),(NULL,NULL,NULL),(2,'2024-02-02','y');
+insert into n2 values (1,'2024-01-01','x'),(NULL,NULL,NULL),(3,'2024-03-03','z');
+select 'null_eq'   as tag; select * from n1 full outer join n2 on n1.i=n2.i  and n1.d=n2.d  and n1.s=n2.s  order by n1.i, n2.i;
+➤ tag[12,-1,0]  𝄀
+null_eq
+select 'null_safe' as tag; select * from n1 full outer join n2 on n1.i<=>n2.i and n1.d<=>n2.d and n1.s<=>n2.s order by n1.i, n2.i;
+➤ tag[12,-1,0]  𝄀
+null_safe
+drop database if exists fulljoin_types_db;

@@ -78,12 +78,12 @@ func TestStripSidecarHint(t *testing.T) {
 func TestWrapForGPUExecution(t *testing.T) {
 	// Simple query
 	assert.Equal(t,
-		"SELECT * FROM gpu_execution('SELECT 1')",
+		"CALL gpu_execution('SELECT 1')",
 		wrapForGPUExecution("SELECT 1"))
 
 	// Query with single quotes — they should be doubled
 	assert.Equal(t,
-		"SELECT * FROM gpu_execution('SELECT * FROM tae_scan(''http://localhost:8888/debug/tae/manifest?table=db.t'')')",
+		"CALL gpu_execution('SELECT * FROM tae_scan(''http://localhost:8888/debug/tae/manifest?table=db.t'')')",
 		wrapForGPUExecution("SELECT * FROM tae_scan('http://localhost:8888/debug/tae/manifest?table=db.t')"))
 }
 

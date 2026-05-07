@@ -692,6 +692,7 @@ func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 
 func (zm ZM) Between(lb, ub []byte) bool {
 	oth := BuildZM(zm.GetType(), lb)
+	oth.SetScale(zm.GetScale())
 	if zm.IsString() {
 		oth.updateMinString(lb)
 		oth.updateMaxString(ub)

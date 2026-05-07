@@ -15,6 +15,9 @@
 package top
 
 import (
+	"bytes"
+	"os"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,6 +29,19 @@ import (
 )
 
 var _ vm.Operator = new(Top)
+
+const topSpillThreshold uint64 = 8192 * 2
+
+type rowRef struct {
+	batchIdx int32
+	rowIdx   int32
+}
+
+type spilledBatchInfo struct {
+	offset int64
+	size   int64
+	rows   int32
+}
 
 type container struct {
 	n     int // result vector number
@@ -42,6 +58,19 @@ type container struct {
 	topValueZM              objectio.ZoneMap
 	bat                     *batch.Batch
 	buildBat                *batch.Batch //temp batch, do not need free or reset
+
+	spilling      bool
+	spillFile     *os.File
+	spillBuf      bytes.Buffer
+	spillBatIdx   int32
+	spillIndex    []spilledBatchInfo
+	rowRefs       []rowRef
+	spillCmpPoses []int32 // remapped poses for spill mode (0-based into key-only bat)
+
+	// streaming eval state for spill mode
+	orderedRefs []rowRef     // sorted output order, populated once at eval start
+	evalCursor  int          // next row index to output in orderedRefs
+	spillOutBat *batch.Batch // current chunk output batch, freed on next call
 }
 
 type Top struct {
@@ -131,15 +160,23 @@ func (ctr *container) reset(proc *process.Process) {
 	}
 
 	if ctr.buildBat != nil {
-		//should not clean ctr.buildBat, because ctr.buildBat's value from PreOperator or ctr.executorsForOrderColumn.Eval
-		// PreOperator or ctr.executorsForOrderColumn will clean them
 		ctr.buildBat = nil
 	}
+	if ctr.spillOutBat != nil {
+		ctr.spillOutBat.Clean(proc.Mp())
+		ctr.spillOutBat = nil
+	}
+
+	ctr.cleanupSpill()
 }
 
 func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
+	}
+	if ctr.spillOutBat != nil {
+		ctr.spillOutBat.Clean(proc.Mp())
+		ctr.spillOutBat = nil
 	}
 	for _, executor := range ctr.executorsForOrderColumn {
 		if executor != nil {
@@ -149,9 +186,36 @@ func (ctr *container) free(proc *process.Process) {
 	if ctr.limitExecutor != nil {
 		ctr.limitExecutor.Free()
 	}
+	ctr.cleanupSpill()
+}
+
+func (ctr *container) cleanupSpill() {
+	if ctr.spillFile != nil {
+		name := ctr.spillFile.Name()
+		ctr.spillFile.Close()
+		os.Remove(name)
+		ctr.spillFile = nil
+	}
+	ctr.spillIndex = nil
+	ctr.rowRefs = nil
+	ctr.spillCmpPoses = nil
+	ctr.spilling = false
+	ctr.spillBatIdx = 0
+	ctr.spillBuf.Reset()
+	ctr.orderedRefs = nil
+	ctr.evalCursor = 0
+	ctr.spillOutBat = nil
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {
+	if ctr.spilling {
+		for _, pos := range ctr.spillCmpPoses {
+			if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
+				return r
+			}
+		}
+		return 0
+	}
 	for _, pos := range ctr.poses {
 		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r

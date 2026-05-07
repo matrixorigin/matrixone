@@ -38,13 +38,30 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
-	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
-	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
+	release, err = LoadColumnsWithMeta(ctx, columns, typs, fs, location, dataMeta, cacheVectors, m, policy)
+	return
+}
+
+// LoadColumnsWithMeta loads block columns using object metadata the caller has
+// already fetched.
+func LoadColumnsWithMeta(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	dataMeta objectio.ObjectDataMeta,
+	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (release func(), err error) {
+	name := location.Name().UnsafeString()
+	var vectors fileservice.IOVector
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
@@ -64,7 +81,7 @@ func LoadColumnsData(
 	}
 	for i := range columns {
 		if err = objectio.MustVectorTo(&cacheVectors[i], vectors.Entries[i].CachedData.Bytes()); err != nil {
-			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
+			logutil.Errorf("LoadColumnsWithMeta %s error: %v", location.String(), err.Error())
 			release()
 			release = nil
 			return

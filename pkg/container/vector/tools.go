@@ -52,6 +52,14 @@ func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 	return
 }
 
+// MustFixedColAsSlice returns the vector's backing data reinterpreted as a []T
+// with length n, ignoring the vector's logical length. The caller must ensure
+// n does not exceed the allocated capacity. Used by aggregation executors for
+// bounds-check-eliminated array access via (*[N]T)(slice) conversion.
+func MustFixedColAsSlice[T any](v *Vector, n int) []T {
+	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
+}
+
 func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
 	ToFixedCol(v, &ret)
 	return

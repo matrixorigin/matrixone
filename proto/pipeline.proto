@@ -261,8 +261,9 @@ message LoopJoin {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   plan.Expr non_eq_cond = 4;
-  repeated plan.Type right_types = 5 [(gogoproto.nullable) = false];
-  int32 join_map_tag = 6;
+  repeated plan.Type left_types = 5 [(gogoproto.nullable) = false];
+  repeated plan.Type right_types = 6 [(gogoproto.nullable) = false];
+  int32 join_map_tag = 7;
 }
 
 message SetOp {}

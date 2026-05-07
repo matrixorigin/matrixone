@@ -958,7 +958,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	if expr == nil || expr.GetF() == nil {
 		return 0 //something error
 	}
-	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" || expr.GetF().Func.ObjName == "prefix_between" || expr.GetF().Func.ObjName == "prefix_in_range" {
 		return 0 //make prefix_in and prefix_eq always the first filter
 	}
 	switch expr.Typ.Id {
@@ -1802,6 +1802,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		if leftChild.Stats.Outcnt*factor1 < rightChild.Stats.Outcnt*factor2 {
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		}
+		// FULL OUTER JOIN reuses the right-join code path in hashjoin to emit
+		// unmatched build (right) rows. Compile-time logic (e.g. forceOneCN)
+		// keys off node.IsRightJoin for full outer too.
+		if node.JoinType == plan.Node_OUTER {
+			node.IsRightJoin = true
+		}
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 		//right joins does not support non equal join for now
@@ -2161,7 +2167,7 @@ func getOverlap(s *pb.StatsInfo, colname string) float64 {
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
 	switch expr.GetF().Func.ObjName {
-	case "isnull", "is_null", "prefix_eq", "prefix_in": //special handle
+	case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
 		return sel
 	}
 	overlap := getOverlap(s, colname)

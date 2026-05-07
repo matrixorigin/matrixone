@@ -497,10 +497,17 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: "
-	if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
-		result += "RIGHT " + ndesc.Node.JoinType.String()
-	} else {
-		result += ndesc.Node.JoinType.String()
+	switch ndesc.Node.JoinType {
+	case plan.Node_OUTER:
+		// FULL OUTER JOIN — IsRightJoin here is just an internal build-side flag
+		// (we always use the right side as hash build for FOJ), not a semantic swap.
+		result += "FULL OUTER"
+	default:
+		if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
+			result += "RIGHT " + ndesc.Node.JoinType.String()
+		} else {
+			result += ndesc.Node.JoinType.String()
+		}
 	}
 	if ndesc.Node.JoinType == plan.Node_DEDUP {
 		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"

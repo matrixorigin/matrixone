@@ -28,12 +28,17 @@ import (
 )
 
 const (
-	AggBatchSize     = 8192
-	kAggArgArenaSize = 512 * 1024
-	kAggArgPrefixSz  = 2
-	kAggArgOrdinalSz = 4
-	magicNumber      = uint64(0xdeadbeefbeefdead)
+	AggBatchSize      = 8192
+	aggBatchSizeShift = 13 // log2(AggBatchSize)
+	aggBatchSizeMask  = AggBatchSize - 1
+	kAggArgArenaSize  = 512 * 1024
+	kAggArgPrefixSz   = 2
+	kAggArgOrdinalSz  = 4
+	magicNumber       = uint64(0xdeadbeefbeefdead)
 )
+
+var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
+var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
 
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
@@ -613,9 +618,11 @@ func (ae *aggExec) GetOptResult() SplitResult {
 }
 
 func (ae *aggExec) getXY(u uint64) (int, uint16) {
-	x := u / AggBatchSize
-	y := u % AggBatchSize
-	return int(x), uint16(y)
+	return int(u >> aggBatchSizeShift), uint16(u & aggBatchSizeMask)
+}
+
+func chunkArr[T any](v *vector.Vector) *[AggBatchSize]T {
+	return (*[AggBatchSize]T)(vector.MustFixedColAsSlice[T](v, AggBatchSize))
 }
 
 func (ae *aggExec) GetNumChunks() int {
@@ -632,13 +639,19 @@ func (ae *aggExec) GetNumGroups() int {
 
 func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
-		// special grow 1
 		ae.state = make([]aggState, 1)
 		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo, true); err != nil {
 			panic(err)
 		}
-
 		ae.state[0].grow(ae.mp, 1, true)
+		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		for _, vec := range ae.state[0].vecs {
+			if vec != nil && vec.Capacity() < AggBatchSize {
+				if err := vec.PreExtend(AggBatchSize, ae.mp); err != nil {
+					panic(err)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -758,6 +771,14 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 		ae.state = make([]aggState, 1)
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
+		}
+		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		for _, vec := range ae.state[0].vecs {
+			if vec != nil && vec.Capacity() < AggBatchSize {
+				if err := vec.PreExtend(AggBatchSize, mp); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
