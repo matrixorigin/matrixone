@@ -294,7 +294,7 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	}
 	mu := ctr.memUsed()
 	if mu > ctr.spillThreshold {
-		logutil.Infof("shouldSpillBatches: per-op trigger memUsed=%dMB > threshold=%dMB",
+		logutil.Debugf("shouldSpillBatches: per-op trigger memUsed=%dMB > threshold=%dMB",
 			mu/1024/1024, ctr.spillThreshold/1024/1024)
 		return true
 	}
@@ -304,7 +304,7 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 func processMemoryOverBudget() bool {
 	curr := mpool.GlobalUsedWithPending()
 	cap := mpool.GlobalCap()
-	return curr > cap*3/5
+	return curr > cap*3/4
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).

@@ -474,19 +474,19 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if sz > ctr.spillThreshold {
 		return true
 	}
-	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/5 {
+	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/4 {
 		return true
 	}
 	used := int64(system.MemoryUsed())
 	total := int64(system.MemoryTotal())
-	if used > total/2 {
-		logutil.Infof("shouldReSpill: system trigger used=%dMB > total/2=%dMB, builderRows=%d",
-			used/1024/1024, total/2/1024/1024, builder.InputBatchRowCount)
+	if used > total*3/4 {
+		logutil.Debugf("shouldReSpill: system trigger used=%dMB > total*3/4=%dMB, builderRows=%d",
+			used/1024/1024, total*3/4/1024/1024, builder.InputBatchRowCount)
 		return true
 	}
 	cnt := atomic.AddUint64(&reSpillCheckCounter, 1)
 	if cnt%500 == 0 {
-		logutil.Infof("shouldReSpill check #%d: sz=%dMB, threshold=%dMB, rows=%d, sysMem=%dMB",
+		logutil.Debugf("shouldReSpill check #%d: sz=%dMB, threshold=%dMB, rows=%d, sysMem=%dMB",
 			cnt, sz/1024/1024, ctr.spillThreshold/1024/1024, builder.InputBatchRowCount, used/1024/1024)
 	}
 	return false
@@ -564,9 +564,9 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	if bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
 		used := int64(system.MemoryUsed())
 		total := int64(system.MemoryTotal())
-		if used > total/2 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/5 {
-			logutil.Infof("rebuildHashmap: pre-BuildHashmap re-spill triggered, used=%dMB, total=%dMB, rows=%d, bucket=%s",
-				used/1024/1024, total/2/1024/1024, builder.InputBatchRowCount, bucket.baseName)
+		if used > total*3/4 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/4 {
+			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, used=%dMB, total=%dMB, rows=%d, bucket=%s",
+				used/1024/1024, total*3/4/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.
 			// reSpillBucket will re-partition from builder.Batches.Buf and
 			// the reader loop will immediately hit EOF — no double-counting.

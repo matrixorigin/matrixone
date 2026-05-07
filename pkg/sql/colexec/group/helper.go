@@ -664,10 +664,10 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	if ctr.spillMem < 10000 {
 		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
 	} else {
-		needSpill = memUsed > ctr.spillMem*4/5
+		needSpill = memUsed > ctr.spillMem
 	}
 	if !needSpill {
-		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/5
+		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
 	}
 
 	return needSpill

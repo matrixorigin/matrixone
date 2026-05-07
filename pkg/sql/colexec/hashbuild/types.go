@@ -160,12 +160,13 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
 		totalMem := int64(system.MemoryTotal())
-		mem := totalMem / 128
+		procs := int64(system.GoMaxProcs())
+		if procs < 1 {
+			procs = 1
+		}
+		mem := totalMem / procs / 4
 		if mem < common.MiB*64 {
 			mem = common.MiB * 64
-		}
-		if mem > common.MiB*512 {
-			mem = common.MiB * 512
 		}
 		ctr.spillThreshold = mem
 	} else {

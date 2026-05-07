@@ -188,9 +188,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			}
 			reservation.Commit()
 
-			// Periodic logging
 			if ctr.hashmapBuilder.InputBatchRowCount%500000 == 0 {
-				logutil.Infof("hashbuild build loop: rows=%d, memUsed=%dMB, CanSpill=%v, IsShuffle=%v",
+				logutil.Debugf("hashbuild build loop: rows=%d, memUsed=%dMB, CanSpill=%v, IsShuffle=%v",
 					ctr.hashmapBuilder.InputBatchRowCount, ctr.memUsed()/1024/1024, hashBuild.CanSpill, hashBuild.IsShuffle)
 			}
 			// Post-alloc check
@@ -201,7 +200,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		if shouldSpill {
 			spillMode = true
-			logutil.Infof("hashbuild entering spill: memUsed=%dMB, rowCnt=%d, threshold=%dMB, IsShuffle=%v",
+			logutil.Debugf("hashbuild entering spill: memUsed=%dMB, rowCnt=%d, threshold=%dMB, IsShuffle=%v",
 				ctr.memUsed()/1024/1024, ctr.hashmapBuilder.InputBatchRowCount, ctr.spillThreshold/1024/1024, hashBuild.IsShuffle)
 			// Initialize spill executors once for reuse across all batches
 			if ctr.spillExprExecs == nil {
@@ -270,7 +269,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if err != nil {
 			return err
 		}
-		logutil.Infof("hashbuild BuildHashmap done: rows=%d, batchMem=%dMB, hashmapSize=%dMB, IsShuffle=%v",
+		logutil.Debugf("hashbuild BuildHashmap done: rows=%d, batchMem=%dMB, hashmapSize=%dMB, IsShuffle=%v",
 			ctr.hashmapBuilder.InputBatchRowCount, ctr.hashmapBuilder.Batches.MemSize/1024/1024,
 			ctr.hashmapBuilder.GetSize()/1024/1024, hashBuild.IsShuffle)
 	}
