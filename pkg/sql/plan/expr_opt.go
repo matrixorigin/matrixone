@@ -1519,6 +1519,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		if merged == nil {
 			continue
 		}
+		mergedFn := merged.GetF()
+		if mergedFn != nil && len(mergedFn.Args) >= 3 {
+			if lit := mergedFn.Args[1].GetLit(); lit != nil && lit.Isnull {
+				continue
+			}
+			if lit := mergedFn.Args[2].GetLit(); lit != nil && lit.Isnull {
+				continue
+			}
+		}
 		merged.Selectivity = compositeFilterSel
 
 		filters[lowerIdx] = merged
