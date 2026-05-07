@@ -48,7 +48,7 @@ current_timestamp(3),
 current_timestamp(6),
 date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
 ;
-➤ now(0)[93,64,0]  ¦  now(3)[93,64,0]  ¦  now(6)[93,64,0]  ¦  current_timestamp(0)[93,64,0]  ¦  current_timestamp(3)[93,64,0]  ¦  current_timestamp(6)[93,64,0]  ¦  date_add(2022-07-01 10:20:30.123456, interval(1, microsecond))[12,-1,0]  𝄀
+➤ now(0)[93,64,0]  ¦  now(3)[93,64,0]  ¦  now(6)[93,64,0]  ¦  current_timestamp(0)[93,64,0]  ¦  current_timestamp(3)[93,64,0]  ¦  current_timestamp(6)[93,64,0]  ¦  date_add(2022-07-01 10:20:30.123456, interval 1 microsecond)[12,-1,0]  𝄀
 2026-01-08 14:10:34  ¦  2026-01-08 14:10:33.516000000  ¦  2026-01-08 14:10:33.515799000  ¦  2026-01-08 14:10:34  ¦  2026-01-08 14:10:33.516000000  ¦  2026-01-08 14:10:33.515799000  ¦  2022-07-01 10:20:30.123457
 select
 timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
