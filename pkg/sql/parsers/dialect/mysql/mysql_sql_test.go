@@ -331,7 +331,7 @@ var (
 		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
-		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
+		output: "select sum(a) over (partition by a range between INTERVAL 1 day preceding and INTERVAL 2 day following) from t1",
 	}, {
 		input:  "select rank() over(partition by a range between 1 preceding and current row) from t1",
 		output: "select rank() over (partition by a range between 1 preceding and current row) from t1",
@@ -730,13 +730,13 @@ var (
 			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
 		}, {
 			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL -100000 year)",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
-			output: "select 2007-01-01 + interval(a, day) from t1",
+			output: "select 2007-01-01 + INTERVAL a day from t1",
 		}, {
 			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
 			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
@@ -797,13 +797,13 @@ var (
 			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 		}, {
 			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "insert into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
 		}, {
 			input:  "SELECT sum(a) as 'hello' from t1;",
 			output: "select sum(a) as hello from t1",
@@ -812,7 +812,7 @@ var (
 			output: "select stream from t1",
 		}, {
 			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
+			output: "select DATE_ADD(2017-06-15, INTERVAL -10 month)",
 		}, {
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
@@ -827,13 +827,13 @@ var (
 			output: "select cast(19999999999999999999 as signed)",
 		}, {
 			input:  "select date_sub(now(), interval 1 day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_sub(now(), interval '1' day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_add(now(), interval '1' day) from t1;",
-			output: "select date_add(now(), interval(1, day)) from t1",
+			output: "select date_add(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "SELECT md.datname as `Database` FROM TT md",
 			output: "select md.datname as Database from tt as md",
@@ -879,7 +879,7 @@ var (
 			output: "select extract(year, l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {
@@ -1303,7 +1303,7 @@ var (
 			input: "select sum(distinct s) from tbl where 1",
 		}, {
 			input:  "select u.a, interval 1 second from t",
-			output: "select u.a, interval(1, second) from t",
+			output: "select u.a, INTERVAL 1 second from t",
 		}, {
 			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c) in (select * from t)",

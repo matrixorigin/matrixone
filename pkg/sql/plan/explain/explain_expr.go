@@ -206,7 +206,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 }
 
 func needSpecialHandling(funcExpr *plan.Function) bool {
-	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" || funcExpr.Func.GetObjName() == "prefix_in_range" {
 		return true
 	}
 	if len(funcExpr.Args) > 1 {

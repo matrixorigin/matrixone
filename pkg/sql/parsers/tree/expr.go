@@ -954,8 +954,25 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	funcName := ""
 	if node.FuncName != nil {
-		ctx.WriteString(node.FuncName.Origin())
+		funcName = node.FuncName.Origin()
+	}
+
+	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
+		ctx.WriteString("INTERVAL ")
+		node.Exprs[0].Format(ctx)
+		ctx.WriteByte(' ')
+		if nv, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(nv.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+		return
+	}
+
+	if funcName != "" {
+		ctx.WriteString(funcName)
 	} else {
 		node.Func.Format(ctx)
 	}
