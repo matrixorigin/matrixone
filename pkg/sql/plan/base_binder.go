@@ -2260,8 +2260,8 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 }
 
 func getIntervalExprArgs(ctx context.Context, intervalExpr *Expr) (*Expr, *Expr, error) {
-	if intervalExpr == nil || intervalExpr.GetList() == nil || len(intervalExpr.GetList().List) != 2 {
-		return nil, nil, moerr.NewInvalidInput(ctx, "invalid interval expression")
+	if intervalExpr == nil || intervalExpr.GetList() == nil || len(intervalExpr.GetList().List) < 2 {
+		return nil, nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
 	}
 	return intervalExpr.GetList().List[0], intervalExpr.GetList().List[1], nil
 }
