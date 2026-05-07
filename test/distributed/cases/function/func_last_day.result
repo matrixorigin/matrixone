@@ -33,7 +33,7 @@ LAST_DAY(hire_date)
 2024-04-30
 2024-03-31
 SELECT LAST_DAY(DATE_SUB(hire_date, INTERVAL 1 MONTH)) from employees AS last_day_of_previous_month;
-LAST_DAY(DATE_SUB(hire_date, INTERVAL(1, month)))
+LAST_DAY(DATE_SUB(hire_date, INTERVAL 1 month))
 2024-05-31
 2024-04-30
 2024-03-31
