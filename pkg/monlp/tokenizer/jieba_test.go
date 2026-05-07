@@ -20,7 +20,10 @@ import (
 
 func collectJieba(tknz *JiebaTokenizer, input string) []Token {
 	out := make([]Token, 0, 16)
-	for tk := range tknz.Tokenize([]byte(input)) {
+	for tk, err := range tknz.Tokenize([]byte(input)) {
+		if err != nil {
+			return nil
+		}
 		out = append(out, tk)
 	}
 	return out
@@ -32,7 +35,10 @@ func tokenString(tk Token) string {
 
 func checkJieba(t *testing.T, useHmm bool, input string, want []string) {
 	t.Helper()
-	tknz := NewJiebaTokenizer(useHmm)
+	tknz, err := NewJiebaTokenizer(useHmm)
+	if err != nil {
+		t.Fatalf("NewJiebaTokenizer: %v", err)
+	}
 	defer tknz.Free()
 
 	got := collectJieba(tknz, input)
@@ -83,7 +89,10 @@ func TestJiebaTokenizerLatinAndPunct(t *testing.T) {
 }
 
 func TestJiebaTokenizerEmpty(t *testing.T) {
-	tknz := NewJiebaTokenizer(true)
+	tknz, err := NewJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("NewJiebaTokenizer: %v", err)
+	}
 	defer tknz.Free()
 
 	if got := collectJieba(tknz, ""); len(got) != 0 {
@@ -94,7 +103,10 @@ func TestJiebaTokenizerEmpty(t *testing.T) {
 func TestJiebaTokenizerBytePos(t *testing.T) {
 	// BytePos must point at the start of the token within the original input.
 	input := "我来到北京清华大学"
-	tknz := NewJiebaTokenizer(true)
+	tknz, err := NewJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("NewJiebaTokenizer: %v", err)
+	}
 	defer tknz.Free()
 
 	got := collectJieba(tknz, input)
@@ -124,8 +136,14 @@ func TestJiebaTokenizerImplementsInterface(t *testing.T) {
 }
 
 func TestSharedJiebaTokenizerSeparatesByHmm(t *testing.T) {
-	hmm := SharedJiebaTokenizer(true)
-	noHmm := SharedJiebaTokenizer(false)
+	hmm, err := SharedJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("SharedJiebaTokenizer(true): %v", err)
+	}
+	noHmm, err := SharedJiebaTokenizer(false)
+	if err != nil {
+		t.Fatalf("SharedJiebaTokenizer(false): %v", err)
+	}
 	if hmm == noHmm {
 		t.Fatalf("SharedJiebaTokenizer(true) and (false) returned the same instance")
 	}
@@ -145,13 +163,20 @@ func TestSharedJiebaTokenizerSeparatesByHmm(t *testing.T) {
 	// the singleton for other callers.
 	hmm.Free()
 	noHmm.Free()
-	if got := collectJieba(SharedJiebaTokenizer(true), in); len(got) != len(hmmTokens) {
+	hmm2, err := SharedJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("SharedJiebaTokenizer(true) after Free: %v", err)
+	}
+	if got := collectJieba(hmm2, in); len(got) != len(hmmTokens) {
 		t.Errorf("shared HMM tokenizer broken after Free: got %d, want %d", len(got), len(hmmTokens))
 	}
 }
 
 func TestJiebaTokenizerFreeIdempotent(t *testing.T) {
-	tknz := NewJiebaTokenizer(true)
+	tknz, err := NewJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("NewJiebaTokenizer: %v", err)
+	}
 	tknz.Free()
 	// Second Free must be a no-op.
 	tknz.Free()
@@ -165,7 +190,10 @@ func TestJiebaTokenizerLongLatinTruncated(t *testing.T) {
 	// A 30-char latin word exceeds MAX_TOKEN_SIZE (23). The output token bytes
 	// must be capped at MAX_TOKEN_SIZE.
 	input := "abcdefghijklmnopqrstuvwxyzabcd"
-	tknz := NewJiebaTokenizer(true)
+	tknz, err := NewJiebaTokenizer(true)
+	if err != nil {
+		t.Fatalf("NewJiebaTokenizer: %v", err)
+	}
 	defer tknz.Free()
 
 	got := collectJieba(tknz, input)

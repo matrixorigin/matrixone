@@ -52,7 +52,10 @@ func TestShakespear(tt *testing.T) {
 	var cntRomeo, cntJoliet, bMax, tMax int32
 
 	tknz := NewSimpleTokenizer()
-	for t := range tknz.Tokenize(data) {
+	for t, err := range tknz.Tokenize(data) {
+		if err != nil {
+			tt.Fatalf("Tokenize failed: %v", err)
+		}
 		if t.TokenBytes[0] == 5 && string(t.TokenBytes[1:6]) == "romeo" {
 			cntRomeo++
 		} else if t.TokenBytes[0] == 6 && string(t.TokenBytes[1:7]) == "juliet" {
@@ -85,7 +88,10 @@ func TestHLM(tt *testing.T) {
 	var cntJBY, cntLDY, bMax, tMax int32
 
 	tknz := NewSimpleTokenizer()
-	for t := range tknz.Tokenize(data) {
+	for t, err := range tknz.Tokenize(data) {
+		if err != nil {
+			tt.Fatalf("Tokenize failed: %v", err)
+		}
 		if t.TokenBytes[0] == 9 && string(t.TokenBytes[1:10]) == "贾宝玉" {
 			origString := string(data[t.BytePos : t.BytePos+9])
 			if origString != "贾宝玉" {

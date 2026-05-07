@@ -851,15 +851,21 @@ func GetResultCountFromPattern(ps []*Pattern) int {
 // HMM on the query side, traditional-Chinese bigrams (e.g. 教學, 中華) appear at
 // query time but not in the index, producing queries that can never match.
 func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
-	tok := tokenizer.SharedJiebaTokenizer(false)
+	tok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return nil, err
+	}
 	list := make([]*Pattern, 0, 8)
-	for t := range tok.Tokenize([]byte(pattern)) {
+	for t, err := range tok.Tokenize([]byte(pattern)) {
+		if err != nil {
+			return nil, err
+		}
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
 		list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
 	}
 	if len(list) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string onverted to empty pattern")
+		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string converted to empty pattern")
 	}
 	idx := int32(0)
 	for _, p := range list {
@@ -889,7 +895,10 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	overlaps := make([]tokenizer.Token, 0, 8)
 
-	for t := range tok.Tokenize([]byte(pattern)) {
+	for t, err := range tok.Tokenize([]byte(pattern)) {
+		if err != nil {
+			return nil, err
+		}
 
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
@@ -940,7 +949,7 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 	}
 
 	if len(list) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string onverted to empty pattern")
+		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string converted to empty pattern")
 	}
 
 	// assign index

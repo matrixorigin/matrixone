@@ -179,11 +179,18 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			// Build path uses HMM=false: dictionary-only segmentation
 			// gives stable tokens across runs and avoids HMM-discovered
 			// "new words" that wouldn't match a query-time tokenization.
-			tok = tokenizer.SharedJiebaTokenizer(false)
+			jtok, jerr := tokenizer.SharedJiebaTokenizer(false)
+			if jerr != nil {
+				return jerr
+			}
+			tok = jtok
 		} else {
 			tok = tokenizer.NewSimpleTokenizer()
 		}
-		for t := range tok.Tokenize(content.Bytes()) {
+		for t, err := range tok.Tokenize(content.Bytes()) {
+			if err != nil {
+				return err
+			}
 
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
@@ -214,7 +221,10 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				jslen := t.TokenBytes[0]
 				// tokenize the value
 				tok := tokenizer.NewSimpleTokenizer()
-				for tt := range tok.Tokenize(t.TokenBytes[1 : jslen+1]) {
+				for tt, err := range tok.Tokenize(t.TokenBytes[1 : jslen+1]) {
+					if err != nil {
+						return err
+					}
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
 					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
