@@ -74,6 +74,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -96,6 +97,36 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	})
 
 	return &tableDef, nil
+}
+
+func getViewSecurityTypeFromContext(ctx CompilerContext) string {
+	securityType := ""
+	val, err := ctx.ResolveVariable("view_security_type", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			securityType = s
+		}
+	}
+	securityType = strings.TrimSpace(strings.ToUpper(securityType))
+	if securityType == "INVOKER" {
+		return "INVOKER"
+	}
+	return "DEFINER"
+}
+
+// overrideViewDefSecurityType replaces the SecurityType in the ViewDef's JSON data.
+func overrideViewDefSecurityType(tableDef *plan.TableDef, securityType string) {
+	if tableDef.ViewSql == nil || tableDef.ViewSql.View == "" {
+		return
+	}
+	var viewData ViewData
+	if err := json.Unmarshal([]byte(tableDef.ViewSql.View), &viewData); err != nil {
+		return
+	}
+	viewData.SecurityType = strings.ToUpper(securityType)
+	if data, err := json.Marshal(viewData); err == nil {
+		tableDef.ViewSql.View = string(data)
+	}
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -149,6 +180,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -383,6 +415,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// If the DDL explicitly specifies SQL SECURITY, override the session variable
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
 	}
 
 	createView.TableDef.Cols = tableDef.Cols
@@ -3632,6 +3669,21 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// SecurityType priority: AST explicit > old view inherited > default DEFINER for legacy views
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
+	} else if oldViewDef != nil && oldViewDef.ViewSql != nil {
+		var oldViewData ViewData
+		if e := json.Unmarshal([]byte(oldViewDef.ViewSql.View), &oldViewData); e == nil {
+			if oldViewData.SecurityType != "" {
+				overrideViewDefSecurityType(tableDef, oldViewData.SecurityType)
+			} else {
+				// Legacy views without security_type field are DEFINER by default
+				overrideViewDefSecurityType(tableDef, "DEFINER")
+			}
+		}
 	}
 
 	alterView.TableDef.Cols = tableDef.Cols

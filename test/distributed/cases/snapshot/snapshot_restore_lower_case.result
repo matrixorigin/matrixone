@@ -182,7 +182,7 @@ EmployeeDepartmentView
 Employees
 show create table EmployeeDepartmentView;
 View    Create View    character_set_client    collation_connection
-EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
+EmployeeDepartmentView    create SQL SECURITY DEFINER view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
 restore account acc01 from snapshot sp02_restore_lower to account acc04;
 use test02;
 show tables;
@@ -204,7 +204,7 @@ EmployeeDepartmentView
 Employees
 show create table EmployeeDepartmentView;
 View    Create View    character_set_client    collation_connection
-EmployeeDepartmentView    create view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
+EmployeeDepartmentView    create SQL SECURITY DEFINER view EmployeeDepartmentView as\nselect\ne.FirstName,\ne.LastName,\nd.DepartmentName\nfrom\nEmployees e\ninner join\nDepartments d ON e.DepartmentID = d.DepartmentID;    utf8mb4    utf8mb4_general_ci
 drop account if exists acc01;
 drop account if exists acc02;
 drop account if exists acc04;

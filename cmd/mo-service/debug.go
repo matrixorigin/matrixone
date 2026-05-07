@@ -54,6 +54,8 @@ var (
 	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
 	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
+	blockProfileRate      = flag.Int("block-profile-rate", 5, "enable block profiling with the given rate. 0 means disabled. Recommended: 100 for production, 1 for debugging")
+	mutexProfileFraction  = flag.Int("mutex-profile-fraction", 100, "enable mutex profiling with the given fraction. 0 means disabled. Recommended: 100 for production, 1 for debugging")
 	statusServer          = status.NewServer()
 )
 
@@ -118,11 +120,6 @@ func writeHeapProfile() {
 }
 
 func init() {
-	// Enable block and mutex profiling for continuous profiling via Pyroscope.
-	// Block: record blocking events ≥5ns; Mutex: sample 1 in 100 contention events.
-	runtime.SetBlockProfileRate(5)
-	runtime.SetMutexProfileFraction(100)
-
 	const cssStyles = `
     <style>
     * {
@@ -432,6 +429,14 @@ func saveProfiles() {
 	saveProfile(profile.HEAP)
 	//dump goroutine before stopping services
 	saveProfile(profile.GOROUTINE)
+	//dump block profile if enabled
+	if *blockProfileRate > 0 {
+		saveProfile(profile.BLOCK)
+	}
+	//dump mutex profile if enabled
+	if *mutexProfileFraction > 0 {
+		saveProfile(profile.MUTEX)
+	}
 	// dump malloc profile
 	saveMallocProfile()
 	// dump http connections profile

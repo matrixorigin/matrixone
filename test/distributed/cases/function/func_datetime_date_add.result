@@ -521,4 +521,4 @@ CREATE TABLE `t2` (
 DROP TABLE t2;
 select date_sub(date('0001-01-01'), interval 1 day) is null q_date_sub_underflow;
 ➤ q_date_sub_underflow[12,4,0]  𝄀
-true
+1

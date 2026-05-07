@@ -1,20 +1,20 @@
 select curtime() is not null q1;
 q1
-true
+1
 select current_time()=curtime() q2;
 q2
-true
+1
 select curtime(3) is not null q3;
 q3
-true
+1
 select current_time(6) is not null q4;
 q4
-true
+1
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
 select current_time()=curtime() q from t1;
 q
-true
-true
-true
+1
+1
+1
 drop table t1;

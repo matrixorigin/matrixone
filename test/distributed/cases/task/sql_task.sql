@@ -55,7 +55,7 @@ select sleep(2);
 select count(*) from scheduled_events;
 select count(*) from manual_events;
 
-alter task sql_task_cron set schedule '*/1 * * * * *' timezone 'UTC';
+alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
 execute task sql_task_cron;
 select sleep(1);
 select count(*) from scheduled_events;
