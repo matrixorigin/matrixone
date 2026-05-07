@@ -1,5 +1,3 @@
--- @label:bvt
-
 -- DATE_ADD/DATE_SUB with various INTERVAL units
 SELECT DATE_ADD('2026-05-07', INTERVAL 3 DAY);
 SELECT DATE_ADD('2026-05-07', INTERVAL 3 HOUR);
@@ -62,9 +60,7 @@ select * from t1 where d >= DATE_SUB('2026-05-07', INTERVAL 3 DAY) and d <= DATE
 drop table t1;
 
 -- NL2SQL typical pattern: current week calculation using DAYOFWEEK + modulo
--- "this week" starts from Monday
 SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) as this_week_start;
--- "last week" starts from Monday
 SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY) as last_week_start;
 
 -- Full NL2SQL pattern: this week vs last week with table

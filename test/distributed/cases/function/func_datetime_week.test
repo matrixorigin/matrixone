@@ -1,8 +1,6 @@
--- @label:bvt
-
 -- WEEK function: 1-argument form (uses default_week_format)
 -- NOTE: MO returns 19 (mode=1 behavior) but MySQL returns 18 (mode=0) when default_week_format=0
--- This is a known bug: WEEK(date) ignores @@default_week_format
+-- This is a known bug (#24293): WEEK(date) ignores @@default_week_format
 SELECT week('2026-05-07');
 
 -- WEEK function: 2-argument form with all modes (0-7)
