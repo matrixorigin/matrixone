@@ -100,6 +100,10 @@ func (external *External) Prepare(proc *process.Process) error {
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
+	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
+		param.LoadEmptyNumericAsZero = true
+	}
 
 	// File list check
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
@@ -841,6 +845,8 @@ func checkLineStrict(param *ExternalParam) bool {
 
 const JsonNull = "\\N"
 
+var loadZeroBytes = []byte("0")
+
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 	if nullMap == nil || len(nullMap[attr]) == 0 {
 		return false
@@ -851,6 +857,60 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 		}
 	}
 	return false
+}
+
+func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
+		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero) {
+		return false
+	}
+	switch id {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp *mpool.MPool) error {
+	if asBytes {
+		return vector.AppendBytes(vec, loadZeroBytes, false, mp)
+	}
+	switch id {
+	case types.T_bool:
+		return vector.AppendFixed(vec, false, false, mp)
+	case types.T_int8:
+		return vector.AppendFixed(vec, int8(0), false, mp)
+	case types.T_int16:
+		return vector.AppendFixed(vec, int16(0), false, mp)
+	case types.T_int32:
+		return vector.AppendFixed(vec, int32(0), false, mp)
+	case types.T_int64:
+		return vector.AppendFixed(vec, int64(0), false, mp)
+	case types.T_uint8:
+		return vector.AppendFixed(vec, uint8(0), false, mp)
+	case types.T_uint16:
+		return vector.AppendFixed(vec, uint16(0), false, mp)
+	case types.T_uint32:
+		return vector.AppendFixed(vec, uint32(0), false, mp)
+	case types.T_uint64:
+		return vector.AppendFixed(vec, uint64(0), false, mp)
+	case types.T_float32:
+		return vector.AppendFixed(vec, float32(0), false, mp)
+	case types.T_float64:
+		return vector.AppendFixed(vec, float64(0), false, mp)
+	case types.T_decimal64:
+		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
+	case types.T_decimal128:
+		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
+	}
 }
 
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
@@ -912,9 +972,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
-	isNullOrEmpty := field.IsNull || (getNullFlag(param.Extern.NullMap, colName, field.Val))
-	if trimSpace {
-		isNullOrEmpty = isNullOrEmpty || len(field.Val) == 0
+	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
+	isNullOrEmpty := field.IsNull || mappedNull
+	emptyNumericField := len(field.Val) == 0 && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	if emptyNumericField {
+		field.Val = "0"
+		isNullOrEmpty = false
+	} else if trimSpace && len(field.Val) == 0 && !isNullOrEmpty {
+		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
 		vector.AppendBytes(vec, nil, true, mp)
