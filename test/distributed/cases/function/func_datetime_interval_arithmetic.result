@@ -1,0 +1,148 @@
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 DAY);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, day))[12,-1,0]  𝄀
+2026-05-10
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 HOUR);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, hour))[12,-1,0]  𝄀
+2026-05-07 03:00:00
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 MINUTE);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, minute))[12,-1,0]  𝄀
+2026-05-07 00:03:00
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 SECOND);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, second))[12,-1,0]  𝄀
+2026-05-07 00:00:03
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 MONTH);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, month))[12,-1,0]  𝄀
+2026-08-07
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 YEAR);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, year))[12,-1,0]  𝄀
+2029-05-07
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 WEEK);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, week))[12,-1,0]  𝄀
+2026-05-28
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 QUARTER);
+➤ DATE_ADD(2026-05-07, INTERVAL(3, quarter))[12,-1,0]  𝄀
+2027-02-07
+SELECT DATE_SUB('2026-05-07', INTERVAL 5+1 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(5 + 1, day))[12,-1,0]  𝄀
+2026-05-01
+SELECT DATE_SUB('2026-05-07', INTERVAL 5-1 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(5 - 1, day))[12,-1,0]  𝄀
+2026-05-03
+SELECT DATE_SUB('2026-05-07', INTERVAL 2*3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(2 * 3, day))[12,-1,0]  𝄀
+2026-05-01
+SELECT DATE_SUB('2026-05-07', INTERVAL 10/2 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(10 / 2, day))[12,-1,0]  𝄀
+2026-05-02
+SELECT DATE_SUB('2026-05-07', INTERVAL 10%3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(10 % 3, day))[12,-1,0]  𝄀
+2026-05-06
+SELECT DATE_SUB('2026-05-07', INTERVAL 10 MOD 3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(10 % 3, day))[12,-1,0]  𝄀
+2026-05-06
+SELECT DATE_SUB('2026-05-07', INTERVAL 10 DIV 3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(10 div 3, day))[12,-1,0]  𝄀
+2026-05-04
+SELECT DATE_SUB('2026-05-07', INTERVAL -3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(-3, day))[12,-1,0]  𝄀
+2026-05-10
+SELECT DATE_ADD('2026-05-07', INTERVAL -3 DAY);
+➤ DATE_ADD(2026-05-07, INTERVAL(-3, day))[12,-1,0]  𝄀
+2026-05-04
+SELECT DATE_SUB('2026-05-07', INTERVAL (1+2)%3 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(+(1 + 2) % 3, day))[12,-1,0]  𝄀
+2026-05-07
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(+(DAYOFWEEK(2026-05-07) + 5) % 7, day))[12,-1,0]  𝄀
+2026-05-04
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(+(DAYOFWEEK(2026-05-07) + 5) % 7 + 7, day))[12,-1,0]  𝄀
+2026-04-27
+SELECT DATE_ADD('2026-05-07', INTERVAL (3+4)%5 DAY);
+➤ DATE_ADD(2026-05-07, INTERVAL(+(3 + 4) % 5, day))[12,-1,0]  𝄀
+2026-05-09
+SELECT DATE_ADD('2026-05-07', INTERVAL 3%2+7%3 HOUR);
+➤ DATE_ADD(2026-05-07, INTERVAL(3 % 2 + 7 % 3, hour))[12,-1,0]  𝄀
+2026-05-07 02:00:00
+SELECT DATE_SUB('2026-05-07', INTERVAL 10%3 HOUR);
+➤ DATE_SUB(2026-05-07, INTERVAL(10 % 3, hour))[12,-1,0]  𝄀
+2026-05-06 23:00:00
+SELECT DATE_SUB('2026-05-07', INTERVAL 100%7 MINUTE);
+➤ DATE_SUB(2026-05-07, INTERVAL(100 % 7, minute))[12,-1,0]  𝄀
+2026-05-06 23:58:00
+SELECT '2026-05-07' - INTERVAL 3 DAY;
+➤ 2026-05-07 - INTERVAL(3, day)[12,-1,0]  𝄀
+2026-05-04
+SELECT '2026-05-07' + INTERVAL 3 DAY;
+➤ 2026-05-07 + INTERVAL(3, day)[12,-1,0]  𝄀
+2026-05-10
+SELECT '2026-05-07' - INTERVAL 5+1 DAY;
+➤ 2026-05-07 - INTERVAL(5 + 1, day)[12,-1,0]  𝄀
+2026-05-01
+SELECT '2026-05-07' + INTERVAL 2*3 DAY;
+➤ 2026-05-07 + INTERVAL(2 * 3, day)[12,-1,0]  𝄀
+2026-05-13
+SELECT '2026-05-07' - INTERVAL (1+2)%3 DAY;
+➤ 2026-05-07 - INTERVAL(+(1 + 2) % 3, day)[12,-1,0]  𝄀
+2026-05-07
+SELECT '2026-05-07' + INTERVAL (3+4)%5 DAY;
+➤ 2026-05-07 + INTERVAL(+(3 + 4) % 5, day)[12,-1,0]  𝄀
+2026-05-09
+SELECT DATE_SUB('2026-05-07', INTERVAL ABS(-3) DAY);
+➤ DATE_SUB(2026-05-07, INTERVAL(ABS(-3), day))[12,-1,0]  𝄀
+2026-05-04
+SELECT DATE_ADD('2026-05-07', INTERVAL ABS(-5)%3 DAY);
+➤ DATE_ADD(2026-05-07, INTERVAL(ABS(-5) % 3, day))[12,-1,0]  𝄀
+2026-05-09
+drop table if exists t1;
+create table t1(id int, d date, offset_days int);
+insert into t1 values(1, '2026-05-07', 3),(2, '2026-05-07', 7),(3, '2026-05-07', 14);
+select id, DATE_SUB(d, INTERVAL offset_days DAY) from t1;
+➤ id[4,32,0]  ¦  DATE_SUB(d, INTERVAL(offset_days, day))[91,64,0]  𝄀
+1  ¦  2026-05-04  𝄀
+2  ¦  2026-04-30  𝄀
+3  ¦  2026-04-23
+select id, DATE_ADD(d, INTERVAL offset_days DAY) from t1;
+➤ id[4,32,0]  ¦  DATE_ADD(d, INTERVAL(offset_days, day))[91,64,0]  𝄀
+1  ¦  2026-05-10  𝄀
+2  ¦  2026-05-14  𝄀
+3  ¦  2026-05-21
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-10'),(4, '2026-05-14');
+select * from t1 where d >= DATE_SUB('2026-05-07', INTERVAL 3 DAY) and d <= DATE_ADD('2026-05-07', INTERVAL 3 DAY);
+➤ id[4,32,0]  ¦  d[91,64,0]  𝄀
+1  ¦  2026-05-04  𝄀
+2  ¦  2026-05-07  𝄀
+3  ¦  2026-05-10
+drop table t1;
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) as this_week_start;
+➤ this_week_start[12,-1,0]  𝄀
+2026-05-04
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY) as last_week_start;
+➤ last_week_start[12,-1,0]  𝄀
+2026-04-27
+drop table if exists events;
+create table events(id int, event_date date, val int);
+insert into events values(1,'2026-05-05',10),(2,'2026-05-06',20),(3,'2026-05-07',30);
+insert into events values(4,'2026-04-28',40),(5,'2026-04-29',50),(6,'2026-04-30',60);
+insert into events values(7,'2026-04-21',70);
+select
+sum(case when event_date >= DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) then val else 0 end) as this_week_sum,
+sum(case when event_date >= DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY)
+and event_date < DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) then val else 0 end) as last_week_sum
+from events;
+➤ this_week_sum[-5,64,0]  ¦  last_week_sum[-5,64,0]  𝄀
+60  ¦  150
+drop table events;
+drop table if exists t1;
+create table t1(id int, dt datetime, ts timestamp);
+insert into t1 values(1, '2026-05-07 10:00:00', '2026-05-07 10:00:00');
+select DATE_ADD(dt, INTERVAL 2 HOUR), DATE_SUB(ts, INTERVAL 30 MINUTE) from t1;
+➤ DATE_ADD(dt, INTERVAL(2, hour))[93,64,0]  ¦  DATE_SUB(ts, INTERVAL(30, minute))[93,64,0]  𝄀
+2026-05-07 12:00:00  ¦  2026-05-07 09:30:00
+select DATE_ADD(dt, INTERVAL 10%3 HOUR), DATE_SUB(ts, INTERVAL (2+1)%2 HOUR) from t1;
+➤ DATE_ADD(dt, INTERVAL(10 % 3, hour))[93,64,0]  ¦  DATE_SUB(ts, INTERVAL(+(2 + 1) % 2, hour))[93,64,0]  𝄀
+2026-05-07 11:00:00  ¦  2026-05-07 09:00:00
+drop table t1;

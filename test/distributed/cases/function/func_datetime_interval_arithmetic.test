@@ -1,0 +1,89 @@
+-- @label:bvt
+
+-- DATE_ADD/DATE_SUB with various INTERVAL units
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 DAY);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 HOUR);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 MINUTE);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 SECOND);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 MONTH);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 YEAR);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 WEEK);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3 QUARTER);
+
+-- DATE_SUB with simple arithmetic in INTERVAL
+SELECT DATE_SUB('2026-05-07', INTERVAL 5+1 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 5-1 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 2*3 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 10/2 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 10%3 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 10 MOD 3 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL 10 DIV 3 DAY);
+
+-- Negative interval
+SELECT DATE_SUB('2026-05-07', INTERVAL -3 DAY);
+SELECT DATE_ADD('2026-05-07', INTERVAL -3 DAY);
+
+-- (expr) % N pattern (issue #24235 original case)
+SELECT DATE_SUB('2026-05-07', INTERVAL (1+2)%3 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY);
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY);
+SELECT DATE_ADD('2026-05-07', INTERVAL (3+4)%5 DAY);
+SELECT DATE_ADD('2026-05-07', INTERVAL 3%2+7%3 HOUR);
+
+-- Mixed arithmetic with modulo in different units
+SELECT DATE_SUB('2026-05-07', INTERVAL 10%3 HOUR);
+SELECT DATE_SUB('2026-05-07', INTERVAL 100%7 MINUTE);
+
+-- date +/- INTERVAL syntax
+SELECT '2026-05-07' - INTERVAL 3 DAY;
+SELECT '2026-05-07' + INTERVAL 3 DAY;
+SELECT '2026-05-07' - INTERVAL 5+1 DAY;
+SELECT '2026-05-07' + INTERVAL 2*3 DAY;
+SELECT '2026-05-07' - INTERVAL (1+2)%3 DAY;
+SELECT '2026-05-07' + INTERVAL (3+4)%5 DAY;
+
+-- INTERVAL with function call as operand
+SELECT DATE_SUB('2026-05-07', INTERVAL ABS(-3) DAY);
+SELECT DATE_ADD('2026-05-07', INTERVAL ABS(-5)%3 DAY);
+
+-- INTERVAL with table
+drop table if exists t1;
+create table t1(id int, d date, offset_days int);
+insert into t1 values(1, '2026-05-07', 3),(2, '2026-05-07', 7),(3, '2026-05-07', 14);
+select id, DATE_SUB(d, INTERVAL offset_days DAY) from t1;
+select id, DATE_ADD(d, INTERVAL offset_days DAY) from t1;
+drop table t1;
+
+-- INTERVAL in WHERE clause
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-10'),(4, '2026-05-14');
+select * from t1 where d >= DATE_SUB('2026-05-07', INTERVAL 3 DAY) and d <= DATE_ADD('2026-05-07', INTERVAL 3 DAY);
+drop table t1;
+
+-- NL2SQL typical pattern: current week calculation using DAYOFWEEK + modulo
+-- "this week" starts from Monday
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) as this_week_start;
+-- "last week" starts from Monday
+SELECT DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY) as last_week_start;
+
+-- Full NL2SQL pattern: this week vs last week with table
+drop table if exists events;
+create table events(id int, event_date date, val int);
+insert into events values(1,'2026-05-05',10),(2,'2026-05-06',20),(3,'2026-05-07',30);
+insert into events values(4,'2026-04-28',40),(5,'2026-04-29',50),(6,'2026-04-30',60);
+insert into events values(7,'2026-04-21',70);
+select
+  sum(case when event_date >= DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) then val else 0 end) as this_week_sum,
+  sum(case when event_date >= DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7+7 DAY)
+            and event_date < DATE_SUB('2026-05-07', INTERVAL (DAYOFWEEK('2026-05-07')+5)%7 DAY) then val else 0 end) as last_week_sum
+from events;
+drop table events;
+
+-- INTERVAL with various date types
+drop table if exists t1;
+create table t1(id int, dt datetime, ts timestamp);
+insert into t1 values(1, '2026-05-07 10:00:00', '2026-05-07 10:00:00');
+select DATE_ADD(dt, INTERVAL 2 HOUR), DATE_SUB(ts, INTERVAL 30 MINUTE) from t1;
+select DATE_ADD(dt, INTERVAL 10%3 HOUR), DATE_SUB(ts, INTERVAL (2+1)%2 HOUR) from t1;
+drop table t1;
