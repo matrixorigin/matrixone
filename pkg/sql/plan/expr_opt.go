@@ -1448,6 +1448,84 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
+	// Pre-merge paired range conditions (e.g., a > 3 AND a < 10) into in_range.
+	colLowerBounds := make(map[int32]int) // colPos -> filter index
+	colUpperBounds := make(map[int32]int) // colPos -> filter index
+	for i, expr := range filters {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+		col, isLower := classifyRangeBound(fn)
+		if col == nil {
+			continue
+		}
+		if isLower {
+			colLowerBounds[col.ColPos] = i
+		} else {
+			colUpperBounds[col.ColPos] = i
+		}
+	}
+	for colPos, lowerIdx := range colLowerBounds {
+		upperIdx, hasUpper := colUpperBounds[colPos]
+		if !hasUpper {
+			continue
+		}
+		// Only merge if col2filter points to a range op (not =, between, in, in_range).
+		if existingIdx, ok := col2filter[colPos]; ok {
+			fn := filters[existingIdx].GetF()
+			if fn != nil {
+				switch fn.Func.ObjName {
+				case "=", "between", "in", "in_range":
+					continue
+				}
+			}
+		}
+		lowerFn := filters[lowerIdx].GetF()
+		upperFn := filters[upperIdx].GetF()
+		lowerOp := canonicalRangeOp(lowerFn)
+		upperOp := canonicalRangeOp(upperFn)
+		lowerVal := rangeFilterConstValue(lowerFn)
+		upperVal := rangeFilterConstValue(upperFn)
+		if lowerVal == nil || upperVal == nil {
+			continue
+		}
+
+		colExpr := lowerFn.Args[0]
+		if colExpr.GetCol() == nil {
+			colExpr = lowerFn.Args[1]
+		}
+		colExpr = DeepCopyExpr(colExpr)
+
+		compositeFilterSel := filters[lowerIdx].Selectivity * filters[upperIdx].Selectivity
+
+		var merged *plan.Expr
+		if lowerOp == ">=" && upperOp == "<=" {
+			merged, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "between", []*plan.Expr{
+				colExpr, DeepCopyExpr(lowerVal), DeepCopyExpr(upperVal),
+			})
+		} else {
+			var flag uint8
+			if lowerOp == ">" {
+				flag |= 1
+			}
+			if upperOp == "<" {
+				flag |= 2
+			}
+			merged, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in_range", []*plan.Expr{
+				colExpr, DeepCopyExpr(lowerVal), DeepCopyExpr(upperVal), MakePlan2Uint8ConstExprWithType(flag),
+			})
+		}
+		if merged == nil {
+			continue
+		}
+		merged.Selectivity = compositeFilterSel
+
+		filters[lowerIdx] = merged
+		filters[upperIdx] = makePlan2BoolConstExprWithType(true)
+		col2filter[colPos] = lowerIdx
+	}
+
 	if numParts == 1 {
 		return filters
 	}
