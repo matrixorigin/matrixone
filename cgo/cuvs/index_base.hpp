@@ -490,15 +490,45 @@ public:
         }
 
         // User-filter path: evaluate on CPU, AND in the delete slice on CPU
-        // (when present). Same lock-scope optimization as before — only the
-        // PK-predicate slow path holds mutex_ across eval.
+        // (when present), then upload the already-combined bitmap. Single-pass
+        // fusion via eval_filter_bitmap_cpu_fused — predicate eval, delete
+        // AND-merge, and popcount all happen inside one OpenMP loop, so the
+        // bitmap is touched exactly once instead of three times.
+        //
+        // Lock-scope optimization: filter_host_ is post-build immutable, so
+        // the fused eval only needs mutex_ when at least one predicate
+        // references the synthetic __mo_pk_host_id column (kHostIdColIdx) —
+        // that's the one input that can race with concurrent extend()
+        // reallocating host_ids. Otherwise snapshot the deleted_bitset_ slice
+        // under a brief shared_lock and run the eval unlocked.
         bool needs_host_ids = false;
         for (const auto& p : preds) {
             if (p.col_idx == kHostIdColIdx) { needs_host_ids = true; break; }
         }
 
+        // Materialize the per-shard delete-bitset slice once. start_row is 0
+        // (non-SHARDED) or a multiple of 32 (SHARDED), so start_word is always
+        // an integer (see class-level doc). Tail words past the recorded
+        // delete-bitset get filled with 0xFFFFFFFFu so the AND inside the
+        // fused loop becomes a no-op there.
+        std::vector<uint32_t> del_slice;
+        auto snapshot_del_slice = [&] {
+            if (!has_del || this->deleted_bitset_.empty()) return;
+            const uint64_t nwords     = (shard_sz + 31) / 32;
+            const uint64_t start_word = start_row / 32;
+            const uint64_t del_words  = this->deleted_bitset_.size();
+            del_slice.resize(nwords);
+            for (uint64_t w = 0; w < nwords; ++w) {
+                del_slice[w] = (start_word + w < del_words)
+                                 ? this->deleted_bitset_[start_word + w]
+                                 : 0xFFFFFFFFu;
+            }
+        };
+
         std::vector<uint32_t> host_mask;
+        uint64_t pc = 0;
         if (needs_host_ids) {
+            // Slow path: host_ids may move under us; hold lock across eval.
             std::shared_lock<std::shared_mutex> lock(mutex_);
             HostIdsView hv;
             if (!this->host_ids.empty()) {
@@ -508,46 +538,24 @@ public:
                 hv.count = this->host_ids.size();
                 hv.type  = FilterColType::INT64;
             }
-            host_mask = eval_filter_bitmap_cpu(
-                this->filter_host_, preds, start_row, shard_sz, hv);
-            if (has_del && !this->deleted_bitset_.empty()) {
-                const uint64_t start_word = start_row / 32;
-                const uint64_t del_words  = this->deleted_bitset_.size();
-                for (uint64_t w = 0; w < host_mask.size(); ++w) {
-                    uint32_t del_w = (start_word + w < del_words)
-                                       ? this->deleted_bitset_[start_word + w]
-                                       : 0xFFFFFFFFu;
-                    host_mask[w] &= del_w;
-                }
-            }
+            snapshot_del_slice();
+            host_mask = eval_filter_bitmap_cpu_fused(
+                this->filter_host_, preds, start_row, shard_sz,
+                del_slice.empty() ? nullptr : &del_slice, hv, pc);
         } else {
-            std::vector<uint32_t> del_slice;
+            // Fast path: snapshot delete slice under a brief lock, then run
+            // the fused eval unlocked. eval reads filter_host_ which is
+            // post-build immutable, and host_ids is unused on this path so
+            // a concurrent extend() reallocating it is harmless.
             if (has_del) {
-                const uint64_t nwords     = (shard_sz + 31) / 32;
-                const uint64_t start_word = start_row / 32;
                 std::shared_lock<std::shared_mutex> lock(mutex_);
-                if (!this->deleted_bitset_.empty()) {
-                    const uint64_t del_words = this->deleted_bitset_.size();
-                    del_slice.resize(nwords);
-                    for (uint64_t w = 0; w < nwords; ++w) {
-                        del_slice[w] = (start_word + w < del_words)
-                                         ? this->deleted_bitset_[start_word + w]
-                                         : 0xFFFFFFFFu;
-                    }
-                }
+                snapshot_del_slice();
             }
             HostIdsView hv;  // unused on this path
-            host_mask = eval_filter_bitmap_cpu(
-                this->filter_host_, preds, start_row, shard_sz, hv);
-            if (!del_slice.empty()) {
-                for (uint64_t w = 0; w < host_mask.size(); ++w) {
-                    host_mask[w] &= del_slice[w];
-                }
-            }
+            host_mask = eval_filter_bitmap_cpu_fused(
+                this->filter_host_, preds, start_row, shard_sz,
+                del_slice.empty() ? nullptr : &del_slice, hv, pc);
         }
-
-        uint64_t pc = 0;
-        for (auto w : host_mask) pc += static_cast<uint64_t>(__builtin_popcount(w));
 
         out.mask       = std::move(host_mask);
         out.popcount   = pc;

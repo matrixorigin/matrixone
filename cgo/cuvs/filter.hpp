@@ -895,4 +895,85 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
     return eval_filter_bitmap_cpu(fs, preds, start_row, num_rows, hv);
 }
 
+// -----------------------------------------------------------------------------
+// eval_filter_bitmap_cpu_fused
+//
+// Single-pass variant that merges three operations the IVF-PQ filtered path
+// used to do back-to-back: predicate eval, AND-merge with the delete-bitset
+// slice, and popcount of the final mask. Each per-word iteration writes once,
+// and OpenMP `reduction(+:total_pc)` accumulates the popcount in registers
+// without re-reading the mask.
+//
+// `del_slice` may be nullptr (no deletes). When non-null it must already be
+// the right size (`(num_rows + 31) / 32`) and aligned to start_row's word —
+// the index_base_t caller snapshots it from `deleted_bitset_` under the
+// shared_lock before calling.
+//
+// `out_popcount` is required (non-null). Pass nullptr to the legacy
+// eval_filter_bitmap_cpu if you don't need popcount or the AND-merge.
+// -----------------------------------------------------------------------------
+
+inline std::vector<uint32_t>
+eval_filter_bitmap_cpu_fused(const FilterStore& fs,
+                             const std::vector<PredOp>& preds,
+                             uint64_t start_row,
+                             uint64_t num_rows,
+                             const std::vector<uint32_t>* del_slice,
+                             HostIdsView hv,
+                             uint64_t& out_popcount) {
+    const uint64_t nwords = (num_rows + 31) / 32;
+    std::vector<uint32_t> mask(nwords, 0);
+    out_popcount = 0;
+    if (nwords == 0) return mask;
+
+    const bool has_del = (del_slice != nullptr && !del_slice->empty());
+
+    // Empty preds: all-ones with tail masked. AND-merge deletes if present,
+    // popcount the result. Matches the original eval_filter_bitmap_cpu shape.
+    if (preds.empty()) {
+        std::fill(mask.begin(), mask.end(), 0xFFFFFFFFu);
+        const uint32_t tail_bits = static_cast<uint32_t>(num_rows & 31);
+        if (tail_bits) mask.back() = (1u << tail_bits) - 1u;
+        if (has_del) {
+            for (uint64_t w = 0; w < nwords; ++w) mask[w] &= (*del_slice)[w];
+        }
+        uint64_t pc = 0;
+        for (auto w : mask) pc += static_cast<uint64_t>(__builtin_popcount(w));
+        out_popcount = pc;
+        return mask;
+    }
+
+    const uint64_t full_words = num_rows / 32;
+    uint64_t total_pc = 0;
+    #pragma omp parallel for schedule(static) reduction(+:total_pc)
+    for (int64_t w = 0; w < static_cast<int64_t>(full_words); ++w) {
+        uint64_t base = static_cast<uint64_t>(w) * 32;
+        uint32_t bits = 0xFFFFFFFFu;
+        for (const auto& p : preds) {
+            bits &= detail::eval_pred_word(fs, p, start_row + base, 32, hv);
+        }
+        if (has_del) bits &= (*del_slice)[w];
+        mask[w] = bits;
+        total_pc += static_cast<uint64_t>(__builtin_popcount(bits));
+    }
+
+    // Tail word — single iteration so no need for OpenMP. Each predicate's
+    // mask zeros bits >= rows_in_word, so starting from all-ones AND keeps
+    // tail bits zero.
+    if (full_words < nwords) {
+        uint64_t base = full_words * 32;
+        uint32_t tail = static_cast<uint32_t>(num_rows - base);
+        uint32_t bits = 0xFFFFFFFFu;
+        for (const auto& p : preds) {
+            bits &= detail::eval_pred_word(fs, p, start_row + base, tail, hv);
+        }
+        if (has_del) bits &= (*del_slice)[full_words];
+        mask[full_words] = bits;
+        total_pc += static_cast<uint64_t>(__builtin_popcount(bits));
+    }
+
+    out_popcount = total_pc;
+    return mask;
+}
+
 }  // namespace matrixone
