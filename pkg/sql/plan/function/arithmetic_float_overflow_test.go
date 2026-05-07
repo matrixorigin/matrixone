@@ -182,6 +182,27 @@ func TestArrayArithmeticInfScanRejected(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestArrayArithmeticNaNRejected asserts NaN results from array arithmetic
+// surface as errors instead of being silently stored. Divide 0 by 0
+// yields NaN (moarray.Divide tolerates zero divisors element-wise),
+// and we also exercise the plus/minus/multi NaN paths via Inf-minus-Inf
+// and Inf*0 constructions that moarray.* passes through.
+func TestArrayArithmeticNaNRejected(t *testing.T) {
+	// 0/0 => NaN
+	zero := types.ArrayToBytes[float32]([]float32{0})
+	_, err := divFnArray[float32](zero, zero)
+	require.Error(t, err, "array divide 0/0 must be rejected as NaN")
+
+	// Inf - Inf => NaN via the minusFn post-scan.
+	inf32 := types.ArrayToBytes[float32]([]float32{float32(math.Inf(1))})
+	_, err = minusFnArray[float32](inf32, inf32)
+	require.Error(t, err, "array Inf-Inf must be rejected as NaN or Inf")
+
+	// 0 * Inf => NaN for multiply.
+	_, err = multiFnArray[float32](zero, inf32)
+	require.Error(t, err, "array 0*Inf must be rejected as NaN or Inf")
+}
+
 func TestExpOverflowReturnsError(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := tcTemp{

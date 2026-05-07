@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -416,5 +417,40 @@ func TestEscapeForDoubleQuotedLiteralRoundTrip(t *testing.T) {
 		numVal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
 		require.Truef(t, ok, "expected NumVal for %q, got %T", in, clause.Exprs[0].Expr)
 		require.Equalf(t, in, numVal.String(), "round-trip mismatch for %q", in)
+	}
+}
+
+// TestShowCreateWrapperEscapesObjectName guards the first "%s" slot in
+// the SHOW CREATE DATABASE/TABLE/VIEW wrapper templates. The object name
+// is user-controlled (CREATE TABLE `a\"b` is legal) and previously
+// flowed into `SELECT "%s" AS ...` verbatim, breaking the outer literal.
+// Verify the escape helper neutralizes both " and \.
+func TestShowCreateWrapperEscapesObjectName(t *testing.T) {
+	cases := []string{
+		`plain`,
+		`with"quote`,
+		`with\backslash`,
+		`trail\`,
+		`mix\"both`,
+	}
+	for _, name := range cases {
+		// Reproduce the format string used in buildShowCreateTable
+		// (same shape as Database/View wrappers for this check).
+		tmpl := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
+		sql := fmt.Sprintf(tmpl,
+			escapeForDoubleQuotedLiteral(name),
+			escapeForDoubleQuotedLiteral("CREATE TABLE `t` (...)"))
+
+		toks, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoErrorf(t, err, "wrapper must parse for object name %q: %s", name, sql)
+		require.Len(t, toks, 1)
+		sel, ok := toks[0].(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 2)
+		numVal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.Truef(t, ok, "expected NumVal for name=%q, got %T", name, clause.Exprs[0].Expr)
+		require.Equalf(t, name, numVal.String(), "round-trip mismatch for name %q", name)
 	}
 }

@@ -2779,6 +2779,51 @@ func Test_strToArray_DimensionCheck(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc5.info, info))
 }
 
+// TestBlobToArray_UnsizedBypassDim checks that blobToArray accepts any
+// dimension when the target ARRAY<T> is unsized (toType.Width ==
+// MaxArrayDimension), matching strToArray's behavior.
+func TestBlobToArray_UnsizedBypassDim(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Encode a 5-element float32 array as blob bytes; target is
+	// unsized ARRAY<FLOAT> — should NOT error on dimension.
+	arr := []float32{1, 2, 3, 4, 5}
+	blob := types.ArrayToBytes[float32](arr)
+
+	rs := vector.NewFunctionResultWrapper(types.T_array_float32.ToType(), proc.Mp())
+	defer rs.Free()
+	require.NoError(t, rs.PreExtendAndReset(1))
+
+	src := vector.NewVec(types.T_blob.ToType())
+	require.NoError(t, vector.AppendBytes(src, blob, false, proc.Mp()))
+	dst := vector.NewVec(types.T_array_float32.ToType())
+
+	require.NoError(t, NewCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+
+	got := vector.MustArrayCol[float32](rs.GetResultVector())
+	require.Equal(t, [][]float32{arr}, got)
+}
+
+// TestBlobToArray_SizedDimMismatch verifies the existing sized path
+// still rejects mismatched dimensions.
+func TestBlobToArray_SizedDimMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	arr := []float32{1, 2, 3, 4, 5}
+	blob := types.ArrayToBytes[float32](arr)
+
+	rs := vector.NewFunctionResultWrapper(types.New(types.T_array_float32, 3, 0), proc.Mp())
+	defer rs.Free()
+	require.NoError(t, rs.PreExtendAndReset(1))
+
+	src := vector.NewVec(types.T_blob.ToType())
+	require.NoError(t, vector.AppendBytes(src, blob, false, proc.Mp()))
+	dst := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+
+	err := NewCast([]*vector.Vector{src, dst}, rs, proc, 1, nil)
+	require.Error(t, err)
+}
+
 func TestCastJsonLargeIntegerPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

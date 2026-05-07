@@ -5523,7 +5523,9 @@ func blobToArray[T types.RealNumbers](
 			}
 		} else {
 			arr := types.BytesToArray[T](v)
-			if int(toType.Width) != len(arr) {
+			// bypass the dimension check if width is max dimension —
+			// mirrors strToArray for unsized ARRAY<T> targets.
+			if int(toType.Width) != types.MaxArrayDimension && int(toType.Width) != len(arr) {
 				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
 			}
 

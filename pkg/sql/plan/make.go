@@ -707,9 +707,21 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 		expr = makePlan2Uint64ConstExprWithType(bits)
 		expr.Typ = targetType
 		return expr, nil
+	case *plan.Literal_Fval:
+		return funcCastFloatLiteralForSetType(ctx, float64(value.Fval), targetType)
+	case *plan.Literal_Dval:
+		return funcCastFloatLiteralForSetType(ctx, value.Dval, targetType)
+	case *plan.Literal_Decimal64Val:
+		return funcCastDecimal64LiteralForSetType(ctx, value.Decimal64Val, expr.Typ.Scale, targetType)
+	case *plan.Literal_Decimal128Val:
+		return funcCastDecimal128LiteralForSetType(ctx, value.Decimal128Val, expr.Typ.Scale, targetType)
 	}
 
-	return expr, nil
+	// Any literal shape we do not recognise (e.g. bytes, date/time, array)
+	// cannot be safely coerced to a SET member — reject instead of
+	// silently passing through, which would otherwise bypass both
+	// member-name lookup and numeric-bits validation.
+	return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
 }
 
 func funcCastSignedLiteralForSetType(ctx context.Context, value int64, targetType Type) (*Expr, error) {
@@ -723,6 +735,140 @@ func funcCastSignedLiteralForSetType(ctx context.Context, value int64, targetTyp
 	expr := makePlan2Uint64ConstExprWithType(bits)
 	expr.Typ = targetType
 	return expr, nil
+}
+
+// funcCastFloatLiteralForSetType rejects non-integer floats (e.g. 1.5, 1e-1)
+// because SET values are bitsets and only make sense as whole non-negative
+// integers. NaN/Inf are also rejected. A clean integer float is re-dispatched
+// through the signed-literal path so it goes through ParseSetValue and fails
+// if the bits reference a non-existent member.
+func funcCastFloatLiteralForSetType(ctx context.Context, value float64, targetType Type) (*Expr, error) {
+	if value != value { // NaN check without importing math
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
+	}
+	if value < 0 || value > float64(^uint64(0)) {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
+	}
+	if value != float64(int64(value)) {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
+	}
+	return funcCastSignedLiteralForSetType(ctx, int64(value), targetType)
+}
+
+// funcCastDecimal64LiteralForSetType accepts a decimal64 literal only when
+// its fractional digits are all zero (so it is a whole number) and the
+// integer bits reference an existing SET member.
+func funcCastDecimal64LiteralForSetType(ctx context.Context, v *plan.Decimal64, scale int32, targetType Type) (*Expr, error) {
+	if v == nil {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
+	}
+	d64 := types.Decimal64(uint64(v.A))
+	intPart, err := decimal64ToIntegerBitsForSet(d64, scale)
+	if err != nil {
+		return nil, err
+	}
+	return funcCastSignedLiteralForSetType(ctx, intPart, targetType)
+}
+
+// funcCastDecimal128LiteralForSetType mirrors the decimal64 path.
+func funcCastDecimal128LiteralForSetType(ctx context.Context, v *plan.Decimal128, scale int32, targetType Type) (*Expr, error) {
+	if v == nil {
+		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for SET column")
+	}
+	d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
+	intPart, err := decimal128ToIntegerBitsForSet(d128, scale)
+	if err != nil {
+		return nil, err
+	}
+	return funcCastSignedLiteralForSetType(ctx, intPart, targetType)
+}
+
+// decimal64ToIntegerBitsForSet truncates scale and rejects values with any
+// fractional component or that overflow int64. Returns the signed integer
+// representation so callers can reuse the signed path (which checks sign
+// and member existence).
+func decimal64ToIntegerBitsForSet(v types.Decimal64, scale int32) (int64, error) {
+	if scale > 0 {
+		pow := decimal64Pow10(scale)
+		if pow == 0 {
+			return 0, moerr.NewInvalidInputNoCtx("invalid default value for SET column")
+		}
+		d := int64(v)
+		if d%int64(pow) != 0 {
+			return 0, moerr.NewInvalidInputNoCtx("invalid default value for SET column")
+		}
+		return d / int64(pow), nil
+	}
+	return int64(v), nil
+}
+
+func decimal128ToIntegerBitsForSet(v types.Decimal128, scale int32) (int64, error) {
+	// Collapse to int64 via string round-trip so we reject anything that
+	// overflows or has a fractional component in one shot.
+	s := v.Format(scale)
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		for _, c := range s[dot+1:] {
+			if c != '0' {
+				return 0, moerr.NewInvalidInputNoCtx("invalid default value for SET column")
+			}
+		}
+		s = s[:dot]
+	}
+	n, ok := parseInt64Strict(s)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("invalid default value for SET column")
+	}
+	return n, nil
+}
+
+func decimal64Pow10(scale int32) uint64 {
+	if scale < 0 || scale > 18 {
+		return 0
+	}
+	r := uint64(1)
+	for i := int32(0); i < scale; i++ {
+		r *= 10
+	}
+	return r
+}
+
+func parseInt64Strict(s string) (int64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	negative := false
+	i := 0
+	if s[0] == '-' {
+		negative = true
+		i = 1
+	} else if s[0] == '+' {
+		i = 1
+	}
+	if i == len(s) {
+		return 0, false
+	}
+	var v uint64
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		next := v*10 + uint64(c-'0')
+		if next < v {
+			return 0, false
+		}
+		v = next
+	}
+	if negative {
+		if v > uint64(1)<<63 {
+			return 0, false
+		}
+		return -int64(v), true
+	}
+	if v > uint64(1)<<63-1 {
+		return 0, false
+	}
+	return int64(v), true
 }
 
 // if typ is decimal128 and decimal64 without scalar and width

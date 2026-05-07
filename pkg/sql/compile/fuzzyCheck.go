@@ -64,6 +64,17 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
 		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+		// displayAttr was initialized above to the internal composite PK
+		// column (__mo_cpkey_col) which must never leak to users. Build
+		// a human-readable "(col1,col2,...)" using the declared member
+		// names so DuplicateEntry errors show the user-visible key.
+		names := make([]string, 0, len(n.TableDef.Pkey.Names))
+		for _, name := range n.TableDef.Pkey.Names {
+			names = append(names, catalog.ResolveAlias(name))
+		}
+		if len(names) > 0 {
+			f.displayAttr = "(" + strings.Join(names, ",") + ")"
+		}
 	}
 
 	// for the case like create unique index for existed table,

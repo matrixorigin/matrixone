@@ -819,6 +819,22 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
+// arrayFloatResultCheck rejects Inf and NaN elements so array arithmetic
+// cannot silently propagate them as results. Callers rely on range/NaN
+// errors surfacing instead of being encoded into stored vectors.
+func arrayFloatResultCheck[T types.RealNumbers](r []T) error {
+	for _, elem := range r {
+		f := float64(elem)
+		if math.IsInf(f, 0) {
+			return moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
+		}
+		if math.IsNaN(f) {
+			return moerr.NewInvalidInputNoCtx("FLOAT/DOUBLE array value is NaN")
+		}
+	}
+	return nil
+}
+
 func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	_v1 := types.BytesToArray[T](v1)
 	_v2 := types.BytesToArray[T](v2)
@@ -826,10 +842,8 @@ func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, elem := range r {
-		if math.IsInf(float64(elem), 0) {
-			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
-		}
+	if err := arrayFloatResultCheck(r); err != nil {
+		return nil, err
 	}
 	return types.ArrayToBytes[T](r), nil
 }
@@ -841,10 +855,8 @@ func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, elem := range r {
-		if math.IsInf(float64(elem), 0) {
-			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
-		}
+	if err := arrayFloatResultCheck(r); err != nil {
+		return nil, err
 	}
 	return types.ArrayToBytes[T](r), nil
 }
@@ -856,10 +868,8 @@ func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, elem := range r {
-		if math.IsInf(float64(elem), 0) {
-			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
-		}
+	if err := arrayFloatResultCheck(r); err != nil {
+		return nil, err
 	}
 	return types.ArrayToBytes[T](r), nil
 }
@@ -871,10 +881,8 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, elem := range r {
-		if math.IsInf(float64(elem), 0) {
-			return nil, moerr.NewOutOfRangeNoCtx("float", "FLOAT/DOUBLE array value is out of range")
-		}
+	if err := arrayFloatResultCheck(r); err != nil {
+		return nil, err
 	}
 	return types.ArrayToBytes[T](r), nil
 }

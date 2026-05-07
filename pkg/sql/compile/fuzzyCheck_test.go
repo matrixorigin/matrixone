@@ -141,6 +141,13 @@ func TestNewFuzzyCheckCompoundKeyPath(t *testing.T) {
 	require.Len(t, f.compoundCols, 2)
 	require.Equal(t, "a", f.compoundCols[0].Name)
 	require.Equal(t, "b", f.compoundCols[1].Name)
+	// Real composite PK (not a hidden unique index): displayAttr must
+	// surface the user-declared column list, not the internal
+	// __mo_cpkey_col placeholder — DuplicateEntry runs through
+	// firstlyCheck/backgroundSQLCheck which use displayAttr verbatim.
+	require.NotEqual(t, catalog.CPrimaryKeyColName, f.displayAttr,
+		"compound PK must not leak __mo_cpkey_col into duplicate-entry errors")
+	require.Equal(t, "(a,b)", f.displayAttr)
 }
 
 // TestNewFuzzyCheckHiddenOnlyPath covers the "ALTER TABLE add unique index on

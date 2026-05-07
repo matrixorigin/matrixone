@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -363,6 +364,116 @@ func TestFuncCastForSetTypeCoversAllLiteralShapes(t *testing.T) {
 	// out-of-range value bubbles up an error
 	_, err = funcCastForSetType(context.Background(), makePlan2Uint64ConstExprWithType(16), setType)
 	require.Error(t, err)
+}
+
+// TestFuncCastForSetType_FloatLiteral covers folded float literals (e.g.
+// 1e0, 1.0, 1.5). Integer-valued floats must coerce like the signed
+// path; fractional floats must be rejected — otherwise SET DEFAULT /
+// ON UPDATE silently stores a garbage literal.
+func TestFuncCastForSetType_FloatLiteral(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
+
+	// 1e0 (makePlan2Float32ConstExpr path) == 1.0 — bits 0b001 valid.
+	f32ok := &plan.Expr{Typ: setType, Expr: makePlan2Float32ConstExpr(1.0)}
+	out, err := funcCastForSetType(context.Background(), f32ok, setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), out.GetLit().GetU64Val())
+
+	// 3.0 (dval path) — bits 0b011 valid.
+	f64ok := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(3.0)}
+	out, err = funcCastForSetType(context.Background(), f64ok, setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), out.GetLit().GetU64Val())
+
+	// 1.5 — fractional must be rejected, not silently truncated.
+	f64frac := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(1.5)}
+	_, err = funcCastForSetType(context.Background(), f64frac, setType)
+	require.Error(t, err, "fractional float default must be rejected for SET")
+
+	// Negative float — invalid for a bitset.
+	f64neg := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(-1.0)}
+	_, err = funcCastForSetType(context.Background(), f64neg, setType)
+	require.Error(t, err)
+
+	// NaN must be rejected.
+	nan := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(math.NaN())}
+	_, err = funcCastForSetType(context.Background(), nan, setType)
+	require.Error(t, err)
+
+	// +Inf must be rejected.
+	inf := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(math.Inf(1))}
+	_, err = funcCastForSetType(context.Background(), inf, setType)
+	require.Error(t, err)
+
+	// 16 (bits referencing non-existent 4th member) must be rejected.
+	f64bad := &plan.Expr{Typ: setType, Expr: makePlan2Float64ConstExpr(16.0)}
+	_, err = funcCastForSetType(context.Background(), f64bad, setType)
+	require.Error(t, err)
+}
+
+// TestFuncCastForSetType_DecimalLiteral verifies decimal literals (1,
+// 1.5, 1.0) are handled like floats: integer-valued accepted, fractional
+// rejected.
+func TestFuncCastForSetType_DecimalLiteral(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
+
+	// decimal64 "3" at scale 0 — bits 0b011.
+	d64ok := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 0},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 3}},
+		}},
+	}
+	out, err := funcCastForSetType(context.Background(), d64ok, setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), out.GetLit().GetU64Val())
+
+	// decimal64 "1.5" at scale 1 (raw = 15, pow10(1)=10) — must reject.
+	d64frac := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 1},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 15}},
+		}},
+	}
+	_, err = funcCastForSetType(context.Background(), d64frac, setType)
+	require.Error(t, err, "fractional decimal64 must be rejected for SET")
+
+	// decimal128 "1.00" at scale 2 — equals 1, must accept.
+	d128ok := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal128), Scale: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 100, B: 0}},
+		}},
+	}
+	out, err = funcCastForSetType(context.Background(), d128ok, setType)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), out.GetLit().GetU64Val())
+
+	// decimal128 "1.50" at scale 2 — fractional, must reject.
+	d128frac := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal128), Scale: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 150, B: 0}},
+		}},
+	}
+	_, err = funcCastForSetType(context.Background(), d128frac, setType)
+	require.Error(t, err, "fractional decimal128 must be rejected for SET")
+}
+
+// TestFuncCastForSetType_UnsupportedLiteral: any literal shape we do
+// not know how to interpret as a SET bitset (bytes, boolean…) must be
+// rejected rather than silently transiting as-is.
+func TestFuncCastForSetType_UnsupportedLiteral(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write"}
+
+	boolLit := &plan.Expr{
+		Typ: setType,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: true},
+		}},
+	}
+	_, err := funcCastForSetType(context.Background(), boolLit, setType)
+	require.Error(t, err, "boolean literal must not be silently accepted for SET")
 }
 
 // Exercise the SET error branches in buildDefaultExpr / buildOnUpdate that

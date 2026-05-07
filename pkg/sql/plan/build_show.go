@@ -93,7 +93,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 
 	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
-	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
+	sqlStr = fmt.Sprintf(sqlStr, escapeForDoubleQuotedLiteral(name), escapeForDoubleQuotedLiteral(createSql))
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
@@ -156,7 +156,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, escapeForDoubleQuotedLiteral(ddlStr))
+	sql = fmt.Sprintf(sql, escapeForDoubleQuotedLiteral(tblName), escapeForDoubleQuotedLiteral(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -214,7 +214,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
 		}
 	}
-	sqlStr = fmt.Sprintf(sqlStr, tblName, escapeForDoubleQuotedLiteral(stmtStr))
+	sqlStr = fmt.Sprintf(sqlStr, escapeForDoubleQuotedLiteral(tblName), escapeForDoubleQuotedLiteral(stmtStr))
 
 	// logutil.Info(sqlStr)
 
