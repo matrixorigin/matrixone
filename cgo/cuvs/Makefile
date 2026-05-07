@@ -28,7 +28,13 @@ INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PR
 # -fopenmp is forwarded to the host compiler via -Xcompiler so OpenMP pragmas
 # in filter.hpp's eval_filter_bitmap_cpu compile and parallelise instead of
 # being dropped with a -Wunknown-pragmas warning.
-NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
+# -march=native lets the host compiler auto-vectorize the cmp loops in
+# filter.hpp's eval_pred_word_typed using AVX2 (Zen 3 / Skylake+); without it
+# the inner per-row cmp + sete + shl-eax,cl + or stays scalar. The flag pins
+# the binary to the build host's ISA tier — swap for an explicit tier
+# (e.g. -mavx2 -mbmi2 -mfma or -march=znver3 / -march=haswell) when building
+# for a heterogeneous deployment.
+NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=native" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
     -gencode arch=compute_86,code=sm_86 \
