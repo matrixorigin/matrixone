@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -34,7 +35,7 @@ type MySQLParser struct {
 }
 
 func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
-	sql = normalizeIntervalParenthesizedModulo(sql)
+	sql = normalizeIntervalParenthesizedOperand(sql)
 	p.scanner.setSql(sql)
 	p.lexer.setScanner(&p.scanner, lower)
 
@@ -118,7 +119,7 @@ type Lexer struct {
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
-	sql = normalizeIntervalParenthesizedModulo(sql)
+	sql = normalizeIntervalParenthesizedOperand(sql)
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
@@ -126,9 +127,10 @@ func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	}
 }
 
-// INTERVAL +(expr) % n uses the existing expression grammar, while INTERVAL (expr) % n
-// is reduced before the trailing time unit. Normalize only that narrow shape.
-func normalizeIntervalParenthesizedModulo(sql string) string {
+// Normalize numeric INTERVAL (expr) operands to INTERVAL +(expr) so the existing
+// unary-plus path handles both complete parenthesized operands and continued
+// arithmetic such as INTERVAL (expr) % n.
+func normalizeIntervalParenthesizedOperand(sql string) string {
 	var out *strings.Builder
 	for i := 0; i < len(sql); {
 		if next := skipSQLLiteralOrComment(sql, i); next > i {
@@ -162,8 +164,7 @@ func normalizeIntervalParenthesizedModulo(sql string) string {
 			i = open
 			continue
 		}
-		modulo := skipSpacesAndComments(sql, close+1)
-		if modulo >= len(sql) || sql[modulo] != '%' {
+		if !shouldNormalizeIntervalParenthesizedOperand(sql, open, close) {
 			if out != nil {
 				out.WriteString(sql[i:open])
 			}
@@ -184,6 +185,37 @@ func normalizeIntervalParenthesizedModulo(sql string) string {
 		return sql
 	}
 	return out.String()
+}
+
+func shouldNormalizeIntervalParenthesizedOperand(sql string, open, close int) bool {
+	exprStart := skipSpacesAndComments(sql, open+1)
+	if exprStart >= close {
+		return false
+	}
+
+	switch sql[exprStart] {
+	case '\'', '"':
+		return false
+	}
+
+	next := skipSpacesAndComments(sql, close+1)
+	if next >= len(sql) {
+		return false
+	}
+	switch sql[next] {
+	case '+', '-', '*', '/', '%':
+		return true
+	}
+
+	unitEnd := next
+	for unitEnd < len(sql) && isIdentChar(sql[unitEnd]) {
+		unitEnd++
+	}
+	if unitEnd == next {
+		return false
+	}
+	_, err := types.IntervalTypeOf(sql[next:unitEnd])
+	return err == nil
 }
 
 func isKeywordAt(sql string, pos int, keyword string) bool {

@@ -2151,8 +2151,10 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	firstExpr, secondExpr, err := getIntervalExprArgs(ctx, intervalExpr)
+	if err != nil {
+		return nil, err
+	}
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
@@ -2257,9 +2259,18 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 	return resetIntervalFunctionArgs(ctx, intervalExpr)
 }
 
+func getIntervalExprArgs(ctx context.Context, intervalExpr *Expr) (*Expr, *Expr, error) {
+	if intervalExpr == nil || intervalExpr.GetList() == nil || len(intervalExpr.GetList().List) != 2 {
+		return nil, nil, moerr.NewInvalidInput(ctx, "invalid interval expression")
+	}
+	return intervalExpr.GetList().List[0], intervalExpr.GetList().List[1], nil
+}
+
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	firstExpr, secondExpr, err := getIntervalExprArgs(ctx, intervalExpr)
+	if err != nil {
+		return nil, err
+	}
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
