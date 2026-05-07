@@ -1,0 +1,154 @@
+-- @label:bvt
+
+-- WEEK function: 1-argument form (uses default_week_format)
+-- NOTE: MO returns 19 (mode=1 behavior) but MySQL returns 18 (mode=0) when default_week_format=0
+-- This is a known bug: WEEK(date) ignores @@default_week_format
+SELECT week('2026-05-07');
+
+-- WEEK function: 2-argument form with all modes (0-7)
+SELECT week('2026-05-07', 0);
+SELECT week('2026-05-07', 1);
+SELECT week('2026-05-07', 2);
+SELECT week('2026-05-07', 3);
+SELECT week('2026-05-07', 4);
+SELECT week('2026-05-07', 5);
+SELECT week('2026-05-07', 6);
+SELECT week('2026-05-07', 7);
+
+-- WEEK: NULL handling
+SELECT week(NULL);
+SELECT week(NULL, 3);
+
+-- WEEK: DATETIME input
+SELECT week('2026-01-01 12:00:00', 3);
+
+-- WEEK: time portion should be ignored
+SELECT week('2026-05-07 23:59:59', 3), week('2026-05-07 00:00:00', 3);
+
+-- WEEK: with CAST
+SELECT week(cast('2026-05-07' as date), 3);
+SELECT week(cast('2026-05-07 10:00:00' as datetime), 3);
+
+-- WEEK: BIGINT mode (original issue #24236)
+SELECT week('2026-05-07', cast(3 as signed));
+SELECT week('2026-05-07', cast(3 as unsigned));
+
+-- WEEK: mode > 7 (wraps around to mode % 8)
+SELECT week('2026-05-07', 8), week('2026-05-07', 0);
+SELECT week('2026-05-07', 9), week('2026-05-07', 1);
+
+-- WEEK: negative mode
+SELECT week('2026-05-07', -1);
+
+-- WEEK: year boundary - 2024 leap year (Jan 1 is Monday)
+SELECT week('2024-01-01', 0), week('2024-01-01', 1), week('2024-01-01', 2), week('2024-01-01', 3);
+SELECT week('2024-12-31', 0), week('2024-12-31', 1), week('2024-12-31', 2), week('2024-12-31', 3);
+
+-- WEEK: leap year Feb 29
+SELECT week('2024-02-29', 0), week('2024-02-29', 1), week('2024-02-29', 2), week('2024-02-29', 3);
+
+-- WEEK: year boundary - 2023 (Jan 1 is Sunday)
+SELECT week('2023-01-01', 0), week('2023-01-01', 1), week('2023-01-01', 2), week('2023-01-01', 3);
+SELECT week('2023-12-31', 0), week('2023-12-31', 1), week('2023-12-31', 2), week('2023-12-31', 3);
+
+-- WEEK: year boundary - 2025 (Jan 1 is Wednesday)
+SELECT week('2025-01-01', 0), week('2025-01-01', 1), week('2025-01-01', 2), week('2025-01-01', 3);
+SELECT week('2025-12-31', 0), week('2025-12-31', 1), week('2025-12-31', 2), week('2025-12-31', 3);
+
+-- WEEK: Jan 1 is Sunday - modes 0,1,4,5
+SELECT week('2023-01-01', 0), week('2023-01-01', 1), week('2023-01-01', 4), week('2023-01-01', 5);
+
+-- WEEK: Jan 1 is Monday - modes 0,1,4,5
+SELECT week('2024-01-01', 0), week('2024-01-01', 1), week('2024-01-01', 4), week('2024-01-01', 5);
+
+-- WEEK: week 53 cases
+SELECT week('2020-12-31', 1), week('2020-12-31', 3);
+SELECT week('2015-12-31', 1), week('2015-12-31', 3);
+
+-- WEEK: mode as expression
+SELECT week('2026-05-07', 1+2);
+
+-- WEEK: arithmetic
+SELECT week('2026-05-07', 1) - week('2026-04-30', 1);
+
+-- WEEK: with table - all modes
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2024-01-01'),(2, '2024-02-29'),(3, '2024-06-15'),(4, '2024-12-31');
+select id, week(d, 0), week(d, 1), week(d, 2), week(d, 3) from t1;
+select id, week(d, 4), week(d, 5), week(d, 6), week(d, 7) from t1;
+drop table t1;
+
+-- WEEK: in WHERE clause
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-11'),(4, '2026-05-12');
+select * from t1 where week(d, 3) = 19;
+drop table t1;
+
+-- WEEK: in ORDER BY
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-03-15'),(2, '2026-01-10'),(3, '2026-07-20'),(4, '2026-05-07');
+select id, d, week(d, 1) as wk from t1 order by wk;
+drop table t1;
+
+-- WEEK: in GROUP BY
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1, '2026-05-04', 10),(2, '2026-05-05', 20),(3, '2026-05-11', 30),(4, '2026-05-12', 40);
+select week(d, 1) as wk, sum(val) from t1 group by wk order by wk;
+drop table t1;
+
+-- WEEK: with DATETIME column
+drop table if exists t1;
+create table t1(id int, dt datetime);
+insert into t1 values(1, '2026-01-01 08:00:00'),(2, '2026-05-07 12:30:00'),(3, '2026-12-31 23:59:59');
+select id, week(dt, 0), week(dt, 3) from t1;
+drop table t1;
+
+-- WEEK: with TIMESTAMP column
+drop table if exists t1;
+create table t1(id int, ts timestamp);
+insert into t1 values(1, '2026-01-01 08:00:00'),(2, '2026-05-07 12:30:00'),(3, '2026-12-31 23:59:59');
+select id, week(ts, 0), week(ts, 3) from t1;
+drop table t1;
+
+-- WEEK: subquery
+SELECT * FROM (SELECT week('2026-05-07', 3) as wk) t WHERE t.wk = 19;
+
+-- WEEK: HAVING clause
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1,'2026-05-04',10),(2,'2026-05-05',20),(3,'2026-05-11',30),(4,'2026-05-12',40),(5,'2026-05-06',50);
+select week(d, 1) as wk, count(*) as cnt from t1 group by wk having cnt >= 2 order by wk;
+drop table t1;
+
+-- WEEK: JOIN condition
+drop table if exists t1;
+drop table if exists t2;
+create table t1(id int, d date);
+create table t2(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-11');
+insert into t2 values(10, '2026-05-07'),(20, '2026-05-14');
+select t1.id, t2.id from t1 join t2 on week(t1.d, 1) = week(t2.d, 1);
+drop table t1;
+drop table t2;
+
+-- WEEK: INSERT SELECT
+drop table if exists t1;
+drop table if exists t2;
+create table t1(d date);
+create table t2(wk int);
+insert into t1 values('2026-01-01'),('2026-05-07'),('2026-12-31');
+insert into t2 select week(d, 3) from t1;
+select * from t2 order by wk;
+drop table t1;
+drop table t2;
+
+-- WEEK: DISTINCT
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1,'2026-05-04'),(2,'2026-05-05'),(3,'2026-05-06'),(4,'2026-05-11'),(5,'2026-05-12');
+select distinct week(d, 1) as wk from t1 order by wk;
+drop table t1;
