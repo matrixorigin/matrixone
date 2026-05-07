@@ -15,6 +15,7 @@
 package fulltext
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -47,7 +48,12 @@ import (
 // Init Search Accum
 func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, params string, scoreAlgo FullTextScoreAlgo) (*SearchAccum, error) {
 
-	ps, err := ParsePattern(pattern, mode)
+	parser, err := parserFromParams(params)
+	if err != nil {
+		return nil, err
+	}
+
+	ps, err := ParsePattern(pattern, mode, parser)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +61,20 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
 		Pattern: ps, Params: params, Nkeywords: nwords, AnyPlus: hasPatternAnyPlus(ps), ScoreAlgo: scoreAlgo}, nil
+}
+
+// parserFromParams extracts the "parser" field from a JSON params string
+// (the same payload threaded through fulltext_index_scan / _tokenize).
+// An empty params string returns "".
+func parserFromParams(params string) (string, error) {
+	if len(params) == 0 {
+		return "", nil
+	}
+	var p FullTextParserParam
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return "", err
+	}
+	return p.Parser, nil
 }
 
 // find pattern by operator
@@ -822,8 +842,38 @@ func GetResultCountFromPattern(ps []*Pattern) int {
 	return cnt
 }
 
+// parsePatternInNLModeJieba tokenizes the search string with gojieba, emitting
+// one TEXT pattern per word. Unlike the ngram path there is no minimum-length
+// rewrite: short tokens map directly to TEXT lookups since the index stores
+// jieba-segmented words rather than overlapping bigrams.
+//
+// HMM is disabled here so the query and index sides segment the same way; with
+// HMM on the query side, traditional-Chinese bigrams (e.g. 教學, 中華) appear at
+// query time but not in the index, producing queries that can never match.
+func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
+	tok := tokenizer.SharedJiebaTokenizer(false)
+	list := make([]*Pattern, 0, 8)
+	for t := range tok.Tokenize([]byte(pattern)) {
+		slen := t.TokenBytes[0]
+		word := string(t.TokenBytes[1 : slen+1])
+		list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
+	}
+	if len(list) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string onverted to empty pattern")
+	}
+	idx := int32(0)
+	for _, p := range list {
+		assignPatternIndex(p, &idx)
+	}
+	return list, nil
+}
+
 // Parse search string in natural language mode
-func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
+func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
+	if parser == "gojieba" {
+		return parsePatternInNLModeJieba(pattern)
+	}
+
 	runeSlice := []rune(pattern)
 	ngram_size := 3
 	// if number of character is small than Ngram size = 3, do prefix search
@@ -832,14 +882,14 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 	}
 
 	list := make([]*Pattern, 0, 32)
-	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
+	tok := tokenizer.NewSimpleTokenizer()
 
 	currBytePos := int32(0)
 	currEndBytePos := int32(0)
 
 	overlaps := make([]tokenizer.Token, 0, 8)
 
-	for t := range tok.Tokenize() {
+	for t := range tok.Tokenize([]byte(pattern)) {
 
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
@@ -943,11 +993,11 @@ func PatternOptimizeJoin(ps []*Pattern) []*Pattern {
 }
 
 // Parse search string into list of patterns
-func ParsePattern(pattern string, mode int64) ([]*Pattern, error) {
+func ParsePattern(pattern string, mode int64, parser string) ([]*Pattern, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
 		// Natural Language Mode or default mode
-		ps, err := ParsePatternInNLMode(pattern)
+		ps, err := ParsePatternInNLMode(pattern, parser)
 		if err != nil {
 			return nil, err
 		}

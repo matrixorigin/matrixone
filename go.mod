@@ -93,6 +93,7 @@ require (
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
 	github.com/unum-cloud/usearch/golang v0.0.0-20260106013029-7306bb446be5
+	github.com/yanyiwu/gojieba v1.4.7
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
