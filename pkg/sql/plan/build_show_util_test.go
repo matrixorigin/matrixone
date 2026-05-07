@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -377,4 +379,42 @@ func TestShowCreateSetMemberCasePreservation(t *testing.T) {
 	require.Equal(t, "set('Read','Write')", lowered)
 	require.NotEqual(t, strings.ToLower(raw), lowered,
 		"plain strings.ToLower would damage member names; keep the fix in place")
+}
+
+// TestEscapeForDoubleQuotedLiteralRoundTrip covers the outer wrapper in
+// buildShowCreateTable / buildShowCreateView. The DDL text carries
+// literal backslashes and double quotes (e.g. from comments like
+// `异常描述[\"..\"]`); when it is spliced into `SELECT "..." AS ...`
+// both must survive the outer scanner pass. The MySQL scanner folds
+// `\\` to `\` and `\"` to `"`, so the helper must emit both escapes.
+func TestEscapeForDoubleQuotedLiteralRoundTrip(t *testing.T) {
+	cases := []string{
+		`plain`,
+		`path\to\file`,
+		`has "quote" inside`,
+		`mixed \" and \\`,
+		// The actual payload from BVT comment.sql row 132/237:
+		`COMMENT '异常描述[\"表面有磨损\",\"表面有裂痕\"]'`,
+		// A single trailing backslash — must not collapse into the
+		// closing quote of the outer literal.
+		`tail\`,
+		``,
+	}
+	for _, in := range cases {
+		escaped := escapeForDoubleQuotedLiteral(in)
+		wrapped := `"` + escaped + `"`
+		// Run through the same scanner pipeline the server uses.
+		toks, err := mysql.Parse(context.Background(),
+			"SELECT "+wrapped+" AS x", 1)
+		require.NoErrorf(t, err, "input=%q wrapped=%q", in, wrapped)
+		require.Len(t, toks, 1)
+		sel, ok := toks[0].(*tree.Select)
+		require.Truef(t, ok, "unexpected stmt type for input %q", in)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 1)
+		numVal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.Truef(t, ok, "expected NumVal for %q, got %T", in, clause.Exprs[0].Expr)
+		require.Equalf(t, in, numVal.String(), "round-trip mismatch for %q", in)
+	}
 }

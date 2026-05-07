@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +36,24 @@ const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
 const SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
+
+// escapeForDoubleQuotedLiteral prepares s for embedding inside a
+// double-quoted MySQL string literal (`"..."`). Both backslashes and
+// double quotes are escaped so every byte survives the outer scanner
+// pass verbatim. Order matters: backslashes must be doubled first,
+// otherwise the `\"` inserted for each `"` would be re-escaped and
+// produce a spurious extra backslash on round-trip.
+//
+// Used by SHOW CREATE {TABLE,VIEW} which wrap the generated DDL text
+// inside a SELECT ... AS projection so the result set columns can be
+// streamed back to the client; the DDL already carries literal
+// backslashes (formatStrLit, column-comment path) that must not be
+// re-interpreted by the scanner.
+func escapeForDoubleQuotedLiteral(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
+}
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -138,18 +155,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
 	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	sql = fmt.Sprintf(sql, tblName, escapeForDoubleQuotedLiteral(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -207,8 +214,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
 		}
 	}
-	stmtStr = strings.ReplaceAll(stmtStr, "\"", "\\\"")
-	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
+	sqlStr = fmt.Sprintf(sqlStr, tblName, escapeForDoubleQuotedLiteral(stmtStr))
 
 	// logutil.Info(sqlStr)
 
