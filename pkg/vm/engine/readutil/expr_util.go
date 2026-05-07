@@ -360,7 +360,7 @@ func getPkExpr(
 				return exprImpl.F.Args[1]
 			}
 
-		case "prefix_eq", "prefix_between", "prefix_in", "between":
+		case "prefix_eq", "prefix_between", "prefix_in", "prefix_in_range", "between":
 			if col := exprImpl.F.Args[0].GetCol(); col != nil {
 				if !compPkCol(col.Name, pkName) {
 					return nil
