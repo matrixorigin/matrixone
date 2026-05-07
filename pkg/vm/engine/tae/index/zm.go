@@ -690,6 +690,24 @@ func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 	return types.PrefixCompare(zmin, ub) <= 0 && types.PrefixCompare(zmax, lb) >= 0
 }
 
+func (zm ZM) PrefixInRange(lb, ub []byte, hint int) bool {
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+
+	switch hint {
+	case 0: // [lb, ub]
+		return types.PrefixCompare(zmax, lb) >= 0 && types.PrefixCompare(zmin, ub) <= 0
+	case 1: // (lb, ub]
+		return types.PrefixCompare(zmax, lb) > 0 && types.PrefixCompare(zmin, ub) <= 0
+	case 2: // [lb, ub)
+		return types.PrefixCompare(zmax, lb) >= 0 && types.PrefixCompare(zmin, ub) < 0
+	case 3: // (lb, ub)
+		return types.PrefixCompare(zmax, lb) > 0 && types.PrefixCompare(zmin, ub) < 0
+	default:
+		return types.PrefixCompare(zmax, lb) >= 0 && types.PrefixCompare(zmin, ub) <= 0
+	}
+}
+
 func (zm ZM) Between(lb, ub []byte) bool {
 	oth := BuildZM(zm.GetType(), lb)
 	oth.SetScale(zm.GetScale())
@@ -703,6 +721,19 @@ func (zm ZM) Between(lb, ub []byte) bool {
 
 	ok1, ok2 := zm.Intersect(oth)
 	return ok1 && ok2
+}
+
+func (zm ZM) InRange(lb, ub []byte, hint int) bool {
+	switch hint {
+	case 1: // (lb, ub]
+		return zm.AnyGTByValue(lb) && zm.AnyLEByValue(ub)
+	case 2: // [lb, ub)
+		return zm.AnyGEByValue(lb) && zm.AnyLTByValue(ub)
+	case 3: // (lb, ub)
+		return zm.AnyGTByValue(lb) && zm.AnyLTByValue(ub)
+	default: // [lb, ub]
+		return zm.AnyGEByValue(lb) && zm.AnyLEByValue(ub)
+	}
 }
 
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
