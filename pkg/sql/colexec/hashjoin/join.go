@@ -636,8 +636,9 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 				return err
 			}
 		} else {
-			ctr.resBat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.resBat.Vecs[i].SetLength(rowCnt)
+			if err := vector.SetConstNull(ctr.resBat.Vecs[i], rowCnt, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.resBat.AddRowCount(rowCnt)
@@ -797,6 +798,9 @@ func (hashJoin *HashJoin) resetResultBat() {
 	ctr := &hashJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].ResetWithSameType()
+		}
 	} else {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
 

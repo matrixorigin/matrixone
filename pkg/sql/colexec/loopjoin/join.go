@@ -170,8 +170,9 @@ func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm
 		} else {
 			switch ap.JoinType {
 			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_OUTER:
-				ctr.resBat.Vecs[i].SetClass(vector.CONSTANT)
-				ctr.resBat.Vecs[i].SetLength(ctr.inBat.RowCount())
+				if err := vector.SetConstNull(ctr.resBat.Vecs[i], ctr.inBat.RowCount(), proc.Mp()); err != nil {
+					return err
+				}
 
 			case plan.Node_MARK:
 				err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, ctr.inBat.RowCount(), proc.Mp())
@@ -427,6 +428,9 @@ func (loopJoin *LoopJoin) resetResultBat() {
 	ctr := &loopJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].ResetWithSameType()
+		}
 	} else {
 		ctr.resBat = batch.NewWithSize(len(loopJoin.ResultCols))
 
@@ -476,6 +480,9 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 		}
 	} else {
 		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].ResetWithSameType()
+		}
 	}
 
 	rowCnt := 0
