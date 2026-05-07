@@ -28,7 +28,6 @@ const (
 	EqualIndexCondition       = 1
 	NonEqualIndexCondition    = 2
 	SpatialIndexCondition     = 3
-	RangeIndexCondition       = 4
 
 	// MaxOverFetchFactor is the maximum multiplier for over-fetching candidates
 	// in auto mode vector search. This cap prevents excessive memory usage and
@@ -926,11 +925,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	idxToChoose, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
-		condType := NonEqualIndexCondition
-		if len(filterIdx) == 2 {
-			condType = RangeIndexCondition
-		}
-		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, condType, filterIdx, scanSnapshot)
+		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, NonEqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
@@ -1463,39 +1458,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		}
 	}
 
-	// First pass: detect paired range conditions (e.g., b >= 9 AND b <= 10)
-	colLowerBounds := make(map[int32]int32) // colPos -> filter index
-	colUpperBounds := make(map[int32]int32) // colPos -> filter index
-
-	for i := range node.FilterList {
-		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
-			continue
-		}
-		col, isLower := classifyRangeBound(fn)
-		if col == nil {
-			continue
-		}
-		if _, ok := colPos2Idx[col.ColPos]; !ok {
-			continue
-		}
-		if isLower {
-			colLowerBounds[col.ColPos] = int32(i)
-		} else {
-			colUpperBounds[col.ColPos] = int32(i)
-		}
-	}
-
-	for colPos, lowerIdx := range colLowerBounds {
-		upperIdx, hasUpper := colUpperBounds[colPos]
-		if !hasUpper {
-			continue
-		}
-		idxPos := colPos2Idx[colPos]
-		return idxPos, []int32{lowerIdx, upperIdx}
-	}
-
-	// Second pass: single non-equi conditions (in, between, in_range, or, single range ops)
+	// Find non-equi conditions (in, between, in_range, or, single range ops)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == NonEqualIndexCondition {
@@ -1575,52 +1538,6 @@ func rangeFilterConstValue(fn *plan.Function) *plan.Expr {
 	return nil
 }
 
-func (builder *QueryBuilder) replaceRangePairCondition(filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef, numParts int) *plan.Expr {
-	lowerFn := filterList[filterIdx[0]].GetF()
-	upperFn := filterList[filterIdx[1]].GetF()
-
-	lowerOp := canonicalRangeOp(lowerFn)
-	upperOp := canonicalRangeOp(upperFn)
-
-	colExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	lowerVal := DeepCopyExpr(rangeFilterConstValue(lowerFn))
-	upperVal := DeepCopyExpr(rangeFilterConstValue(upperFn))
-
-	compositeFilterSel := filterList[filterIdx[0]].Selectivity * filterList[filterIdx[1]].Selectivity
-
-	if numParts > 1 {
-		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{lowerVal})
-		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{upperVal})
-	}
-
-	// Closed range: >= and <= maps to between/prefix_between
-	if lowerOp == ">=" && upperOp == "<=" {
-		funcName := "between"
-		if numParts > 1 {
-			funcName = "prefix_between"
-		}
-		expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
-		expr.Selectivity = compositeFilterSel
-		return expr
-	}
-
-	// Open/half-open range: use in_range/prefix_in_range with boundary flags
-	var flag uint8
-	if lowerOp == ">" {
-		flag |= 1
-	}
-	if upperOp == "<" {
-		flag |= 2
-	}
-	funcName := "in_range"
-	if numParts > 1 {
-		funcName = "prefix_in_range"
-	}
-	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
-	expr.Selectivity = compositeFilterSel
-	return expr
-}
-
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
@@ -1636,8 +1553,6 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	} else if filterType == SpatialIndexCondition {
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
-	} else if filterType == RangeIndexCondition {
-		idxFilter = builder.replaceRangePairCondition(node.FilterList, filterIdx, idxTag, idxTableDef, numParts)
 	} else {
 		idxFilter = builder.replaceNonEqualCondition(node.FilterList[filterIdx[0]], idxTag, idxTableDef, numParts)
 	}

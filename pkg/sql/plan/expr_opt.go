@@ -1495,15 +1495,28 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		if colExpr.GetCol() == nil {
 			colExpr = lowerFn.Args[1]
 		}
-		colExpr = DeepCopyExpr(colExpr)
+
+		lb := lowerVal
+		ub := upperVal
+
+		// Cast bounds to column type so between/in_range runtime gets uniform types.
+		colTyp := colExpr.Typ
+		if lb.Typ.Id != colTyp.Id || lb.Typ.Width != colTyp.Width || lb.Typ.Scale != colTyp.Scale {
+			if casted, err := appendCastBeforeExpr(builder.GetContext(), lb, colTyp); err == nil {
+				lb = casted
+			}
+		}
+		if ub.Typ.Id != colTyp.Id || ub.Typ.Width != colTyp.Width || ub.Typ.Scale != colTyp.Scale {
+			if casted, err := appendCastBeforeExpr(builder.GetContext(), ub, colTyp); err == nil {
+				ub = casted
+			}
+		}
 
 		compositeFilterSel := filters[lowerIdx].Selectivity * filters[upperIdx].Selectivity
 
 		var merged *plan.Expr
 		if lowerOp == ">=" && upperOp == "<=" {
-			merged, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "between", []*plan.Expr{
-				colExpr, DeepCopyExpr(lowerVal), DeepCopyExpr(upperVal),
-			})
+			merged = makeBetweenExpr(colExpr, lb, ub)
 		} else {
 			var flag uint8
 			if lowerOp == ">" {
@@ -1512,21 +1525,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			if upperOp == "<" {
 				flag |= 2
 			}
-			merged, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "in_range", []*plan.Expr{
-				colExpr, DeepCopyExpr(lowerVal), DeepCopyExpr(upperVal), MakePlan2Uint8ConstExprWithType(flag),
-			})
-		}
-		if merged == nil {
-			continue
-		}
-		mergedFn := merged.GetF()
-		if mergedFn != nil && len(mergedFn.Args) >= 3 {
-			if lit := mergedFn.Args[1].GetLit(); lit != nil && lit.Isnull {
-				continue
-			}
-			if lit := mergedFn.Args[2].GetLit(); lit != nil && lit.Isnull {
-				continue
-			}
+			merged = makeInRangeExpr(colExpr, lb, ub, flag)
 		}
 		merged.Selectivity = compositeFilterSel
 
@@ -1749,5 +1748,35 @@ func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Exp
 
 	for _, arg := range fn.Args {
 		flattenLogicalExpressions(arg, opName, args)
+	}
+}
+
+var (
+	boolType       = plan.Type{Id: int32(types.T_bool), NotNullable: false}
+	betweenFuncRef = getFunctionObjRef(int64(function.BETWEEN)<<32, "between")
+	inRangeFuncRef = getFunctionObjRef(int64(function.IN_RANGE)<<32, "in_range")
+)
+
+func makeBetweenExpr(col, lb, ub *plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: betweenFuncRef,
+				Args: []*plan.Expr{col, lb, ub},
+			},
+		},
+		Typ: boolType,
+	}
+}
+
+func makeInRangeExpr(col, lb, ub *plan.Expr, flag uint8) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: inRangeFuncRef,
+				Args: []*plan.Expr{col, lb, ub, MakePlan2Uint8ConstExprWithType(flag)},
+			},
+		},
+		Typ: boolType,
 	}
 }
