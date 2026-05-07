@@ -1,89 +1,197 @@
-SELECT YEARWEEK('1987-01-01') AS result1;
-result1
-198652
-SELECT YEARWEEK('1987-01-01') AS yearweek;
-yearweek
-198652
-SELECT YEARWEEK('2008-02-20') AS yearweek_feb;
-yearweek_feb
-200807
-SELECT YEARWEEK('2008-12-31') AS yearweek_dec;
-yearweek_dec
-200852
-SELECT YEARWEEK('1987-01-01', 0) AS yearweek_mode0;
-yearweek_mode0
-198652
-SELECT YEARWEEK('1987-01-01', 1) AS yearweek_mode1;
-yearweek_mode1
-198701
-SELECT YEARWEEK('1987-01-01', 2) AS yearweek_mode2;
-yearweek_mode2
-198652
-SELECT YEARWEEK('1987-01-01', 3) AS yearweek_mode3;
-yearweek_mode3
-198701
-SELECT YEARWEEK('1987-01-01 10:30:45') AS yearweek_datetime;
-yearweek_datetime
-198652
-SELECT YEARWEEK('2008-02-20 12:00:00', 0) AS yearweek_datetime_mode0;
-yearweek_datetime_mode0
-200807
-SELECT YEARWEEK(TIMESTAMP('1987-01-01 10:30:45')) AS yearweek_timestamp;
-yearweek_timestamp
-198652
-SELECT YEARWEEK('2003-12-30') AS yearweek_2003_dec;
-yearweek_2003_dec
-200352
-SELECT YEARWEEK('2004-01-02') AS yearweek_2004_jan;
-yearweek_2004_jan
-200352
-SELECT YEARWEEK('2004-12-31') AS yearweek_2004_dec;
-yearweek_2004_dec
-200452
-SELECT YEARWEEK('2005-01-01') AS yearweek_2005_jan;
-yearweek_2005_jan
-200452
-CREATE TABLE t1(d DATE);
-INSERT INTO t1 VALUES ('1987-01-01'), ('2008-02-20'), ('2008-12-31');
-SELECT d, YEARWEEK(d) AS yearweek FROM t1;
-d    yearweek
-1987-01-01    198652
-2008-02-20    200807
-2008-12-31    200852
-DROP TABLE t1;
-CREATE TABLE t1(d DATE);
-INSERT INTO t1 VALUES ('1987-01-01'), ('2008-06-15'), ('2008-12-31');
-SELECT * FROM t1 WHERE YEARWEEK(d) > 200800;
-d
-2008-06-15
-2008-12-31
-DROP TABLE t1;
-SELECT YEARWEEK(NULL) AS null_result;
-null_result
+SELECT yearweek('2026-05-07');
+yearweek(2026-05-07)
+202618
+SELECT yearweek('2026-05-07', 0);
+yearweek(2026-05-07, 0)
+202618
+SELECT yearweek('2026-05-07', 1);
+yearweek(2026-05-07, 1)
+202619
+SELECT yearweek('2026-05-07', 2);
+yearweek(2026-05-07, 2)
+202618
+SELECT yearweek('2026-05-07', 3);
+yearweek(2026-05-07, 3)
+202619
+SELECT yearweek('2026-05-07', 4);
+yearweek(2026-05-07, 4)
+202618
+SELECT yearweek('2026-05-07', 5);
+yearweek(2026-05-07, 5)
+202618
+SELECT yearweek('2026-05-07', 6);
+yearweek(2026-05-07, 6)
+202618
+SELECT yearweek('2026-05-07', 7);
+yearweek(2026-05-07, 7)
+202618
+SELECT yearweek(NULL);
+yearweek(null)
 null
-SELECT YEARWEEK('1987-01-01', NULL) AS null_mode;
-null_mode
+SELECT yearweek(NULL, 3);
+yearweek(null, 3)
 null
-SELECT YEARWEEK('1987-01-01') AS yearweek_result,
-YEAR('1987-01-01') AS year_result,
-WEEK('1987-01-01', 0) AS week_result;
-yearweek_result    year_result    week_result
-198652    1987    0
-SELECT YEARWEEK('2008-01-15') AS jan_week;
-jan_week
-200802
-SELECT YEARWEEK('2008-06-15') AS jun_week;
-jun_week
-200824
-SELECT YEARWEEK('2008-09-15') AS sep_week;
-sep_week
-200837
-SELECT YEARWEEK('2008-12-15') AS dec_week;
-dec_week
-200850
-SELECT YEARWEEK('2008-06-15') AS current_yearweek;
-current_yearweek
-200824
-SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
-week_after
-198701
+SELECT yearweek('2026-01-01 12:00:00', 3);
+yearweek(2026-01-01 12:00:00, 3)
+202601
+SELECT yearweek('2026-05-07 23:59:59', 3), yearweek('2026-05-07 00:00:00', 3);
+yearweek(2026-05-07 23:59:59, 3)    yearweek(2026-05-07 00:00:00, 3)
+202619    202619
+SELECT yearweek(cast('2026-05-07' as date), 3);
+yearweek(cast(2026-05-07 as date), 3)
+202619
+SELECT yearweek(cast('2026-05-07 10:00:00' as datetime), 3);
+yearweek(cast(2026-05-07 10:00:00 as datetime), 3)
+202619
+SELECT yearweek('2026-05-07', cast(3 as signed));
+yearweek(2026-05-07, cast(3 as signed))
+202619
+SELECT yearweek('2026-05-07', cast(3 as unsigned));
+yearweek(2026-05-07, cast(3 as unsigned))
+202619
+SELECT yearweek('2024-01-01', 0), yearweek('2024-01-01', 1), yearweek('2024-01-01', 2), yearweek('2024-01-01', 3);
+yearweek(2024-01-01, 0)    yearweek(2024-01-01, 1)    yearweek(2024-01-01, 2)    yearweek(2024-01-01, 3)
+202353    202401    202353    202401
+SELECT yearweek('2024-12-31', 0), yearweek('2024-12-31', 1), yearweek('2024-12-31', 2), yearweek('2024-12-31', 3);
+yearweek(2024-12-31, 0)    yearweek(2024-12-31, 1)    yearweek(2024-12-31, 2)    yearweek(2024-12-31, 3)
+202452    202501    202452    202501
+SELECT yearweek('2023-01-01', 0), yearweek('2023-01-01', 1), yearweek('2023-01-01', 2), yearweek('2023-01-01', 3);
+yearweek(2023-01-01, 0)    yearweek(2023-01-01, 1)    yearweek(2023-01-01, 2)    yearweek(2023-01-01, 3)
+202301    202252    202301    202252
+SELECT yearweek('2023-12-31', 0), yearweek('2023-12-31', 1), yearweek('2023-12-31', 2), yearweek('2023-12-31', 3);
+yearweek(2023-12-31, 0)    yearweek(2023-12-31, 1)    yearweek(2023-12-31, 2)    yearweek(2023-12-31, 3)
+202353    202352    202353    202352
+SELECT yearweek('2025-01-01', 0), yearweek('2025-01-01', 1), yearweek('2025-01-01', 2), yearweek('2025-01-01', 3);
+yearweek(2025-01-01, 0)    yearweek(2025-01-01, 1)    yearweek(2025-01-01, 2)    yearweek(2025-01-01, 3)
+202452    202501    202452    202501
+SELECT yearweek('2025-12-31', 0), yearweek('2025-12-31', 1), yearweek('2025-12-31', 2), yearweek('2025-12-31', 3);
+yearweek(2025-12-31, 0)    yearweek(2025-12-31, 1)    yearweek(2025-12-31, 2)    yearweek(2025-12-31, 3)
+202552    202601    202552    202601
+SELECT yearweek('2020-12-31', 1), yearweek('2020-12-31', 3);
+yearweek(2020-12-31, 1)    yearweek(2020-12-31, 3)
+202053    202053
+SELECT yearweek('2015-12-31', 1), yearweek('2015-12-31', 3);
+yearweek(2015-12-31, 1)    yearweek(2015-12-31, 3)
+201553    201553
+SELECT yearweek('2026-05-07', 1+2);
+yearweek(2026-05-07, 1 + 2)
+202619
+SELECT yearweek('2026-05-07', 3) - yearweek('2026-04-30', 3);
+yearweek(2026-05-07, 3) - yearweek(2026-04-30, 3)
+1
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2024-01-01'),(2, '2024-02-29'),(3, '2024-06-15'),(4, '2024-12-31');
+select id, yearweek(d, 0), yearweek(d, 1), yearweek(d, 2), yearweek(d, 3) from t1;
+id    yearweek(d, 0)    yearweek(d, 1)    yearweek(d, 2)    yearweek(d, 3)
+1    202353    202401    202353    202401
+2    202408    202409    202408    202409
+3    202423    202424    202423    202424
+4    202452    202501    202452    202501
+select id, yearweek(d, 4), yearweek(d, 5), yearweek(d, 6), yearweek(d, 7) from t1;
+id    yearweek(d, 4)    yearweek(d, 5)    yearweek(d, 6)    yearweek(d, 7)
+1    202401    202401    202401    202401
+2    202409    202409    202409    202409
+3    202424    202424    202424    202424
+4    202501    202453    202501    202453
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-11'),(4, '2026-05-12');
+select * from t1 where yearweek(d, 3) = yearweek('2026-05-07', 3);
+id    d
+1    2026-05-04
+2    2026-05-07
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-03-15'),(2, '2026-01-10'),(3, '2026-07-20'),(4, '2026-05-07');
+select id, d, yearweek(d, 1) as yw from t1 order by yw;
+id    d    yw
+2    2026-01-10    202602
+1    2026-03-15    202611
+4    2026-05-07    202619
+3    2026-07-20    202630
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1, '2026-05-04', 10),(2, '2026-05-05', 20),(3, '2026-05-11', 30),(4, '2026-05-12', 40);
+select yearweek(d, 1) as yw, sum(val) from t1 group by yw order by yw;
+yw    sum(val)
+202619    30
+202620    70
+drop table t1;
+drop table if exists t1;
+create table t1(id int, dt datetime);
+insert into t1 values(1, '2024-01-01 08:00:00'),(2, '2024-06-15 12:30:00'),(3, '2024-12-31 23:59:59');
+select id, yearweek(dt, 0), yearweek(dt, 3) from t1;
+id    yearweek(dt, 0)    yearweek(dt, 3)
+1    202353    202401
+2    202423    202424
+3    202452    202501
+drop table t1;
+drop table if exists t1;
+create table t1(id int, ts timestamp);
+insert into t1 values(1, '2024-01-01 08:00:00'),(2, '2024-06-15 12:30:00'),(3, '2024-12-31 23:59:59');
+select id, yearweek(ts, 0), yearweek(ts, 3) from t1;
+id    yearweek(ts, 0)    yearweek(ts, 3)
+1    202353    202401
+2    202423    202424
+3    202452    202501
+drop table t1;
+SELECT * FROM (SELECT yearweek('2026-05-07', 3) as yw) t WHERE t.yw = 202619;
+yw
+202619
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1,'2026-05-04',10),(2,'2026-05-05',20),(3,'2026-05-11',30),(4,'2026-05-12',40),(5,'2026-05-06',50);
+select yearweek(d, 1) as yw, count(*) as cnt from t1 group by yw having cnt >= 2 order by yw;
+yw    cnt
+202619    3
+202620    2
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(id int, d date);
+create table t2(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-11');
+insert into t2 values(10, '2026-05-07'),(20, '2026-05-14');
+select t1.id, t2.id from t1 join t2 on yearweek(t1.d, 1) = yearweek(t2.d, 1);
+id    id
+1    10
+2    20
+drop table t1;
+drop table t2;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(d date);
+create table t2(yw int);
+insert into t1 values('2024-01-01'),('2024-06-15'),('2024-12-31');
+insert into t2 select yearweek(d, 3) from t1;
+select * from t2 order by yw;
+yw
+202401
+202424
+202501
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1,'2026-05-04'),(2,'2026-05-05'),(3,'2026-05-06'),(4,'2026-05-11'),(5,'2026-05-12');
+select distinct yearweek(d, 1) as yw from t1 order by yw;
+yw
+202619
+202620
+drop table t1;
+SELECT week('2024-12-31', 1), yearweek('2024-12-31', 1);
+week(2024-12-31, 1)    yearweek(2024-12-31, 1)
+53    202501
+SELECT week('2024-12-31', 3), yearweek('2024-12-31', 3);
+week(2024-12-31, 3)    yearweek(2024-12-31, 3)
+1    202501
+SELECT week('2023-01-01', 1), yearweek('2023-01-01', 1);
+week(2023-01-01, 1)    yearweek(2023-01-01, 1)
+0    202252
+SELECT week('2023-01-01', 3), yearweek('2023-01-01', 3);
+week(2023-01-01, 3)    yearweek(2023-01-01, 3)
+52    202252
