@@ -12030,7 +12030,6 @@ name_confict:
 |   DEDUP
 |   HOUR
 |   IF
-|   INTERVAL
 |   FORMAT
 |   LEFT
 |   MICROSECOND
