@@ -121,6 +121,88 @@ with ranked as (
 select customer_id, cum_amount from ranked where rn = 2 order by customer_id;
 
 -- ============================================================
+-- Case 8: Issue #24081 original shape
+-- ROW_NUMBER and SUM(decimal) in the same derived table; the outer
+-- filter compares the ROW_NUMBER output and must not use decimal
+-- comparison state from the later SUM window column.
+-- ============================================================
+drop table if exists swf_issue_24081_orders;
+create table swf_issue_24081_orders (
+    id int auto_increment primary key,
+    customer_id int,
+    order_date date,
+    amount decimal(10, 2)
+);
+insert into swf_issue_24081_orders (customer_id, order_date, amount) values
+    (1, '2024-01-01', 100.00), (1, '2024-02-01', 150.00), (1, '2024-03-01', 50.00),
+    (2, '2024-01-10', 80.00), (2, '2024-04-02', 120.00), (3, '2024-05-05', 60.00);
+
+select x.__mf_part_key as customer_id,
+       x.__mf_cum_val as second_cum_amount
+from (
+    select customer_id as __mf_part_key,
+           row_number() over (partition by customer_id order by order_date) as __mf_rn,
+           sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as __mf_cum_val
+    from swf_issue_24081_orders
+    where year(order_date) = 2024
+) as x
+where x.__mf_rn = 2
+order by customer_id;
+
+-- Case 9: Arithmetic expression on ROW_NUMBER result.
+select x.__mf_part_key as customer_id,
+       x.__mf_cum_val as second_cum_amount
+from (
+    select customer_id as __mf_part_key,
+           row_number() over (partition by customer_id order by order_date) as __mf_rn,
+           sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as __mf_cum_val
+    from swf_issue_24081_orders
+    where year(order_date) = 2024
+) as x
+where x.__mf_rn + 0 = 2
+order by customer_id;
+
+-- Case 10: BETWEEN expression on ROW_NUMBER result.
+select x.__mf_part_key as customer_id,
+       x.__mf_cum_val as second_cum_amount
+from (
+    select customer_id as __mf_part_key,
+           row_number() over (partition by customer_id order by order_date) as __mf_rn,
+           sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as __mf_cum_val
+    from swf_issue_24081_orders
+    where year(order_date) = 2024
+) as x
+where x.__mf_rn between 2 and 2
+order by customer_id;
+
+-- Case 11: IN expression on ROW_NUMBER result.
+select x.__mf_part_key as customer_id,
+       x.__mf_cum_val as second_cum_amount
+from (
+    select customer_id as __mf_part_key,
+           row_number() over (partition by customer_id order by order_date) as __mf_rn,
+           sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as __mf_cum_val
+    from swf_issue_24081_orders
+    where year(order_date) = 2024
+) as x
+where x.__mf_rn in (2)
+order by customer_id;
+
+-- Case 12: Mixed predicates on ROW_NUMBER and SUM(decimal) aliases.
+select x.__mf_part_key as customer_id,
+       x.__mf_cum_val as second_cum_amount
+from (
+    select customer_id as __mf_part_key,
+           row_number() over (partition by customer_id order by order_date) as __mf_rn,
+           sum(amount) over (partition by customer_id order by order_date rows unbounded preceding) as __mf_cum_val
+    from swf_issue_24081_orders
+    where year(order_date) = 2024
+) as x
+where x.__mf_rn = 2 and x.__mf_cum_val >= 200.00
+order by customer_id;
+
+-- ============================================================
 -- Cleanup
 -- ============================================================
 drop table if exists swf_orders;
+drop table if exists swf_issue_24081_orders;

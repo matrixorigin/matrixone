@@ -514,7 +514,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Nil(t, p)
 		require.Nil(t, c)
@@ -531,25 +531,11 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: cctx,
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
+		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
 		require.Nil(t, err)
 		require.Nil(t, p)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-	}
-
-	{
-		// if receiver gets proc timeout, should exit.
-		// 1. return error.
-		receiver := &messageReceiverOnServer{
-			connectionCtx: context.TODO(),
-		}
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
-		require.NotNil(t, err)
-		require.Nil(t, p)
-
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
@@ -567,7 +553,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
 		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
 
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Equal(t, p0, p)
 		require.Equal(t, c0, c)
@@ -585,6 +571,51 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
+}
+
+func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.TODO(),
+		messageCtx:    context.TODO(),
+	}
+
+	// Start GetProcByUuid in a goroutine BEFORE PutProcIntoUuidMap.
+	// This tests the wait-then-wake path: the receiver must block on the
+	// changed channel and wake exactly once when the UUID is inserted.
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{p, c, e}
+	}()
+
+	// Give the goroutine time to enter the wait.
+	time.Sleep(10 * time.Millisecond)
+
+	p0 := &process.Process{}
+	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+	select {
+	case r := <-done:
+		require.Nil(t, r.err)
+		require.Equal(t, p0, r.proc)
+		require.Equal(t, c0, r.ch)
+	case <-time.After(3 * time.Second):
+		t.Fatal("GetProcByUuid did not wake after PutProcIntoUuidMap")
+	}
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
 var _ morpc.Stream = &fakeStreamSender{}

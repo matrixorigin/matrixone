@@ -878,3 +878,85 @@ func TestCheckSpatialIndexFilterDistanceRejectsNonConstGeometryArg(t *testing.T)
 
 	require.Nil(t, checkSpatialIndexFilter(filter))
 }
+
+func TestCheckIndexFilter_RangeOps(t *testing.T) {
+	colExpr := makeSpatialColExpr(5)
+	constExpr := makeInt64LiteralExpr(10)
+
+	tests := []struct {
+		name       string
+		op         string
+		left       *planpb.Expr
+		right      *planpb.Expr
+		wantType   int
+		wantColPos int32
+	}{
+		{"col >= const", ">=", colExpr, constExpr, NonEqualIndexCondition, 5},
+		{"col <= const", "<=", colExpr, constExpr, NonEqualIndexCondition, 5},
+		{"col > const", ">", colExpr, constExpr, NonEqualIndexCondition, 5},
+		{"col < const", "<", colExpr, constExpr, NonEqualIndexCondition, 5},
+		{"const >= col", ">=", constExpr, colExpr, NonEqualIndexCondition, 5},
+		{"const <= col", "<=", constExpr, colExpr, NonEqualIndexCondition, 5},
+		{"const > col", ">", constExpr, colExpr, NonEqualIndexCondition, 5},
+		{"const < col", "<", constExpr, colExpr, NonEqualIndexCondition, 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := makeComparisonExpr(tt.op, tt.left, tt.right)
+			fn := filter.GetF()
+			gotType, gotCol := checkIndexFilter(fn)
+			assert.Equal(t, tt.wantType, gotType)
+			require.NotNil(t, gotCol)
+			assert.Equal(t, tt.wantColPos, gotCol.ColPos)
+		})
+	}
+}
+
+func TestCanonicalRangeOp(t *testing.T) {
+	colExpr := makeSpatialColExpr(1)
+	constExpr := makeInt64LiteralExpr(5)
+
+	tests := []struct {
+		name  string
+		op    string
+		left  *planpb.Expr
+		right *planpb.Expr
+		want  string
+	}{
+		{"col >= const → >=", ">=", colExpr, constExpr, ">="},
+		{"col > const → >", ">", colExpr, constExpr, ">"},
+		{"col <= const → <=", "<=", colExpr, constExpr, "<="},
+		{"col < const → <", "<", colExpr, constExpr, "<"},
+		{"const >= col → <=", ">=", constExpr, colExpr, "<="},
+		{"const > col → <", ">", constExpr, colExpr, "<"},
+		{"const <= col → >=", "<=", constExpr, colExpr, ">="},
+		{"const < col → >", "<", constExpr, colExpr, ">"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := makeComparisonExpr(tt.op, tt.left, tt.right)
+			fn := filter.GetF()
+			got := canonicalRangeOp(fn)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRangeFilterConstValue(t *testing.T) {
+	colExpr := makeSpatialColExpr(1)
+	constExpr := makeInt64LiteralExpr(42)
+
+	// col >= const: value is const (right side)
+	filter1 := makeComparisonExpr(">=", colExpr, constExpr)
+	val1 := rangeFilterConstValue(filter1.GetF())
+	require.NotNil(t, val1)
+	assert.Equal(t, int64(42), val1.GetLit().GetI64Val())
+
+	// const < col: value is const (left side)
+	filter2 := makeComparisonExpr("<", constExpr, colExpr)
+	val2 := rangeFilterConstValue(filter2.GetF())
+	require.NotNil(t, val2)
+	assert.Equal(t, int64(42), val2.GetLit().GetI64Val())
+}

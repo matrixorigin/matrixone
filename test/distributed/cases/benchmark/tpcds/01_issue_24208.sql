@@ -1,4 +1,3 @@
--- @bvt:issue#24208
 -- Reproduces the q34 root cause on the AP merge-group path.
 -- The first partial batch contains only non-null customer keys, while a
 -- later batch contains the NULL group that used to be dropped.

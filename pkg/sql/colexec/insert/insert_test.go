@@ -21,16 +21,19 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -165,4 +168,251 @@ func TestInsert_initBufForS3(t *testing.T) {
 			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
 		})
 	}
+}
+
+type testS3MemThrottler struct {
+	grants       []bool
+	acquired     []int64
+	released     int64
+	forceRefresh int
+}
+
+func (t *testS3MemThrottler) Refresh() {}
+
+func (t *testS3MemThrottler) ForceRefresh() {
+	t.forceRefresh++
+}
+
+func (t *testS3MemThrottler) PrintUsage() {}
+
+func (t *testS3MemThrottler) Acquire(size int64) (int64, bool) {
+	t.acquired = append(t.acquired, size)
+	if len(t.grants) == 0 {
+		return 0, false
+	}
+	grant := t.grants[0]
+	t.grants = t.grants[1:]
+	return 0, grant
+}
+
+func (t *testS3MemThrottler) Release(size int64) int64 {
+	t.released += size
+	return 0
+}
+
+func (t *testS3MemThrottler) Available() int64 {
+	return 0
+}
+
+type testRefreshOnlyThrottler struct {
+	refreshed int
+}
+
+func (t *testRefreshOnlyThrottler) Refresh() {
+	t.refreshed++
+}
+
+func TestInsertAcquireS3WriteMemory(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true, true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler: throttler,
+		},
+	}
+
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1024}, throttler.acquired)
+	require.Equal(t, int64(1024), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
+
+	err = insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1024, 1024}, throttler.acquired)
+	require.Equal(t, int64(2048), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
+}
+
+func TestInsertAcquireS3WriteMemoryFlushesBeforeRetry(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{false, false, true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemGranted:   2048,
+			s3MemThrottler: throttler,
+		},
+	}
+
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 4096)
+	require.NoError(t, err)
+	require.Equal(t, []int64{4096, 4096, 4096}, throttler.acquired)
+	require.Equal(t, int64(2048), throttler.released)
+	require.Equal(t, int64(4096), insert.ctr.s3MemGranted)
+	require.Equal(t, 1, throttler.forceRefresh)
+}
+
+func TestInsertAcquireS3WriteMemoryCapsReservationToS3Threshold(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler: throttler,
+		},
+	}
+
+	size := colexec.WriteS3Threshold * 4
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(colexec.WriteS3Threshold)}, throttler.acquired)
+	require.Equal(t, int64(colexec.WriteS3Threshold), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
+
+	err = insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(colexec.WriteS3Threshold)}, throttler.acquired)
+}
+
+func TestInsertAcquireS3WriteMemoryDoesNotCapPipelineFlush(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{true}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler:      throttler,
+			s3MemNoThresholdCap: true,
+		},
+	}
+
+	size := colexec.WriteS3Threshold * 4
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), size)
+	require.NoError(t, err)
+	require.Equal(t, []int64{int64(size)}, throttler.acquired)
+	require.Equal(t, int64(size), insert.ctr.s3MemGranted)
+	require.Equal(t, 0, throttler.forceRefresh)
+}
+
+func TestInsertAcquireS3WriteMemoryReturnsExhaustedError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	throttler := &testS3MemThrottler{grants: []bool{false, false, false, false}}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{},
+		ctr: container{
+			s3MemThrottler: throttler,
+		},
+	}
+
+	err := insert.acquireS3WriteMemory(proc, process.NewAnalyzer(0, false, false, "insert"), 1024)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CN S3 write memory is exhausted")
+	require.Equal(t, []int64{1024, 1024, 1024, 1024}, throttler.acquired)
+	require.Equal(t, 2, throttler.forceRefresh)
+}
+
+func TestForcedRefreshFallsBackToRefresh(t *testing.T) {
+	throttler := &testRefreshOnlyThrottler{}
+	forcedRefresh(throttler)
+	require.Equal(t, 1, throttler.refreshed)
+}
+
+func TestInsertPrepareToWriteS3WithPipelineFlush(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	proc.Ctx = context.WithValue(proc.Ctx, ioutil.PipelineFlushKey, true)
+	throttler := &testS3MemThrottler{}
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.CNMemoryThrottler, throttler)
+
+	insert := &Insert{
+		ToWriteS3: true,
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+	}
+
+	err := insert.Prepare(proc)
+	require.NoError(t, err)
+	require.True(t, insert.ctr.s3MemNoThresholdCap)
+	require.Same(t, throttler, insert.ctr.s3MemThrottler)
+	require.NotNil(t, insert.ctr.s3Writer)
+	require.NotNil(t, insert.ctr.buf)
+	require.Equal(t, colexec.WriteS3Threshold, insert.ctr.s3Writer.MemorySizeThreshold())
+}
+
+func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	throttler := &testS3MemThrottler{}
+	insert := &Insert{
+		InsertCtx: &InsertCtx{
+			TableDef: testInsertS3TableDef(),
+		},
+		ctr: container{
+			s3Writer:       colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false),
+			s3MemGranted:   1024,
+			s3MemThrottler: throttler,
+		},
+	}
+	insert.initBufForS3()
+	defer insert.ctr.s3Writer.Close()
+
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	err = insert.ctr.s3Writer.Write(proc.Ctx, bat)
+	require.NoError(t, err)
+
+	err = insert.flushS3WriterOnMemoryPressure(proc, process.NewAnalyzer(0, false, false, "insert"))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), insert.ctr.s3MemGranted)
+	require.Equal(t, int64(1024), throttler.released)
+	require.NotNil(t, insert.ctr.buf)
+	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func testInsertS3TableDef() *plan.TableDef {
+	tableDef := &plan.TableDef{
+		Name: "t1",
+		Cols: []*plan.ColDef{
+			{ColId: 0, Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}, NotNull: true, Primary: true, Default: &plan.Default{NullAbility: false}},
+			{ColId: 1, Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 8192}, NotNull: true},
+			{ColId: 2, Name: catalog.Row_ID, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Cols:        []uint64{0},
+			PkeyColId:   0,
+			PkeyColName: "a",
+			Names:       []string{"a"},
+		},
+		Name2ColIndex: map[string]int32{
+			"a":            0,
+			"b":            1,
+			catalog.Row_ID: 2,
+		},
+	}
+	return tableDef
 }

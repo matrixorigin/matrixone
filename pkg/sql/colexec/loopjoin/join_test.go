@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -126,6 +127,192 @@ func TestJoin(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	int32Type := types.T_int32.ToType()
+	fr, err := function.GetFunctionByName(context.Background(), "=", []types.Type{int32Type, int32Type})
+	require.NoError(t, err)
+	fid := fr.GetEncodedOverloadID()
+	cond := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					}},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: 0,
+					}},
+				},
+			},
+			Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
+		}},
+	}
+
+	tag++
+	join := &LoopJoin{
+		NonEqCond:  cond,
+		ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(-1, 0)},
+		LeftTypes:  []types.Type{int32Type},
+		RightTypes: []types.Type{int32Type},
+		JoinType:   plan.Node_MARK,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 1,
+			},
+		},
+		JoinMapTag: tag,
+	}
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeInt32LoopJoinBatch(proc.Mp(), []int32{1, 4}),
+	}))
+
+	build := &hashbuild.HashBuild{
+		NeedBatches:   true,
+		JoinMapTag:    tag,
+		JoinMapRefCnt: 1,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 0,
+			},
+		},
+	}
+	build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeInt32LoopJoinBatch(proc.Mp(), []int32{1}),
+		makeInt32LoopJoinBatch(proc.Mp(), []int32{1}),
+	}))
+
+	require.NoError(t, join.Prepare(proc))
+	require.NoError(t, build.Prepare(proc))
+
+	res, err := vm.Exec(build, proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+
+	res, err = vm.Exec(join, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.Equal(t, []int32{1, 4}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[:2])
+	require.Equal(t, []bool{true, false}, vector.MustFixedColNoTypeCheck[bool](res.Batch.Vecs[1])[:2])
+	require.False(t, res.Batch.Vecs[1].GetNulls().Contains(0))
+	require.False(t, res.Batch.Vecs[1].GetNulls().Contains(1))
+
+	join.Free(proc, false, nil)
+	build.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	int32Type := types.T_int32.ToType()
+	fr, err := function.GetFunctionByName(context.Background(), "=", []types.Type{int32Type, int32Type})
+	require.NoError(t, err)
+	fid := fr.GetEncodedOverloadID()
+	cond := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					}},
+				},
+				{
+					Typ: plan.Type{Id: int32(types.T_int32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: 0,
+					}},
+				},
+			},
+			Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
+		}},
+	}
+
+	tag++
+	join := &LoopJoin{
+		NonEqCond:  cond,
+		ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(-1, 0)},
+		LeftTypes:  []types.Type{int32Type},
+		RightTypes: []types.Type{int32Type},
+		JoinType:   plan.Node_MARK,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 1,
+			},
+		},
+		JoinMapTag: tag,
+	}
+	leftVals := make([]int32, colexec.DefaultBatchSize+1)
+	for i := range leftVals {
+		leftVals[i] = int32(i)
+	}
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeInt32LoopJoinBatch(proc.Mp(), leftVals),
+	}))
+
+	build := &hashbuild.HashBuild{
+		NeedBatches:   true,
+		JoinMapTag:    tag,
+		JoinMapRefCnt: 1,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 0,
+			},
+		},
+	}
+	build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeInt32LoopJoinBatch(proc.Mp(), []int32{-1}),
+	}))
+
+	require.NoError(t, join.Prepare(proc))
+	require.NoError(t, build.Prepare(proc))
+
+	res, err := vm.Exec(build, proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+
+	res, err = vm.Exec(join, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, colexec.DefaultBatchSize, res.Batch.RowCount())
+	require.Equal(t, int32(0), vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[0])
+	require.Equal(t, int32(colexec.DefaultBatchSize-1), vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[colexec.DefaultBatchSize-1])
+
+	res, err = vm.Exec(join, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, 1, res.Batch.RowCount())
+	require.Equal(t, int32(colexec.DefaultBatchSize), vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[0])
+	require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](res.Batch.Vecs[1])[:1])
+	require.False(t, res.Batch.Vecs[1].GetNulls().Contains(0))
+
+	join.Free(proc, false, nil)
+	build.Free(proc, false, nil)
+	proc.Free()
+}
+
+func makeInt32LoopJoinBatch(mp *mpool.MPool, vals []int32) *batch.Batch {
+	bat := batch.New([]string{"id"})
+	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
+	bat.SetRowCount(len(vals))
+	return bat
 }
 
 /*
