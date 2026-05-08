@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -433,4 +435,96 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
 		})
 	}
+}
+
+// TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.
+// Covers legacy-JSON fallback where Option[] still carries hive_partitioning /
+// hive_partition_columns (stripHiveOptionKeys did not run). The key behavior:
+// each key's skip-if-set guard must only inspect its own field; otherwise a
+// reversed option order silently drops hive_partitioning=true.
+func TestParseHiveOptionKV(t *testing.T) {
+	t.Run("canonical order applies both", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Option = []string{
+			"hive_partitioning", "true",
+			"hive_partition_columns", "year,month",
+		}
+		for i := 0; i < len(param.Option); i += 2 {
+			handled, err := parseHiveOptionKV(param, param.Option[i], param.Option[i+1])
+			require.True(t, handled)
+			require.NoError(t, err)
+		}
+		assert.True(t, param.HivePartitioning)
+		assert.Equal(t, []string{"year", "month"}, param.HivePartitionCols)
+	})
+
+	// Each key's skip-if-set guard must inspect only its own field. A coupled
+	// guard that treats non-empty HivePartitionCols as "already handled" would
+	// silently drop hive_partitioning=true when cols appeared first in Option[],
+	// leaving the table mis-classified as non-hive. Keep this case as a
+	// regression for that contract.
+	t.Run("reversed order still applies both", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Option = []string{
+			"hive_partition_columns", "year,month",
+			"hive_partitioning", "true",
+		}
+		for i := 0; i < len(param.Option); i += 2 {
+			handled, err := parseHiveOptionKV(param, param.Option[i], param.Option[i+1])
+			require.True(t, handled, "key=%s", param.Option[i])
+			require.NoError(t, err)
+		}
+		assert.True(t, param.HivePartitioning,
+			"hive_partitioning must not be dropped when cols appeared first in Option[]")
+		assert.Equal(t, []string{"year", "month"}, param.HivePartitionCols)
+	})
+
+	t.Run("pre-populated HivePartitioning is not overwritten", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.HivePartitioning = true
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "false")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.True(t, param.HivePartitioning, "skip-if-set must not flip true→false")
+	})
+
+	t.Run("pre-populated HivePartitionCols is not overwritten", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.HivePartitionCols = []string{"year"}
+		handled, err := parseHiveOptionKV(param, "hive_partition_columns", "month,day")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"year"}, param.HivePartitionCols)
+	})
+
+	t.Run("invalid bool value reports error", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "yes")
+		require.True(t, handled)
+		require.Error(t, err)
+	})
+
+	t.Run("non-hive key returns not-handled", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "filepath", "/data/")
+		assert.False(t, handled)
+		assert.NoError(t, err)
+	})
+
+	t.Run("false value", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "false")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.False(t, param.HivePartitioning)
+	})
+
+	t.Run("cols lowercased and trimmed", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "hive_partition_columns", "  Year ,  MONTH  , , Day ")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"year", "month", "day"}, param.HivePartitionCols)
+	})
 }

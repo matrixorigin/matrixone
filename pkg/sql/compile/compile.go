@@ -1604,6 +1604,11 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 }
 
 func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	// Hive partition tables use recursive list-and-filter discovery, not ReadDir.
+	// ReadDir requires glob patterns in filepath; Hive base paths are opaque directories.
+	if param.HivePartitioning {
+		return c.getHivePartitionFileList(node, param)
+	}
 	switch node.ExternScan.Type {
 	case int32(plan.ExternType_EXTERNAL_TB):
 		t := time.Now()
@@ -1637,6 +1642,68 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 	return fileList, fileSize, nil
 }
 
+func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternParam) ([]string, []int64, error) {
+	partColSet := toLowerSet(param.HivePartitionCols)
+	partFilters, fpFilters, rowFilters := external.ClassifyFilters(
+		node.TableDef, node.FilterList, partColSet)
+
+	preds := external.ExtractPartitionPredicatesFromExprs(node.TableDef, partFilters, partColSet)
+
+	listDir := external.NewListDirFunc(param)
+	result, err := external.DiscoverHivePartitions(
+		c.proc.Ctx, listDir, param.Filepath,
+		param.HivePartitionCols, param.HivePartitionColTypes, preds)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fileList := make([]string, len(result.Files))
+	fileSize := make([]int64, len(result.Files))
+	for i, f := range result.Files {
+		fileList[i] = f.FilePath
+		fileSize[i] = f.FileSize
+	}
+
+	if len(fpFilters) > 0 {
+		var leftover []*plan.Expr
+		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node.TableDef, fpFilters, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		rowFilters = append(rowFilters, leftover...)
+	}
+
+	node.FilterList = rowFilters
+	return fileList, fileSize, nil
+}
+
+func runFilePathFilters(
+	ctx context.Context,
+	proc *process.Process,
+	tableDef *plan.TableDef,
+	fpFilters []*plan.Expr,
+	fileList []string,
+	fileSize []int64,
+) ([]string, []int64, []*plan.Expr, error) {
+	tmpNode := &plan.Node{
+		TableDef:   tableDef,
+		FilterList: fpFilters,
+	}
+	outFileList, outFileSize, err := external.FilterFileList(ctx, tmpNode, proc, fileList, fileSize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return outFileList, outFileSize, tmpNode.FilterList, nil
+}
+
+func toLowerSet(cols []string) map[string]bool {
+	m := make(map[string]bool, len(cols))
+	for _, col := range cols {
+		m[strings.ToLower(col)] = true
+	}
+	return m
+}
+
 func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
@@ -1661,6 +1728,12 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	}
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(node, param, strictSqlMode)
+	}
+
+	// Hive partition tables must not enter parallel read paths — the parallel loop
+	// mutates param.Filepath per file, which breaks ExtractPartitionValues' base path.
+	if param.HivePartitioning {
+		param.Parallel = false
 	}
 
 	fileList, fileSize, err := c.getExternalFileListAndSize(node, param)
