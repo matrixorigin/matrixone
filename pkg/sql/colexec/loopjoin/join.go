@@ -122,6 +122,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
+				for i := range ctr.rbat.Vecs {
+					ctr.rbat.Vecs[i].ResetWithSameType()
+				}
 				for i, rp := range loopJoin.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
@@ -163,8 +166,7 @@ func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm
 			}
 		} else {
 			if ap.JoinType == LoopLeft || ap.JoinType == LoopSingle {
-				ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-				ctr.rbat.Vecs[i].SetLength(ctr.inbat.RowCount())
+				vector.SetConstNull(ctr.rbat.Vecs[i], ctr.inbat.RowCount(), proc.Mp())
 			} else if ap.JoinType == LoopMark {
 				err := vector.SetConstFixed(ctr.rbat.Vecs[i], false, ctr.inbat.RowCount(), proc.Mp())
 				if err != nil {

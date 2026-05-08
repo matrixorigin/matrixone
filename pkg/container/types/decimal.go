@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1498,6 +1499,7 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	flag := false
 	t := false
 	floatflag := false
+	expDigitSeen := false
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
@@ -1550,18 +1552,17 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+					return
+				}
 				floatflag = true
 				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
-				continue
-			}
-			if x[i] == '+' && floatflag {
-				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
 				continue
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
@@ -1593,11 +1594,24 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 				scale++
 			}
 		} else {
+			expDigitSeen = true
+			// Guard against exponent overflow: bail out before scalecount
+			// wraps int32, instead of letting huge exponents produce a
+			// silently wrong scale.
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+				return
+			}
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
 		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal64.", x)
 		return
 	}
@@ -1607,6 +1621,13 @@ func Parse64(x string) (y Decimal64, scale int32, err error) {
 	if floatflag {
 		if scalesign {
 			scalecount = -scalecount
+		}
+		// scale -= scalecount can overflow int32 when scalecount is near the
+		// bounds; detect this explicitly as out-of-range.
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64.", x)
+			return
 		}
 		scale -= scalecount
 		if scale < 0 {
@@ -1690,15 +1711,19 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 	i := 0
 	flag := false
 	floatflag := false
+	expDigitSeen := false
 	scalecount := int32(0)
 	scalesign := false
 	signx := false
-	if x[0] == '-' {
+	for i < len(x) && x[i] == ' ' {
 		i++
-		signx = true
+	}
+	if i < len(x) && (x[i] == '-' || x[i] == '+') {
+		signx = x[i] == '-'
+		i++
 	}
 	for i < len(x) {
-		if x[i] == ' ' || x[i] == '+' {
+		if x[i] == ' ' {
 			i++
 			continue
 		}
@@ -1741,14 +1766,17 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				return
 			}
 		} else if x[i] < '0' || x[i] > '9' {
-			if x[i] == 'e' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+					return
+				}
 				floatflag = true
 				i++
-				continue
-			}
-			if x[i] == '-' && floatflag {
-				scalesign = true
-				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
 				continue
 			}
 			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
@@ -1782,11 +1810,21 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 				scale++
 			}
 		} else {
+			expDigitSeen = true
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+				return
+			}
 			scalecount = scalecount*10 + int32(x[i]-'0')
 		}
 		i++
 	}
 	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
 		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal128.", x)
 		return
 	}
@@ -1797,12 +1835,178 @@ func Parse128(x string) (y Decimal128, scale int32, err error) {
 		if scalesign {
 			scalecount = -scalecount
 		}
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+			return
+		}
 		scale -= scalecount
 		if scale < 0 {
 			y, err = y.Scale(-scale)
 			scale = 0
 			if err != nil {
 				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128.", x)
+			}
+		}
+	}
+	if signx {
+		y = y.Minus()
+	}
+	return
+}
+
+func Parse256(x string) (y Decimal256, scale int32, err error) {
+	if x == "" {
+		return Decimal256{}, 0, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	var z Decimal256
+	width := 0
+	t := false
+	scale = -1
+	i := 0
+	flag := false
+	floatflag := false
+	expDigitSeen := false
+	scalecount := int32(0)
+	scalesign := false
+	signx := false
+	for i < len(x) && x[i] == ' ' {
+		i++
+	}
+	if i < len(x) && (x[i] == '-' || x[i] == '+') {
+		signx = x[i] == '-'
+		i++
+	}
+	for i < len(x) {
+		if x[i] == ' ' {
+			i++
+			continue
+		}
+		if x[i] == 'x' && i != 0 && x[i-1] == '0' &&
+			y.B0_63 == 0 && y.B64_127 == 0 && y.B128_191 == 0 && y.B192_255 == 0 {
+			t = true
+			i++
+			continue
+		}
+		if t {
+			if (x[i] >= '0' && x[i] <= '9') || (x[i] >= 'a' && x[i] <= 'f') || (x[i] >= 'A' && x[i] <= 'F') {
+				xx := uint64(0)
+				if x[i] >= '0' && x[i] <= '9' {
+					xx = uint64(x[i] - '0')
+				} else if x[i] >= 'a' && x[i] <= 'f' {
+					xx = uint64(x[i]-'a') + 10
+				} else {
+					xx = uint64(x[i]-'A') + 10
+				}
+				flag = true
+				z, err = y.Mul256(Decimal256{16, 0, 0, 0})
+				if err == nil {
+					y, err = z.Add256(Decimal256{xx, 0, 0, 0})
+				}
+				if err != nil {
+					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+					return
+				}
+			} else {
+				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				return
+			}
+			i++
+			continue
+		}
+		if x[i] == '.' {
+			if scale == -1 {
+				scale = 0
+			} else {
+				err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+				return
+			}
+		} else if x[i] < '0' || x[i] > '9' {
+			if x[i] == 'e' || x[i] == 'E' {
+				if floatflag {
+					err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+					return
+				}
+				floatflag = true
+				i++
+				if i < len(x) && (x[i] == '-' || x[i] == '+') {
+					scalesign = x[i] == '-'
+					i++
+				}
+				continue
+			}
+			err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+			return
+		} else if !floatflag {
+			if width == 76 {
+				if scale == -1 {
+					err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+					return
+				}
+				if x[i] >= '5' {
+					y, err = y.Add256(Decimal256{1, 0, 0, 0})
+					if err != nil {
+						err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+						return
+					}
+					y1, _ := y.Mod256(Decimal256{10, 0, 0, 0})
+					if y1.B0_63 == 0 && y1.B64_127 == 0 && y1.B128_191 == 0 && y1.B192_255 == 0 {
+						scale--
+						y, _ = y.Scale(-1)
+					}
+				}
+				break
+			}
+			flag = true
+			z, err = y.Mul256(Decimal256{Pow10[1], 0, 0, 0})
+			if err == nil {
+				y, err = z.Add256(Decimal256{uint64(x[i] - '0'), 0, 0, 0})
+			}
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				return
+			}
+			width++
+			if scale != -1 {
+				scale++
+			}
+		} else {
+			expDigitSeen = true
+			if scalecount > math.MaxInt32/10 ||
+				(scalecount == math.MaxInt32/10 && int32(x[i]-'0') > math.MaxInt32%10) {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				return
+			}
+			scalecount = scalecount*10 + int32(x[i]-'0')
+		}
+		i++
+	}
+	if !flag {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+		return
+	}
+	if floatflag && !expDigitSeen {
+		err = moerr.NewInvalidInputNoCtxf("%s is illegal string, can't be converted to Decimal256.", x)
+		return
+	}
+	if scale == -1 {
+		scale = 0
+	}
+	if floatflag {
+		if scalesign {
+			scalecount = -scalecount
+		}
+		if (scalecount > 0 && scale < math.MinInt32+scalecount) ||
+			(scalecount < 0 && scale > math.MaxInt32+scalecount) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			return
+		}
+		scale -= scalecount
+		if scale < 0 {
+			y, err = y.Scale(-scale)
+			scale = 0
+			if err != nil {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
 			}
 		}
 	}
@@ -1848,6 +2052,84 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 	} else {
 		if !y.Less(z) {
 			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
+			return
+		}
+	}
+	return
+}
+
+func decimal256Pow10(width int32) (Decimal256, error) {
+	result := Decimal256{1, 0, 0, 0}
+	for width > 19 {
+		next, err := result.Mul256(Decimal256{Pow10[19], 0, 0, 0})
+		if err != nil {
+			return Decimal256{}, err
+		}
+		result = next
+		width -= 19
+	}
+	if width > 0 {
+		next, err := result.Mul256(Decimal256{Pow10[width], 0, 0, 0})
+		if err != nil {
+			return Decimal256{}, err
+		}
+		result = next
+	}
+	return result, nil
+}
+
+func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
+	if x == "" {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	if width > 76 {
+		width = 76
+	}
+	n := int32(0)
+	y, n, err = Parse256(x)
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	if n > scale {
+		y, _ = y.Scale(scale - n)
+	} else {
+		y, err = y.Scale(scale - n)
+		if err != nil {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			return
+		}
+	}
+	z, err := decimal256Pow10(width)
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	if y.Sign() {
+		if y.Less(z.Minus()) {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+			return
+		}
+	} else if !y.Less(z) {
+		err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
+		return
+	}
+	return
+}
+
+func ParseDecimal256FromByte(x string, width, scale int32) (y Decimal256, err error) {
+	if x == "" {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("can't cast empty string to Decimal256")
+	}
+	y = Decimal256{}
+	n := len(x)
+	for i := 0; i < n; i++ {
+		y, err = y.Mul256(Decimal256{256, 0, 0, 0})
+		if err != nil {
+			return
+		}
+		y, err = y.Add256(Decimal256{uint64(x[i]), 0, 0, 0})
+		if err != nil {
 			return
 		}
 	}
@@ -1939,8 +2221,31 @@ func (x Decimal128) Format(scale int32) string {
 }
 
 func (x Decimal256) Format(scale int32) string {
-	a := ""
-	return a
+	signx := x.Sign()
+	if signx {
+		x = x.Minus()
+	}
+
+	n := new(big.Int).SetUint64(x.B192_255)
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B128_191))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B64_127))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B0_63))
+
+	s := n.String()
+	if scale > 0 {
+		for int32(len(s)) <= scale {
+			s = "0" + s
+		}
+		pos := len(s) - int(scale)
+		s = s[:pos] + "." + s[pos:]
+	}
+	if signx && s != "0" {
+		s = "-" + s
+	}
+	return s
 }
 
 func (x Decimal64) Ceil(scale1, scale2 int32, isConst bool) Decimal64 {

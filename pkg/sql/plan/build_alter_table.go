@@ -316,8 +316,8 @@ func buildAlterInsertDataSQL(
 	}
 
 	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
-		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+		formatIdent(schemaName), formatIdent(copyTableName), insertBuffer.String(),
+		selectBuffer.String(), formatIdent(schemaName), formatIdent(originTableName))
 
 	return insertSQL, nil
 }

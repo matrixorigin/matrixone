@@ -17,6 +17,7 @@ package types
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 )
 
@@ -69,12 +70,225 @@ func TestParse64ScientificNotation(t *testing.T) {
 	}
 }
 
+// TestParse128LeadingWhitespaceAndSigns verifies Parse128/Parse256 accept the
+// leading whitespace / `+` / `-` branches.
+func TestParse128LeadingWhitespaceAndSigns(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"  42", "42"},
+		{"+42", "42"},
+		{"-42", "-42"},
+		{"  -3.14", "-3.14"},
+		{"  +3.14e2", "314.00"},
+	}
+	for _, c := range cases {
+		v128, s128, err := Parse128(c.in)
+		if err != nil {
+			t.Errorf("Parse128(%q) err=%v", c.in, err)
+			continue
+		}
+		got128 := v128.Format(s128)
+		if got128 != c.want && got128 != strings.TrimSuffix(c.want, ".00") {
+			t.Errorf("Parse128(%q) got %q want %q", c.in, got128, c.want)
+		}
+
+		v256, s256, err := Parse256(c.in)
+		if err != nil {
+			t.Errorf("Parse256(%q) err=%v", c.in, err)
+			continue
+		}
+		got256 := v256.Format(s256)
+		if got256 != c.want && got256 != strings.TrimSuffix(c.want, ".00") {
+			t.Errorf("Parse256(%q) got %q want %q", c.in, got256, c.want)
+		}
+	}
+}
+
+// TestParse128HexLiteral exercises the hex-literal branch (0x...) in Parse128
+// and Parse256.
+func TestParse128HexLiteral(t *testing.T) {
+	if v, _, err := Parse128("0x1a"); err != nil || v.B0_63 != 26 {
+		t.Errorf("Parse128(0x1a) v=%v err=%v", v, err)
+	}
+	if v, _, err := Parse256("0xff"); err != nil || v.B0_63 != 255 {
+		t.Errorf("Parse256(0xff) v=%v err=%v", v, err)
+	}
+	// Invalid hex digit is rejected.
+	if _, _, err := Parse128("0xzz"); err == nil {
+		t.Errorf("Parse128(0xzz) should reject")
+	}
+}
+
+func TestParseDecimalsAcceptCommonForms(t *testing.T) {
+	positives := []string{
+		"42",
+		"-42",
+		"3.14",
+		"-3.14",
+		"1.23e4",
+		"1.23e+4",
+		"1.23e-4",
+		"1.23E4",
+		"1.23E+4",
+		"1.23E-4",
+		"+1.23",
+		"0",
+		"-0",
+		"0.0",
+		"0x1a", // hex for Parse128/256 but not Parse64
+	}
+	for _, s := range positives {
+		_, _, _ = Parse64(s)
+		_, _, _ = Parse128(s)
+		_, _, _ = Parse256(s)
+	}
+
+	// Confirm a couple of edge-case rejections match expectations (must be
+	// rejected by all three widths).
+	rejects := []string{
+		"",      // empty
+		"abc",   // non-numeric
+		"12..3", // double dot
+		"1.2.3", // double dot
+	}
+	for _, s := range rejects {
+		if _, _, err := Parse64(s); err == nil {
+			t.Errorf("Parse64(%q) should reject", s)
+		}
+		if _, _, err := Parse128(s); err == nil {
+			t.Errorf("Parse128(%q) should reject", s)
+		}
+		if _, _, err := Parse256(s); err == nil {
+			t.Errorf("Parse256(%q) should reject", s)
+		}
+	}
+}
+
+// TestParseDecimalScalePropagation exercises the scale-subtraction overflow
+// guard by combining a positive-scale digit stream with a huge exponent so
+// that the final scale calculation would wrap int32.
+func TestParseDecimalScalePropagation(t *testing.T) {
+	// Positive exponent at the int32 boundary: scalecount accumulates past
+	// MaxInt32/10, tripping the guard.
+	boundary := "0.1e2147483600"
+	if _, _, err := Parse64(boundary); err == nil {
+		t.Errorf("Parse64(%q) expected out-of-range error", boundary)
+	}
+	if _, _, err := Parse128(boundary); err == nil {
+		t.Errorf("Parse128(%q) expected out-of-range error", boundary)
+	}
+	if _, _, err := Parse256(boundary); err == nil {
+		t.Errorf("Parse256(%q) expected out-of-range error", boundary)
+	}
+}
+
+// TestParseDecimalRejectsOverflowingExponent verifies scientific-notation
+// exponents that would overflow int32 during parsing are rejected as
+// out-of-range instead of silently wrapping.
+func TestParseDecimalRejectsOverflowingExponent(t *testing.T) {
+	// >10 digit exponents easily exceed int32 capacity.
+	bigExp := "1e99999999999"
+	if _, _, err := Parse64(bigExp); err == nil {
+		t.Errorf("Parse64(%q) expected an error for huge exponent", bigExp)
+	}
+	if _, _, err := Parse128(bigExp); err == nil {
+		t.Errorf("Parse128(%q) expected an error for huge exponent", bigExp)
+	}
+	if _, _, err := Parse256(bigExp); err == nil {
+		t.Errorf("Parse256(%q) expected an error for huge exponent", bigExp)
+	}
+}
+
+// TestParse64RejectsMalformedScientific verifies Decimal64 mirrors
+// Decimal128/256's strict exponent validation: exactly one `e`/`E`, at most
+// one sign right after it, and no trailing non-digit characters.
+func TestParse64RejectsMalformedScientific(t *testing.T) {
+	cases := []string{
+		"1e",    // nothing after e
+		"1e+",   // sign after e but no digit
+		"1e-",   // sign after e but no digit
+		"1E",    // capital E variant
+		"1e+-5", // double sign
+		"1e++5", // double sign
+		"1e1e2", // two exponents
+		"1ea",   // letter after e
+	}
+	for _, s := range cases {
+		_, _, err := Parse64(s)
+		if err == nil {
+			t.Errorf("Parse64(%q) expected an error, got nil", s)
+		}
+	}
+}
+
 func TestParse128(t *testing.T) {
 	x, y := ParseDecimal128("99999.999999999999999999999999999999999", 12, 6)
 	if y != nil || x.B0_63 != 100000000000 {
 		panic("Decimal128Parse wrong")
 	}
 }
+
+func TestParse128ScientificNotationWithPlusSign(t *testing.T) {
+	x, err := ParseDecimal128("1.23456789e+06", 20, 2)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal128 scientific notation with plus sign: %v", err)
+	}
+	expected := Decimal128{B0_63: 123456789, B64_127: 0}
+	if x != expected {
+		t.Fatalf("ParseDecimal128('1.23456789e+06', 20, 2) = %v, expected %v", x, expected)
+	}
+}
+
+func TestParse128RejectsMisplacedPlusSign(t *testing.T) {
+	if _, err := ParseDecimal128("1+2", 20, 0); err == nil {
+		t.Fatalf("ParseDecimal128 accepted misplaced plus sign")
+	}
+	if _, err := ParseDecimal128("1e++2", 20, 0); err == nil {
+		t.Fatalf("ParseDecimal128 accepted duplicate exponent plus sign")
+	}
+}
+
+func TestParseDecimal256(t *testing.T) {
+	x, err := ParseDecimal256("123456789012345678901234567890.123456789012345678901234567890", 65, 30)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256: %v", err)
+	}
+	if got := x.Format(30); got != "123456789012345678901234567890.123456789012345678901234567890" {
+		t.Fatalf("Decimal256 Format(30) = %s", got)
+	}
+}
+
+func TestParseDecimal256ScientificNotationWithPlusSign(t *testing.T) {
+	x, err := ParseDecimal256("1.23456789e+06", 65, 2)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256 scientific notation with plus sign: %v", err)
+	}
+	if got := x.Format(2); got != "1234567.89" {
+		t.Fatalf("Decimal256 scientific notation Format(2) = %s", got)
+	}
+}
+
+func TestParseDecimal256RejectsMisplacedPlusSign(t *testing.T) {
+	if _, err := ParseDecimal256("1+2", 65, 0); err == nil {
+		t.Fatalf("ParseDecimal256 accepted misplaced plus sign")
+	}
+	if _, err := ParseDecimal256("1e++2", 65, 0); err == nil {
+		t.Fatalf("ParseDecimal256 accepted duplicate exponent plus sign")
+	}
+}
+
+func TestParseDecimal256FromByte(t *testing.T) {
+	x, err := ParseDecimal256FromByte("\x01\x00", 65, 0)
+	if err != nil {
+		t.Fatalf("Failed to parse Decimal256 from bytes: %v", err)
+	}
+	if got := x.Format(0); got != "256" {
+		t.Fatalf("Decimal256 from bytes Format(0) = %s", got)
+	}
+}
+
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x
