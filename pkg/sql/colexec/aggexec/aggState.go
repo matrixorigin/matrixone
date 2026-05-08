@@ -297,11 +297,13 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 						if err := types.WriteSizeBytes(nil, buf); err != nil {
 							return err
 						}
-					} else if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
-						return err
 					} else {
-						if err := types.WriteSizeBytes(bs, buf); err != nil {
+						if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
 							return err
+						} else {
+							if err := types.WriteSizeBytes(bs, buf); err != nil {
+								return err
+							}
 						}
 					}
 				}
@@ -336,15 +338,24 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 		}
 		if info.makeMarshalerUnmarshaler != nil {
 			for _, entry := range ag.mobs[:ag.length] {
+				/*
+					for gap between groups like:
+					group 0 , group 1(gap), group 2.
+
+					group 0 and group 2 have data.
+					group 1 does not have data. there is no marshal for group 1.
+				*/
 				if entry == nil {
 					if err := types.WriteSizeBytes(nil, buf); err != nil {
 						return err
 					}
-				} else if bs, err := entry.MarshalBinary(); err != nil {
-					return err
 				} else {
-					if err := types.WriteSizeBytes(bs, buf); err != nil {
+					if bs, err := entry.MarshalBinary(); err != nil {
 						return err
+					} else {
+						if err := types.WriteSizeBytes(bs, buf); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -391,6 +402,7 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 					return 0, err
 				}
 				if sz > 0 {
+					//only need marshal for size > 0.
 					if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
 						return 0, err
 					}
