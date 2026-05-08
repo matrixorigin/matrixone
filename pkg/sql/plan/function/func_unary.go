@@ -1358,12 +1358,40 @@ func getWeekMode(modes vector.FunctionParameterWrapper[int64], row uint64) (int,
 	return int(mode & 7), false
 }
 
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return 0, nil
+	}
+
+	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return 0, nil
+	}
+
+	mode, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
+	}
+	return int(mode & 7), nil
+}
+
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
 	var modes vector.FunctionParameterWrapper[int64]
 	if len(ivecs) > 1 {
 		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -1382,7 +1410,7 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		week := int(date.WeekOfYear2())
+		week := date.Week(defaultMode)
 		if modes != nil {
 			mode, null := getWeekMode(modes, i)
 			if null {
@@ -1408,6 +1436,14 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	if len(ivecs) > 1 {
 		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -1425,7 +1461,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
-		week := int(dt.ToDate().WeekOfYear2())
+		week := dt.ToDate().Week(defaultMode)
 		if modes != nil {
 			mode, null := getWeekMode(modes, i)
 			if null {
