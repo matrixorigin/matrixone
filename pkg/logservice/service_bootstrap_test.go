@@ -18,13 +18,16 @@ import (
 	"context"
 	"path"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetBackupData(t *testing.T) {
@@ -106,6 +109,40 @@ func TestServiceBootstrap(t *testing.T) {
 			s.cfg.UUID = parts[1]
 			s.cfg.BootstrapConfig.Restore.FilePath = ""
 			assert.NoError(t, s.BootstrapHAKeeper(ctx, s.cfg))
+		}
+		runServiceTest(t, false, false, fn)
+	})
+
+	// Guards the #24300 review follow-up: if startReplicas's zombie
+	// self-check has classified the local HAKeeper (shardID=0, replicaID)
+	// as removed, BootstrapHAKeeper must honor that decision and refuse
+	// to re-start the replica. Otherwise the production
+	// NewService -> Start -> BootstrapHAKeeper path would immediately
+	// resurrect the zombie that startReplicas just skipped.
+	t.Run("skips zombie HAKeeper replica", func(t *testing.T) {
+		fn := func(t *testing.T, s *Service) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			assert.Greater(t, len(s.cfg.BootstrapConfig.InitHAKeeperMembers), 0)
+			member := s.cfg.BootstrapConfig.InitHAKeeperMembers[0]
+			parts := strings.Split(member, ":")
+			require.Equal(t, 2, len(parts))
+			s.cfg.UUID = parts[1]
+			replicaID, ok := s.cfg.Bootstrapping()
+			require.True(t, ok)
+
+			// Seed the skippedZombies set as if startReplicas had already
+			// classified this HAKeeper replica as removed.
+			s.store.mu.Lock()
+			s.store.mu.skippedZombies = map[zombieKey]struct{}{
+				{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}: {},
+			}
+			s.store.mu.Unlock()
+
+			require.NoError(t, s.BootstrapHAKeeper(ctx, s.cfg))
+			// startHAKeeperReplica was not called, so haKeeperReplicaID is
+			// still zero and dragonboat does not know about shard 0.
+			assert.Equal(t, uint64(0), atomic.LoadUint64(&s.store.haKeeperReplicaID))
 		}
 		runServiceTest(t, false, false, fn)
 	})
