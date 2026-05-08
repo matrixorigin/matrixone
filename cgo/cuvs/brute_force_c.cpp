@@ -335,8 +335,129 @@ void gpu_brute_force_destroy(gpu_brute_force_c index_c, void* errmsg) {
         auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
         delete any;
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_destroy", e.what());
+    }
+}
+
+// ---------- Filter wrappers ----------
+
+void gpu_brute_force_set_filter_columns(gpu_brute_force_c index_c, const char* col_meta_json,
+                                        uint64_t total_count, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        std::string meta = col_meta_json ? col_meta_json : "";
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->set_filter_columns(meta, total_count); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->set_filter_columns(meta, total_count); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_set_filter_columns", e.what());
+    }
+}
+
+void gpu_brute_force_add_filter_chunk(gpu_brute_force_c index_c, uint32_t col_idx,
+                                      const void* data, const uint32_t* null_bitmap,
+                                      uint64_t nrows, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            case Quantization_F16: static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->add_filter_chunk(col_idx, data, null_bitmap, nrows); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_add_filter_chunk", e.what());
+    }
+}
+
+gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_force_c index_c,
+                                                                    const void* queries_data,
+                                                                    uint64_t num_queries, uint32_t query_dimension,
+                                                                    uint32_t limit, const char* preds_json,
+                                                                    void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        brute_force_search_params_t sp;
+        std::string preds = preds_json ? preds_json : "";
+        void* result_ptr = nullptr;
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<float>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_with_filter(static_cast<const float*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+                result_ptr = cpp_res;
+                break;
+            }
+            case Quantization_F16: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<half>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_with_filter(static_cast<const half*>(queries_data), num_queries, query_dimension, limit, sp, preds);
+                result_ptr = cpp_res;
+                break;
+            }
+            default: break;
+        }
+        return static_cast<gpu_brute_force_search_result_c>(result_ptr);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_with_filter", e.what());
+        return nullptr;
+    }
+}
+
+gpu_brute_force_search_result_c gpu_brute_force_search_float_with_filter(gpu_brute_force_c index_c,
+                                                                          const float* queries_data,
+                                                                          uint64_t num_queries, uint32_t query_dimension,
+                                                                          uint32_t limit, const char* preds_json,
+                                                                          void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        brute_force_search_params_t sp;
+        std::string preds = preds_json ? preds_json : "";
+        void* result_ptr = nullptr;
+        switch (any->qtype) {
+            case Quantization_F32: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<float>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds);
+                result_ptr = cpp_res;
+                break;
+            }
+            case Quantization_F16: {
+                auto* cpp_res = new matrixone::gpu_brute_force_t<half>::search_result_t();
+                *cpp_res = static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float_with_filter(queries_data, num_queries, query_dimension, limit, sp, preds);
+                result_ptr = cpp_res;
+                break;
+            }
+            default: break;
+        }
+        return static_cast<gpu_brute_force_search_result_c>(result_ptr);
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter", e.what());
+        return nullptr;
+    }
+}
+
+uint64_t gpu_brute_force_search_float_with_filter_async(gpu_brute_force_c index_c,
+                                                         const float* queries_data,
+                                                         uint64_t num_queries, uint32_t query_dimension,
+                                                         uint32_t limit, const char* preds_json,
+                                                         void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_brute_force_any_t*>(index_c);
+        brute_force_search_params_t sp;
+        std::string preds = preds_json ? preds_json : "";
+        switch (any->qtype) {
+            case Quantization_F32: return static_cast<matrixone::gpu_brute_force_t<float>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            case Quantization_F16: return static_cast<matrixone::gpu_brute_force_t<half>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_brute_force_search_float_with_filter_async", e.what());
+        return 0;
     }
 }
 

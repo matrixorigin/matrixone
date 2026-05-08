@@ -874,19 +874,9 @@ public:
         }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            const int num_shards = this->devices_.size();
-            // Per-shard CPU mask eval on the calling thread. Each shard owns a
-            // disjoint slice [start_row, start_row+shard_sz), keyed by rank.
-            // eval_filter_bitmap_cpu is itself OpenMP-parallel; iterating
-            // shards sequentially here keeps thread-pool contention bounded.
-            std::vector<std::shared_ptr<host_mask_bundle_t>> shard_masks(num_shards);
-            for (int rank = 0; rank < num_shards; ++rank) {
-                uint64_t shard_sz  = this->shard_sizes_[rank];
-                uint64_t start_row = 0;
-                for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
-                shard_masks[rank] = std::make_shared<host_mask_bundle_t>(
-                    this->build_filter_host_mask(preds_json, start_row, shard_sz));
-            }
+            // Per-shard CPU mask eval on the calling thread (off-worker).
+            auto shard_masks   = this->build_filter_shard_masks(preds_json);
+            const int num_shards = static_cast<int>(shard_masks.size());
 
             std::vector<search_result_t> shard_results(num_shards);
             auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
@@ -903,8 +893,7 @@ public:
         }
 
         // Single-device / replicated: one mask covering all rows.
-        auto mask = std::make_shared<host_mask_bundle_t>(
-            this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count));
+        auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", mask.get());
         };
@@ -1312,15 +1301,8 @@ public:
         }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            const int num_shards = this->devices_.size();
-            std::vector<std::shared_ptr<host_mask_bundle_t>> shard_masks(num_shards);
-            for (int rank = 0; rank < num_shards; ++rank) {
-                uint64_t shard_sz  = this->shard_sizes_[rank];
-                uint64_t start_row = 0;
-                for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
-                shard_masks[rank] = std::make_shared<host_mask_bundle_t>(
-                    this->build_filter_host_mask(preds_json, start_row, shard_sz));
-            }
+            auto shard_masks   = this->build_filter_shard_masks(preds_json);
+            const int num_shards = static_cast<int>(shard_masks.size());
 
             std::vector<search_result_t> shard_results(num_shards);
             auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
@@ -1336,8 +1318,7 @@ public:
             return this->merge_sharded_results(shard_results, num_queries, limit);
         }
 
-        auto mask = std::make_shared<host_mask_bundle_t>(
-            this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count));
+        auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };
@@ -1346,6 +1327,59 @@ public:
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         return std::any_cast<search_result_t>(result_wait.result);
+    }
+
+    // Async variant of search_float_with_filter. Builds the host mask bundle on
+    // the calling thread (same off-worker pattern as the sync filter), copies
+    // queries into a shared_ptr so they outlive the Go caller, captures both in
+    // the worker lambda, and returns a job_id that search_wait() can collect.
+    // Used by the multi-index filter path so per-shard searches run in parallel.
+    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+                                            uint32_t query_dimension, uint32_t limit,
+                                            const ivf_pq_search_params_t& sp,
+                                            const std::string& preds_json) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+        }
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+
+        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            // Bitmap eval moved INSIDE the submit_main task — the calling
+            // (Go) thread returns immediately with a job_id; main_thread_
+            // does eval → fan-out → wait → merge, off both the Go thread
+            // and the GPU workers.
+            auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, preds_json](raft_handle_wrapper_t& /*handle*/) -> std::any {
+                auto shard_masks = this->build_filter_shard_masks(preds_json);
+                int num_shards = this->devices_.size();
+                std::vector<search_result_t> shard_results(num_shards);
+                auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                    int rank = gpu_handle.get_rank();
+                    return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                };
+                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+                for (int i = 0; i < num_shards; ++i) {
+                    auto res = this->worker->wait(job_ids[i]).get();
+                    if (res.error) std::rethrow_exception(res.error);
+                    shard_results[i] = std::any_cast<search_result_t>(res.result);
+                }
+                return this->merge_sharded_results(shard_results, num_queries, limit);
+            };
+            return this->worker->submit_main(task);
+        }
+
+        // Single-GPU / replicated: bitmap eval stays on the calling thread
+        // and the GPU search goes through worker->submit so concurrent calls
+        // can be auto-batched in the device queue. Wrapping in submit_main
+        // would force serialization through main_thread_ and lose batching.
+        auto mask = this->build_filter_single_mask(preds_json);
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
+        };
+        return this->worker->submit(task);
     }
 
     uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {

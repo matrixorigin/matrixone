@@ -143,6 +143,9 @@ public:
     using ivf_flat_index = cuvs::neighbors::ivf_flat::index<T, int64_t>;
     using mg_index = cuvs::neighbors::mg_index<ivf_flat_index, T, int64_t>;
     using search_result_t = ivf_flat_search_result_t;
+    // Inherited dependent type — bring into scope so search_internal can take a
+    // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
+    using host_mask_bundle_t = typename gpu_index_base_t<T, ivf_flat_build_params_t, int64_t>::host_mask_bundle_t;
 
     std::unique_ptr<ivf_flat_index> index_;
     std::string data_filename_;
@@ -688,10 +691,14 @@ public:
         }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
+            // Off-worker CPU mask eval — see search_internal for the contract.
+            auto shard_masks   = this->build_filter_shard_masks(preds_json);
+            const int num_shards = static_cast<int>(shard_masks.size());
+
             std::vector<search_result_t> shard_results(num_shards);
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_internal(gpu_handle, queries_data, num_queries, limit, sp, preds_json);
+            auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                int rank = gpu_handle.get_rank();
+                return this->search_internal(gpu_handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             for (int i = 0; i < num_shards; ++i) {
@@ -702,8 +709,9 @@ public:
             return this->merge_sharded_results(shard_results, num_queries, limit);
         }
 
-        auto task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_internal(handle, queries_data, num_queries, limit, sp, preds_json);
+        auto mask = this->build_filter_single_mask(preds_json);
+        auto task = [this, num_queries, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", mask.get());
         };
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         uint64_t job_id = this->worker->submit(task);
@@ -830,6 +838,9 @@ public:
     }
 
     // Filtered variant of search_float() — see search_with_filter() for rationale.
+    // Same off-worker bitmap-eval pattern as IVF-PQ: build_filter_host_mask
+    // runs on the calling thread, the bundle is captured by shared_ptr in the
+    // worker lambda, and the worker only does GPU work.
     search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const ivf_flat_search_params_t& sp,
@@ -841,10 +852,13 @@ public:
         }
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
+            auto shard_masks   = this->build_filter_shard_masks(preds_json);
+            const int num_shards = static_cast<int>(shard_masks.size());
+
             std::vector<search_result_t> shard_results(num_shards);
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_float_internal(gpu_handle, queries_data, num_queries, this->dimension, limit, sp, preds_json);
+            auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                int rank = gpu_handle.get_rank();
+                return this->search_float_internal(gpu_handle, queries_data, num_queries, this->dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             for (int i = 0; i < num_shards; ++i) {
@@ -855,14 +869,67 @@ public:
             return this->merge_sharded_results(shard_results, num_queries, limit);
         }
 
-        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, preds_json](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        auto mask = this->build_filter_single_mask(preds_json);
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         uint64_t job_id = this->worker->submit(task);
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
         return std::any_cast<search_result_t>(result_wait.result);
+    }
+
+    // Async variant of search_float_with_filter. Builds the host mask bundle on
+    // the calling thread (off-worker), copies queries into a shared_ptr so they
+    // outlive the Go caller, captures both in the worker lambda, and returns a
+    // job_id that search_wait() can collect. Used by the multi-index filter
+    // path so per-shard searches run in parallel.
+    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+                                            uint32_t query_dimension, uint32_t limit,
+                                            const ivf_flat_search_params_t& sp,
+                                            const std::string& preds_json) {
+        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+        }
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+
+        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+
+        if (this->dist_mode == DistributionMode_SHARDED) {
+            // Bitmap eval moved INSIDE the submit_main task — the calling
+            // (Go) thread returns immediately with a job_id; main_thread_
+            // does eval → fan-out → wait → merge.
+            auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, preds_json](raft_handle_wrapper_t& /*handle*/) -> std::any {
+                auto shard_masks = this->build_filter_shard_masks(preds_json);
+                int num_shards = this->devices_.size();
+                std::vector<search_result_t> shard_results(num_shards);
+                auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                    int rank = gpu_handle.get_rank();
+                    return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                };
+                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+                for (int i = 0; i < num_shards; ++i) {
+                    auto res = this->worker->wait(job_ids[i]).get();
+                    if (res.error) std::rethrow_exception(res.error);
+                    shard_results[i] = std::any_cast<search_result_t>(res.result);
+                }
+                return this->merge_sharded_results(shard_results, num_queries, limit);
+            };
+            return this->worker->submit_main(task);
+        }
+
+        // Single-GPU / replicated: bitmap eval stays on the calling thread
+        // and the GPU search goes through worker->submit so concurrent calls
+        // can be auto-batched in the device queue. Wrapping in submit_main
+        // would force serialization through main_thread_ and lose batching.
+        auto mask = this->build_filter_single_mask(preds_json);
+        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
+        };
+        return this->worker->submit(task);
     }
 
     uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
@@ -934,7 +1001,15 @@ public:
         return future.get();
     }
 
-    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "") {
+    // `prebuilt`, when non-null, supplies a host_mask_bundle_t computed off the
+    // worker thread (see search_with_filter below). On that path we skip the
+    // queries-H2D sync_stream — the search kernel queues on the same stream
+    // immediately after the queries / bitset H2D copies and is naturally
+    // ordered, so the only barrier we need is the terminal handle.sync().
+    // The bundle's host_mask is kept alive by a shared_ptr captured in the
+    // worker lambda. When prebuilt is null we use the legacy build_search_bitset
+    // entry point which keeps its own internal sync (host_mask is local there).
+    search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
@@ -942,7 +1017,12 @@ public:
 
         auto queries_device = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
         raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
-        raft::resource::sync_stream(*res);
+        // Legacy path syncs so build_search_bitset's stack-local host bitmap can
+        // drain on the same stream. Prebuilt path skips: bitset H2D queues
+        // naturally behind queries H2D and the kernel.
+        if (!prebuilt) {
+            raft::resource::sync_stream(*res);
+        }
 
         search_result_t search_res;
         search_res.neighbors.resize(num_queries * limit);
@@ -992,7 +1072,17 @@ public:
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+
+            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+            if (prebuilt) {
+                if (prebuilt->has_filter) {
+                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                } else if (prebuilt->deletes_only) {
+                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                }
+            } else {
+                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+            }
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1046,20 +1136,23 @@ public:
         return search_res;
     }
 
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "") {
+    // See search_internal() above for the prebuilt-bundle contract; identical
+    // semantics here (off-worker CPU mask eval, skip queries-H2D sync_stream
+    // when prebuilt is non-null).
+    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
         // std::shared_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
         // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
-        
+
         if constexpr (std::is_same_v<T, float>) {
             raft::copy(*res, q_dev_t.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
         } else {
             auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
             raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-            
+
             if constexpr (sizeof(T) == 1) {
                 if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                 this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
@@ -1068,7 +1161,12 @@ public:
                 raft::copy(*res, q_dev_t.view(), q_dev_f.view());
             }
         }
-        raft::resource::sync_stream(*res);
+        // Legacy path syncs so build_search_bitset's stack-local host bitmap can
+        // drain on the same stream. Prebuilt path skips: bitset H2D queues
+        // naturally behind queries H2D and the kernel.
+        if (!prebuilt) {
+            raft::resource::sync_stream(*res);
+        }
 
 
         search_result_t search_res;
@@ -1119,7 +1217,17 @@ public:
                 start_row = 0;
                 for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
             }
-            auto bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+
+            std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
+            if (prebuilt) {
+                if (prebuilt->has_filter) {
+                    bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                } else if (prebuilt->deletes_only) {
+                    bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
+                }
+            } else {
+                bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+            }
 
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());

@@ -651,6 +651,35 @@ public:
         return bs;
     }
 
+    // Off-worker mask-building helpers shared by the filtered-search entry
+    // points of every derived index type (IVF-PQ, CAGRA, IVF-Flat). Both
+    // evaluate predicates on the calling thread and wrap each bundle in a
+    // shared_ptr so worker lambdas can capture it by value; the bundle's
+    // host_mask therefore outlives the worker's H2D + kernel naturally and
+    // upload_host_mask does not need its own sync_stream.
+
+    // SHARDED: one bundle per shard, sized [start_row(rank), shard_sizes_[rank]).
+    std::vector<std::shared_ptr<host_mask_bundle_t>>
+    build_filter_shard_masks(const std::string& preds_json) {
+        const int num_shards = static_cast<int>(this->devices_.size());
+        std::vector<std::shared_ptr<host_mask_bundle_t>> shard_masks(num_shards);
+        for (int rank = 0; rank < num_shards; ++rank) {
+            uint64_t shard_sz  = this->shard_sizes_[rank];
+            uint64_t start_row = 0;
+            for (int r = 0; r < rank; ++r) start_row += this->shard_sizes_[r];
+            shard_masks[rank] = std::make_shared<host_mask_bundle_t>(
+                this->build_filter_host_mask(preds_json, start_row, shard_sz));
+        }
+        return shard_masks;
+    }
+
+    // SINGLE_GPU / REPLICATED: a single bundle covering [0, count).
+    std::shared_ptr<host_mask_bundle_t>
+    build_filter_single_mask(const std::string& preds_json) {
+        return std::make_shared<host_mask_bundle_t>(
+            this->build_filter_host_mask(preds_json, /*start_row=*/0, this->count));
+    }
+
     void set_ids(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
         std::unique_lock<std::shared_mutex> lock(mutex_);

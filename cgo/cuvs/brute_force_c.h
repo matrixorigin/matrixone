@@ -69,6 +69,39 @@ void gpu_brute_force_get_results(gpu_brute_force_search_result_c result_c, uint6
 // Frees the memory for a gpu_brute_force_search_result_c object
 void gpu_brute_force_free_search_result(gpu_brute_force_search_result_c result_c);
 
+// ---------- Pre-filter (INCLUDE columns) ----------
+// See cagra_c.h for JSON format details.
+void gpu_brute_force_set_filter_columns(gpu_brute_force_c index_c, const char* col_meta_json,
+                                        uint64_t total_count, void* errmsg);
+
+// null_bitmap: LSB-first bits where 1 = row is NULL; NULL pointer = dense.
+void gpu_brute_force_add_filter_chunk(gpu_brute_force_c index_c, uint32_t col_idx,
+                                      const void* data, const uint32_t* null_bitmap,
+                                      uint64_t nrows, void* errmsg);
+
+// Filtered search variants. preds_json is a JSON predicate array;
+// passing NULL or "" yields unfiltered behavior (delegates to the deletes-only
+// fast path internally if any rows are tombstoned).
+gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_force_c index_c,
+                                                                    const void* queries_data,
+                                                                    uint64_t num_queries, uint32_t query_dimension,
+                                                                    uint32_t limit, const char* preds_json,
+                                                                    void* errmsg);
+
+gpu_brute_force_search_result_c gpu_brute_force_search_float_with_filter(gpu_brute_force_c index_c,
+                                                                          const float* queries_data,
+                                                                          uint64_t num_queries, uint32_t query_dimension,
+                                                                          uint32_t limit, const char* preds_json,
+                                                                          void* errmsg);
+
+// Async variant of gpu_brute_force_search_float_with_filter. Returns a job_id
+// that is collected with the existing gpu_brute_force_search_wait.
+uint64_t gpu_brute_force_search_float_with_filter_async(gpu_brute_force_c index_c,
+                                                         const float* queries_data,
+                                                         uint64_t num_queries, uint32_t query_dimension,
+                                                         uint32_t limit, const char* preds_json,
+                                                         void* errmsg);
+
 // Returns the capacity of the index buffer
 uint64_t gpu_brute_force_cap(gpu_brute_force_c index_c);
 
