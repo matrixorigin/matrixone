@@ -16,6 +16,8 @@ package aggexec
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -26,6 +28,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type errMarshalerUnmarshaler struct {
+	err error
+}
+
+func (e errMarshalerUnmarshaler) MarshalBinary() ([]byte, error) {
+	return nil, e.err
+}
+
+func (e errMarshalerUnmarshaler) UnmarshalBinary([]byte) error {
+	return e.err
+}
+
+func (e errMarshalerUnmarshaler) UnmarshalFromReader(io.Reader) error {
+	return e.err
+}
 
 func buildTestBitmapVecs(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
@@ -247,4 +265,53 @@ func TestBitmapConstructSaveIntermediateResultOfChunkMinimal(t *testing.T) {
 
 	vec.Free(mp)
 	exec.Free()
+}
+
+func TestAggStateMarshalerUnmarshalerErrorPaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+	expectedErr := errors.New("expected marshaler error")
+	info := aggInfo{
+		makeMarshalerUnmarshaler: makeBmpMarshalerUnmarshaler,
+	}
+
+	t.Run("write flagged state", func(t *testing.T) {
+		ag := aggState{
+			length:   1,
+			capacity: 1,
+			mobs:     []MarshalerUnmarshaler{errMarshalerUnmarshaler{err: expectedErr}},
+		}
+
+		var buf bytes.Buffer
+		err := ag.writeStateToBuf(mp, &info, []uint8{1}, &buf)
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("write whole chunk", func(t *testing.T) {
+		ag := aggState{
+			length:   1,
+			capacity: 1,
+			mobs:     []MarshalerUnmarshaler{errMarshalerUnmarshaler{err: expectedErr}},
+		}
+
+		var buf bytes.Buffer
+		err := ag.writeAllStatesToBuf(&buf, &info)
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("make marshaler while reading", func(t *testing.T) {
+		info := aggInfo{
+			makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
+				return nil, expectedErr
+			},
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, buf.WriteByte(0))
+
+		var ag aggState
+		_, err := ag.readState(mp, &buf, &info)
+		require.ErrorIs(t, err, expectedErr)
+	})
 }
