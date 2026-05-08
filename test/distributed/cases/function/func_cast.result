@@ -81,7 +81,7 @@ select cast(NULL as DATE);
 ➤ cast(null as date)[91,64,0]  𝄀
 null
 select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
-➤ date_add(cast(2004-12-30 12:00:00 as date), interval(0, hour))[93,64,0]  𝄀
+➤ date_add(cast(2004-12-30 12:00:00 as date), interval 0 hour)[93,64,0]  𝄀
 2004-12-30 00:00:00
 select cast(18446744073709551615 as unsigned);
 ➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀

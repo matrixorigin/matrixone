@@ -253,6 +253,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ParallelLoadRequested = stmt.Param.Parallel
 
 	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
