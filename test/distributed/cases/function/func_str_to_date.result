@@ -143,7 +143,7 @@ select str_to_date('11:13:56', '%r');
 str_to_date(11:13:56, %r)
 11:13:56
 SELECT DATE_ADD(str_to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_add(str_to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_add(str_to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT str_to_date('01,5,2013','%d,%m,%Y');
 str_to_date(01,5,2013, %d,%m,%Y)
@@ -197,10 +197,10 @@ select str_to_date('04/30/2004 ', '%m/%d/%Y ');
 str_to_date(04/30/2004 , %m/%d/%Y )
 2004-04-30
 SELECT DATE_SUB(str_to_date('9999-12-31 00:01:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_sub(str_to_date(9999-12-31 00:01:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_sub(str_to_date(9999-12-31 00:01:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT DATE_ADD(str_to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_add(str_to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_add(str_to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT str_to_date('09:22', '%H:%i');
 str_to_date(09:22, %H:%i)
@@ -230,7 +230,7 @@ select to_date('11:13:56', '%r');
 to_date(11:13:56, %r)
 11:13:56
 SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_add(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_add(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT to_date('01,5,2013','%d,%m,%Y');
 to_date(01,5,2013, %d,%m,%Y)
@@ -284,10 +284,10 @@ select to_date('04/30/2004 ', '%m/%d/%Y ');
 to_date(04/30/2004 , %m/%d/%Y )
 2004-04-30
 SELECT DATE_SUB(to_date('9999-12-31 00:01:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_sub(to_date(9999-12-31 00:01:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_sub(to_date(9999-12-31 00:01:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
-date_add(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval(1, minute))
+date_add(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), interval 1 minute)
 9999-12-31 00:00:00
 SELECT to_date('09:22', '%H:%i');
 to_date(09:22, %H:%i)

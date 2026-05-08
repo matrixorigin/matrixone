@@ -50,13 +50,14 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	ParallelLoad  bool
-	StrictSqlMode bool
-	Close         byte
-	maxBatchSize  uint64
-	Idx           int
-	ColumnListLen int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
-	CreateSql     string
+	ParallelLoad           bool
+	LoadEmptyNumericAsZero bool
+	StrictSqlMode          bool
+	Close                  byte
+	maxBatchSize           uint64
+	Idx                    int
+	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
+	CreateSql              string
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr

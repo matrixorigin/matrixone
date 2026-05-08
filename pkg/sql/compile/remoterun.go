@@ -652,15 +652,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:           t.Es.Attrs,
-			ColumnListLen:   t.Es.ColumnListLen,
-			Cols:            t.Es.Cols,
-			FileSize:        t.Es.FileSize,
-			FileOffsetTotal: t.Es.FileOffsetTotal,
-			CreateSql:       t.Es.CreateSql,
-			FileList:        t.Es.FileList,
-			Filter:          t.Es.Filter.FilterExpr,
-			StrictSqlMode:   t.Es.StrictSqlMode,
+			Attrs:                  t.Es.Attrs,
+			ColumnListLen:          t.Es.ColumnListLen,
+			Cols:                   t.Es.Cols,
+			FileSize:               t.Es.FileSize,
+			FileOffsetTotal:        t.Es.FileOffsetTotal,
+			CreateSql:              t.Es.CreateSql,
+			FileList:               t.Es.FileList,
+			Filter:                 t.Es.Filter.FilterExpr,
+			StrictSqlMode:          t.Es.StrictSqlMode,
+			ParallelLoad:           t.Es.ParallelLoad,
+			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -1102,14 +1104,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:           t.Attrs,
-					ColumnListLen:   t.ColumnListLen,
-					FileSize:        t.FileSize,
-					FileOffsetTotal: t.FileOffsetTotal,
-					Cols:            t.Cols,
-					CreateSql:       t.CreateSql,
-					FileList:        t.FileList,
-					StrictSqlMode:   t.StrictSqlMode,
+					Attrs:                  t.Attrs,
+					ColumnListLen:          t.ColumnListLen,
+					FileSize:               t.FileSize,
+					FileOffsetTotal:        t.FileOffsetTotal,
+					Cols:                   t.Cols,
+					CreateSql:              t.CreateSql,
+					FileList:               t.FileList,
+					StrictSqlMode:          t.StrictSqlMode,
+					ParallelLoad:           t.ParallelLoad,
+					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),

@@ -341,16 +341,18 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:           t.Es.Attrs,
-					Cols:            t.Es.Cols,
-					ColumnListLen:   t.Es.ColumnListLen,
-					Idx:             index,
-					CreateSql:       t.Es.CreateSql,
-					FileList:        t.Es.FileList,
-					FileSize:        t.Es.FileSize,
-					FileOffsetTotal: t.Es.FileOffsetTotal,
-					Extern:          t.Es.Extern,
-					StrictSqlMode:   t.Es.StrictSqlMode,
+					Attrs:                  t.Es.Attrs,
+					Cols:                   t.Es.Cols,
+					ColumnListLen:          t.Es.ColumnListLen,
+					Idx:                    index,
+					CreateSql:              t.Es.CreateSql,
+					FileList:               t.Es.FileList,
+					FileSize:               t.Es.FileSize,
+					FileOffsetTotal:        t.Es.FileOffsetTotal,
+					Extern:                 t.Es.Extern,
+					StrictSqlMode:          t.Es.StrictSqlMode,
+					ParallelLoad:           t.Es.ParallelLoad,
+					LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -903,6 +905,8 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
+					(param.Parallel || param.ParallelLoadRequested),
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),

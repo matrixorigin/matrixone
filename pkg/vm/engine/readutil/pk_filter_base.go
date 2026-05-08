@@ -303,6 +303,29 @@ func ConstructBasePKFilter(
 			}
 			filter.Oid = oid
 
+		case "in_range":
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			if !ok || len(vals) < 3 {
+				return
+			}
+			filter.Valid = true
+			flag := types.DecodeInt64(vals[2])
+			switch flag {
+			case 0:
+				filter.Op = function.BETWEEN
+			case 1:
+				filter.Op = RangeLeftOpen
+			case 2:
+				filter.Op = RangeRightOpen
+			case 3:
+				filter.Op = RangeBothOpen
+			default:
+				return
+			}
+			filter.LB = vals[0]
+			filter.UB = vals[1]
+			filter.Oid = oid
+
 		case "between":
 			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
@@ -315,6 +338,17 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_between":
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			if !ok {
+				return
+			}
+			filter.Valid = true
+			filter.Op = function.PREFIX_BETWEEN
+			filter.LB = vals[0]
+			filter.UB = vals[1]
+			filter.Oid = oid
+
+		case "prefix_in_range":
 			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return

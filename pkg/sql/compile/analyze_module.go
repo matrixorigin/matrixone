@@ -361,38 +361,76 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 	return receivers
 }
 
-// ConvertOperatorToPhyOperator Convert Operator to PhyOperator
+// phyOpArena pre-allocates backing storage for PhyOperator nodes and their
+// Children pointer slices, reducing per-node heap allocations to zero.
+type phyOpArena struct {
+	nodes    []models.PhyOperator
+	childBuf []*models.PhyOperator
+}
+
+// ConvertOperatorToPhyOperator converts an Operator tree to a PhyOperator tree.
+// All PhyOperator nodes and child-pointer slices are allocated from a single
+// arena to minimize heap allocations and reduce GC pressure.
 func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
 	if op == nil {
 		return nil
 	}
+	n := countOperators(op)
+	arena := phyOpArena{
+		nodes:    make([]models.PhyOperator, 0, n),
+		childBuf: make([]*models.PhyOperator, 0, n),
+	}
+	return convertOperatorToPhyOperator(op, rmp, &arena)
+}
 
-	phyOp := &models.PhyOperator{
-		OpName:       op.OpType().String(),
-		NodeIdx:      op.GetOperatorBase().Idx,
-		DestReceiver: getDestReceiver(op, rmp),
-		IsFirst:      op.GetOperatorBase().IsFirst,
-		IsLast:       op.GetOperatorBase().IsLast,
+func countOperators(op vm.Operator) int {
+	if op == nil {
+		return 0
+	}
+	n := 1
+	for _, child := range op.GetOperatorBase().Children {
+		n += countOperators(child)
+	}
+	return n
+}
+
+func convertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int, arena *phyOpArena) *models.PhyOperator {
+	if op == nil {
+		return nil
 	}
 
-	if op.GetOperatorBase().IsFirst {
+	base := op.GetOperatorBase()
+	arena.nodes = append(arena.nodes, models.PhyOperator{
+		OpName:       op.OpType().String(),
+		NodeIdx:      base.Idx,
+		DestReceiver: getDestReceiver(op, rmp),
+		IsFirst:      base.IsFirst,
+		IsLast:       base.IsLast,
+	})
+	phyOp := &arena.nodes[len(arena.nodes)-1]
+
+	if base.IsFirst {
 		phyOp.Status |= 1 << 0
 	}
-	if op.GetOperatorBase().IsLast {
+	if base.IsLast {
 		phyOp.Status |= 1 << 1
 	}
 
-	if op.GetOperatorBase().OpAnalyzer != nil {
-		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	if base.OpAnalyzer != nil {
+		phyOp.OpStats = base.OpAnalyzer.GetOpStats()
 	}
 
-	children := op.GetOperatorBase().Children
-	phyChildren := make([]*models.PhyOperator, len(children))
-	for i, child := range children {
-		phyChildren[i] = ConvertOperatorToPhyOperator(child, rmp)
+	children := base.Children
+	if len(children) > 0 {
+		start := len(arena.childBuf)
+		for range children {
+			arena.childBuf = append(arena.childBuf, nil)
+		}
+		phyOp.Children = arena.childBuf[start : start+len(children)]
+		for i, child := range children {
+			phyOp.Children[i] = convertOperatorToPhyOperator(child, rmp, arena)
+		}
 	}
-
-	phyOp.Children = phyChildren
 	return phyOp
 }
 
@@ -418,49 +456,35 @@ func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
 	return true
 }
 
-// getDestReceiver returns the DestReceiver of the current Operator
+// getDestReceiver returns the DestReceiver of the current Operator.
+// Returns nil for operators that have no receivers (the common case).
 func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.PhyReceiver {
-	receivers := make([]models.PhyReceiver, 0)
 	id := op.OpType()
-	_, ok := debugInstructionNames[id]
-	if ok {
-		if id == vm.Connector {
-			arg := op.(*connector.Connector)
-			if receiverId, okk := mp[arg.Reg]; okk {
-				//receivers = append(receivers, receiverId)
-				receivers = append(receivers, models.PhyReceiver{
-					Idx:        receiverId,
-					RemoteUuid: "",
-				})
-			}
-		} else if id == vm.Dispatch {
-			arg := op.(*dispatch.Dispatch)
-			for i := range arg.LocalRegs {
-				if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
-					//receivers = append(receivers, receiverId)
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        receiverId,
-						RemoteUuid: "",
-					})
-				} else {
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        -1,
-						RemoteUuid: "",
-					})
-				}
-			}
-
-			if len(arg.RemoteRegs) != 0 {
-				for _, reg := range arg.RemoteRegs {
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        -2, // reg.NodeAddr
-						RemoteUuid: reg.Uuid.String(),
-					})
-				}
+	switch id {
+	case vm.Connector:
+		arg := op.(*connector.Connector)
+		if receiverId, ok := mp[arg.Reg]; ok {
+			return []models.PhyReceiver{{Idx: receiverId}}
+		}
+	case vm.Dispatch:
+		arg := op.(*dispatch.Dispatch)
+		receivers := make([]models.PhyReceiver, 0, len(arg.LocalRegs)+len(arg.RemoteRegs))
+		for i := range arg.LocalRegs {
+			if receiverId, ok := mp[arg.LocalRegs[i]]; ok {
+				receivers = append(receivers, models.PhyReceiver{Idx: receiverId})
+			} else {
+				receivers = append(receivers, models.PhyReceiver{Idx: -1})
 			}
 		}
+		for _, reg := range arg.RemoteRegs {
+			receivers = append(receivers, models.PhyReceiver{
+				Idx:        -2,
+				RemoteUuid: reg.Uuid.String(),
+			})
+		}
+		return receivers
 	}
-	return receivers
+	return nil
 }
 
 func ConvertSourceToPhySource(source *Source) *models.PhySource {
