@@ -48,6 +48,9 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
+	if group.ctr.mp != nil {
+		group.ctr.free()
+	}
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
