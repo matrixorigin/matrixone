@@ -147,6 +147,14 @@ func ReadOneBlockWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
+	var generatedIOVec fileservice.IOVector
+	defer func() {
+		if err != nil {
+			ioVec.ReleaseReadResultOnError()
+			generatedIOVec.ReleaseReadResultOnError()
+			ioVec = fileservice.IOVector{}
+		}
+	}()
 
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
@@ -194,11 +202,6 @@ func ReadOneBlockWithMeta(
 		})
 	}
 	if len(ioVec.Entries) > 0 {
-		defer func() {
-			if err != nil {
-				ioVec.ReleaseReadResultOnError()
-			}
-		}()
 		err = fs.Read(ctx, &ioVec)
 		if err != nil {
 			return
@@ -241,6 +244,9 @@ func ReadOneBlockWithMeta(
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
 				filledEntries[i].CachedData = cacheData
+				generatedIOVec.Entries = append(generatedIOVec.Entries, fileservice.IOEntry{
+					CachedData: cacheData,
+				})
 			}
 		}
 		ioVec.Entries = filledEntries
@@ -286,6 +292,7 @@ func ReadAllBlocksWithMeta(
 	err = fs.Read(ctx, &ioVec)
 	if err != nil {
 		ioVec.ReleaseReadResultOnError()
+		ioVec = fileservice.IOVector{}
 		return
 	}
 	//TODO when to call ioVec.Release?

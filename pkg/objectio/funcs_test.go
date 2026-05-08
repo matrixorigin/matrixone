@@ -105,7 +105,7 @@ func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	col.setDataType(uint8(types.T_int8))
 	col.setLocation(NewExtent(1, 0, 1, 1))
 
-	_, err := ReadOneBlockWithMeta(
+	ioVec, err := ReadOneBlockWithMeta(
 		context.Background(),
 		&meta,
 		"test-object",
@@ -119,6 +119,7 @@ func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+	require.Empty(t, ioVec.Entries)
 }
 
 func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
@@ -134,7 +135,7 @@ func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 	col.setDataType(uint8(types.T_int8))
 	col.setLocation(NewExtent(1, 0, 1, 1))
 
-	_, err := ReadAllBlocksWithMeta(
+	ioVec, err := ReadAllBlocksWithMeta(
 		context.Background(),
 		&meta,
 		"test-object",
@@ -146,6 +147,7 @@ func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+	require.Empty(t, ioVec.Entries)
 }
 
 func TestReadExtentReleasesPartialReadOnError(t *testing.T) {
