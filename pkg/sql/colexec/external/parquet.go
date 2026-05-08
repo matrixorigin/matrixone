@@ -820,6 +820,28 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if lt == nil {
 			break
 		}
+		if lt.Date != nil {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				dict := page.Dictionary()
+				if dict == nil {
+					bs, _ := data.Data()
+					ls := types.DecodeSlice[int32](bs)
+					return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Datetime {
+						return types.DaysFromUnixEpochToDate(t).ToDatetime()
+					})
+				}
+
+				dictData := dict.Page().Data()
+				bs, _ := dictData.Data()
+				dictDates := types.DecodeSlice[int32](bs)
+				indexes := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Datetime {
+					return types.DaysFromUnixEpochToDate(dictDates[int(idx)]).ToDatetime()
+				})
+			}
+			break
+		}
 		dtT := lt.Timestamp
 		if dtT == nil {
 			break

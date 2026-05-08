@@ -361,6 +361,8 @@ message ExternalScan {
   plan.Expr filter = 8;
   bool strict_sql_mode = 9;
   int32 column_list_len = 10;
+  bool parallel_load = 11;
+  bool load_empty_numeric_as_zero = 12;
 }
 
 message StreamScan {
