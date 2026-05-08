@@ -21,6 +21,8 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestGetShardInfo(t *testing.T) {
@@ -50,4 +52,60 @@ func TestGetShardInfo(t *testing.T) {
 		assert.False(t, ok)
 	}
 	runServiceTest(t, false, true, fn)
+}
+
+// TestGetShardInfo_LeaderAddressEmptyReturnsNotReady guards the discovery
+// semantics of GetShardInfo after Service.getShardInfo was changed to keep
+// membership entries whose owning store's gossip metadata has not yet been
+// delivered (ServiceAddress == ""). The membership self-check needs those
+// entries in the raw response so the ID set is authoritative, but
+// GetShardInfo's callers (e.g. connectToLogServiceByReverseProxy) must
+// still see "leader unknown" in that state — otherwise they would dial an
+// empty leader address.
+func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "uuid-1", ServiceAddress: ""}, // leader's meta not propagated yet
+				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
+			},
+		}, true, nil
+	}
+
+	_, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	assert.False(t, ok,
+		"leader entry without a resolved address must be treated as leader-unknown")
+}
+
+// TestGetShardInfo_OmitsUnreachableFollowers makes sure address-less
+// follower entries do not leak into the addresses GetShardInfo's callers
+// iterate to reach the raft shard.
+func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "uuid-1", ServiceAddress: "10.0.0.1:1"},
+				2: {UUID: "uuid-2", ServiceAddress: ""}, // follower meta not propagated
+				3: {UUID: "uuid-3", ServiceAddress: "10.0.0.3:1"},
+			},
+		}, true, nil
+	}
+
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
+	assert.Equal(t, "10.0.0.3:1", info.Replicas[3])
+	_, follower2Present := info.Replicas[2]
+	assert.False(t, follower2Present,
+		"follower entry without a resolved address must be omitted from Replicas")
 }
