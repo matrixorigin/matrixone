@@ -314,4 +314,21 @@ func TestAggStateMarshalerUnmarshalerErrorPaths(t *testing.T) {
 		_, err := ag.readState(mp, &buf, &info)
 		require.ErrorIs(t, err, expectedErr)
 	})
+
+	t.Run("unmarshal marshaler while reading", func(t *testing.T) {
+		info := aggInfo{
+			makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
+				return errMarshalerUnmarshaler{err: expectedErr}, nil
+			},
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, buf.WriteByte(0))
+
+		var ag aggState
+		_, err := ag.readState(mp, &buf, &info)
+		require.ErrorIs(t, err, expectedErr)
+	})
 }
