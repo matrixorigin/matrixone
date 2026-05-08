@@ -370,10 +370,14 @@ func typeCompatible[T any](typ types.Type) bool {
 		return typ.Oid == types.T_decimal64
 	case types.Decimal128:
 		return typ.Oid == types.T_decimal128
+	case types.Decimal256:
+		return typ.Oid == types.T_decimal256
 	case types.Uuid:
 		return typ.Oid == types.T_uuid
 	case types.Date:
 		return typ.Oid == types.T_date
+	case types.MoYear:
+		return typ.Oid == types.T_year
 	case types.Time:
 		return typ.Oid == types.T_time
 	case types.Datetime:

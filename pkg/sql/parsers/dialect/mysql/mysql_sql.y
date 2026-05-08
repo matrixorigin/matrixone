@@ -12504,8 +12504,12 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for decimal out of range (max = 30)")
+            goto ret1
+        }
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12540,8 +12544,12 @@ decimal_type:
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
         goto ret1
         }
-        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
-            yylex.Error("For decimal(M), M must between 0 and 38.")
+        if $2.Scale > 30 {
+            yylex.Error("Display scale for decimal out of range (max = 30)")
+            goto ret1
+        }
+        if $2.DisplayWith > 65 || $2.DisplayWith < 0 {
+            yylex.Error("For decimal(M), M must between 0 and 65.")
                 goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
@@ -12952,13 +12960,90 @@ spatial_type:
             },
         }
     }
-// |   POINT
-// |   LINESTRING
-// |   POLYGON
-// |   GEOMETRYCOLLECTION
-// |   MULTIPOINT
-// |   MULTILINESTRING
-// |   MULTIPOLYGON
+|   POINT
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   LINESTRING
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   POLYGON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   GEOMETRYCOLLECTION
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTIPOINT
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTILINESTRING
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
+|   MULTIPOLYGON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.GeometryFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
+            },
+        }
+    }
 
 // TODO:
 // need to encode SQL string

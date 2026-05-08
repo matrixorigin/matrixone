@@ -15,11 +15,13 @@
 package types
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // This class is only for benchmark analysis for StringToArray and ArrayToString.
@@ -260,12 +262,17 @@ func indexFrom(str, substr string, start int) int {
 	return pos
 }
 
-// stringToT convert str to T
+// stringToT convert str to T. NaN / ±Inf inputs (e.g. "NaN", "Inf") are
+// rejected here so arrays never hold non-finite elements: downstream
+// comparisons and vector math assume finite floats.
 func stringToT[T RealNumbers](str string) (t T, err error) {
 	switch any(t).(type) {
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
 		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float32.String())
+		}
+		if math.IsNaN(num) || math.IsInf(num, 0) {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float32.String())
 		}
 		// FIX: https://stackoverflow.com/a/36391858/1609570
@@ -274,6 +281,9 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 	case float64:
 		num, err := strconv.ParseFloat(str, 64)
 		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
+		}
+		if math.IsNaN(num) || math.IsInf(num, 0) {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil

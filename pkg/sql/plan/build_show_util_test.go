@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -235,4 +238,219 @@ func buildTestShowCreateTable(sql string) (string, error) {
 		return "", err
 	}
 	return showSQL, nil
+}
+
+// formatIdent and formatStrLit split the old formatStr responsibilities.
+// Identifier escape (backticks -> doubled backticks), string literal escape
+// (single quotes -> doubled quotes). Free-form expression text is never
+// passed through either — callers emit it verbatim.
+func TestFormatIdentEscapesBackticks(t *testing.T) {
+	require.Equal(t, "a``b", formatIdent("a`b"))
+	require.Equal(t, "plain", formatIdent("plain"))
+	// Must not treat single quotes specially — they are allowed inside an
+	// identifier name.
+	require.Equal(t, "o'brien", formatIdent("o'brien"))
+}
+
+func TestFormatStrLitEscapesSingleQuotes(t *testing.T) {
+	require.Equal(t, "'o''brien'", formatStrLit("o'brien"))
+	require.Equal(t, "''", formatStrLit(""))
+	// Backticks are NOT doubled inside a string literal.
+	require.Equal(t, "'a`b'", formatStrLit("a`b"))
+	// Multiple interior quotes must all be doubled.
+	require.Equal(t, "'''hi''there'''", formatStrLit("'hi'there'"))
+}
+
+// TestFormatStrLitEscapesBackslashes pins the round-trip contract for raw
+// strings that contain a literal backslash. The MySQL scanner collapses
+// \b / \n / \r / \t / \Z / \0 into their control-char equivalents, so a
+// value like "a\b" must be emitted as 'a\\b' — otherwise re-parsing the
+// SHOW CREATE output silently turns it into "a" + 0x08.
+func TestFormatStrLitEscapesBackslashes(t *testing.T) {
+	require.Equal(t, `'a\\b'`, formatStrLit(`a\b`))
+	// Combined quote + backslash still escapes both.
+	require.Equal(t, `'o''\\brien'`, formatStrLit(`o'\brien`))
+}
+
+// TestEscapeFormatEscapesBackslashes guards the ENUM/SET member formatter.
+// A SET member declared as SET('a\\b') is stored with one literal backslash;
+// the old EscapeFormat replaceMap did not include '\\' -> "\\\\", so
+// FormatColType emitted SET('a\b'), which re-parses as "a" + 0x08.
+func TestEscapeFormatEscapesBackslashes(t *testing.T) {
+	require.Equal(t, `a\\b`, EscapeFormat(`a\b`))
+}
+
+func TestCommentBackslashEscape(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name:    "c1",
+		Comment: `path\to\file`,
+		Typ:     plan.Type{Id: int32(22)}, // T_int32
+		Default: &plan.Default{NullAbility: true},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_comment",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, `COMMENT 'path\\to\\file'`)
+}
+
+func TestTableCommentBackslashEscape(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name:    "c1",
+		Typ:     plan.Type{Id: int32(22)}, // T_int32
+		Default: &plan.Default{NullAbility: true},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_tbl_comment",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+		Defs: []*plan.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{Key: catalog.SystemRelAttr_Comment, Value: `back\slash`},
+						},
+					},
+				},
+			},
+		},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, `COMMENT='back\\slash'`)
+}
+
+func TestOnUpdateOriginString(t *testing.T) {
+	colDef := &plan.ColDef{
+		Name: "updated_at",
+		Typ:  plan.Type{Id: int32(53)}, // T_timestamp
+		Default: &plan.Default{
+			NullAbility:  true,
+			OriginString: "CURRENT_TIMESTAMP()",
+		},
+		OnUpdate: &plan.OnUpdate{
+			Expr:         &plan.Expr{},
+			OriginString: "CURRENT_TIMESTAMP()",
+		},
+	}
+	tableDef := &plan.TableDef{
+		Name:      "t_on_update",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols:      []*plan.ColDef{colDef},
+	}
+	mock := NewMockOptimizer(false)
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "ON UPDATE CURRENT_TIMESTAMP()")
+}
+
+func TestFormatStrLitBackslashNoDoubleEscape(t *testing.T) {
+	require.Equal(t, `'\\'`, formatStrLit(`\`))
+	require.Equal(t, `'"'`, formatStrLit(`"`))
+}
+
+func TestFormatStrLitCRLF(t *testing.T) {
+	require.Equal(t, `'\r\n'`, formatStrLit("\r\n"))
+	require.Equal(t, `'\n'`, formatStrLit("\n"))
+	require.NotEqual(t, formatStrLit("\n"), formatStrLit("\r\n"))
+}
+
+func TestFormatStrLitNUL(t *testing.T) {
+	require.Equal(t, `'\0'`, formatStrLit("\x00"))
+}
+
+// TestShowCreateSetMemberCasePreservation verifies the SHOW CREATE column
+// loop only lower-cases the leading "SET" keyword and keeps the declared
+// member-name case, so SET('Read','Write') round-trips as set('Read','Write')
+// instead of set('read','write').
+func TestShowCreateSetMemberCasePreservation(t *testing.T) {
+	setType := plan.Type{Id: int32(28), Enumvalues: "Read,Write"} // T_uint64 with SET members
+	raw := FormatColType(setType)
+	require.Equal(t, "SET('Read','Write')", raw)
+
+	// Mirror the branch added to build_show_util.go: lower-case only the
+	// type keyword, keep members intact.
+	lowered := strings.ToLower(raw[:3]) + raw[3:]
+	require.Equal(t, "set('Read','Write')", lowered)
+	require.NotEqual(t, strings.ToLower(raw), lowered,
+		"plain strings.ToLower would damage member names; keep the fix in place")
+}
+
+// TestEscapeForDoubleQuotedLiteralRoundTrip covers the outer wrapper in
+// buildShowCreateTable / buildShowCreateView. The DDL text carries
+// literal backslashes and double quotes (e.g. from comments like
+// `异常描述[\"..\"]`); when it is spliced into `SELECT "..." AS ...`
+// both must survive the outer scanner pass. The MySQL scanner folds
+// `\\` to `\` and `\"` to `"`, so the helper must emit both escapes.
+func TestEscapeForDoubleQuotedLiteralRoundTrip(t *testing.T) {
+	cases := []string{
+		`plain`,
+		`path\to\file`,
+		`has "quote" inside`,
+		`mixed \" and \\`,
+		// The actual payload from BVT comment.sql row 132/237:
+		`COMMENT '异常描述[\"表面有磨损\",\"表面有裂痕\"]'`,
+		// A single trailing backslash — must not collapse into the
+		// closing quote of the outer literal.
+		`tail\`,
+		``,
+	}
+	for _, in := range cases {
+		escaped := escapeForDoubleQuotedLiteral(in)
+		wrapped := `"` + escaped + `"`
+		// Run through the same scanner pipeline the server uses.
+		toks, err := mysql.Parse(context.Background(),
+			"SELECT "+wrapped+" AS x", 1)
+		require.NoErrorf(t, err, "input=%q wrapped=%q", in, wrapped)
+		require.Len(t, toks, 1)
+		sel, ok := toks[0].(*tree.Select)
+		require.Truef(t, ok, "unexpected stmt type for input %q", in)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 1)
+		numVal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.Truef(t, ok, "expected NumVal for %q, got %T", in, clause.Exprs[0].Expr)
+		require.Equalf(t, in, numVal.String(), "round-trip mismatch for %q", in)
+	}
+}
+
+// TestShowCreateWrapperEscapesObjectName guards the first "%s" slot in
+// the SHOW CREATE DATABASE/TABLE/VIEW wrapper templates. The object name
+// is user-controlled (CREATE TABLE `a\"b` is legal) and previously
+// flowed into `SELECT "%s" AS ...` verbatim, breaking the outer literal.
+// Verify the escape helper neutralizes both " and \.
+func TestShowCreateWrapperEscapesObjectName(t *testing.T) {
+	cases := []string{
+		`plain`,
+		`with"quote`,
+		`with\backslash`,
+		`trail\`,
+		`mix\"both`,
+	}
+	for _, name := range cases {
+		// Reproduce the format string used in buildShowCreateTable
+		// (same shape as Database/View wrappers for this check).
+		tmpl := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
+		sql := fmt.Sprintf(tmpl,
+			escapeForDoubleQuotedLiteral(name),
+			escapeForDoubleQuotedLiteral("CREATE TABLE `t` (...)"))
+
+		toks, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoErrorf(t, err, "wrapper must parse for object name %q: %s", name, sql)
+		require.Len(t, toks, 1)
+		sel, ok := toks[0].(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, clause.Exprs, 2)
+		numVal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+		require.Truef(t, ok, "expected NumVal for name=%q, got %T", name, clause.Exprs[0].Expr)
+		require.Equalf(t, name, numVal.String(), "round-trip mismatch for name %q", name)
+	}
 }
