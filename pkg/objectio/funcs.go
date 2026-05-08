@@ -56,7 +56,7 @@ func ReadExtent(
 		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
-		ReleaseIOVector(ioVec)
+		ioVec.ReleaseReadResultOnError()
 		return
 	}
 	if ioVec.Entries[0].CachedData == nil {
@@ -196,7 +196,7 @@ func ReadOneBlockWithMeta(
 	if len(ioVec.Entries) > 0 {
 		defer func() {
 			if err != nil {
-				ioVec.Release()
+				ioVec.ReleaseReadResultOnError()
 			}
 		}()
 		err = fs.Read(ctx, &ioVec)
@@ -285,7 +285,7 @@ func ReadAllBlocksWithMeta(
 
 	err = fs.Read(ctx, &ioVec)
 	if err != nil {
-		ioVec.Release()
+		ioVec.ReleaseReadResultOnError()
 		return
 	}
 	//TODO when to call ioVec.Release?
@@ -320,7 +320,7 @@ func ReadOneBlockAllColumns(
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
-		ioVec.Release()
+		ioVec.ReleaseReadResultOnError()
 		return nil, err
 	}
 	defer ioVec.Release()
