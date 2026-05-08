@@ -2715,6 +2715,48 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 	}
 }
 
+// Invalid flag bytes must not produce a Valid filter. Named-return makes a
+// bare `return` in the switch default leave Valid=true,Op=0 (= EQUAL), which
+// would corrupt range ops into equality filters.
+func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
+	m := mpool.MustNew(t.Name())
+
+	for _, fn := range []string{"in_range", "prefix_in_range"} {
+		t.Run(fn, func(t *testing.T) {
+			tableDef := &plan.TableDef{
+				Name:          "test_idx",
+				Name2ColIndex: map[string]int32{"k": 0},
+				Pkey: &plan.PrimaryKeyDef{
+					Names:       []string{"k"},
+					PkeyColName: "k",
+				},
+				Cols: []*plan.ColDef{
+					{Name: "k", ColId: 0, Seqnum: 0, Primary: true,
+						Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+			}
+			expr := MakeFunctionExprForTest(fn, []*plan.Expr{
+				MakeColExprForTest(0, types.T_varchar, "k"),
+				plan2.MakePlan2StringConstExprWithType("a"),
+				plan2.MakePlan2StringConstExprWithType("z"),
+				plan2.MakePlan2Uint8ConstExprWithType(99), // invalid
+			})
+
+			proc := testutil.NewProcessWithMPool(t, "", m)
+			var exes []colexec.ExpressionExecutor
+			plan2.ReplaceFoldExpr(proc, expr, &exes)
+			plan2.EvalFoldExpr(proc, expr, &exes)
+			for _, exe := range exes {
+				defer exe.Free()
+			}
+
+			basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
+			require.NoError(t, err)
+			require.False(t, basePKFilter.Valid, "invalid flag must produce Valid=false")
+		})
+	}
+}
+
 func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "test_idx",

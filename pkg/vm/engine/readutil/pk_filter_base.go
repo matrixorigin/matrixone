@@ -314,7 +314,6 @@ func ConstructBasePKFilter(
 			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				return
 			}
-			filter.Valid = true
 			switch vals[2][0] {
 			case 0:
 				filter.Op = function.BETWEEN
@@ -327,6 +326,7 @@ func ConstructBasePKFilter(
 			default:
 				return
 			}
+			filter.Valid = true
 			filter.LB = vals[0]
 			filter.UB = vals[1]
 			filter.Oid = oid
@@ -358,9 +358,7 @@ func ConstructBasePKFilter(
 			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				return
 			}
-			filter.Valid = true
-			flag := vals[2][0]
-			switch flag {
+			switch vals[2][0] {
 			case 0:
 				filter.Op = function.PREFIX_BETWEEN
 			case 1:
@@ -372,6 +370,7 @@ func ConstructBasePKFilter(
 			default:
 				return
 			}
+			filter.Valid = true
 			filter.LB = vals[0]
 			filter.UB = vals[1]
 			filter.Oid = oid
