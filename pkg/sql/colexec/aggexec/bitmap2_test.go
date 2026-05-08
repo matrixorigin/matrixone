@@ -83,6 +83,54 @@ func TestBitmapConstructExec(t *testing.T) {
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
+	t.Run("MarshalNilState", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			save func(*bmpConstructExec, *bytes.Buffer) error
+		}{
+			{
+				name: "chunk",
+				save: func(exec *bmpConstructExec, buf *bytes.Buffer) error {
+					return exec.SaveIntermediateResultOfChunk(0, buf)
+				},
+			},
+			{
+				name: "flags",
+				save: func(exec *bmpConstructExec, buf *bytes.Buffer) error {
+					return exec.SaveIntermediateResult(2, [][]uint8{{1, 1}}, buf)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				curNB := mp.CurrNB()
+				vec := testutil.NewUInt64Vector(2, types.T_uint64.ToType(), mp, false, []bool{false, true}, []uint64{42, 99})
+				exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+				restored := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+
+				require.NoError(t, exec.GroupGrow(2))
+				require.NoError(t, exec.BatchFill(0, []uint64{1, 2}, []*vector.Vector{vec}))
+
+				buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+				require.NoError(t, tc.save(exec, buf))
+				require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+
+				results, err := restored.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				checkBitmap(t, results[0], 0, []uint32{42})
+				require.True(t, results[0].IsNull(1))
+
+				vec.Free(mp)
+				exec.Free()
+				restored.Free()
+				for _, result := range results {
+					result.Free(mp)
+				}
+				require.Equal(t, curNB, mp.CurrNB())
+			})
+		}
+	})
+
 	t.Run("Merge", func(t *testing.T) {
 		curNB := mp.CurrNB()
 		execa1 := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())

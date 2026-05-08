@@ -293,10 +293,16 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		if info.makeMarshalerUnmarshaler != nil {
 			for i := range flags {
 				if flags[i] != 0 {
-					if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
+					if ag.mobs[i] == nil {
+						if err := types.WriteSizeBytes(nil, buf); err != nil {
+							return err
+						}
+					} else if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
 						return err
 					} else {
-						types.WriteSizeBytes(bs, buf)
+						if err := types.WriteSizeBytes(bs, buf); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -329,11 +335,17 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 			}
 		}
 		if info.makeMarshalerUnmarshaler != nil {
-			for _, entry := range ag.mobs {
-				if bs, err := entry.MarshalBinary(); err != nil {
+			for _, entry := range ag.mobs[:ag.length] {
+				if entry == nil {
+					if err := types.WriteSizeBytes(nil, buf); err != nil {
+						return err
+					}
+				} else if bs, err := entry.MarshalBinary(); err != nil {
 					return err
 				} else {
-					types.WriteSizeBytes(bs, buf)
+					if err := types.WriteSizeBytes(bs, buf); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -374,14 +386,14 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		}
 		if info.makeMarshalerUnmarshaler != nil {
 			for i := range cnt {
-				if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
-					return 0, err
-				}
 				sz, err := types.ReadInt32(reader)
 				if err != nil {
 					return 0, err
 				}
 				if sz > 0 {
+					if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
+						return 0, err
+					}
 					lr := io.LimitReader(reader, int64(sz))
 					if err := ag.mobs[i].UnmarshalFromReader(lr); err != nil {
 						return 0, err
