@@ -38,11 +38,74 @@ type ShardInfo struct {
 // GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
 // address is usually the reverse proxy that randomly redirect the request to
 // a known Log Service node.
+//
+// Entries without a resolved ServiceAddress (gossip has delivered the
+// membership entry but not yet the owning store's metadata) are stripped
+// from the returned Replicas map. The leader-known filter likewise treats
+// a leader entry with an empty ServiceAddress as "leader unknown" and
+// returns ok=false. Callers that dial Replicas[id] therefore only ever
+// see addresses that are at least potentially reachable, matching the
+// behavior before Service.getShardInfo stopped filtering on meta presence.
 func GetShardInfo(
 	sid string,
 	address string,
 	shardID uint64,
 ) (ShardInfo, bool, error) {
+	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	if err != nil || !ok {
+		return ShardInfo{}, false, err
+	}
+	leader, present := si.Replicas[si.LeaderID]
+	if !present || leader.ServiceAddress == "" {
+		// leader address is unknown
+		return ShardInfo{}, false, nil
+	}
+	result := ShardInfo{
+		ReplicaID: si.LeaderID,
+		Replicas:  make(map[uint64]string),
+	}
+	for replicaID, info := range si.Replicas {
+		if info.ServiceAddress == "" {
+			continue
+		}
+		result.Replicas[replicaID] = info.ServiceAddress
+	}
+	return result, true, nil
+}
+
+// queryShardInfoRawFn is overridable in tests. Production uses the real RPC.
+var queryShardInfoRawFn = queryShardInfoRaw
+
+// getShardMembership returns the live membership of the given shard as the
+// queried peer sees it. Unlike GetShardInfo it does NOT require an elected
+// leader: as long as the peer's gossip registry knows the shard, ok=true is
+// returned with whatever members the peer has on file. This is the form the
+// zombie self-check needs, because the scenario that produces zombies is
+// exactly the one where HAKeeper has no leader.
+func getShardMembership(
+	sid string,
+	address string,
+	shardID uint64,
+) (map[uint64]string, bool, error) {
+	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	members := make(map[uint64]string, len(si.Replicas))
+	for replicaID, info := range si.Replicas {
+		members[replicaID] = info.ServiceAddress
+	}
+	return members, true, nil
+}
+
+// queryShardInfoRaw issues the GET_SHARD_INFO RPC and returns the raw response
+// without applying the leader-known filter. ok=false means the queried peer
+// has no record of the shard in its gossip registry.
+func queryShardInfoRaw(
+	sid string,
+	address string,
+	shardID uint64,
+) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
@@ -60,7 +123,7 @@ func GetShardInfo(
 		"GetShardInfo",
 	)
 	if err != nil {
-		return ShardInfo{}, false, err
+		return pb.ShardInfoQueryResult{}, false, err
 	}
 	defer func() {
 		if err := cc.Close(); err != nil {
@@ -80,12 +143,12 @@ func GetShardInfo(
 	}
 	future, err := cc.Send(ctx, address, rpcReq)
 	if err != nil {
-		return ShardInfo{}, false, moerr.AttachCause(ctx, err)
+		return pb.ShardInfoQueryResult{}, false, moerr.AttachCause(ctx, err)
 	}
 	defer future.Close()
 	msg, err := future.Get()
 	if err != nil {
-		return ShardInfo{}, false, err
+		return pb.ShardInfoQueryResult{}, false, err
 	}
 	response, ok := msg.(*RPCResponse)
 	if !ok {
@@ -95,24 +158,13 @@ func GetShardInfo(
 	defer response.Release()
 	err = toError(ctx, resp)
 	if err != nil {
-		return ShardInfo{}, false, err
+		return pb.ShardInfoQueryResult{}, false, err
 	}
 	si := *resp.ShardInfo
 	if reflect.DeepEqual(si, pb.ShardInfoQueryResult{}) {
-		return ShardInfo{}, false, nil
+		return pb.ShardInfoQueryResult{}, false, nil
 	}
-	// leader address is unknown
-	if _, ok := si.Replicas[si.LeaderID]; !ok {
-		return ShardInfo{}, false, nil
-	}
-	result := ShardInfo{
-		ReplicaID: si.LeaderID,
-		Replicas:  make(map[uint64]string),
-	}
-	for replicaID, info := range si.Replicas {
-		result.Replicas[replicaID] = info.ServiceAddress
-	}
-	return result, true, nil
+	return si, true, nil
 }
 
 func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
@@ -132,16 +184,21 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 		Replicas: make(map[uint64]pb.ReplicaInfo),
 	}
 	for nodeID, uuid := range shard.Nodes {
-		data, ok := r.GetMeta(uuid)
-		if !ok {
-			continue
+		replica := pb.ReplicaInfo{UUID: uuid}
+		if data, ok := r.GetMeta(uuid); ok {
+			var md storeMeta
+			md.unmarshal(data)
+			replica.ServiceAddress = md.serviceAddress
 		}
-		var md storeMeta
-		md.unmarshal(data)
-		result.Replicas[nodeID] = pb.ReplicaInfo{
-			UUID:           uuid,
-			ServiceAddress: md.serviceAddress,
-		}
+		// Record every membership entry from the authoritative shard view,
+		// even when gossip has not yet carried that node's metadata. The
+		// zombie self-check consumes this map to decide whether a locally
+		// persisted replicaID is still a cluster member; filtering by
+		// "has metadata" would let gossip skew misclassify a healthy
+		// replica whose meta has not yet propagated. Existing callers that
+		// dial Replicas[id] already handle an empty ServiceAddress (they
+		// treat it as "leader unknown" and fall back).
+		result.Replicas[nodeID] = replica
 	}
 	return result, true
 }
