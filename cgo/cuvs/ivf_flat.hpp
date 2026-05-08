@@ -747,6 +747,12 @@ public:
             return this->worker->submit_main(task);
         }
 
+        // Single-GPU / replicated. Honor batch_window like the sync path:
+        // when > 0, route through submit_batched_async so concurrent async
+        // callers coalesce into one GPU kernel.
+        if (this->worker->batch_window() > 0) {
+            return this->search_batch_internal_async(queries_copy, num_queries, limit, sp);
+        }
         auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp);
         };
@@ -793,6 +799,43 @@ public:
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
         return future.get();
+    }
+
+    // Async counterpart of search_batch_internal.
+    uint64_t search_batch_internal_async(std::shared_ptr<std::vector<T>> queries_copy, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
+        struct search_req_t { std::shared_ptr<std::vector<T>> owner; const T* data; uint64_t n; };
+        std::string batch_key = "ivf_flat_s_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
+
+        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
+            uint64_t total_queries = 0;
+            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
+
+            std::vector<T> aggregated_queries(total_queries * this->dimension);
+            uint64_t offset = 0;
+            for (const auto& r_any : reqs) {
+                auto req = std::any_cast<search_req_t>(r_any);
+                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
+                offset += req.n;
+            }
+
+            auto results = this->search_internal(handle, aggregated_queries.data(), total_queries, limit, sp);
+
+            offset = 0;
+            for (size_t i = 0; i < reqs.size(); ++i) {
+                auto req = std::any_cast<search_req_t>(reqs[i]);
+                search_result_t individual_res;
+                individual_res.neighbors.resize(req.n * limit);
+                individual_res.distances.resize(req.n * limit);
+                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
+                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
+                setters[i](individual_res);
+                offset += req.n;
+            }
+        };
+
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        const T* data_ptr = queries_copy->data();
+        return this->worker->template submit_batched_async<search_result_t>(batch_key, search_req_t{queries_copy, data_ptr, num_queries}, exec_fn);
     }
 
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
@@ -959,6 +1002,12 @@ public:
             return this->worker->submit_main(task);
         }
 
+        // Single-GPU / replicated. Honor batch_window like the sync path:
+        // when > 0, route through submit_batched_async so concurrent async
+        // callers coalesce into one GPU kernel.
+        if (this->worker->batch_window() > 0) {
+            return this->search_float_batch_internal_async(queries_copy, num_queries, limit, sp);
+        }
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
         };
@@ -999,6 +1048,43 @@ public:
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
         return future.get();
+    }
+
+    // Async counterpart of search_float_batch_internal.
+    uint64_t search_float_batch_internal_async(std::shared_ptr<std::vector<float>> queries_copy, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
+        struct search_req_t { std::shared_ptr<std::vector<float>> owner; const float* data; uint64_t n; };
+        std::string batch_key = "ivf_flat_sf_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
+
+        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
+            uint64_t total_queries = 0;
+            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
+
+            std::vector<float> aggregated_queries(total_queries * this->dimension);
+            uint64_t offset = 0;
+            for (const auto& r_any : reqs) {
+                auto req = std::any_cast<search_req_t>(r_any);
+                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
+                offset += req.n;
+            }
+
+            auto results = this->search_float_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
+
+            offset = 0;
+            for (size_t i = 0; i < reqs.size(); ++i) {
+                auto req = std::any_cast<search_req_t>(reqs[i]);
+                search_result_t individual_res;
+                individual_res.neighbors.resize(req.n * limit);
+                individual_res.distances.resize(req.n * limit);
+                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
+                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
+                setters[i](individual_res);
+                offset += req.n;
+            }
+        };
+
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        const float* data_ptr = queries_copy->data();
+        return this->worker->template submit_batched_async<search_result_t>(batch_key, search_req_t{queries_copy, data_ptr, num_queries}, exec_fn);
     }
 
     // `prebuilt`, when non-null, supplies a host_mask_bundle_t computed off the

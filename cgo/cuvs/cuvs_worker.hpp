@@ -757,6 +757,98 @@ public:
         return future;
     }
 
+    // Async counterpart of submit_batched: same coalescing semantics, but
+    // returns a uint64_t job_id that wait(job_id) can collect via the normal
+    // results_store_ path. Used by per-index search_*_async to honor
+    // batch_window > 0 from the async dispatch path (e.g. multi_index.go).
+    //
+    // The per-request setter — in addition to fulfilling its local promise —
+    // writes the result (or exception) into results_store_ under job_id, so
+    // existing wait() logic resolves naturally.
+    template <typename ResT, typename ReqT>
+    uint64_t submit_batched_async(const std::string& key, ReqT req,
+                                  std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn) {
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
+
+        // Allocate a job_id up front. It's just a counter bump until the setter
+        // calls results_store_.store(job_id, …); existing wait(job_id) finds it.
+        // We deliberately don't bump in_flight_tasks_ here — submit_batched
+        // doesn't either; the actual GPU work spawned by flush_batch via
+        // submit_fire_and_forget(_main) does its own in-flight tracking.
+        uint64_t job_id = results_store_.get_next_job_id();
+
+        bool should_flush_now = false;
+        bool should_schedule = false;
+
+        while (true) {
+            std::shared_ptr<batch_t> batch;
+            {
+                std::lock_guard<std::mutex> lock(batch_mutex_);
+                if (!running_ || stopping_) throw std::runtime_error("Worker not running");
+
+                auto& b = batches_[key];
+                if (!b) {
+                    b = std::make_shared<batch_t>();
+                    b->scheduled = false;
+                    b->flushed = false;
+                }
+                b->exec_fn = exec_fn;
+                batch = b;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(batch->mu);
+                if (batch->flushed) continue; // Race: retry with new batch
+
+                if (!batch->scheduled) {
+                    batch->scheduled = true;
+                    should_schedule = true;
+                }
+
+                batch->reqs.push_back(req);
+
+                auto fulfilled = std::make_shared<std::atomic<bool>>(false);
+                batch->setters.push_back([this, job_id, fulfilled](std::any res) {
+                    if (fulfilled->exchange(true)) return;
+                    cuvs_task_result_t store;
+                    try {
+                        if (res.type() == typeid(std::exception_ptr)) {
+                            store.error = std::any_cast<std::exception_ptr>(res);
+                        } else {
+                            // Validate type, then re-wrap as std::any so the
+                            // existing wait()/std::any_cast<ResT> path works the
+                            // same as a non-batched submit() result.
+                            store.result = std::any(std::any_cast<ResT>(res));
+                        }
+                    } catch (...) {
+                        store.error = std::current_exception();
+                    }
+                    results_store_.store(job_id, std::move(store));
+                });
+                if (batch->reqs.size() >= 16) {
+                    should_flush_now = true;
+                }
+            }
+
+            if (should_flush_now) {
+                this->flush_batch(key);
+            } else if (should_schedule) {
+                try {
+                    this->submit_fire_and_forget([this, key](raft_handle&) -> std::any {
+                        std::this_thread::sleep_for(std::chrono::microseconds(batch_window_us_));
+                        this->flush_batch(key);
+                        return std::any();
+                    });
+                } catch (...) {
+                    this->flush_batch(key);
+                }
+            }
+            break;
+        }
+
+        return job_id;
+    }
+
 private:
     struct batch_t {
         std::vector<std::any> reqs;
