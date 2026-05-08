@@ -17,13 +17,13 @@ package objectio
 import (
 	"bytes"
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -94,7 +94,7 @@ func (t *trackingCacheDataAllocator) CopyToCacheData(context.Context, []byte) fs
 
 func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
-	readErr := errors.New("read canceled after partial cache fill")
+	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial cache fill")
 	fs := &partialReadErrorFS{
 		data: &releaseTrackingData{releases: &releases},
 		err:  readErr,
@@ -123,7 +123,7 @@ func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 
 func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
-	readErr := errors.New("read canceled after partial all-blocks fill")
+	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial all-blocks fill")
 	fs := &partialReadErrorFS{
 		data: &releaseTrackingData{releases: &releases},
 		err:  readErr,
@@ -150,7 +150,7 @@ func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 
 func TestReadExtentReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
-	readErr := errors.New("read canceled after partial extent fill")
+	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial extent fill")
 	fs := &partialReadErrorFS{
 		data: &releaseTrackingData{releases: &releases},
 		err:  readErr,
@@ -191,7 +191,7 @@ func TestConstructorFactoryReleasesDecompressionDataOnError(t *testing.T) {
 
 func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
-	readErr := errors.New("read canceled after partial all-columns fill")
+	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial all-columns fill")
 	fs := &partialReadErrorFS{
 		data: &releaseTrackingData{releases: &releases},
 		err:  readErr,
