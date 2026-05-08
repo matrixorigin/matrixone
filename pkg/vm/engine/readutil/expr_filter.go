@@ -666,7 +666,7 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			hint := int(vals[2][0])
+			hint := vals[2][0]
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
@@ -754,11 +754,11 @@ func CompileFilterExpr(
 			}
 		case "in_range":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok || len(vals) < 3 || len(vals[2]) < 8 {
+			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
 				canCompile = false
 				return
 			}
-			hint := int(types.DecodeInt64(vals[2]))
+			hint := vals[2][0]
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {

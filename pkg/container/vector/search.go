@@ -236,7 +236,7 @@ func LinearCollectOffsetsByPrefixBetweenFactory(lb, ub []byte) func(*Vector) []i
 	}
 }
 
-func LinearCollectOffsetsByBetweenString(lb, ub string, hint int) func(*Vector) []int64 {
+func LinearCollectOffsetsByBetweenString(lb, ub string, hint uint8) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)
@@ -273,7 +273,7 @@ func LinearCollectOffsetsByBetweenString(lb, ub string, hint int) func(*Vector) 
 	}
 }
 
-func LinearCollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lb, ub T, hint int) func(*Vector) []int64 {
+func LinearCollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lb, ub T, hint uint8) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)
@@ -641,7 +641,7 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 	}
 }
 
-func CollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint int) func(*Vector) []int64 {
+func CollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint uint8) func(*Vector) []int64 {
 	return func(lvec *Vector) []int64 {
 		lvlen := lvec.Length()
 		if lvlen == 0 {
@@ -690,7 +690,7 @@ func CollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint int) func(*Vector)
 	}
 }
 
-func LinearCollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint int) func(*Vector) []int64 {
+func LinearCollectOffsetsByPrefixInRangeFactory(lb, ub []byte, hint uint8) func(*Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
 		vecLen := vector.Length()
@@ -748,7 +748,7 @@ func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal | types.Uuid](lva
 	}
 }
 
-func CollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lval, rval T, hint int) func(*Vector) []int64 {
+func CollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.Enum](lval, rval T, hint uint8) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)
@@ -799,7 +799,7 @@ func CollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | types.
 	}
 }
 
-func CollectOffsetsByBetweenString(lval, rval string, hint int) func(*Vector) []int64 {
+func CollectOffsetsByBetweenString(lval, rval string, hint uint8) func(*Vector) []int64 {
 	// 0: [,]
 	// 1: (,]
 	// 2: [,)

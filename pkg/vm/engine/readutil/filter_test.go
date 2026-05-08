@@ -2543,28 +2543,91 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 	})
 }
 
-func TestCompileFilterExpr_PrefixInRange(t *testing.T) {
+func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 	tableDef := &plan.TableDef{
-		Name: "test_idx",
+		Name:          "test_idx",
+		Name2ColIndex: map[string]int32{"__mo_index_idx_col": 0},
 		Pkey: &plan.PrimaryKeyDef{
 			Names:       []string{"__mo_index_idx_col"},
 			PkeyColName: "__mo_index_idx_col",
 		},
 		Cols: []*plan.ColDef{
 			{
-				Name:   "__mo_index_idx_col",
-				ColId:  0,
-				Seqnum: 0,
-				Typ:    plan.Type{Id: int32(types.T_varchar)},
+				Name:    "__mo_index_idx_col",
+				ColId:   0,
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_varchar)},
 			},
 		},
 	}
 
-	expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
-		MakeColExprForTest(0, types.T_varchar, "__mo_index_idx_col"),
-		plan2.MakePlan2StringConstExprWithType("aaa"),
-		plan2.MakePlan2StringConstExprWithType("zzz"),
-		plan2.MakePlan2Uint8ConstExprWithType(3),
+	m := mpool.MustNew(t.Name())
+
+	flags := []struct {
+		flag uint8
+		op   int
+	}{
+		{0, function.PREFIX_BETWEEN},
+		{1, PrefixRangeLeftOpen},
+		{2, PrefixRangeRightOpen},
+		{3, PrefixRangeBothOpen},
+	}
+
+	for _, tc := range flags {
+		expr := MakeFunctionExprForTest("prefix_in_range", []*plan.Expr{
+			MakeColExprForTest(0, types.T_varchar, "__mo_index_idx_col"),
+			plan2.MakePlan2StringConstExprWithType("aaa"),
+			plan2.MakePlan2StringConstExprWithType("zzz"),
+			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
+		})
+
+		proc := testutil.NewProcessWithMPool(t, "", m)
+		var exes []colexec.ExpressionExecutor
+		plan2.ReplaceFoldExpr(proc, expr, &exes)
+		plan2.EvalFoldExpr(proc, expr, &exes)
+		for _, exe := range exes {
+			defer exe.Free()
+		}
+
+		fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+		require.True(t, canCompile, "prefix_in_range flag=%d should be compilable", tc.flag)
+		require.NotNil(t, fastFilterOp, "fastFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, loadOp, "loadOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, objectFilterOp, "objectFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, blockFilterOp, "blockFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, seekOp, "seekOp should be set for flag=%d", tc.flag)
+
+		basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
+		require.NoError(t, err)
+		require.True(t, basePKFilter.Valid)
+		require.Equal(t, tc.op, basePKFilter.Op, "flag=%d should map to op=%d", tc.flag, tc.op)
+	}
+}
+
+func TestCompileFilterExpr_Between(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:          "test_tbl",
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				ColId:   0,
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_int64)},
+			},
+		},
+	}
+
+	expr := MakeFunctionExprForTest("between", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64, "id"),
+		plan2.MakePlan2Int64ConstExprWithType(10),
+		plan2.MakePlan2Int64ConstExprWithType(20),
 	})
 
 	m := mpool.MustNew(t.Name())
@@ -2576,18 +2639,130 @@ func TestCompileFilterExpr_PrefixInRange(t *testing.T) {
 		defer exe.Free()
 	}
 
-	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
-	require.True(t, canCompile, "prefix_in_range should be compilable")
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile, "between should be compilable")
+	require.NotNil(t, fastFilterOp, "fastFilterOp should be set")
 	require.NotNil(t, loadOp, "loadOp should be set")
 	require.NotNil(t, objectFilterOp, "objectFilterOp should be set")
 	require.NotNil(t, blockFilterOp, "blockFilterOp should be set")
-	_ = fastFilterOp
+	require.NotNil(t, seekOp, "seekOp should be set for sorted key")
 
-	// Also verify ConstructBasePKFilter maps it to PREFIX_BETWEEN
 	basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
 	require.NoError(t, err)
-	require.True(t, basePKFilter.Valid, "prefix_in_range should produce a valid PK filter")
-	require.Equal(t, PrefixRangeBothOpen, basePKFilter.Op, "prefix_in_range with flag=3 should map to PrefixRangeBothOpen op")
-	require.Equal(t, []byte("aaa"), basePKFilter.LB)
-	require.Equal(t, []byte("zzz"), basePKFilter.UB)
+	require.True(t, basePKFilter.Valid)
+	require.Equal(t, function.BETWEEN, basePKFilter.Op)
+}
+
+func TestCompileFilterExpr_InRange(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:          "test_tbl",
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				ColId:   0,
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_int64)},
+			},
+		},
+	}
+
+	flags := []struct {
+		flag uint8
+		op   int
+	}{
+		{0, function.BETWEEN},
+		{1, RangeLeftOpen},
+		{2, RangeRightOpen},
+		{3, RangeBothOpen},
+	}
+
+	m := mpool.MustNew(t.Name())
+
+	for _, tc := range flags {
+		expr := MakeFunctionExprForTest("in_range", []*plan.Expr{
+			MakeColExprForTest(0, types.T_int64, "id"),
+			plan2.MakePlan2Int64ConstExprWithType(10),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
+		})
+
+		proc := testutil.NewProcessWithMPool(t, "", m)
+		var exes []colexec.ExpressionExecutor
+		plan2.ReplaceFoldExpr(proc, expr, &exes)
+		plan2.EvalFoldExpr(proc, expr, &exes)
+		for _, exe := range exes {
+			defer exe.Free()
+		}
+
+		fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+		require.True(t, canCompile, "in_range flag=%d should be compilable", tc.flag)
+		require.NotNil(t, fastFilterOp, "fastFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, loadOp, "loadOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, objectFilterOp, "objectFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, blockFilterOp, "blockFilterOp should be set for flag=%d", tc.flag)
+		require.NotNil(t, seekOp, "seekOp should be set for flag=%d", tc.flag)
+
+		basePKFilter, err := ConstructBasePKFilter(expr, tableDef, m)
+		require.NoError(t, err)
+		require.True(t, basePKFilter.Valid)
+		require.Equal(t, tc.op, basePKFilter.Op, "in_range flag=%d should map to op=%d", tc.flag, tc.op)
+	}
+}
+
+func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:          "test_idx",
+		Name2ColIndex: map[string]int32{"__mo_index_idx_col": 0},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"__mo_index_idx_col"},
+			PkeyColName: "__mo_index_idx_col",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:    "__mo_index_idx_col",
+				ColId:   0,
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_varchar)},
+			},
+		},
+	}
+
+	m := mpool.MustNew(t.Name())
+
+	exprs := map[string]*plan.Expr{
+		"prefix_eq": MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
+			MakeColExprForTest(0, types.T_varchar, "__mo_index_idx_col"),
+			plan2.MakePlan2StringConstExprWithType("hello"),
+		}),
+		"prefix_between": MakeFunctionExprForTest("prefix_between", []*plan.Expr{
+			MakeColExprForTest(0, types.T_varchar, "__mo_index_idx_col"),
+			plan2.MakePlan2StringConstExprWithType("aaa"),
+			plan2.MakePlan2StringConstExprWithType("zzz"),
+		}),
+	}
+
+	for name, expr := range exprs {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", m)
+			var exes []colexec.ExpressionExecutor
+			plan2.ReplaceFoldExpr(proc, expr, &exes)
+			plan2.EvalFoldExpr(proc, expr, &exes)
+			for _, exe := range exes {
+				defer exe.Free()
+			}
+
+			_, loadOp, _, blockFilterOp, seekOp, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+			require.True(t, canCompile)
+			require.NotNil(t, loadOp)
+			require.NotNil(t, blockFilterOp)
+			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
+		})
+	}
 }
