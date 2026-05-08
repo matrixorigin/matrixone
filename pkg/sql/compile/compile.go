@@ -1701,31 +1701,17 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 
 func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {
 	if node.Stats == nil {
-		return cpuNum
+		return capLoadParallelism(cpuNum)
 	}
 	totalSize := node.Stats.Cost * node.Stats.Rowsize
 	parallelSize := int(totalSize / float64(colexec.WriteS3Threshold))
 	if parallelSize < 1 {
 		return 1
 	} else if parallelSize < cpuNum {
-		return parallelSize
+		cpuNum = parallelSize
 	}
 
-	// Cap parallelism by available mpool memory: each worker uses roughly
-	// the adaptive S3 threshold (staged data) + 64MB (arena + sort buffers).
-	// Use only 1/3 of global cap for load workers to leave room for baseline
-	// mpool consumers (metadata, caches) and spill overhead.
-	memPerWorker := int64(colexec.AdaptiveWriteS3Threshold()) + 64*mpool.MB
-	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < 1<<62 {
-		memLimit := int(globalCap / 3 / memPerWorker)
-		if memLimit < 1 {
-			memLimit = 1
-		}
-		if cpuNum > memLimit {
-			cpuNum = memLimit
-		}
-	}
-
+	cpuNum = capLoadParallelism(cpuNum)
 	return cpuNum
 }
 
@@ -1786,17 +1772,42 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 	if parallelSize < 1 {
 		return 1
 	} else if parallelSize < cpuNum {
-		return parallelSize
+		cpuNum = parallelSize
 	}
+	return cpuNum
+}
 
-	memPerWorker := int64(colexec.WriteS3Threshold) + 32*mpool.MB
+// capLoadParallelism limits load worker parallelism based on available memory.
+// Each worker consumes both mpool (off-heap, for sinker buffers) and Go heap
+// (for PK dedup metadata loading, vector operations). On memory-constrained
+// containers, uncapped parallelism causes OOM because multiple workers
+// simultaneously load object metadata onto the Go heap faster than GC can
+// reclaim it.
+func capLoadParallelism(cpuNum int) int {
+	// Mpool-based cap: each worker uses adaptive threshold + arena overhead.
+	memPerWorker := int64(colexec.AdaptiveWriteS3Threshold()) + 64*mpool.MB
 	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < 1<<62 {
-		memLimit := int(globalCap / 2 / memPerWorker)
+		memLimit := int(globalCap / 3 / memPerWorker)
 		if memLimit < 1 {
 			memLimit = 1
 		}
 		if cpuNum > memLimit {
 			cpuNum = memLimit
+		}
+	}
+
+	// Total-memory-based cap: each worker also pressures Go heap during PK
+	// dedup (object metadata loads). Estimate ~1GB total footprint per worker
+	// (mpool buffers + Go heap for metadata + GC overhead). Allow at most
+	// totalMem/4GB workers to prevent OOM on small containers.
+	totalMem := int64(system.MemoryTotal())
+	if totalMem > 0 && totalMem < 64*mpool.GB {
+		maxWorkers := int(totalMem / (4 * mpool.GB))
+		if maxWorkers < 1 {
+			maxWorkers = 1
+		}
+		if cpuNum > maxWorkers {
+			cpuNum = maxWorkers
 		}
 	}
 
@@ -1816,21 +1827,27 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
 
+	perCNCap := capLoadParallelism(system.NumCPU())
 	if param.ScanType == tree.S3 {
 		for i := 0; i < len(c.cnList); i++ {
-			tmp := mcpu
-			if c.cnList[i].Mcpu > external.S3ParallelMaxnum {
-				mcpu += external.S3ParallelMaxnum
-			} else {
-				mcpu += c.cnList[i].Mcpu
+			n := c.cnList[i].Mcpu
+			if n > external.S3ParallelMaxnum {
+				n = external.S3ParallelMaxnum
 			}
-			ID2Addr[i] = mcpu - tmp
+			if n > perCNCap {
+				n = perCNCap
+			}
+			mcpu += n
+			ID2Addr[i] = n
 		}
 	} else {
 		for i := 0; i < len(c.cnList); i++ {
-			tmp := mcpu
-			mcpu += c.cnList[i].Mcpu
-			ID2Addr[i] = mcpu - tmp
+			n := c.cnList[i].Mcpu
+			if n > perCNCap {
+				n = perCNCap
+			}
+			mcpu += n
+			ID2Addr[i] = n
 		}
 	}
 
