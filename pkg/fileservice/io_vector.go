@@ -36,6 +36,20 @@ func (i *IOVector) Release() {
 	}
 }
 
+func (i *IOVector) ReleaseReadResultOnError() {
+	for idx := range i.Entries {
+		entry := &i.Entries[idx]
+		if entry.CachedData != nil {
+			entry.CachedData.Release()
+			entry.CachedData = nil
+		}
+		if entry.done && entry.releaseData != nil {
+			entry.releaseData()
+			entry.releaseData = nil
+		}
+	}
+}
+
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 	readFull = i.Policy.CacheFullFile() &&
 		!i.Policy.Any(SkipDiskCache)
