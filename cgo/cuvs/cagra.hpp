@@ -509,19 +509,25 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            // Pool-bypass training matrix — see matrixone::raw_device_mr() in cuvs_worker.hpp.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(this->count) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
+
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -547,41 +553,51 @@ public:
             //               << this->host_ids[start_row+2] << std::endl;
             // }
 
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), 
+            // Pool-bypass training shard — see REPLICATED branch.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(num_rows) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device,
                        raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
+
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
             // Do all GPU work outside the lock — holding shared_mutex across GPU calls
             // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            // Pool-bypass training matrix — see REPLICATED branch.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(this->count) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            using dataset_t = raft::device_matrix<T, int64_t>;
-            auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
             handle.sync();
 
             // Assign results under lock
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(new_idx);
-                this->dataset_device_ptr_ = std::move(new_dataset);
+                this->dataset_device_ptr_ = std::move(dataset_storage);
             }
         }
     }
@@ -593,10 +609,14 @@ public:
             throw std::runtime_error("CAGRA extend is not supported for float16 (half) by cuVS.");
         } else {
             auto res = handle.get_raft_resources();
+            auto stream = raft::resource::get_cuda_stream(*res);
 
-            auto additional_dataset_device = raft::make_device_matrix<T, int64_t>(
-                *res, static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
-            raft::copy(*res, additional_dataset_device.view(),
+            // Pool-bypass: extend's upload buffer is one-shot, freed on return.
+            rmm::device_uvector<T> additional_storage(
+                static_cast<size_t>(num_vectors) * this->dimension, stream, matrixone::raw_device_mr());
+            auto additional_dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                additional_storage.data(), static_cast<int64_t>(num_vectors), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, additional_dataset_device,
                        raft::make_host_matrix_view<const T, int64_t>(additional_data, num_vectors, this->dimension));
             raft::resource::sync_stream(*res);
 
@@ -608,7 +628,7 @@ public:
                     std::shared_lock<std::shared_mutex> lock(this->mutex_);
                     idx = static_cast<cagra_index*>(this->replicated_indices_.at(handle.get_device_id()).get());
                 }
-                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *idx);
+                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *idx);
                 handle.sync();
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -619,7 +639,7 @@ public:
                 // (a) the GPU worker serializes all tasks on the main device, so no
                 //     concurrent GPU search can be running while extend is in-flight;
                 // (b) extend_mutex_ in extend() ensures only one extend at a time.
-                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device.view()), *index_);
+                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *index_);
                 handle.sync();
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);

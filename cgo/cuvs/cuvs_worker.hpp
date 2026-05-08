@@ -102,6 +102,23 @@ inline void ensure_rmm_pool_for_device(int device_id) {
     });
 }
 
+// Process-static raw cuda_memory_resource that bypasses the per-device pool.
+// Use this for transient huge allocations whose lifetime is "load → build/extend
+// → drop" (e.g. the training-vector device matrix in build_internal). Routing
+// these through the pool would pin the pool's high-water mark at training-set
+// size forever — pool memory is never released to the driver — eating the
+// upstream headroom that big single allocations need (see ensure_rmm_pool_for_device
+// comment). With this MR, the device_uvector dtor returns memory straight to the
+// driver, keeping the pool small and the upstream free pool large.
+//
+// Per-allocation override: rmm::device_uvector captures the MR at construction
+// and frees back to it. No global state changes, so concurrent search threads
+// on the same device keep using the per-device pool MR via raft handles.
+inline rmm::mr::cuda_memory_resource* raw_device_mr() {
+    static rmm::mr::cuda_memory_resource mr;
+    return &mr;
+}
+
 // =============================================================================
 // cuvs_worker_t — Developer Guide
 // =============================================================================

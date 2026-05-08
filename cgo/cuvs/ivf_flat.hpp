@@ -318,19 +318,25 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            // Pool-bypass training matrix — see matrixone::raw_device_mr() in cuvs_worker.hpp.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(this->count) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
+
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -351,42 +357,52 @@ public:
 
             // std::cout << "[DEBUG] IVF-Flat build SHARDED: rank=" << rank << " start_row=" << start_row << " num_rows=" << num_rows << std::endl;
 
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)num_rows, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), 
+            // Pool-bypass training shard — see REPLICATED branch.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(num_rows) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device,
                        raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
+
             handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_flat_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::make_shared<raft::device_matrix<T, int64_t>>(std::move(dataset_device));
+                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
             // Do all GPU work outside the lock — holding shared_mutex across GPU calls
             // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
-            auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            // Pool-bypass training matrix — see REPLICATED branch.
+            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
+                static_cast<size_t>(this->count) * this->dimension,
+                raft::resource::get_cuda_stream(*res),
+                matrixone::raw_device_mr());
+            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
+                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
             auto new_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device.view())));
-            
-            using dataset_t = raft::device_matrix<T, int64_t>;
-            auto new_dataset = std::make_shared<dataset_t>(std::move(dataset_device));
+                *res, index_params, raft::make_const_mdspan(dataset_device)));
+
             handle.sync();
 
             // Assign results under lock
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(new_idx);
-                this->dataset_device_ptr_ = std::move(new_dataset);
+                this->dataset_device_ptr_ = std::move(dataset_storage);
             }
         }
     }
@@ -394,9 +410,14 @@ public:
     void extend_internal(raft_handle_wrapper_t& handle, const T* new_data, uint64_t n_rows,
                          const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
 
-        auto new_vecs_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
-        raft::copy(*res, new_vecs_device.view(),
+        // Pool-bypass: extend's upload buffer is one-shot, freed on return.
+        rmm::device_uvector<T> new_vecs_storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+            new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+        raft::copy(*res, new_vecs_device,
                    raft::make_host_matrix_view<const T, int64_t>(new_data, n_rows, this->dimension));
 
         auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
@@ -415,7 +436,7 @@ public:
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_datasets_.erase(handle.get_device_id());
@@ -431,7 +452,7 @@ public:
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -440,7 +461,7 @@ public:
         } else {
             if (!index_) throw std::runtime_error("extend_internal: index not built");
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, index_.get());
+                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
@@ -452,21 +473,29 @@ public:
     void extend_internal_float(raft_handle_wrapper_t& handle, const float* new_data, uint64_t n_rows,
                                const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
 
-        auto new_vecs_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
+        // Pool-bypass: transient extend buffers — see extend_internal.
+        rmm::device_uvector<T> new_vecs_storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+            new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, new_vecs_device.view(),
+            raft::copy(*res, new_vecs_device,
                        raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
         } else {
-            auto new_vecs_float = raft::make_device_matrix<float, int64_t>(*res, (int64_t)n_rows, (int64_t)this->dimension);
-            raft::copy(*res, new_vecs_float.view(),
+            rmm::device_uvector<float> new_vecs_float_storage(
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            auto new_vecs_float = raft::make_device_matrix_view<float, int64_t>(
+                new_vecs_float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+            raft::copy(*res, new_vecs_float,
                        raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
             if constexpr (sizeof(T) == 1) {
                 if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained for extend_float");
-                this->quantizer_.template transform<T>(*res, new_vecs_float.view(), new_vecs_device.data_handle(), true);
+                this->quantizer_.template transform<T>(*res, new_vecs_float, new_vecs_device.data_handle(), true);
             } else {
                 // T is half
-                raft::copy(*res, new_vecs_device.view(), new_vecs_float.view());
+                raft::copy(*res, new_vecs_device, new_vecs_float);
             }
         }
 
@@ -486,7 +515,7 @@ public:
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_datasets_.erase(handle.get_device_id());
@@ -502,7 +531,7 @@ public:
                 idx_ptr = static_cast<ivf_flat_index*>(it->second.get());
             }
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, idx_ptr);
+                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -511,7 +540,7 @@ public:
         } else {
             if (!index_) throw std::runtime_error("extend_internal_float: index not built");
             cuvs::neighbors::ivf_flat::extend(*res,
-                raft::make_const_mdspan(new_vecs_device.view()), indices_opt, index_.get());
+                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
