@@ -226,3 +226,25 @@ func TestBitmapConstructExec(t *testing.T) {
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 }
+
+func TestBitmapConstructSaveIntermediateResultOfChunkMinimal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewUInt64Vector(
+		1,
+		types.T_uint64.ToType(),
+		mp,
+		false,
+		nil,
+		[]uint64{42},
+	)
+
+	exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+
+	var buf bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &buf))
+
+	vec.Free(mp)
+	exec.Free()
+}
