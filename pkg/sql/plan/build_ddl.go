@@ -936,11 +936,16 @@ func buildCreateTable(
 	if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id":
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns":
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
 		}
+
+		if err := validateAndSetHivePartitionOptions(ctx.GetContext(), stmt, createTable); err != nil {
+			return nil, err
+		}
+
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
@@ -4947,4 +4952,166 @@ func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+// validateAndSetHivePartitionOptions parses and validates hive_partitioning options from the DDL,
+// normalizes partition column names, extracts column types, and strips hive keys from Option[].
+func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTable, createTable *plan.CreateTable) error {
+	raw := stmt.Param.Option
+
+	if err := rejectDuplicateKeys(ctx, raw, []string{"hive_partitioning", "hive_partition_columns"}); err != nil {
+		return err
+	}
+
+	hiveEnabled, hiveCols, err := parseHiveOptionsFromRawOptions(ctx, raw)
+	if err != nil {
+		return err
+	}
+	if !hiveEnabled {
+		return nil
+	}
+
+	if len(hiveCols) == 0 {
+		return moerr.NewBadConfig(ctx, "hive_partition_columns is required when hive_partitioning is enabled")
+	}
+
+	if err := rejectDuplicateKeys(ctx, raw, []string{"format", "filepath"}); err != nil {
+		return err
+	}
+
+	rawFormat := strings.ToLower(getRawOption(raw, "format"))
+	if rawFormat != "parquet" {
+		return moerr.NewBadConfigf(ctx, "hive_partitioning currently only supports format='parquet', got '%s'", rawFormat)
+	}
+
+	rawFilepath := getRawOption(raw, "filepath")
+	if len(stmt.Param.StageName) != 0 || strings.HasPrefix(rawFilepath, "stage://") {
+		return moerr.NewBadConfig(ctx, "hive_partitioning does not support stage external tables")
+	}
+
+	normalized := make([]string, 0, len(hiveCols))
+	colTypes := make([]tree.HivePartColType, 0, len(hiveCols))
+	seen := make(map[string]bool)
+	for _, pc := range hiveCols {
+		col := findColInTableDefCaseInsensitive(createTable.TableDef.Cols, pc)
+		if col == nil {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' not found in table columns", pc)
+		}
+		if col.Hidden {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a hidden column", pc)
+		}
+		typId := types.T(col.Typ.Id)
+		if typId == types.T_array_float32 || typId == types.T_array_float64 {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
+		}
+		canonical := strings.ToLower(col.Name)
+		if seen[canonical] {
+			return moerr.NewBadConfigf(ctx, "duplicate partition column '%s'", pc)
+		}
+		seen[canonical] = true
+		normalized = append(normalized, canonical)
+
+		nullable := true
+		if col.Default != nil {
+			nullable = col.Default.NullAbility
+		}
+		colTypes = append(colTypes, tree.HivePartColType{
+			Id:          col.Typ.Id,
+			Width:       col.Typ.Width,
+			Scale:       col.Typ.Scale,
+			Enumvalues:  col.Typ.Enumvalues,
+			NullAbility: nullable,
+		})
+	}
+
+	stmt.Param.HivePartitioning = true
+	stmt.Param.HivePartitionCols = normalized
+	stmt.Param.HivePartitionColTypes = colTypes
+	stmt.Param.Option = stripHiveOptionKeys(stmt.Param.Option)
+	return nil
+}
+
+func parseHiveOptionsFromRawOptions(ctx context.Context, options []string) (enabled bool, cols []string, err error) {
+	var hiveVal string
+	var colsVal string
+	for i := 0; i < len(options); i += 2 {
+		key := strings.ToLower(options[i])
+		switch key {
+		case "hive_partitioning":
+			hiveVal = strings.ToLower(options[i+1])
+		case "hive_partition_columns":
+			colsVal = options[i+1]
+		}
+	}
+	if hiveVal == "" {
+		return false, nil, nil
+	}
+	if hiveVal != "true" && hiveVal != "false" {
+		return false, nil, moerr.NewBadConfigf(ctx, "hive_partitioning must be 'true' or 'false', got '%s'", hiveVal)
+	}
+	if hiveVal == "false" {
+		return false, nil, nil
+	}
+	if colsVal == "" {
+		return true, nil, nil
+	}
+	parts := strings.Split(colsVal, ",")
+	cols = make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			cols = append(cols, p)
+		}
+	}
+	return true, cols, nil
+}
+
+func rejectDuplicateKeys(ctx context.Context, options []string, keys []string) error {
+	keySet := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keySet[k] = true
+	}
+	seen := make(map[string]bool)
+	for i := 0; i < len(options); i += 2 {
+		key := strings.ToLower(options[i])
+		if !keySet[key] {
+			continue
+		}
+		if seen[key] {
+			return moerr.NewBadConfigf(ctx, "duplicate option key '%s'", key)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func getRawOption(options []string, key string) string {
+	for i := 0; i < len(options); i += 2 {
+		if strings.ToLower(options[i]) == key {
+			return options[i+1]
+		}
+	}
+	return ""
+}
+
+func stripHiveOptionKeys(opt []string) []string {
+	out := make([]string, 0, len(opt))
+	for i := 0; i < len(opt); i += 2 {
+		key := strings.ToLower(opt[i])
+		if key == "hive_partitioning" || key == "hive_partition_columns" {
+			continue
+		}
+		out = append(out, opt[i], opt[i+1])
+	}
+	return out
+}
+
+func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.ColDef {
+	lower := strings.ToLower(name)
+	for _, col := range cols {
+		if strings.ToLower(col.Name) == lower {
+			return col
+		}
+	}
+	return nil
 }

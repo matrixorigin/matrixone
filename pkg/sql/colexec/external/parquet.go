@@ -19,7 +19,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +43,9 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 	if param.parqh == nil {
 		var err error
+		if err = param.refreshPartitionValues(); err != nil {
+			return err
+		}
 		param.parqh, err = newParquetHandler(param)
 		if err != nil {
 			return err
@@ -57,14 +62,31 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
 	}
 
-	return param.parqh.getData(bat, param, proc)
+	h := param.parqh
+	if err := h.getData(bat, param, proc); err != nil {
+		return err
+	}
+	if bat.RowCount() > 0 && (h.filepathColIndex >= 0 || len(h.partitionColIndices) > 0) {
+		if err := h.fillVirtualColumns(bat, param, proc); err != nil {
+			return err
+		}
+	}
+	if h.rowCountOnly && h.file != nil && h.offset >= h.file.NumRows() {
+		param.parqh = nil
+		param.Fileparam.FileFin++
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+	}
+	return nil
 }
 
 var maxParquetBatchCnt int64 = 1000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
-		batchCnt: maxParquetBatchCnt,
+		batchCnt:         maxParquetBatchCnt,
+		filepathColIndex: -1,
 	}
 	err := h.openFile(param)
 	if err != nil {
@@ -102,16 +124,59 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
+// findColumnIgnoreCase finds a column in the Parquet schema with case-insensitive matching.
+func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
+	root := h.file.Root()
+	nameLower := strings.ToLower(name)
+
+	var exactMatch *parquet.Column
+	var caseInsensitiveMatches []*parquet.Column
+	for _, col := range root.Columns() {
+		if col.Name() == name {
+			exactMatch = col
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		} else if strings.ToLower(col.Name()) == nameLower {
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		}
+	}
+	if len(caseInsensitiveMatches) > 1 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"ambiguous column name %s: multiple columns match case-insensitively (%s and %s)",
+			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
+	}
+	if exactMatch != nil {
+		return exactMatch, nil
+	}
+	if len(caseInsensitiveMatches) == 1 {
+		return caseInsensitiveMatches[0], nil
+	}
+	return nil, nil
+}
+
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
-	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.mappers = make([]*columnMapper, len(param.Attrs))
+	h.cols = make([]*parquet.Column, len(param.Cols))
+	h.mappers = make([]*columnMapper, len(param.Cols))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
 			continue
 		}
 
-		col := h.file.Root().Column(attr.ColName)
+		if param.isHivePartitionCol(attr.ColName) {
+			h.partitionColIndices = append(h.partitionColIndices, int(attr.ColIndex))
+			continue
+		}
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			h.filepathColIndex = int(attr.ColIndex)
+			continue
+		}
+
+		h.hasPhysicalCol = true
+
+		col, err := h.findColumnIgnoreCase(param.Ctx, attr.ColName)
+		if err != nil {
+			return err
+		}
 		if col == nil {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
@@ -137,6 +202,10 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
 		h.mappers[attr.ColIndex] = fn
+	}
+
+	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
+		h.rowCountOnly = true
 	}
 
 	return nil
@@ -190,10 +259,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
+					return int8(dictValues[int(idx)])
+				})
+			}
 			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
 				return int8(v)
 			})
@@ -203,10 +277,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
+					return int16(dictValues[int(idx)])
+				})
+			}
 			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
 				return int16(v)
 			})
@@ -216,10 +295,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Int32())
 		}
 	case types.T_int64:
@@ -227,10 +311,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Int64())
 		}
 	case types.T_uint32:
@@ -238,10 +327,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Uint32())
 		}
 	case types.T_uint64:
@@ -249,10 +343,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Uint64())
 		}
 	case types.T_float32:
@@ -260,10 +359,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Float()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Float())
 		}
 	case types.T_float64:
@@ -271,10 +375,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Double()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Double())
 		}
 	case types.T_date:
@@ -534,10 +643,41 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	return nil
 }
 
+func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) error {
+	for _, idx := range indexes {
+		if idx < 0 || int(idx) >= dictLen {
+			return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
+		}
+	}
+	return nil
+}
+
+func copyDictPageToVec[T any](
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	dictLen int,
+	indexes []int32,
+	convert func(idx int32) T,
+) error {
+	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
+		return err
+	}
+	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.rowCountOnly {
+		return h.getDataRowCountOnly(bat)
+	}
+
 	length := 0
 	finish := false
 	for colIdx, col := range h.cols {
+		if col == nil {
+			continue
+		}
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -597,6 +737,30 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		h.offset += int64(length)
 	}
 
+	return nil
+}
+
+func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
+	batchLimit := int(h.batchCnt)
+	rowCount := 0
+
+	if h.rowCountRemaining > 0 {
+		rowCount = min(h.rowCountRemaining, batchLimit)
+		h.rowCountRemaining -= rowCount
+	} else {
+		rgs := h.file.RowGroups()
+		if h.currentRowGroup >= len(rgs) {
+			bat.SetRowCount(0)
+			return nil
+		}
+		total := int(rgs[h.currentRowGroup].NumRows())
+		h.currentRowGroup++
+		rowCount = min(total, batchLimit)
+		h.rowCountRemaining = total - rowCount
+	}
+
+	h.offset += int64(rowCount)
+	bat.SetRowCount(rowCount)
 	return nil
 }
 
