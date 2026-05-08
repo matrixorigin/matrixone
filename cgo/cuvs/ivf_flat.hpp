@@ -1101,8 +1101,11 @@ public:
 
         // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
-        auto queries_device = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
-        raft::copy(*res, queries_device.view(), raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        // Step C: reuse per-thread grow-only query workspace buffer.
+        auto& q_buf = handle.template q_dev_buf<T>(static_cast<size_t>(num_queries) * this->dimension);
+        auto queries_device = raft::make_device_matrix_view<T, int64_t>(
+            q_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+        raft::copy(*res, queries_device, raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
         // Legacy path syncs so build_search_bitset's stack-local host bitmap can
         // drain on the same stream. Prebuilt path skips: bitset H2D queues
         // naturally behind queries H2D and the kernel.
@@ -1128,7 +1131,7 @@ public:
                 handle.set_index_ptr(std::any()); // Clear invalid cache
             }
         }
-        
+
         if (!local_index) {
             // Tiered fallback: Replicated -> Single
             {
@@ -1148,8 +1151,13 @@ public:
         }
 
         if (local_index) {
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, num_queries, limit);
-            auto distances_device = raft::make_device_matrix<float, int64_t>(*res, num_queries, limit);
+            // Step C: reuse per-thread neighbor / distance workspaces.
+            auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
+            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+            auto neighbors_device = raft::make_device_matrix_view<int64_t, int64_t>(
+                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+            auto distances_device = raft::make_device_matrix_view<float, int64_t>(
+                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1173,16 +1181,16 @@ public:
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device.view()),
-                                                    neighbors_device.view(), distances_device.view(), filter);
+                                                    raft::make_const_mdspan(queries_device),
+                                                    neighbors_device, distances_device, filter);
             } else {
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(queries_device.view()),
-                                                    neighbors_device.view(), distances_device.view());
+                                                    raft::make_const_mdspan(queries_device),
+                                                    neighbors_device, distances_device);
             }
 
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device);
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
         } else {
             std::string msg = "IVF-Flat search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";
@@ -1231,21 +1239,32 @@ public:
 
         // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
-        auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+        // Step C: reuse the per-thread T-typed query workspace buffer.
+        const size_t n_q_elems = static_cast<size_t>(num_queries) * this->dimension;
+        auto& q_buf_t = handle.template q_dev_buf<T>(n_q_elems);
+        auto q_dev_t = raft::make_device_matrix_view<T, int64_t>(
+            q_buf_t.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
 
         if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, q_dev_t.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+        } else if constexpr (std::is_same_v<T, __half>) {
+            // Host-side fp32 → fp16 cast (F16C / AVX, IEEE round-to-nearest-even
+            // — bit-identical to mdspan_copy_kernel<__half>) into a pinned
+            // staging buffer, then a single half-sized H2D copy. Skips the
+            // q_dev_f device allocation and the mdspan_copy_kernel dispatch.
+            __half* host_h = handle.ensure_host_half_buf(n_q_elems);
+            matrixone::cast_float_to_half_host(queries_data, host_h, n_q_elems);
+            raft::copy(*res, q_dev_t,
+                raft::make_host_matrix_view<const __half, int64_t>(host_h, num_queries, this->dimension));
         } else {
-            auto q_dev_f = raft::make_device_matrix<float, int64_t>(*res, num_queries, this->dimension);
-            raft::copy(*res, q_dev_f.view(), raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
+            // sizeof(T) == 1: int8 quantizer needs the fp32 device matrix.
+            auto& q_buf_f = handle.q_dev_buf_float(n_q_elems);
+            auto q_dev_f = raft::make_device_matrix_view<float, int64_t>(
+                q_buf_f.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
 
-            if constexpr (sizeof(T) == 1) {
-                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-                this->quantizer_.template transform<T>(*res, q_dev_f.view(), q_dev_t.data_handle(), true);
-            } else {
-                // T is half
-                raft::copy(*res, q_dev_t.view(), q_dev_f.view());
-            }
+            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
         }
         // Legacy path syncs so build_search_bitset's stack-local host bitmap can
         // drain on the same stream. Prebuilt path skips: bitset H2D queues
@@ -1273,7 +1292,7 @@ public:
                 handle.set_index_ptr(std::any()); // Clear invalid cache
             }
         }
-        
+
         if (!local_index) {
             // Tiered fallback: Replicated -> Single
             {
@@ -1293,8 +1312,13 @@ public:
         }
 
         if (local_index) {
-            auto neighbors_device = raft::make_device_matrix<int64_t, int64_t>(*res, num_queries, limit);
-            auto distances_device = raft::make_device_matrix<float, int64_t>(*res, num_queries, limit);
+            // Step C: reuse per-thread neighbor / distance workspaces.
+            auto& n_buf = handle.neighbors_buf(static_cast<size_t>(num_queries) * limit);
+            auto& d_buf = handle.distances_buf(static_cast<size_t>(num_queries) * limit);
+            auto neighbors_device = raft::make_device_matrix_view<int64_t, int64_t>(
+                n_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
+            auto distances_device = raft::make_device_matrix_view<float, int64_t>(
+                d_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(limit));
 
             uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1318,16 +1342,16 @@ public:
             if (bs_ptr) {
                 auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t.view()),
-                                                    neighbors_device.view(), distances_device.view(), filter);
+                                                    raft::make_const_mdspan(q_dev_t),
+                                                    neighbors_device, distances_device, filter);
             } else {
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
-                                                    raft::make_const_mdspan(q_dev_t.view()),
-                                                    neighbors_device.view(), distances_device.view());
+                                                    raft::make_const_mdspan(q_dev_t),
+                                                    neighbors_device, distances_device);
             }
 
-            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device.view());
-            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device.view());
+            raft::copy(*res, raft::make_host_matrix_view<int64_t, int64_t>(search_res.neighbors.data(), num_queries, limit), neighbors_device);
+            raft::copy(*res, raft::make_host_matrix_view<float, int64_t>(search_res.distances.data(), num_queries, limit), distances_device);
         } else {
             std::string msg = "IVF-Flat search error: No valid index found for device " + std::to_string(handle.get_device_id()) +
                              " (Mode: " + mode_name(this->dist_mode) + ")";

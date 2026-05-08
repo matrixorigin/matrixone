@@ -21,6 +21,16 @@
 #include "helper.h"
 #include "cuvs_types.h"
 
+#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/mr/pool_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
+#include <rmm/cuda_device.hpp>
+#include <rmm/device_uvector.hpp>
+#include <raft/core/resource/cuda_stream.hpp>
+#include <raft/core/device_mdspan.hpp>
+#include <cuda_fp16.h>
+#include <cstdint>
+
 #include <any>
 #include <atomic>
 #include <condition_variable>
@@ -41,6 +51,56 @@
 #include <iostream>
 
 namespace matrixone {
+
+// Process-wide RMM pool memory resources, one per device, lazy-initialized the
+// first time a worker thread runs on that device. Without this, every
+// raft::device_resources() falls back to cuda_memory_resource, which calls raw
+// cudaMalloc/cudaFree per allocation — a global driver lock that dominates
+// search wall time when ~18 device_uvectors are allocated/freed per query.
+// The pool services thousands of allocations from a small number of up-front
+// cudaMallocs and is lock-light on the hot path.
+//
+// Pool storage is intentionally never torn down: shared_ptrs in `keepalives_`
+// hold the pool alive for process lifetime, so we cannot free into a destroyed
+// pool from a `device_uvector` whose lifetime crosses cuvs_worker_t teardown.
+// On process exit the OS reclaims everything.
+inline void ensure_rmm_pool_for_device(int device_id) {
+    constexpr int kMaxDevices = 16;
+    static std::once_flag flags[kMaxDevices];
+    static std::mutex keepalive_mu;
+    static std::vector<std::shared_ptr<void>> keepalives;
+    if (device_id < 0 || device_id >= kMaxDevices) return;
+    std::call_once(flags[device_id], [device_id] {
+        try {
+            cudaSetDevice(device_id);
+            auto base = std::make_shared<rmm::mr::cuda_memory_resource>();
+            // Initial pool = 10% of free GPU memory; max = unbounded — pool
+            // grows by allocating more from the upstream as needed.
+            // Kept small so a subsequent huge-index load (e.g. an IVF-PQ or
+            // CAGRA index needing ≥¾ VRAM in a single allocation) can still
+            // claim a contiguous upstream slab: the pool's initial reservation
+            // is not relocatable, so an allocation larger than the pool must
+            // be satisfied by a fresh upstream cudaMalloc, which only succeeds
+            // if (1 − initial_pct) of VRAM is still free.
+            auto pool = std::make_shared<
+                rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
+                    base.get(),
+                    rmm::percent_of_free_device_memory(10));
+            rmm::mr::set_per_device_resource(rmm::cuda_device_id{device_id}, pool.get());
+            std::lock_guard<std::mutex> lk(keepalive_mu);
+            keepalives.push_back(pool);   // pool outlives every device_uvector
+            keepalives.push_back(base);   // base outlives the pool
+        } catch (const std::exception& e) {
+            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
+                      << " failed to install pool MR: " << e.what()
+                      << " — falling back to cuda_memory_resource" << std::endl;
+        } catch (...) {
+            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
+                      << " failed with unknown error — falling back to cuda_memory_resource"
+                      << std::endl;
+        }
+    });
+}
 
 // =============================================================================
 // cuvs_worker_t — Developer Guide
@@ -392,17 +452,35 @@ private:
 
 /**
  * @brief Wrapper around raft::resources to provide a consistent interface for workers.
+ *
+ * Owns per-thread reusable buffers (pinned host scratch for the fp32→fp16
+ * query path). One handle is created per worker thread and lives for the
+ * thread's lifetime, so these buffers grow once and are reused across
+ * thousands of searches.
  */
 class raft_handle_wrapper_t {
 public:
-    raft_handle_wrapper_t(int device_id, int rank = 0, 
-                         distribution_mode_t mode = DistributionMode_SINGLE_GPU) 
+    raft_handle_wrapper_t(int device_id, int rank = 0,
+                         distribution_mode_t mode = DistributionMode_SINGLE_GPU)
         : device_id_(device_id), rank_(rank), mode_(mode) {
         if (device_id >= 0) {
             res_ = std::make_shared<raft::resources>();
         } else {
             // CPU Context
             res_ = nullptr;
+        }
+    }
+
+    ~raft_handle_wrapper_t() {
+        if (host_half_buf_) {
+            // cudaFreeHost requires a live CUDA context on this device.
+            // The worker thread bound to this handle has already called
+            // cudaSetDevice(device_id_) once during start(); reset it here
+            // because handle dtor may run on the joining thread which may
+            // have switched device contexts since.
+            if (device_id_ >= 0) cudaSetDevice(device_id_);
+            cudaFreeHost(host_half_buf_);
+            host_half_buf_ = nullptr;
         }
     }
 
@@ -423,12 +501,129 @@ public:
     void set_index_ptr(std::any ptr) { index_ptr_ = ptr; }
     std::any get_index_ptr() const { return index_ptr_; }
 
+    /**
+     * @brief Grow-only pinned-host scratch buffer for fp16 query staging.
+     *
+     * Returns a pointer to at least `n` halves of pinned (page-locked) host
+     * memory. Pinned memory makes the subsequent H2D copy ~2× faster on the
+     * wire than pageable memory. The buffer is per-thread (one
+     * raft_handle_wrapper_t per worker thread), so no synchronization is
+     * needed on access.
+     */
+    half* ensure_host_half_buf(size_t n) {
+        if (n <= host_half_capacity_) return host_half_buf_;
+        if (host_half_buf_) {
+            cudaFreeHost(host_half_buf_);
+            host_half_buf_ = nullptr;
+            host_half_capacity_ = 0;
+        }
+        cudaError_t err = cudaMallocHost(reinterpret_cast<void**>(&host_half_buf_), n * sizeof(half));
+        if (err != cudaSuccess) {
+            host_half_buf_ = nullptr;
+            host_half_capacity_ = 0;
+            throw std::runtime_error(std::string("cudaMallocHost failed for host_half_buf: ") +
+                                     cudaGetErrorString(err));
+        }
+        host_half_capacity_ = n;
+        return host_half_buf_;
+    }
+
+    // ------------------------------------------------------------------
+    // Grow-only device-side workspace buffers
+    //
+    // These hold the per-search query / neighbor / distance staging memory
+    // that used to be allocated via raft::make_device_matrix on every call.
+    // With Step A's RMM pool the underlying cost is small but non-zero;
+    // reusing the same uvector eliminates the pool free-list traffic
+    // entirely on the hot path.
+    //
+    // Each accessor is grow-only — once the buffer reaches the largest n
+    // seen on this thread, subsequent calls return without resizing. All
+    // resizes are stream-ordered on the handle's CUDA stream, so they
+    // serialize correctly with searches issued on the same handle.
+    //
+    // Lifetime: these uvectors are destroyed in the handle's dtor. The RMM
+    // pool installed in start() is process-lifetime, so the deallocations
+    // always release into a live pool — no ordering hazard at shutdown.
+    //
+    // Thread-safety: one handle per worker thread; no synchronization
+    // needed on access. submit_batched aggregates queries from multiple
+    // callers into one search, but that runs on the worker thread holding
+    // the handle, so concurrent access is impossible by construction.
+    // ------------------------------------------------------------------
+
+    rmm::device_uvector<float>& q_dev_buf_float(size_t n) {
+        return ensure_uvec_(q_buf_f_, n);
+    }
+    rmm::device_uvector<__half>& q_dev_buf_half(size_t n) {
+        return ensure_uvec_(q_buf_h_, n);
+    }
+    rmm::device_uvector<int8_t>& q_dev_buf_int8(size_t n) {
+        return ensure_uvec_(q_buf_i8_, n);
+    }
+    rmm::device_uvector<uint8_t>& q_dev_buf_uint8(size_t n) {
+        return ensure_uvec_(q_buf_u8_, n);
+    }
+    rmm::device_uvector<int64_t>& neighbors_buf(size_t n) {
+        return ensure_uvec_(neigh_buf_, n);
+    }
+    rmm::device_uvector<float>& distances_buf(size_t n) {
+        return ensure_uvec_(dist_buf_, n);
+    }
+    rmm::device_uvector<uint32_t>& cagra_neighbors_buf(size_t n) {
+        return ensure_uvec_(cagra_neigh_buf_, n);
+    }
+
+    /**
+     * @brief Templated dispatch to the per-type query workspace buffer.
+     *
+     * Used in templated search bodies (ivf_pq / ivf_flat / cagra) to fetch
+     * the right grow-only uvector for `T` without an `if constexpr` chain
+     * at every call site.
+     */
+    template <typename U>
+    rmm::device_uvector<U>& q_dev_buf(size_t n) {
+        if constexpr (std::is_same_v<U, float>)        return q_dev_buf_float(n);
+        else if constexpr (std::is_same_v<U, __half>)  return q_dev_buf_half(n);
+        else if constexpr (std::is_same_v<U, int8_t>)  return q_dev_buf_int8(n);
+        else if constexpr (std::is_same_v<U, uint8_t>) return q_dev_buf_uint8(n);
+        else static_assert(sizeof(U) == 0, "q_dev_buf: unsupported query element type");
+    }
+
 private:
+    template <typename U>
+    rmm::device_uvector<U>& ensure_uvec_(std::unique_ptr<rmm::device_uvector<U>>& slot, size_t n) {
+        auto stream = raft::resource::get_cuda_stream(*res_);
+        if (!slot) {
+            slot = std::make_unique<rmm::device_uvector<U>>(n, stream);
+            return *slot;
+        }
+        if (slot->size() < n) {
+            slot->resize(n, stream);
+        }
+        return *slot;
+    }
+
     int device_id_;
     int rank_;
     std::shared_ptr<raft::resources> res_;
     distribution_mode_t mode_;
     std::any index_ptr_;
+
+    // Pinned-host fp16 staging buffer for the fp32-input → fp16-index search
+    // path. Sized to (max num_queries × dimension) seen so far on this thread.
+    half*  host_half_buf_      = nullptr;
+    size_t host_half_capacity_ = 0;
+
+    // Grow-only device workspace buffers (allocated on the handle's stream
+    // out of the RMM pool installed by ensure_rmm_pool_for_device).
+    std::unique_ptr<rmm::device_uvector<float>>    q_buf_f_;
+    std::unique_ptr<rmm::device_uvector<__half>>   q_buf_h_;
+    std::unique_ptr<rmm::device_uvector<int8_t>>   q_buf_i8_;
+    std::unique_ptr<rmm::device_uvector<uint8_t>>  q_buf_u8_;
+    std::unique_ptr<rmm::device_uvector<int64_t>>  neigh_buf_;
+    std::unique_ptr<rmm::device_uvector<float>>    dist_buf_;
+    std::unique_ptr<rmm::device_uvector<uint32_t>> cagra_neigh_buf_;
 };
 
 class cuvs_worker_t {
@@ -465,7 +660,13 @@ public:
         // Start Main Thread (only for main_tasks_)
         main_thread_ = std::thread([this, init_fn, stop_fn] {
             int device_id = devices_.empty() ? -1 : devices_[0];
-            if (device_id >= 0) cudaSetDevice(device_id);
+            if (device_id >= 0) {
+                cudaSetDevice(device_id);
+                // Install the per-device RMM pool BEFORE constructing
+                // raft_handle so any rmm::device_uvector created via the
+                // handle's allocator pulls from the pool from the start.
+                matrixone::ensure_rmm_pool_for_device(device_id);
+            }
             raft_handle handle(device_id, 0, mode_);
             if (init_fn) init_fn(handle);
             this->run_main_loop(handle, stop_fn);
@@ -482,10 +683,13 @@ public:
 
             device_threads_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn] {
                 cudaSetDevice(device_id);
-                
+                // Same as the main thread: install the RMM pool BEFORE the
+                // handle so all device-side allocations route through it.
+                matrixone::ensure_rmm_pool_for_device(device_id);
+
                 // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
                 raft_handle handle(device_id, rank, mode_);
-                
+
 		// only main thread will run init_fn and stop_fn
                 this->run_device_loop(handle, nullptr, device_idx);
             });

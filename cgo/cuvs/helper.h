@@ -81,6 +81,18 @@ void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, 
  */
 void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, float* dst, uint64_t total_elements);
 
+/**
+ * @brief Host-side fp32→fp16 cast (uses F16C / AVX when available, scalar
+ * __float2half_rn otherwise). Bit-identical to the device-side raft::copy
+ * cast that compiles to mdspan_copy_kernel<__half>, so recall is preserved.
+ *
+ * Used to fold the per-search fp32→fp16 cast into the host-side query buffer
+ * fill so the H2D copy moves half as many bytes and the GPU never runs the
+ * mdspan_copy_kernel<__half> dispatch.
+ */
+void cast_float_to_half_host(const float* __restrict__ src,
+                             half* __restrict__ dst, size_t n);
+
 } // namespace matrixone
 #endif
 
