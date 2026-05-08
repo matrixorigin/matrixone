@@ -47,6 +47,8 @@ func (i *IOVector) ReleaseReadResultOnError() {
 			entry.releaseData()
 			entry.releaseData = nil
 		}
+		entry.done = false
+		entry.fromCache = nil
 	}
 }
 

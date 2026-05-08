@@ -58,13 +58,15 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 				releaseData: func() {
 					doneReleaseData.Add(1)
 				},
-				done: true,
+				done:      true,
+				fromCache: &MemCache{},
 			},
 			{
 				CachedData: &releaseCountingData{releases: &cacheReleases},
 				releaseData: func() {
 					undoneReleaseData.Add(1)
 				},
+				fromCache: &MemCache{},
 			},
 		},
 	}
@@ -76,6 +78,10 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	require.Equal(t, int32(0), undoneReleaseData.Load())
 	require.Nil(t, vector.Entries[0].CachedData)
 	require.Nil(t, vector.Entries[0].releaseData)
+	require.False(t, vector.Entries[0].done)
+	require.Nil(t, vector.Entries[0].fromCache)
 	require.Nil(t, vector.Entries[1].CachedData)
 	require.NotNil(t, vector.Entries[1].releaseData)
+	require.False(t, vector.Entries[1].done)
+	require.Nil(t, vector.Entries[1].fromCache)
 }
