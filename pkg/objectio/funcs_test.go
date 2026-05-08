@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync/atomic"
@@ -22,7 +23,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -30,14 +33,15 @@ import (
 
 type releaseTrackingData struct {
 	releases *atomic.Int32
+	bytes    []byte
 }
 
 func (r *releaseTrackingData) Size() int64 {
-	return 0
+	return int64(len(r.bytes))
 }
 
 func (r *releaseTrackingData) Bytes() []byte {
-	return nil
+	return r.bytes
 }
 
 func (r *releaseTrackingData) Slice(int) fscache.Data {
@@ -72,6 +76,22 @@ func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) e
 	return nil
 }
 
+type trackingCacheDataAllocator struct {
+	data fscache.Data
+}
+
+func (t *trackingCacheDataAllocator) AllocateCacheData(context.Context, int) fscache.Data {
+	return t.data
+}
+
+func (t *trackingCacheDataAllocator) AllocateCacheDataWithHint(context.Context, int, malloc.Hints) fscache.Data {
+	return t.data
+}
+
+func (t *trackingCacheDataAllocator) CopyToCacheData(context.Context, []byte) fscache.Data {
+	return t.data
+}
+
 func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
 	readErr := errors.New("read canceled after partial cache fill")
@@ -101,6 +121,33 @@ func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	require.Equal(t, int32(1), releases.Load())
 }
 
+func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
+	var releases atomic.Int32
+	readErr := errors.New("read canceled after partial all-blocks fill")
+	fs := &partialReadErrorFS{
+		data: &releaseTrackingData{releases: &releases},
+		err:  readErr,
+	}
+
+	meta := BuildMetaData(1, 1)
+	col := meta.GetBlockMeta(0).ColumnMeta(0)
+	col.setDataType(uint8(types.T_int8))
+	col.setLocation(NewExtent(1, 0, 1, 1))
+
+	_, err := ReadAllBlocksWithMeta(
+		context.Background(),
+		&meta,
+		"test-object",
+		[]uint16{0},
+		fileservice.Policy(0),
+		mpool.MustNewZero(),
+		fs,
+		constructorFactory,
+	)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), releases.Load())
+}
+
 func TestReadExtentReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
 	readErr := errors.New("read canceled after partial extent fill")
@@ -119,6 +166,26 @@ func TestReadExtentReleasesPartialReadOnError(t *testing.T) {
 		constructorFactory,
 	)
 	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestConstructorFactoryReleasesDecompressionDataOnError(t *testing.T) {
+	var releases atomic.Int32
+	allocator := &trackingCacheDataAllocator{
+		data: &releaseTrackingData{
+			releases: &releases,
+			bytes:    make([]byte, 16),
+		},
+	}
+
+	cacheData, err := constructorFactory(16, compress.Lz4)(
+		context.Background(),
+		bytes.NewReader([]byte("not-lz4")),
+		[]byte("not-lz4"),
+		allocator,
+	)
+	require.Error(t, err)
+	require.Nil(t, cacheData)
 	require.Equal(t, int32(1), releases.Load())
 }
 
