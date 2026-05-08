@@ -305,11 +305,11 @@ func ConstructBasePKFilter(
 
 		case "in_range":
 			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
-			if !ok || len(vals) < 3 {
+			if !ok || len(vals) < 3 || len(vals[2]) < 1 {
 				return
 			}
 			filter.Valid = true
-			flag := types.DecodeInt64(vals[2])
+			flag := vals[2][0]
 			switch flag {
 			case 0:
 				filter.Op = function.BETWEEN
