@@ -225,6 +225,67 @@ func TestRemoveSnapshot(t *testing.T) {
 	assert.Equal(t, mgr.snapshots[nid].items[0].index, snapshotIndex(300))
 }
 
+func TestDropNewest(t *testing.T) {
+	var (
+		shardID   uint64 = 1
+		replicaID uint64 = 1
+	)
+	mgr := getInitializedMgr(t, shardID, replicaID)
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+
+	// Manager holds items 100, 200, 300. DropNewest must remove 300
+	// and leave 100 (the oldest -- which EvalImportSnapshot would
+	// pick) untouched.
+	idx, err := mgr.DropNewest(shardID, replicaID)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(300), idx)
+	assert.Equal(t, 2, mgr.Count(shardID, replicaID))
+	assert.Equal(t, snapshotIndex(100), mgr.snapshots[nid].items[0].index)
+	assert.Equal(t, snapshotIndex(200), mgr.snapshots[nid].items[1].index)
+
+	idx, err = mgr.DropNewest(shardID, replicaID)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(200), idx)
+	assert.Equal(t, 1, mgr.Count(shardID, replicaID))
+	assert.Equal(t, snapshotIndex(100), mgr.snapshots[nid].items[0].index)
+
+	idx, err = mgr.DropNewest(shardID, replicaID)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(100), idx)
+	assert.Equal(t, 0, mgr.Count(shardID, replicaID))
+
+	// Empty manager: no-op, returns 0.
+	idx, err = mgr.DropNewest(shardID, replicaID)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(0), idx)
+
+	// Unknown (shardID, replicaID): also a no-op.
+	idx, err = mgr.DropNewest(999, 999)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(0), idx)
+}
+
+func TestNewestIndex(t *testing.T) {
+	var (
+		shardID   uint64 = 1
+		replicaID uint64 = 1
+	)
+	mgr := getInitializedMgr(t, shardID, replicaID)
+
+	assert.Equal(t, uint64(300), mgr.NewestIndex(shardID, replicaID))
+
+	_, err := mgr.DropNewest(shardID, replicaID)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(200), mgr.NewestIndex(shardID, replicaID))
+
+	// Remove all items.
+	assert.NoError(t, mgr.Remove(shardID, replicaID, 9999))
+	assert.Equal(t, uint64(0), mgr.NewestIndex(shardID, replicaID))
+
+	// Unknown pair: 0.
+	assert.Equal(t, uint64(0), mgr.NewestIndex(999, 999))
+}
+
 func TestEvalImportSnapshot(t *testing.T) {
 	var (
 		shardID   uint64 = 1
