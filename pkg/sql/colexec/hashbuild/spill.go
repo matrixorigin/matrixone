@@ -304,7 +304,7 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 func processMemoryOverBudget() bool {
 	curr := mpool.GlobalUsedWithPending()
 	cap := mpool.GlobalCap()
-	return curr > cap*3/4
+	return curr > cap*2/3
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).

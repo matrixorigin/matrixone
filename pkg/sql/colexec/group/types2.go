@@ -157,12 +157,15 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	}
 
 	if m == 0 {
-		totalMem := int64(system.MemoryTotal())
+		budget := mpool.GlobalCap()
+		if budget <= 0 || budget >= 1<<62 {
+			budget = int64(system.MemoryTotal())
+		}
 		procs := int64(system.GoMaxProcs())
 		if procs < 1 {
 			procs = 1
 		}
-		mem := totalMem / procs / 4
+		mem := budget / procs / 4
 		if mem < common.MiB*64 {
 			mem = common.MiB * 64
 		}

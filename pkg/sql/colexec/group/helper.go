@@ -667,7 +667,7 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 		needSpill = memUsed > ctr.spillMem
 	}
 	if !needSpill {
-		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
+		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3
 	}
 
 	return needSpill

@@ -270,11 +270,8 @@ func (d *DiskCache) Read(
 	openedFiles := make(map[string]*os.File)
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
-		tight := memoryTight()
 		for _, file := range openedFiles {
-			if tight {
-				unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
-			}
+			unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
 			_ = file.Close()
 		}
 		LogEvent(ctx, str_close_disk_files_end)
@@ -546,6 +543,7 @@ func (d *DiskCache) writeFile(
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 
 	stat, err = f.Stat()
 	if err != nil {

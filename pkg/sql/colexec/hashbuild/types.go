@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -159,12 +160,18 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
-		totalMem := int64(system.MemoryTotal())
+		// Use mpool cap as the budget base since hash build allocations go
+		// through mpool (off-heap). Divide by GOMAXPROCS to get per-worker
+		// share, then divide by 4 to allow concurrent operators headroom.
+		budget := mpool.GlobalCap()
+		if budget <= 0 || budget >= 1<<62 {
+			budget = int64(system.MemoryTotal())
+		}
 		procs := int64(system.GoMaxProcs())
 		if procs < 1 {
 			procs = 1
 		}
-		mem := totalMem / procs / 4
+		mem := budget / procs / 4
 		if mem < common.MiB*64 {
 			mem = common.MiB * 64
 		}
