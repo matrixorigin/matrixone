@@ -523,7 +523,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 
 		if ctr.hr.IsEmpty() {
-			if err = ctr.buildHashTable(proc.Ctx); err != nil {
+			hint := uint64(bkt.cnt)
+			if hint < 1024 {
+				hint = 1024
+			}
+			if err = ctr.buildHashTableWithHint(proc.Ctx, hint); err != nil {
 				return false, err
 			}
 		}

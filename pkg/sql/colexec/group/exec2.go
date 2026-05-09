@@ -369,19 +369,24 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 }
 
 func (ctr *container) buildHashTable(ctx context.Context) error {
-	// build hash table
+	return ctr.buildHashTableWithHint(ctx, aggHtPreAllocSize)
+}
+
+func (ctr *container) buildHashTableWithHint(ctx context.Context, preAlloc uint64) error {
+	if preAlloc < aggHtPreAllocSize {
+		preAlloc = aggHtPreAllocSize
+	}
 	if err := ctr.hr.BuildHashTable(
 		ctx, ctr.mp,
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
-		aggHtPreAllocSize); err != nil {
+		preAlloc); err != nil {
 		return err
 	}
 
-	// pre-allocate groups for each agg.
 	for _, ag := range ctr.aggList {
-		if err := ag.PreAllocateGroups(aggHtPreAllocSize); err != nil {
+		if err := ag.PreAllocateGroups(int(preAlloc)); err != nil {
 			return err
 		}
 	}

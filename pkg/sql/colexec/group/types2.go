@@ -161,16 +161,15 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 		if budget <= 0 || budget >= 1<<62 {
 			budget = int64(system.MemoryTotal())
 		}
-		procs := int64(system.GoMaxProcs())
-		if procs < 1 {
-			procs = 1
-		}
-		// GroupBy spill is expensive (serialize/deserialize agg state + hash
-		// rebuild), so use a larger per-op budget than HashBuild (/procs/2
-		// instead of /procs/4) to avoid unnecessary spill on queries like Q17.
-		mem := budget / procs / 2
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
+		// GroupBy spill is very expensive (serialize/deserialize agg state +
+		// full hash table rebuild), so use a large per-op budget. Unlike
+		// HashBuild where many operators run concurrently (DOP shards),
+		// GroupBy typically has 1-2 operators active. Use budget/4 to allow
+		// a single GroupBy to hold ~25% of mpool before spilling; the global
+		// 3/4 threshold in needSpill() guards against multi-operator OOM.
+		mem := budget / 4
+		if mem < common.MiB*256 {
+			mem = common.MiB * 256
 		}
 		ctr.spillMem = mem
 	} else {
