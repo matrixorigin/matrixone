@@ -89,24 +89,32 @@ func opBetweenBool(
 	_ *process.Process,
 	length int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[bool](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[bool](parameters[1], 0)
 	rval := vector.GetFixedAtWithTypeCheck[bool](parameters[2], 0)
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	alwaysTrue := lval != rval
+	alwaysTrue := !lval && rval
+	alwaysFalse := lval && !rval
 
 	if ivec.IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 	} else if ivec.IsConst() {
-		if alwaysTrue {
+		if alwaysFalse {
+			for i := range length {
+				res[i] = false
+			}
+		} else if alwaysTrue {
 			for i := range length {
 				res[i] = true
 			}
 		} else {
 			r := icol[0] == lval
-
 			for i := range length {
 				res[i] = r
 			}
@@ -114,13 +122,35 @@ func opBetweenBool(
 	} else if ivec.HasNull() {
 		iNulls := ivec.GetNulls()
 		rNulls := result.GetResultVector().GetNulls()
-		for i := range length {
-			if iNulls.Contains(uint64(i)) {
+		if alwaysFalse {
+			for i := range length {
+				if iNulls.Contains(uint64(i)) {
+					rNulls.Add(uint64(i))
+				}
 				res[i] = false
-				rNulls.Add(uint64(i))
-			} else {
-				res[i] = icol[i] == lval
 			}
+		} else if alwaysTrue {
+			for i := range length {
+				if iNulls.Contains(uint64(i)) {
+					res[i] = false
+					rNulls.Add(uint64(i))
+				} else {
+					res[i] = true
+				}
+			}
+		} else {
+			for i := range length {
+				if iNulls.Contains(uint64(i)) {
+					res[i] = false
+					rNulls.Add(uint64(i))
+				} else {
+					res[i] = icol[i] == lval
+				}
+			}
+		}
+	} else if alwaysFalse {
+		for i := range length {
+			res[i] = false
 		}
 	} else if alwaysTrue {
 		for i := range length {
@@ -141,6 +171,10 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	_ *process.Process,
 	length int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
@@ -205,6 +239,10 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	length int,
 	compareFunc func(v1, v2 T) int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
@@ -270,6 +308,10 @@ func opBetweenBytesWithFunc(
 	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol, iarea := vector.MustVarlenaRawData(ivec)
 	lval := parameters[1].GetBytesAt(0)
@@ -391,6 +433,10 @@ func inRangeBool(
 	_ *process.Process,
 	length int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[bool](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[bool](parameters[1], 0)
@@ -398,35 +444,39 @@ func inRangeBool(
 	flag := vector.MustFixedColWithTypeCheck[uint8](parameters[3])[0]
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	alwaysTrue := flag == 0 && lval != rval
-	alwaysFalse := flag == 3 || (flag != 0 && lval == rval)
+	lb := int8(0)
+	if lval {
+		lb = 1
+	}
+	ub := int8(0)
+	if rval {
+		ub = 1
+	}
+
+	check := func(v bool) bool {
+		iv := int8(0)
+		if v {
+			iv = 1
+		}
+		switch flag {
+		case 0:
+			return iv >= lb && iv <= ub
+		case 1:
+			return iv > lb && iv <= ub
+		case 2:
+			return iv >= lb && iv < ub
+		case 3:
+			return iv > lb && iv < ub
+		}
+		return false
+	}
 
 	if ivec.IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 	} else if ivec.IsConst() {
-		if alwaysTrue {
-			for i := range length {
-				res[i] = true
-			}
-		} else if alwaysFalse {
-			for i := range length {
-				res[i] = false
-			}
-		} else {
-			val := icol[0]
-			var r bool
-			switch flag {
-			case 0:
-				r = val == lval
-			case 1:
-				r = val
-			case 2:
-				r = !val
-			}
-
-			for i := range length {
-				res[i] = r
-			}
+		r := check(icol[0])
+		for i := range length {
+			res[i] = r
 		}
 	} else if ivec.HasNull() {
 		iNulls := ivec.GetNulls()
@@ -436,39 +486,12 @@ func inRangeBool(
 				res[i] = false
 				rNulls.Add(uint64(i))
 			} else {
-				val := icol[i]
-				switch flag {
-				case 0:
-					res[i] = val == lval
-				case 1:
-					res[i] = val
-				case 2:
-					res[i] = !val
-				}
+				res[i] = check(icol[i])
 			}
-		}
-	} else if alwaysTrue {
-		for i := range length {
-			res[i] = true
-		}
-	} else if alwaysFalse {
-		for i := range length {
-			res[i] = false
 		}
 	} else {
-		switch flag {
-		case 0:
-			for i := range length {
-				res[i] = icol[i] == lval
-			}
-		case 1:
-			for i := range length {
-				res[i] = icol[i]
-			}
-		case 2:
-			for i := range length {
-				res[i] = !icol[i]
-			}
+		for i := range length {
+			res[i] = check(icol[i])
 		}
 	}
 
@@ -481,6 +504,10 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 	_ *process.Process,
 	length int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
@@ -597,6 +624,10 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 	length int,
 	compareFunc func(v1, v2 T) int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
@@ -714,6 +745,10 @@ func inRangeBytesWithFunc(
 	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
+	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		return nil
+	}
 	ivec := parameters[0]
 	icol, iarea := vector.MustVarlenaRawData(ivec)
 	lval := parameters[1].GetBytesAt(0)

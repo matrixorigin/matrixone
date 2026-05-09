@@ -1289,6 +1289,24 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			col2filter[col.ColPos] = i
+		} else if funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" {
+			col := fn.Args[0].GetCol()
+			if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
+				continue
+			}
+
+			if _, ok := col2filter[col.ColPos]; !ok {
+				col2filter[col.ColPos] = i
+			}
+		} else if funcName == "in_range" {
+			col := fn.Args[0].GetCol()
+			if col == nil || !isRuntimeConstExpr(fn.Args[1]) || !isRuntimeConstExpr(fn.Args[2]) {
+				continue
+			}
+
+			if _, ok := col2filter[col.ColPos]; !ok {
+				col2filter[col.ColPos] = i
+			}
 		} else if funcName == "in" {
 			if fn.Args[0].GetCol() == nil {
 				continue
@@ -1430,6 +1448,92 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
+	// Pre-merge paired range conditions (e.g., a > 3 AND a < 10) into in_range.
+	colLowerBounds := make(map[int32]int) // colPos -> filter index
+	colUpperBounds := make(map[int32]int) // colPos -> filter index
+	for i, expr := range filters {
+		fn := expr.GetF()
+		if fn == nil {
+			continue
+		}
+		col, isLower := classifyRangeBound(fn)
+		if col == nil {
+			continue
+		}
+		if isLower {
+			colLowerBounds[col.ColPos] = i
+		} else {
+			colUpperBounds[col.ColPos] = i
+		}
+	}
+	for colPos, lowerIdx := range colLowerBounds {
+		upperIdx, hasUpper := colUpperBounds[colPos]
+		if !hasUpper {
+			continue
+		}
+		// Only merge if col2filter points to a range op (not =, between, in, in_range).
+		if existingIdx, ok := col2filter[colPos]; ok {
+			fn := filters[existingIdx].GetF()
+			if fn != nil {
+				switch fn.Func.ObjName {
+				case "=", "between", "in", "in_range":
+					continue
+				}
+			}
+		}
+		lowerFn := filters[lowerIdx].GetF()
+		upperFn := filters[upperIdx].GetF()
+		lowerOp := canonicalRangeOp(lowerFn)
+		upperOp := canonicalRangeOp(upperFn)
+		lowerVal := rangeFilterConstValue(lowerFn)
+		upperVal := rangeFilterConstValue(upperFn)
+		if lowerVal == nil || upperVal == nil {
+			continue
+		}
+
+		colExpr := lowerFn.Args[0]
+		if colExpr.GetCol() == nil {
+			colExpr = lowerFn.Args[1]
+		}
+
+		lb := lowerVal
+		ub := upperVal
+
+		// Cast bounds to column type so between/in_range runtime gets uniform types.
+		colTyp := colExpr.Typ
+		if lb.Typ.Id != colTyp.Id || lb.Typ.Width != colTyp.Width || lb.Typ.Scale != colTyp.Scale {
+			if casted, err := appendCastBeforeExpr(builder.GetContext(), lb, colTyp); err == nil {
+				lb = casted
+			}
+		}
+		if ub.Typ.Id != colTyp.Id || ub.Typ.Width != colTyp.Width || ub.Typ.Scale != colTyp.Scale {
+			if casted, err := appendCastBeforeExpr(builder.GetContext(), ub, colTyp); err == nil {
+				ub = casted
+			}
+		}
+
+		compositeFilterSel := filters[lowerIdx].Selectivity * filters[upperIdx].Selectivity
+
+		var merged *plan.Expr
+		if lowerOp == ">=" && upperOp == "<=" {
+			merged = makeBetweenExpr(colExpr, lb, ub)
+		} else {
+			var flag uint8
+			if lowerOp == ">" {
+				flag |= 1
+			}
+			if upperOp == "<" {
+				flag |= 2
+			}
+			merged = makeInRangeExpr(colExpr, lb, ub, flag)
+		}
+		merged.Selectivity = compositeFilterSel
+
+		filters[lowerIdx] = merged
+		filters[upperIdx] = makePlan2BoolConstExprWithType(true)
+		col2filter[colPos] = lowerIdx
+	}
+
 	if numParts == 1 {
 		return filters
 	}
@@ -1444,7 +1548,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 		filterIdx = append(filterIdx, idx)
 		funcName := filters[idx].GetF().Func.ObjName
-		if funcName == "in" || funcName == "between" {
+		if funcName == "in" || funcName == "between" ||
+			funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" ||
+			funcName == "in_range" {
 			break
 		}
 	}
@@ -1525,6 +1631,79 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			leftArg,
 			rightArg,
 		})
+	} else if lastFuncName == "in_range" {
+		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
+		for i := 0; i < len(filterIdx)-1; i++ {
+			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		}
+
+		if len(filterIdx) < numParts && len(serialArgs) == 0 {
+			return filters
+		}
+
+		tmpSerialArgs := DeepCopyExprList(serialArgs)
+		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[1])
+		leftArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+
+		tmpSerialArgs = serialArgs
+		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[2])
+		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+
+		funcName := "in_range"
+		if len(filterIdx) < numParts {
+			funcName = "prefix_in_range"
+		}
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+			pkExpr,
+			leftArg,
+			rightArg,
+			lastFilter.GetF().Args[3],
+		})
+	} else if lastFuncName == "<" || lastFuncName == "<=" || lastFuncName == ">" || lastFuncName == ">=" {
+		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
+		for i := 0; i < len(filterIdx)-1; i++ {
+			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		}
+
+		if len(filterIdx) < numParts && len(serialArgs) == 0 {
+			return filters
+		}
+
+		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFilter.GetF().Args[1])
+		boundArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+
+		prefixArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+
+		var flag byte
+		var leftArg, rightArg *plan.Expr
+		switch lastFuncName {
+		case "<":
+			leftArg = prefixArg
+			rightArg = boundArg
+			flag = 2 // RightOpen
+		case "<=":
+			leftArg = prefixArg
+			rightArg = boundArg
+			flag = 0 // both closed
+		case ">":
+			leftArg = boundArg
+			rightArg = prefixArg
+			flag = 1 // LeftOpen
+		case ">=":
+			leftArg = boundArg
+			rightArg = prefixArg
+			flag = 0 // both closed
+		}
+
+		flagExpr := makePlan2Uint8ConstExprWithType(flag)
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", []*plan.Expr{
+			pkExpr,
+			leftArg,
+			rightArg,
+			flagExpr,
+		})
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
 		for i := range filterIdx {
@@ -1569,5 +1748,35 @@ func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Exp
 
 	for _, arg := range fn.Args {
 		flattenLogicalExpressions(arg, opName, args)
+	}
+}
+
+var (
+	boolType       = plan.Type{Id: int32(types.T_bool), NotNullable: false}
+	betweenFuncRef = getFunctionObjRef(int64(function.BETWEEN)<<32, "between")
+	inRangeFuncRef = getFunctionObjRef(int64(function.IN_RANGE)<<32, "in_range")
+)
+
+func makeBetweenExpr(col, lb, ub *plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: betweenFuncRef,
+				Args: []*plan.Expr{col, lb, ub},
+			},
+		},
+		Typ: boolType,
+	}
+}
+
+func makeInRangeExpr(col, lb, ub *plan.Expr, flag uint8) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: inRangeFuncRef,
+				Args: []*plan.Expr{col, lb, ub, MakePlan2Uint8ConstExprWithType(flag)},
+			},
+		},
+		Typ: boolType,
 	}
 }
