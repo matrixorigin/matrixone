@@ -451,6 +451,20 @@ func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
 		return
 	}
 
+	if r.orderByLimit == nil {
+		r.orderByLimit = &objectio.BlockReadTopOp{}
+	}
+
+	if col := orderBy[0].Expr.GetCol(); col != nil {
+		r.orderByLimit.Typ = types.T(orderBy[0].Expr.Typ.Id)
+		r.orderByLimit.ColPos = col.ColPos
+		r.orderByLimit.Limit = limit
+		r.orderByLimit.OrderedLimit = true
+		r.orderByLimit.Desc = orderBy[0].Flag&plan.OrderBySpec_DESC != 0
+		r.orderByLimit.NumVec = nil
+		return
+	}
+
 	orderFunc := orderBy[0].Expr.GetF()
 	if orderFunc == nil {
 		panic("order function is nil")
@@ -471,15 +485,13 @@ func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
 		panic("unsupported order function")
 	}
 
-	if r.orderByLimit == nil {
-		r.orderByLimit = &objectio.BlockReadTopOp{}
-	}
-
 	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
 	r.orderByLimit.Metric = metric
 	r.orderByLimit.ColPos = col.ColPos
 	r.orderByLimit.NumVec = []byte(numVec)
 	r.orderByLimit.Limit = limit
+	r.orderByLimit.OrderedLimit = false
+	r.orderByLimit.Desc = orderBy[0].Flag&plan.OrderBySpec_DESC != 0
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {
@@ -578,7 +590,7 @@ func (r *reader) Read(
 	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
 	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
 	var detachedDistVec *vector.Vector
-	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && len(outBatch.Vecs) > len(cols) {
 		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
 			candidate.GetType().Oid == types.T_float64 {
 			candidate.CleanOnlyData()
@@ -621,7 +633,7 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		if r.orderByLimit != nil {
+		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
 			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
 			if err != nil {
 				return false, err
@@ -667,7 +679,7 @@ func (r *reader) Read(
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
-	if r.orderByLimit != nil && detachedDistVec != nil {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
 		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
 		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
 		detachedDistVec = nil

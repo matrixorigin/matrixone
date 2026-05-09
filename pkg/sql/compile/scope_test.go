@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -619,6 +621,58 @@ func (m *mockRelationForBloomFilter) BuildReaders(
 	return []engine.Reader{}, nil
 }
 
+type mockReaderForParallelOrderBy struct {
+	orderByCalls  int
+	orderBy       []*plan.OrderBySpec
+	blockTopCalls int
+	blockOrderBy  []*plan.OrderBySpec
+	blockLimit    uint64
+}
+
+func (m *mockReaderForParallelOrderBy) Close() error {
+	return nil
+}
+
+func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
+	return true, nil
+}
+
+func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
+	m.orderByCalls++
+	m.orderBy = orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
+	return m.orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	m.blockTopCalls++
+	m.blockOrderBy = orderBy
+	m.blockLimit = limit
+}
+
+func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
+
+type mockRelationForParallelOrderBy struct {
+	engine.Relation
+	readers []engine.Reader
+}
+
+func (m *mockRelationForParallelOrderBy) BuildReaders(
+	context.Context,
+	any,
+	*plan.Expr,
+	engine.RelData,
+	int,
+	int,
+	bool,
+	engine.TombstoneApplyPolicy,
+	engine.FilterHint,
+) ([]engine.Reader, error) {
+	return m.readers, nil
+}
+
 func TestBuildReadersBloomFilterHint(t *testing.T) {
 	t.Run("BloomFilter set when node is IVFFLAT Entries and context has bloom filter", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
@@ -861,4 +915,38 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		require.NotNil(t, readers)
 		require.Nil(t, mockRel.capturedHint.BloomFilter)
 	})
+}
+
+func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
+
+	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	blockOrderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	reader1 := &mockReaderForParallelOrderBy{}
+	reader2 := &mockReaderForParallelOrderBy{}
+
+	scope.DataSource = &Source{
+		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
+		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+		FilterExpr:         nil,
+		OrderBy:            orderBy,
+		BlockOrderBy:       blockOrderBy,
+		BlockLimit:         16,
+		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+	}
+	scope.NodeInfo = engine.Node{Mcpu: 2}
+
+	mergeScope, err := buildScanParallelRun(scope, c)
+	require.NoError(t, err)
+	require.NotNil(t, mergeScope)
+	require.Len(t, mergeScope.PreScopes, 2)
+
+	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
+		require.Equal(t, 1, reader.orderByCalls)
+		require.Equal(t, orderBy, reader.orderBy)
+		require.Equal(t, 1, reader.blockTopCalls)
+		require.Equal(t, blockOrderBy, reader.blockOrderBy)
+		require.Equal(t, uint64(16), reader.blockLimit)
+	}
 }
