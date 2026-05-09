@@ -124,6 +124,43 @@ func TestNotifyWaiters(t *testing.T) {
 	assert.Equal(t, 0, len(tw.mu.waiters))
 }
 
+func TestNotifyLatestCommitTSNonBlockingWhenChannelFull(t *testing.T) {
+	tw := &timestampWaiter{
+		logger:    util.GetLogger(""),
+		notifiedC: make(chan struct{}, 1),
+	}
+	tw.notifiedC <- struct{}{}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tw.NotifyLatestCommitTS(newTestTimestamp(10))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("NotifyLatestCommitTS blocked when notification channel was full")
+	}
+
+	latest := tw.notified.Load()
+	require.NotNil(t, latest)
+	assert.Equal(t, newTestTimestamp(10), *latest)
+}
+
+func TestFetchLatestTSDoesNotDrainUnboundedSignals(t *testing.T) {
+	tw := &timestampWaiter{
+		notifiedC: make(chan struct{}, maxNotifiedCount*2),
+	}
+	for i := 0; i < maxNotifiedCount*2; i++ {
+		tw.notifiedC <- struct{}{}
+	}
+	tw.storeNotified(newTestTimestamp(10))
+
+	assert.Equal(t, newTestTimestamp(10), tw.fetchLatestTS())
+	assert.NotZero(t, len(tw.notifiedC))
+}
+
 func BenchmarkGetTimestampWithWaitNotify(b *testing.B) {
 	runTimestampWaiterTests(
 		b,

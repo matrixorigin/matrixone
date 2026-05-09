@@ -962,6 +962,63 @@ func TestRoutineController_CommandPools(t *testing.T) {
 	})
 }
 
+func TestDispatchUpdateResponseCoalescesTimestampCommands(t *testing.T) {
+	ctx := context.Background()
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
+	defer tw.Close()
+
+	e := &Engine{}
+	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+
+	recRoutines := make([]*routineController, consumerNumber)
+	for i := range recRoutines {
+		recRoutines[i] = &routineController{
+			routineId:  i,
+			signalChan: make(chan routineControlCmd, 8),
+			cmdLogPool: sync.Pool{
+				New: func() any {
+					return &cmdToConsumeLog{}
+				},
+			},
+			cmdTimePool: sync.Pool{
+				New: func() any {
+					return &cmdToUpdateTime{}
+				},
+			},
+		}
+	}
+
+	to := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	response := &logtail.UpdateResponse{
+		To: &to,
+		LogtailList: []logtail.TableLogtail{
+			{Table: &api.TableID{DbId: 10, TbId: 101}},
+			{Table: &api.TableID{DbId: 10, TbId: 105}},
+			{Table: &api.TableID{DbId: 10, TbId: 102}},
+		},
+	}
+	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
+
+	require.Equal(t, 2, len(recRoutines[1].signalChan))
+	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	assert.False(t, cmd.notifyApplied)
+	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	assert.True(t, cmd.notifyApplied)
+	assert.Equal(t, to, cmd.applied)
+
+	require.Equal(t, 1, len(recRoutines[2].signalChan))
+	cmd = (<-recRoutines[2].signalChan).(*cmdToConsumeLog)
+	assert.True(t, cmd.notifyApplied)
+	assert.Equal(t, to, cmd.applied)
+
+	require.Equal(t, 1, len(recRoutines[0].signalChan))
+	_, ok := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
+	assert.True(t, ok)
+	require.Equal(t, 1, len(recRoutines[3].signalChan))
+	_, ok = (<-recRoutines[3].signalChan).(*cmdToUpdateTime)
+	assert.True(t, ok)
+}
+
 // TestCommandActions verifies that command actions can be created and their basic functionality works
 func TestCommandActions(t *testing.T) {
 	t.Run("cmdToConsumeSub creation and basic properties", func(t *testing.T) {
