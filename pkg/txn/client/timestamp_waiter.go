@@ -33,8 +33,9 @@ const (
 type timestampWaiter struct {
 	logger    *log.MOLogger
 	stopper   stopper.Stopper
-	notifiedC chan timestamp.Timestamp
+	notifiedC chan struct{}
 	latestTS  atomic.Pointer[timestamp.Timestamp]
+	notified  atomic.Pointer[timestamp.Timestamp]
 	mu        struct {
 		sync.Mutex
 		waiters      []*waiter
@@ -50,7 +51,7 @@ func NewTimestampWaiter(
 		logger: logger,
 		stopper: *stopper.NewStopper("timestamp-waiter",
 			stopper.WithLogger(logger.RawLogger())),
-		notifiedC: make(chan timestamp.Timestamp, maxNotifiedCount),
+		notifiedC: make(chan struct{}, maxNotifiedCount),
 	}
 	if err := tw.stopper.RunTask(tw.handleEvent); err != nil {
 		panic(err)
@@ -80,7 +81,13 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
 	util.LogTxnPushedTimestampUpdated(tw.logger, ts)
-	tw.notifiedC <- ts
+	if !tw.storeNotified(ts) {
+		return
+	}
+	select {
+	case tw.notifiedC <- struct{}{}:
+	default:
+	}
 }
 
 func (tw *timestampWaiter) Close() {
@@ -138,8 +145,8 @@ func (tw *timestampWaiter) handleEvent(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case ts := <-tw.notifiedC:
-			ts = tw.fetchLatestTS(ts)
+		case <-tw.notifiedC:
+			ts := tw.fetchLatestTS()
 			if latest.Less(ts) {
 				latest = ts
 				tw.latestTS.Store(&ts)
@@ -149,15 +156,43 @@ func (tw *timestampWaiter) handleEvent(ctx context.Context) {
 	}
 }
 
-func (tw *timestampWaiter) fetchLatestTS(ts timestamp.Timestamp) timestamp.Timestamp {
+func (tw *timestampWaiter) storeNotified(ts timestamp.Timestamp) bool {
 	for {
+		latest := tw.notified.Load()
+		if latest != nil && latest.GreaterEq(ts) {
+			return false
+		}
+		v := ts
+		if tw.notified.CompareAndSwap(latest, &v) {
+			return true
+		}
+	}
+}
+
+func (tw *timestampWaiter) fetchLatestTS() timestamp.Timestamp {
+	ts := tw.takeNotified()
+	for i := 0; i < maxNotifiedCount; i++ {
 		select {
-		case v := <-tw.notifiedC:
-			if v.Greater(ts) {
+		case <-tw.notifiedC:
+			v := tw.takeNotified()
+			if ts.Less(v) {
 				ts = v
 			}
 		default:
 			return ts
+		}
+	}
+	return ts
+}
+
+func (tw *timestampWaiter) takeNotified() timestamp.Timestamp {
+	for {
+		latest := tw.notified.Load()
+		if latest == nil {
+			return timestamp.Timestamp{}
+		}
+		if tw.notified.CompareAndSwap(latest, nil) {
+			return *latest
 		}
 	}
 }
