@@ -222,8 +222,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				cnt := int64(exec.state[i].argCnt[j])
 				if cnt <= 1 {
-					//cnt == 1 && exec is samp
-					if 0 == cnt || !exec.isPop {
+					// cnt == 1 && exec is samp
+					if cnt == 0 || !exec.isPop {
 						if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
 							return nil, err
 						}
@@ -269,8 +269,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 			sumsqs := vector.MustFixedColNoTypeCheck[float64](exec.state[i].vecs[2])
 			for j, cnt := range cnts {
 				if cnt <= 1 {
-					//cnt == 1 && exec is samp
-					if 0 == cnt || !exec.isPop {
+					// cnt == 1 && exec is samp
+					if cnt == 0 || !exec.isPop {
 						vector.AppendNull(vecs[i], exec.mp)
 						continue
 					}
