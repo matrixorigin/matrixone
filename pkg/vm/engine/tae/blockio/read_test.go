@@ -326,13 +326,13 @@ func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	vec0 := vector.NewVec(types.T_int32.ToType())
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		vector.AppendFixed(vec0, int32(i), false, mp)
 	}
 	cacheVectors := make(containers.Vectors, 1)
 	cacheVectors[0] = *vec0
 
-	orderByLimit := &objectio.BlockReadTopOp{
+	descLimit := &objectio.BlockReadTopOp{
 		Typ:          types.T_int32,
 		ColPos:       0,
 		Limit:        2,
@@ -341,10 +341,35 @@ func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
 	}
 	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
 
-	rows, dists, err := handleOrderByLimitOnLiveRows(context.Background(), orderByLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	rows, dists, err := handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, objectio.Bitmap{}, cacheVectors)
 	require.NoError(t, err)
 	require.Nil(t, dists)
-	require.Equal(t, []int64{2, 3}, rows)
+	require.Equal(t, []int64{4, 5}, rows)
+
+	ascLimit := &objectio.BlockReadTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+	}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{0, 1}, rows)
+
+	deleteMask := objectio.GetReusableBitmap()
+	defer deleteMask.Release()
+	deleteMask.Add(4)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{3, 5}, rows)
+
+	unsortedInfo := &objectio.BlockInfo{}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, unsortedInfo, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{0, 1, 2, 3, 4, 5}, rows)
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex

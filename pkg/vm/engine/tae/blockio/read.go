@@ -919,29 +919,92 @@ func handleOrderByLimitOnLiveRows(
 		vecColPos--
 	}
 	vecCol := &cacheVectors[vecColPos]
-	selectRows := buildLiveRows(vecCol.Length(), deleteMask, orderByLimit.OrderedLimit)
 	if orderByLimit.OrderedLimit {
-		return handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
+		selectRows := buildOrderedLiveRows(vecCol.Length(), deleteMask, orderByLimit, info.IsSorted())
+		return selectRows, nil, nil
 	}
+	selectRows := buildLiveRows(vecCol.Length(), deleteMask)
 	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }
 
-func buildLiveRows(rowCount int, deleteMask objectio.Bitmap, includeAll bool) []int64 {
-	if rowCount <= 0 || (deleteMask.IsEmpty() && !includeAll) {
+func buildLiveRows(rowCount int, deleteMask objectio.Bitmap) []int64 {
+	if rowCount <= 0 || deleteMask.IsEmpty() {
 		return nil
 	}
-	capHint := rowCount
-	if !deleteMask.IsEmpty() {
-		capHint -= deleteMask.Count()
-		if capHint < 0 {
-			capHint = 0
-		}
+	capHint := rowCount - deleteMask.Count()
+	if capHint < 0 {
+		capHint = 0
 	}
 	rows := make([]int64, 0, capHint)
 	for i := 0; i < rowCount; i++ {
-		if deleteMask.IsEmpty() || !deleteMask.Contains(uint64(i)) {
+		if !deleteMask.Contains(uint64(i)) {
 			rows = append(rows, int64(i))
 		}
+	}
+	return rows
+}
+
+func buildOrderedLiveRows(
+	rowCount int,
+	deleteMask objectio.Bitmap,
+	orderByLimit *objectio.BlockReadTopOp,
+	isSorted bool,
+) []int64 {
+	if rowCount <= 0 {
+		return nil
+	}
+	if !isSorted {
+		if deleteMask.IsEmpty() {
+			return buildContiguousRows(0, rowCount)
+		}
+		return buildLiveRows(rowCount, deleteMask)
+	}
+	limit := int(orderByLimit.Limit)
+	if limit <= 0 || limit > rowCount {
+		limit = rowCount
+	}
+	if orderByLimit.Desc {
+		return buildOrderedLiveRowsDesc(rowCount, deleteMask, limit)
+	}
+	return buildOrderedLiveRowsAsc(rowCount, deleteMask, limit)
+}
+
+func buildOrderedLiveRowsAsc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(0, limit)
+	}
+	rows := make([]int64, 0, limit)
+	for i := 0; i < rowCount && len(rows) < limit; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
+}
+
+func buildOrderedLiveRowsDesc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(rowCount-limit, rowCount)
+	}
+	rows := make([]int64, 0, limit)
+	for i := rowCount - 1; i >= 0 && len(rows) < limit; i-- {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows
+}
+
+func buildContiguousRows(start, end int) []int64 {
+	if end <= start {
+		return nil
+	}
+	rows := make([]int64, end-start)
+	for i := range rows {
+		rows[i] = int64(start + i)
 	}
 	return rows
 }
