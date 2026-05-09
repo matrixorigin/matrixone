@@ -79,11 +79,7 @@ Project  𝄀
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  ->  Join  𝄀
-        Join Type: LEFT  𝄀
-        Join Cond: (t2.c2 = t1.c1)  𝄀
-        ->  Table Scan on d1.t2  𝄀
-        ->  Table Scan on d1.t1
+  ->  Table Scan on d1.t2
 explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -95,15 +91,7 @@ Project  𝄀
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  ->  Join  𝄀
-        Join Type: LEFT  𝄀
-        Join Cond: (t2.c1 = t3.c1), (t2.c2 = t3.c2)  𝄀
-        ->  Table Scan on d1.t2  𝄀
-        ->  Join  𝄀
-              Join Type: INNER   hashOnPK  𝄀
-              Join Cond: (t3.c1 = t1.c1)  𝄀
-              ->  Table Scan on d1.t3  𝄀
-              ->  Table Scan on d1.t1
+  ->  Table Scan on d1.t2
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
