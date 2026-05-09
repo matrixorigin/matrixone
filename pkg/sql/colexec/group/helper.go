@@ -503,7 +503,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 		// load aggs from the spill bucket.
 		for _, ag := range ctr.spillAggList {
-			ag.UnmarshalFromReader(bufferedFile, ctr.mp)
+			if err = ag.UnmarshalFromReader(bufferedFile, ctr.mp); err != nil {
+				return false, err
+			}
 		}
 
 		checkMagic, err = types.ReadUint64(bufferedFile)
@@ -526,6 +528,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			hint := uint64(bkt.cnt)
 			if hint < 1024 {
 				hint = 1024
+			}
+			if hint > maxPreAllocHint {
+				hint = maxPreAllocHint
 			}
 			if err = ctr.buildHashTableWithHint(proc.Ctx, hint); err != nil {
 				return false, err

@@ -43,8 +43,9 @@ const (
 	spillNumBuckets = 32
 	spillMaskBits   = 5 // log2(spillNumBuckets)
 	spillMaxPass    = 3
-	spillIOBufSize  = 4 * 1024 * 1024 // 4 MiB read-ahead buffer for spill file reads (aligned with hashjoin)
-	spillWrBufSize  = 256 * 1024      // 256 KiB write buffer per spill bucket
+	spillIOBufSize      = 4 * 1024 * 1024 // 4 MiB read-ahead buffer for spill file reads (aligned with hashjoin)
+	spillWrBufSize      = 256 * 1024      // 256 KiB write buffer per spill bucket
+	maxPreAllocHint     = 1 << 20         // 1M groups cap on hash table pre-alloc to avoid GB-level single allocation
 )
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
@@ -383,12 +384,6 @@ func (ctr *container) buildHashTableWithHint(ctx context.Context, preAlloc uint6
 		ctr.keyNullable,
 		preAlloc); err != nil {
 		return err
-	}
-
-	for _, ag := range ctr.aggList {
-		if err := ag.PreAllocateGroups(int(preAlloc)); err != nil {
-			return err
-		}
 	}
 	return nil
 }

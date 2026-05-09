@@ -756,6 +756,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 
 	// Always unmarshal from a clean state.
 	ae.Free()
+	ae.state = ae.state[:0]
 
 	// read number of chunks
 	cnt, err := types.ReadInt32(reader)
