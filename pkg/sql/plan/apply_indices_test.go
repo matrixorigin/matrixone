@@ -564,6 +564,49 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, catalog.IndexTableIndexColName, blockOrderCol.Name)
 }
 
+func TestHandleMessageFromTopToScanSkipsBlockTopWithOffsetOrRank(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*planpb.Node)
+	}{
+		{
+			name: "offset",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.Offset = &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_uint64)},
+					Expr: &planpb.Expr_Lit{
+						Lit: &planpb.Literal{
+							Value: &planpb.Literal_U64Val{U64Val: 10},
+						},
+					},
+				}
+			},
+		},
+		{
+			name: "rank",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.RankOption = &planpb.RankOption{}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			sortNode := builder.qry.Nodes[1]
+			tc.setup(sortNode)
+
+			builder.handleMessageFromTopToScan(rootNodeID)
+
+			scanNode := builder.qry.Nodes[0]
+			require.Len(t, sortNode.SendMsgList, 1)
+			require.Len(t, scanNode.RecvMsgList, 1)
+			require.Len(t, scanNode.OrderBy, 1)
+			assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+			assert.Empty(t, scanNode.BlockOrderBy)
+			assert.Nil(t, scanNode.BlockLimit)
+		})
+	}
+}
+
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 1, 1, planpb.OrderBySpec_DESC)
 
