@@ -79,12 +79,8 @@ func MemoryTotal() uint64 {
 
 // MemoryAvailable returns the available size of memory of this node.
 func MemoryAvailable() uint64 {
-	if InContainer() {
-		used, err := cgroup.GetMemUsage(pid)
-		if err != nil {
-			logutil.Errorf("failed to get memory usage: %v", err)
-			return 0
-		}
+	used, err := cgroup.GetMemUsage(pid)
+	if err == nil && used > 0 {
 		return memoryTotal.Load() - uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
@@ -96,12 +92,8 @@ func MemoryAvailable() uint64 {
 }
 
 func MemoryUsed() uint64 {
-	if InContainer() {
-		used, err := cgroup.GetMemUsage(pid)
-		if err != nil {
-			logutil.Errorf("failed to get memory usage: %v", err)
-			return 0
-		}
+	used, err := cgroup.GetMemUsage(pid)
+	if err == nil && used > 0 {
 		return uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
@@ -304,29 +296,33 @@ func shouldRefreshQuotaConfig() bool {
 // Tips: Currently, the callings are serial in two places: 1) init; 2) runWatchCgroupConfig
 func refreshQuotaConfig() {
 	lastQuotaRefreshTime.Store(time.Now().UnixNano())
-	if InContainer() {
-		cpu, err := cgroup.GetCPUStats(pid)
-		if err != nil {
-			logutil.Errorf("failed to get cgroup cpu stats: %v", err)
-		} else {
-			if cpu.CFS.PeriodMicros != 0 && cpu.CFS.QuotaMicros != 0 {
-				cpuNum.Store(int32(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros))
-			} else {
-				cpuNum.Store(int32(runtime.NumCPU()))
-			}
-		}
-		limit, err := cgroup.GetMemLimit(pid)
-		if err != nil {
-			logutil.Errorf("failed to get cgroup mem limit: %v", err)
-		} else {
-			memoryTotal.Store(uint64(limit))
-		}
-	} else {
+
+	// Always try cgroup first — InContainer() (pid==1) is unreliable when
+	// the container uses tini or another init process.
+	cpuFromCgroup := false
+	cpu, err := cgroup.GetCPUStats(pid)
+	if err == nil && cpu.CFS.PeriodMicros != 0 && cpu.CFS.QuotaMicros != 0 {
+		cpuNum.Store(int32(cpu.CFS.QuotaMicros / cpu.CFS.PeriodMicros))
+		cpuFromCgroup = true
+	}
+	if !cpuFromCgroup {
 		cpuNum.Store(int32(runtime.NumCPU()))
-		s := gosigar.ConcreteSigar{}
-		mem, err := s.GetMem()
-		if err != nil {
-			logutil.Errorf("failed to get memory stats: %v", err)
+	}
+
+	s := gosigar.ConcreteSigar{}
+	mem, memErr := s.GetMem()
+
+	memFromCgroup := false
+	limit, err := cgroup.GetMemLimit(pid)
+	if err == nil && limit > 0 {
+		if memErr != nil || uint64(limit) < mem.Total {
+			memoryTotal.Store(uint64(limit))
+			memFromCgroup = true
+		}
+	}
+	if !memFromCgroup {
+		if memErr != nil {
+			logutil.Errorf("failed to get memory stats: %v", memErr)
 		} else {
 			memoryTotal.Store(mem.Total)
 		}

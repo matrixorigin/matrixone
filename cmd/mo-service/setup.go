@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -50,7 +51,11 @@ func setupServiceRuntime(
 	stopper *stopper.Stopper,
 ) error {
 	if int64(cfg.Limit.Memory) >= int64(defaultMemoryLimit) {
-		mpool.InitCapAuto(system.MemoryTotal())
+		sysMem := system.MemoryTotal()
+		if cgMem, err := memlimit.FromCgroup(); err == nil && cgMem > 0 && cgMem < sysMem {
+			sysMem = cgMem
+		}
+		mpool.InitCapAuto(sysMem)
 	} else {
 		mpool.InitCap(int64(cfg.Limit.Memory))
 	}
