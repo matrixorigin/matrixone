@@ -144,3 +144,56 @@ func TestParseEnumIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeDecodeEnumValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []string
+	}{
+		{"simple", []string{"xs", "s", "m", "l", "xl"}},
+		{"single", []string{"only"}},
+		{"with comma", []string{"a,b", "c", "d,e,f"}},
+		{"empty member", []string{"", "a", "b"}},
+		{"unicode", []string{"日本語", "中文", "한국어"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded := EncodeEnumValues(tt.values)
+			decoded, err := DecodeEnumValues(encoded)
+			require.NoError(t, err)
+			require.Equal(t, tt.values, decoded)
+		})
+	}
+}
+
+func TestEncodeEnumValuesBackwardCompat(t *testing.T) {
+	values := []string{"xs", "s", "m", "l", "xl"}
+	encoded := EncodeEnumValues(values)
+	require.Equal(t, "xs,s,m,l,xl", encoded)
+}
+
+func TestDecodeEnumValuesEmpty(t *testing.T) {
+	_, err := DecodeEnumValues("")
+	require.Error(t, err)
+}
+
+func TestParseEnumWithComma(t *testing.T) {
+	values := []string{"a,b", "c", "d"}
+	encoded := EncodeEnumValues(values)
+	got, err := ParseEnum(encoded, "a,b")
+	require.NoError(t, err)
+	require.Equal(t, Enum(1), got)
+
+	got, err = ParseEnum(encoded, "c")
+	require.NoError(t, err)
+	require.Equal(t, Enum(2), got)
+}
+
+func TestParseEnumIndexWithComma(t *testing.T) {
+	values := []string{"a,b", "c", "d"}
+	encoded := EncodeEnumValues(values)
+	got, err := ParseEnumIndex(encoded, 1)
+	require.NoError(t, err)
+	require.Equal(t, "a,b", got)
+}

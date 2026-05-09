@@ -543,7 +543,7 @@ a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
 4    [8.560689, 6.790359, 821.9778]    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
 select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
-internal error: vector contains infinity values
+Data truncation: data out of range: data type float, FLOAT/DOUBLE array value is out of range
 select l2_distance("[0, 0, 0]", "[3, 4, 0]"), l2_distance_sq("[0, 0, 0]", "[3, 4, 0]");
 l2_distance([0, 0, 0], [3, 4, 0])    l2_distance_sq([0, 0, 0], [3, 4, 0])
 5.0    25.0

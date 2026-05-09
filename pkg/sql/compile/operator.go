@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -750,8 +751,39 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 		}
 	}
 
+	// When the fuzzy filter target is a hidden unique-index table, report the
+	// user-visible column name (e.g. "a") in the duplicate-entry error instead
+	// of the hidden index column ("__mo_index_idx_col"). For composite unique
+	// indexes we fall back to a "(col1,col2)" tuple because the plan message
+	// does not carry the user-declared index name.
+	displayPkName := pkName
+	if n.Fuzzymessage != nil {
+		if len(n.Fuzzymessage.ParentUniqueCols) == 1 {
+			displayPkName = n.Fuzzymessage.ParentUniqueCols[0].Name
+		} else if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
+			names := make([]string, 0, len(n.Fuzzymessage.ParentUniqueCols))
+			for _, c := range n.Fuzzymessage.ParentUniqueCols {
+				if c == nil {
+					continue
+				}
+				names = append(names, catalog.ResolveAlias(c.Name))
+			}
+			if len(names) > 0 {
+				displayPkName = "(" + strings.Join(names, ",") + ")"
+			}
+		}
+	} else if n.TableDef != nil && catalog.IsHiddenTable(n.TableDef.Name) {
+		// Direct-insert path into a hidden UNIQUE index table (e.g.
+		// CREATE UNIQUE INDEX on an existing table). The plan does not
+		// carry Fuzzymessage, so pkName is still __mo_index_idx_col /
+		// __mo_cpkey_col. Mirror the placeholder used in newFuzzyCheck
+		// so runtime duplicate-entry errors do not leak the internal
+		// catalog column name.
+		displayPkName = "unique index"
+	}
+
 	op := fuzzyfilter.NewArgument()
-	op.PkName = pkName
+	op.PkName = displayPkName
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = n.IfInsertFromUnique
 

@@ -2683,6 +2683,15 @@ func executeStmtWithWorkspace(ses FeSession,
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
 		err = finishTxnFunc(ses, err, execCtx)
+		// Final sweep: if any error path below Run / Commit surfaces the
+		// internal __mo_index_idx_col key name (tae DedupSnapByPK, disttae
+		// commit-time dedup, etc.), rewrite it to the user-visible column or
+		// index name before the error leaves the statement boundary.
+		if err != nil &&
+			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) &&
+			execCtx.cw != nil {
+			err = plan2.RewriteHiddenIndexDupEntry(execCtx.cw.Plan(), err)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")

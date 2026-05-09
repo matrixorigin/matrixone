@@ -747,8 +747,8 @@ func buildCreateTable(
 		var err error
 		oldTable := stmt.LikeTableName
 		newTable := stmt.Table
-		tblName := formatStr(string(oldTable.ObjectName))
-		dbName := formatStr(string(oldTable.SchemaName))
+		tblName := formatIdent(string(oldTable.ObjectName))
+		dbName := formatIdent(string(oldTable.SchemaName))
 
 		var snapshot *Snapshot
 		snapshot = ctx.GetSnapshot()

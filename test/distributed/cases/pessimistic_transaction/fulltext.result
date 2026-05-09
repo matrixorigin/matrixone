@@ -17,4 +17,4 @@ primary key(a, b)
 create fulltext index ftidx on t1 (c);
 insert into t1 select * from t0 where a = 1 and b = 1;
 insert into t1 select * from t0 where a = 1 and b = 1;
-Duplicate entry '(1,1)' for key '__mo_cpkey_col'
+Duplicate entry '(1,1)' for key '(a,b)'
