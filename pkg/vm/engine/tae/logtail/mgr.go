@@ -124,27 +124,63 @@ type txnWithLogtails struct {
 	closeCB func()
 }
 
-func (mgr *Manager) onTxnLogTails(items ...any) {
-	// Collect logtails for all txns in parallel via collectPool.
-	// Each slot in readyCh corresponds to items[i]; the slot goroutine
-	// sends the txnWithLogtails once its WaitEvent(WalPreparing) +
-	// CollectLogtail + GetTxnState completes.
-	//
-	// The ordered publisher below reads slot 0, 1, 2, ... in sequence,
-	// so generateLogtailWithTxn is still called in PrepareTS order
-	// (required by mgr.previousSaveTS invariant), but a slow txn only
-	// blocks the publisher, not the collection of later txns.
-	readyCh := make([]chan *txnWithLogtails, len(items))
-	for i, item := range items {
-		txn := item.(txnif.AsyncTxn)
-		if txn.IsReplay() {
+// orderedCollectAndPublish collects logtails for n items in parallel via submit,
+// then publishes them strictly in index order (0, 1, 2, ...).
+//
+//   - skip(i) returning true means item i is excluded (no collect, no publish).
+//   - collect(i) is invoked concurrently in a goroutine scheduled by submit.
+//     Returning nil means the item was collected but should not be published
+//     (e.g. the txn rolled back).
+//   - publish(v) is invoked serially by the caller's goroutine, for each
+//     collect result that is not nil, in ascending index order.
+//
+// The helper preserves PrepareTS ordering required by generateLogtailWithTxn
+// (mgr.previousSaveTS invariant) while allowing later slots' collection to
+// proceed in parallel with earlier slots' publish.
+func orderedCollectAndPublish(
+	n int,
+	skip func(i int) bool,
+	submit func(fn func()),
+	collect func(i int) *txnWithLogtails,
+	publish func(v *txnWithLogtails),
+) {
+	readyCh := make([]chan *txnWithLogtails, n)
+	for i := 0; i < n; i++ {
+		if skip(i) {
 			readyCh[i] = nil
 			continue
 		}
 		ch := make(chan *txnWithLogtails, 1)
 		readyCh[i] = ch
+		idx := i
+		submit(func() {
+			ch <- collect(idx)
+		})
+	}
 
-		mgr.collectPool.Submit(func() {
+	for _, ch := range readyCh {
+		if ch == nil {
+			continue
+		}
+		if v := <-ch; v != nil {
+			publish(v)
+		}
+	}
+}
+
+func (mgr *Manager) onTxnLogTails(items ...any) {
+	// Collect logtails for all txns in parallel via collectPool.
+	// A slow txn only blocks the publisher up to its slot, not the
+	// collection of later slots nor the publishing of earlier already-ready
+	// slots. generateLogtailWithTxn is still called in PrepareTS order.
+	orderedCollectAndPublish(
+		len(items),
+		func(i int) bool {
+			return items[i].(txnif.AsyncTxn).IsReplay()
+		},
+		func(fn func()) { _ = mgr.collectPool.Submit(fn) },
+		func(i int) *txnWithLogtails {
+			txn := items[i].(txnif.AsyncTxn)
 			txn.GetStore().WaitEvent(txnif.WalPreparing)
 
 			builder := NewTxnLogtailRespBuilder(mgr.rt)
@@ -163,22 +199,12 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 				if state != txnif.TxnStateRollbacked {
 					panic(fmt.Sprintf("wrong state %v", state))
 				}
-				ch <- nil
-				return
+				return nil
 			}
-			ch <- txnTail
-		})
-	}
-
-	// Serial publish in item order; wait only on the next slot in line.
-	for _, ch := range readyCh {
-		if ch == nil {
-			continue
-		}
-		if txnTail := <-ch; txnTail != nil {
-			mgr.generateLogtailWithTxn(txnTail)
-		}
-	}
+			return txnTail
+		},
+		mgr.generateLogtailWithTxn,
+	)
 }
 
 func (mgr *Manager) Stop() {
