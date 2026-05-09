@@ -165,9 +165,12 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 		if procs < 1 {
 			procs = 1
 		}
-		mem := budget / procs / 4
-		if mem < common.MiB*64 {
-			mem = common.MiB * 64
+		// GroupBy spill is expensive (serialize/deserialize agg state + hash
+		// rebuild), so use a larger per-op budget than HashBuild (/procs/2
+		// instead of /procs/4) to avoid unnecessary spill on queries like Q17.
+		mem := budget / procs / 2
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
 		}
 		ctr.spillMem = mem
 	} else {
