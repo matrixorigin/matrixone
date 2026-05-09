@@ -65,11 +65,13 @@ func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFunc
 }
 
 type BlockReadTopOp struct {
-	Typ    types.T
-	Metric metric.MetricType
-	ColPos int32
-	NumVec []byte
-	Limit  uint64
+	Typ          types.T
+	Metric       metric.MetricType
+	ColPos       int32
+	NumVec       []byte
+	Limit        uint64
+	OrderedLimit bool
+	Desc         bool
 }
 
 type WriteOptions struct {

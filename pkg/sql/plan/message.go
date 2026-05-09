@@ -73,7 +73,24 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	}
 	scanNode := builder.qry.Nodes[scanID]
 	if len(scanNode.OrderBy) != 0 {
-		panic("orderby in scannode should be nil!")
+		return
+	}
+	scanOrderBy := DeepCopyOrderBy(node.OrderBy[0])
+	enableBlockTop := false
+	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
+		orderByName := orderByCol.Name
+		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
+		hiddenKeyExpr.GetCol().Name = orderByName
+		node.OrderBy[0].Expr = hiddenKeyExpr
+		orderByCol = hiddenKeyExpr.GetCol()
+
+		scanHiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
+		scanHiddenKeyExpr.GetCol().Name = scanNode.TableDef.Cols[0].Name
+		scanOrderBy = &plan.OrderBySpec{
+			Expr: scanHiddenKeyExpr,
+			Flag: node.OrderBy[0].Flag,
+		}
+		enableBlockTop = node.Offset == nil && node.RankOption == nil
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
@@ -83,7 +100,10 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
-	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
+	scanNode.OrderBy = append(scanNode.OrderBy, scanOrderBy)
+	if enableBlockTop {
+		applyRegularIndexBlockTop(scanNode, scanOrderBy, node.Limit)
+	}
 }
 
 func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
