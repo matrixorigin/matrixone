@@ -799,7 +799,8 @@ func (hashJoin *HashJoin) resetResultBat() {
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
 		for i := range ctr.resBat.Vecs {
-			ctr.resBat.Vecs[i].ResetWithSameType()
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	} else {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))

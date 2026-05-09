@@ -429,7 +429,8 @@ func (loopJoin *LoopJoin) resetResultBat() {
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
 		for i := range ctr.resBat.Vecs {
-			ctr.resBat.Vecs[i].ResetWithSameType()
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	} else {
 		ctr.resBat = batch.NewWithSize(len(loopJoin.ResultCols))
@@ -481,7 +482,8 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 	} else {
 		ctr.resBat.CleanOnlyData()
 		for i := range ctr.resBat.Vecs {
-			ctr.resBat.Vecs[i].ResetWithSameType()
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	}
 
