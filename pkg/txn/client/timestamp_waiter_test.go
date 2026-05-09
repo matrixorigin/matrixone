@@ -148,6 +148,20 @@ func TestNotifyLatestCommitTSNonBlockingWhenChannelFull(t *testing.T) {
 	assert.Equal(t, newTestTimestamp(10), *latest)
 }
 
+func TestNotifyLatestCommitTSSkipsRedundantWakeup(t *testing.T) {
+	tw := &timestampWaiter{
+		logger:    util.GetLogger(""),
+		notifiedC: make(chan struct{}, maxNotifiedCount),
+	}
+	tw.NotifyLatestCommitTS(newTestTimestamp(10))
+	tw.NotifyLatestCommitTS(newTestTimestamp(9))
+
+	assert.Equal(t, 1, len(tw.notifiedC))
+	latest := tw.notified.Load()
+	require.NotNil(t, latest)
+	assert.Equal(t, newTestTimestamp(10), *latest)
+}
+
 func TestFetchLatestTSDoesNotDrainUnboundedSignals(t *testing.T) {
 	tw := &timestampWaiter{
 		notifiedC: make(chan struct{}, maxNotifiedCount*2),

@@ -81,7 +81,9 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
 	util.LogTxnPushedTimestampUpdated(tw.logger, ts)
-	tw.storeNotified(ts)
+	if !tw.storeNotified(ts) {
+		return
+	}
 	select {
 	case tw.notifiedC <- struct{}{}:
 	default:
@@ -154,15 +156,15 @@ func (tw *timestampWaiter) handleEvent(ctx context.Context) {
 	}
 }
 
-func (tw *timestampWaiter) storeNotified(ts timestamp.Timestamp) {
+func (tw *timestampWaiter) storeNotified(ts timestamp.Timestamp) bool {
 	for {
 		latest := tw.notified.Load()
 		if latest != nil && latest.GreaterEq(ts) {
-			return
+			return false
 		}
 		v := ts
 		if tw.notified.CompareAndSwap(latest, &v) {
-			return
+			return true
 		}
 	}
 }
