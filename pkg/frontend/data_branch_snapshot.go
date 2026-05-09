@@ -213,6 +213,11 @@ func createBranchProtectSnapshot(
 	// they are never visible as kind='user' — not even transiently. The
 	// existing insertIntoMoSnapshots format does not carry the kind column
 	// (it relies on the 'user' default), so this path uses its own insert.
+	//
+	// Values are interpolated via fmt.Sprintf because every user-
+	// controllable string here (account name, db/table name) has already
+	// passed through the MO parser/catalog path, so it is a legal MySQL
+	// identifier and never carries a quote that could break the literal.
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
 			`values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,

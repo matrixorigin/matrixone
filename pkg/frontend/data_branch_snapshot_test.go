@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
@@ -366,6 +367,58 @@ func TestReclaimCore_DanglingChildMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// UT-U7b — cycle in mo_branch_metadata must not hang the reclaim walk.
+// ---------------------------------------------------------------------------
+
+// TestReclaimCore_CycleGuard feeds a corrupted DAG where two nodes point at
+// each other (A.parent=B and B.parent=A) and asserts that both the ancestor
+// walk and the subtree-all-deleted check terminate cleanly.
+//
+// The production DAG is built from `mo_branch_metadata`, which is currently
+// only written by `updateBranchMetaTable` inside a single txn, so a cycle
+// should never appear. The guard is defensive: a bug in that writer, a
+// disaster-recovery edit, or a restore from a partial snapshot could
+// corrupt the shape. Hanging the drop-table path in that situation would
+// leave the txn uncommitted and locks held, which is catastrophic. This
+// test pins the "never hang" contract.
+func TestReclaimCore_CycleGuard(t *testing.T) {
+	rows := []databranchutils.DataBranchMetadata{
+		{TableID: 11, PTableID: 12, TableDeleted: true},
+		{TableID: 12, PTableID: 11, TableDeleted: true},
+	}
+	dag := databranchutils.NewBranchReclaimDag(rows)
+
+	// SubtreeAllDeleted must not recurse forever on a cycle.
+	done := make(chan struct{})
+	go func() {
+		_ = dag.SubtreeAllDeleted(11)
+		_ = dag.SubtreeAllDeleted(12)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SubtreeAllDeleted hung on a cycle")
+	}
+
+	// ReclaimBranchSnapshotsCore should produce a finite drop list even
+	// though the ancestor walk re-enters the cycle.
+	var drops []string
+	err := databranchutils.ReclaimBranchSnapshotsCore(
+		[]uint64{11, 12},
+		func() (databranchutils.BranchReclaimDag, error) { return dag, nil },
+		func(snames []string) error {
+			drops = append([]string(nil), snames...)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	// Both nodes are marked deleted and they form a closed subtree, so
+	// both branch snapshots are reclaimable.
+	require.Equal(t, []string{"__mo_branch_11", "__mo_branch_12"}, drops)
+}
+
+// ---------------------------------------------------------------------------
 // UT-U8 — doDropSnapshot rejects kind='branch' rows with a clear error.
 // ---------------------------------------------------------------------------
 
@@ -423,8 +476,12 @@ func TestShowSnapshotsExcludesBranch(t *testing.T) {
 	require.NotNil(t, body, "buildShowSnapShots not found in %s", buildShowPath)
 
 	// The predicate must survive the fmt.Sprintf %% escaping of the LIKE
-	// clause — match the literal `kind != 'branch'`.
-	require.Regexp(t, regexp.MustCompile(`kind\s*!=\s*'branch'`), string(body))
+	// clause. Accept either the inline literal `kind != 'branch'` or the
+	// %s-substituted form that references the databranchutils constant.
+	require.Regexp(t,
+		regexp.MustCompile(`kind\s*!=\s*'(?:branch|%s)'`),
+		string(body),
+	)
 	// Sanity: the legacy ccpr filter must remain.
 	require.Regexp(t, regexp.MustCompile(`sname\s+NOT\s+LIKE\s+'ccpr_`), string(body))
 }

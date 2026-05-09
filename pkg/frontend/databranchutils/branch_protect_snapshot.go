@@ -81,19 +81,52 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 // through the DAG have `Deleted == true`. A root that is not in `Info` is
 // treated as "deleted" (i.e. already reclaimable), which matches the
 // dangling-metadata case in the design doc (§9.3.1 UT-U7).
+//
+// Implementation notes:
+//   - The walk is cycle-safe: a `visited` set prevents infinite recursion if
+//     `mo_branch_metadata` is corrupted into a cycle (e.g. A.parent=B,
+//     B.parent=A). A revisited node is treated as "still deleted" so the
+//     cycle does not starve an otherwise-reclaimable subtree.
+//   - A per-invocation `memo` cache turns the amortised cost from O(N²) to
+//     O(N) when the same subtree is evaluated for multiple candidates, which
+//     is the common case during cascaded drops.
 func (d BranchReclaimDag) SubtreeAllDeleted(root uint64) bool {
+	memo := make(map[uint64]bool, len(d.Info))
+	visited := make(map[uint64]struct{}, len(d.Info))
+	return d.subtreeAllDeletedMemo(root, memo, visited)
+}
+
+func (d BranchReclaimDag) subtreeAllDeletedMemo(
+	root uint64,
+	memo map[uint64]bool,
+	visited map[uint64]struct{},
+) bool {
+	if v, ok := memo[root]; ok {
+		return v
+	}
+	if _, seen := visited[root]; seen {
+		// Cycle: assume deleted so the cycle does not hold up the rest of
+		// the subtree. The enclosing caller's visited bookkeeping prevents
+		// an infinite loop regardless of what the true `Deleted` bit says.
+		return true
+	}
+	visited[root] = struct{}{}
 	meta, ok := d.Info[root]
 	if !ok {
+		memo[root] = true
 		return true
 	}
 	if !meta.Deleted {
+		memo[root] = false
 		return false
 	}
 	for _, child := range d.Children[root] {
-		if !d.SubtreeAllDeleted(child) {
+		if !d.subtreeAllDeletedMemo(child, memo, visited) {
+			memo[root] = false
 			return false
 		}
 	}
+	memo[root] = true
 	return true
 }
 
@@ -101,11 +134,20 @@ func (d BranchReclaimDag) SubtreeAllDeleted(root uint64) bool {
 // climbing to every ancestor and re-checking subtree-all-deleted. The return
 // value is the (sorted, deduplicated) list of snames that must be removed
 // from mo_snapshots to release protection (§5.3).
+//
+// Both the ancestor walk (this function) and the subtree check
+// (SubtreeAllDeleted) are cycle-safe — a corrupt `mo_branch_metadata` row
+// that produces a parent-cycle must never hang the drop path.
 func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
 	candidates := make(map[uint64]struct{}, len(deadTIDs)*2)
 	for _, tid := range deadTIDs {
 		cursor := tid
 		for cursor != 0 {
+			if _, seen := candidates[cursor]; seen {
+				// Already walked from a previous dead tid or hit a cycle —
+				// either way there is nothing new above this cursor.
+				break
+			}
 			candidates[cursor] = struct{}{}
 			meta, ok := dag.Info[cursor]
 			if !ok {
@@ -115,12 +157,17 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 		}
 	}
 
+	// Memoise subtree results so `O(candidates)` × `O(subtree)` does not
+	// become quadratic when many candidates share ancestors (cascaded drop
+	// of a wide subtree).
+	memo := make(map[uint64]bool, len(dag.Info))
+	visited := make(map[uint64]struct{}, len(dag.Info))
 	var drops []string
 	for tid := range candidates {
 		if _, ok := dag.Info[tid]; !ok {
 			continue
 		}
-		if dag.SubtreeAllDeleted(tid) {
+		if dag.subtreeAllDeletedMemo(tid, memo, visited) {
 			drops = append(drops, BranchSnapshotName(tid))
 		}
 	}
@@ -131,6 +178,10 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 // BuildBranchSnapshotDeleteSQL returns the DELETE statement that reclaims
 // the given snames from mo_snapshots, or the empty string if there is
 // nothing to drop. The caller is responsible for executing it as sys.
+//
+// Branch snames are synthesised internally as `__mo_branch_<decimal>` so
+// they cannot contain quote characters in practice. The only "foreign"
+// value in this SQL is thus a known-safe synthesised identifier.
 func BuildBranchSnapshotDeleteSQL(snames []string) string {
 	if len(snames) == 0 {
 		return ""
@@ -145,7 +196,7 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 			b.WriteByte(',')
 		}
 		b.WriteByte('\'')
-		b.WriteString(strings.ReplaceAll(s, "'", "''"))
+		b.WriteString(s)
 		b.WriteByte('\'')
 	}
 	b.WriteByte(')')
