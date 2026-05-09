@@ -651,33 +651,27 @@ func tryExtractIn(tableDef *plan.TableDef, args []*plan.Expr, partColSet map[str
 }
 
 // extractVecValues decodes a folded LiteralVec into string values for pruning.
-//
-// The defer/recover is intentional: vec.UnmarshalBinary reads optimizer-produced
-// binary data that, if malformed (buggy fold pass, future schema change, or an
-// on-disk plan we never validated), can panic inside parquet-go / slice
-// indexing. We degrade to (nil, false) so the caller silently drops this
-// partition-predicate hint; the duplicated partition filter still survives in
-// rowFilters (see ClassifyFilters §4.3.1 double-filter invariant), which
-// guarantees result correctness. Losing pruning is a performance regression,
-// not a correctness bug, so swallowing the panic is the right trade.
 func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, ok bool) {
 	if litVec == nil || len(litVec.Data) == 0 {
 		return nil, false
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			values, ok = nil, false
-		}
-	}()
-	vec := vector.NewVec(types.New(types.T(typ.Id), typ.Width, typ.Scale))
+	oid := types.T(typ.Id)
+	if !validateLiteralVecBinary(litVec, oid) {
+		return nil, false
+	}
+
+	vec := vector.NewVec(types.New(oid, typ.Width, typ.Scale))
 	if err := vec.UnmarshalBinary(litVec.Data); err != nil {
 		return nil, false
 	}
 	defer vec.Free(nil)
+	if vec.GetType().Oid != oid {
+		return nil, false
+	}
 
 	n := vec.Length()
 	values = make([]string, 0, n)
-	switch types.T(typ.Id) {
+	switch oid {
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
 		for i := 0; i < n; i++ {
@@ -719,13 +713,90 @@ func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, 
 			values = append(values, strconv.FormatUint(col[i], 10))
 		}
 	case types.T_char, types.T_varchar, types.T_text:
+		col := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+		area := vec.GetArea()
 		for i := 0; i < n; i++ {
-			values = append(values, string(vec.GetBytesAt(i)))
+			bs, ok := safeVarlenaBytes(&col[i], area)
+			if !ok {
+				return nil, false
+			}
+			values = append(values, string(bs))
 		}
 	default:
 		return nil, false
 	}
 	return values, true
+}
+
+func validateLiteralVecBinary(litVec *plan.LiteralVec, expectedOid types.T) bool {
+	data := litVec.Data
+	if litVec.Len <= 0 {
+		return false
+	}
+	minLen := 1 + types.TSize + 4 + 4 + 4 + 4 + 1
+	if len(data) < minLen {
+		return false
+	}
+
+	pos := 0
+	if int(data[pos]) != vector.FLAT {
+		return false
+	}
+	pos++
+
+	vecType := types.DecodeType(data[pos : pos+types.TSize])
+	pos += types.TSize
+	if vecType.Oid != expectedOid || vecType.TypeSize() <= 0 {
+		return false
+	}
+
+	length := types.DecodeUint32(data[pos : pos+4])
+	pos += 4
+	if length != uint32(litVec.Len) {
+		return false
+	}
+
+	dataLen := types.DecodeUint32(data[pos : pos+4])
+	pos += 4
+	expectedDataLen := uint64(vecType.TypeSize()) * uint64(length)
+	if uint64(dataLen) != expectedDataLen || uint64(dataLen) > uint64(len(data)-pos) {
+		return false
+	}
+	pos += int(dataLen)
+
+	if len(data)-pos < 4 {
+		return false
+	}
+	areaLen := types.DecodeUint32(data[pos : pos+4])
+	pos += 4
+	if uint64(areaLen) > uint64(len(data)-pos) {
+		return false
+	}
+	pos += int(areaLen)
+
+	if len(data)-pos < 4 {
+		return false
+	}
+	nspLen := types.DecodeUint32(data[pos : pos+4])
+	pos += 4
+	if nspLen != 0 || uint64(nspLen) > uint64(len(data)-pos) {
+		return false
+	}
+	pos += int(nspLen)
+
+	return len(data)-pos == 1
+}
+
+func safeVarlenaBytes(v *types.Varlena, area []byte) ([]byte, bool) {
+	if v.IsSmall() {
+		return v.ByteSlice(), true
+	}
+	off, size := v.OffsetLen()
+	end := uint64(off) + uint64(size)
+	if end > uint64(len(area)) {
+		return nil, false
+	}
+	return area[int(off):int(end)], true
 }
 
 // getPartColName returns the bare partition column name from a column expression.

@@ -77,3 +77,33 @@ func TestRunFilePathFilters_LeftoverContainsUnconsumed(t *testing.T) {
 			"append it to rowFilters; losing it silently drops the predicate at runtime")
 	assert.Same(t, orExpr, leftover[0])
 }
+
+// TestToLowerSet covers the tiny helper feeding partColSet.
+func TestToLowerSet(t *testing.T) {
+	got := toLowerSet([]string{"Year", "MONTH", "day"})
+	assert.True(t, got["year"])
+	assert.True(t, got["month"])
+	assert.True(t, got["day"])
+	assert.False(t, got["Year"])
+	assert.Equal(t, 3, len(got))
+
+	// Empty input.
+	got = toLowerSet(nil)
+	assert.Equal(t, 0, len(got))
+}
+
+// TestRunFilePathFilters_AllConsumed exercises the consumed-path of
+// runFilePathFilters where FilterFileList keeps the filter and leftover is
+// empty — distinct from the unconsumed regression above.
+func TestRunFilePathFilters_NoFilters(t *testing.T) {
+	proc := testutil.NewProc(t)
+	td := &plan.TableDef{Cols: []*plan.ColDef{{Name: catalog.ExternalFilePath}}}
+	// Empty fpFilters → FilterFileList short-circuits, returns fileList unchanged.
+	fileList := []string{"/a.parquet"}
+	fileSize := []int64{10}
+	out, outSz, leftover, err := runFilePathFilters(proc.Ctx, proc, td, nil, fileList, fileSize)
+	require.NoError(t, err)
+	assert.Equal(t, fileList, out)
+	assert.Equal(t, fileSize, outSz)
+	assert.Empty(t, leftover)
+}
