@@ -191,6 +191,68 @@ func TestOrderedCollectAndPublish_SkipInterleaved(t *testing.T) {
 	require.Equal(t, []int{1, 3}, publishOrder)
 }
 
+// antsLikeSubmit mimics ants by recovering panics in the submitted fn
+// so they do not crash the test process. This is the failure mode the
+// helper must tolerate: a silently-recovered panic inside collect would
+// otherwise leave the publisher waiting on a channel that never receives.
+func antsLikeSubmit(fn func()) {
+	go func() {
+		defer func() { _ = recover() }()
+		fn()
+	}()
+}
+
+func TestOrderedCollectAndPublish_CollectPanicDoesNotBlock(t *testing.T) {
+	// Slot 1 panics inside collect; slots 0 and 2 succeed. Publisher must
+	// still make progress and publish the two healthy slots. Without the
+	// defer-recover inside the helper, slot 1's channel would never
+	// receive a value and the publisher would block forever.
+	const n = 3
+	tails := make([]*txnWithLogtails, n)
+	tails[0] = &txnWithLogtails{}
+	tails[1] = nil // panic slot
+	tails[2] = &txnWithLogtails{}
+
+	var mu sync.Mutex
+	var publishOrder []int
+
+	done := make(chan struct{})
+	go func() {
+		orderedCollectAndPublish(
+			n,
+			func(int) bool { return false },
+			antsLikeSubmit,
+			func(i int) *txnWithLogtails {
+				if i == 1 {
+					panic("simulated collect panic")
+				}
+				return tails[i]
+			},
+			func(v *txnWithLogtails) {
+				mu.Lock()
+				defer mu.Unlock()
+				for idx, tt := range tails {
+					if tt != nil && tt == v {
+						publishOrder = append(publishOrder, idx)
+						return
+					}
+				}
+				t.Errorf("published unknown txnWithLogtails")
+			},
+		)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("orderedCollectAndPublish blocked after collect panic")
+	}
+
+	require.Equal(t, []int{0, 2}, publishOrder,
+		"panicking slot must not block progress of surrounding slots")
+}
+
 func TestOrderedCollectAndPublish_SyncSubmit(t *testing.T) {
 	// Exercise the path where submit runs fn inline. This guards against
 	// regressions where readyCh[i] capacity assumption breaks if the

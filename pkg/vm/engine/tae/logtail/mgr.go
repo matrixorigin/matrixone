@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,7 +155,24 @@ func orderedCollectAndPublish(
 		readyCh[i] = ch
 		idx := i
 		submit(func() {
-			ch <- collect(idx)
+			// Always send a terminator so publisher cannot block forever.
+			// If collect panics (which ants recovers silently), the deferred
+			// recover below sends nil and logs the panic with stack.
+			var v *txnWithLogtails
+			defer func() {
+				if p := recover(); p != nil {
+					logutil.Error(
+						"onTxnLogTails collect panic",
+						zap.Int("slot", idx),
+						zap.Any("panic", p),
+						zap.String("stack", string(debug.Stack())),
+					)
+					ch <- nil
+					return
+				}
+				ch <- v
+			}()
+			v = collect(idx)
 		})
 	}
 
@@ -194,12 +212,14 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 				closeCB: closeCB,
 			}
 
+			// Validate state but keep publishing the txnTail in both
+			// committed and rollback cases. Publishing ensures closeCB
+			// eventually runs (it releases the batches produced by
+			// CollectLogtail); dropping rolled-back tails here would
+			// leak those batches.
 			state := txn.GetTxnState(true)
-			if state != txnif.TxnStateCommitted {
-				if state != txnif.TxnStateRollbacked {
-					panic(fmt.Sprintf("wrong state %v", state))
-				}
-				return nil
+			if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
+				panic(fmt.Sprintf("wrong state %v", state))
 			}
 			return txnTail
 		},
