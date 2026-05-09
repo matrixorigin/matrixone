@@ -125,19 +125,26 @@ type txnWithLogtails struct {
 }
 
 func (mgr *Manager) onTxnLogTails(items ...any) {
+	// Collect logtails for all txns in parallel via collectPool.
+	// Each slot in readyCh corresponds to items[i]; the slot goroutine
+	// sends the txnWithLogtails once its WaitEvent(WalPreparing) +
+	// CollectLogtail + GetTxnState completes.
+	//
+	// The ordered publisher below reads slot 0, 1, 2, ... in sequence,
+	// so generateLogtailWithTxn is still called in PrepareTS order
+	// (required by mgr.previousSaveTS invariant), but a slow txn only
+	// blocks the publisher, not the collection of later txns.
+	readyCh := make([]chan *txnWithLogtails, len(items))
 	for i, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		if txn.IsReplay() {
+			readyCh[i] = nil
 			continue
 		}
-
-		mgr.collectWg.Add(1)
+		ch := make(chan *txnWithLogtails, 1)
+		readyCh[i] = ch
 
 		mgr.collectPool.Submit(func() {
-			defer func() {
-				mgr.collectWg.Done()
-			}()
-
 			txn.GetStore().WaitEvent(txnif.WalPreparing)
 
 			builder := NewTxnLogtailRespBuilder(mgr.rt)
@@ -151,23 +158,25 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 				closeCB: closeCB,
 			}
 
-			mgr.orderedList[i] = txnTail
-
 			state := txn.GetTxnState(true)
 			if state != txnif.TxnStateCommitted {
 				if state != txnif.TxnStateRollbacked {
 					panic(fmt.Sprintf("wrong state %v", state))
 				}
+				ch <- nil
 				return
 			}
+			ch <- txnTail
 		})
 	}
 
-	mgr.collectWg.Wait()
-	for i := range len(items) {
-		if mgr.orderedList[i] != nil {
-			mgr.generateLogtailWithTxn(mgr.orderedList[i])
-			mgr.orderedList[i] = nil
+	// Serial publish in item order; wait only on the next slot in line.
+	for _, ch := range readyCh {
+		if ch == nil {
+			continue
+		}
+		if txnTail := <-ch; txnTail != nil {
+			mgr.generateLogtailWithTxn(txnTail)
 		}
 	}
 }
