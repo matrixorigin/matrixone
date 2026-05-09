@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -383,12 +384,15 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
-		totalMem := int64(system.MemoryTotal())
+		budget := mpool.GlobalCap()
+		if budget <= 0 || budget >= 1<<62 {
+			budget = int64(system.MemoryTotal())
+		}
 		procs := int64(system.GoMaxProcs())
 		if procs < 1 {
 			procs = 1
 		}
-		mem := totalMem / procs / 4
+		mem := budget / procs / 4
 		if mem < common.MiB*64 {
 			mem = common.MiB * 64
 		}

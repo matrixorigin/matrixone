@@ -59,7 +59,7 @@ const (
 	// rebuild hash maps from spilled data. With DOP=64, without this limit all
 	// operators rebuild at once creating a memory spike. Limiting to 4 keeps peak
 	// memory bounded while still allowing parallelism.
-	rebuildConcurrency = 4
+	rebuildConcurrency = 2
 )
 
 // rebuildSem limits concurrent hash map rebuilds across all hashjoin operators
@@ -474,14 +474,14 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if sz > ctr.spillThreshold {
 		return true
 	}
-	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/4 {
+	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
 		return true
 	}
 	used := int64(system.MemoryUsed())
 	total := int64(system.MemoryTotal())
-	if used > total*3/4 {
-		logutil.Debugf("shouldReSpill: system trigger used=%dMB > total*3/4=%dMB, builderRows=%d",
-			used/1024/1024, total*3/4/1024/1024, builder.InputBatchRowCount)
+	if used > total*2/3 {
+		logutil.Debugf("shouldReSpill: system trigger used=%dMB > total*2/3=%dMB, builderRows=%d",
+			used/1024/1024, total*2/3/1024/1024, builder.InputBatchRowCount)
 		return true
 	}
 	cnt := atomic.AddUint64(&reSpillCheckCounter, 1)
@@ -564,9 +564,9 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	if bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
 		used := int64(system.MemoryUsed())
 		total := int64(system.MemoryTotal())
-		if used > total*3/4 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*3/4 {
+		if used > total*2/3 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
 			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, used=%dMB, total=%dMB, rows=%d, bucket=%s",
-				used/1024/1024, total*3/4/1024/1024, builder.InputBatchRowCount, bucket.baseName)
+				used/1024/1024, total*2/3/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.
 			// reSpillBucket will re-partition from builder.Batches.Buf and
 			// the reader loop will immediately hit EOF — no double-counting.

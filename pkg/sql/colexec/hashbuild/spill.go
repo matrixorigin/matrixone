@@ -284,11 +284,6 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 		return false
 	}
 
-	// Non-shuffle operators only spill under global memory pressure
-	if !hashBuild.IsShuffle {
-		return processMemoryOverBudget()
-	}
-
 	if ctr.spillThreshold <= 100000 {
 		return ctr.rowCnt() >= ctr.spillThreshold
 	}
