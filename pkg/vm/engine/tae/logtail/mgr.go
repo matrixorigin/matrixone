@@ -212,14 +212,19 @@ func (mgr *Manager) onTxnLogTails(items ...any) {
 				closeCB: closeCB,
 			}
 
-			// Validate state but keep publishing the txnTail in both
-			// committed and rollback cases. Publishing ensures closeCB
-			// eventually runs (it releases the batches produced by
-			// CollectLogtail); dropping rolled-back tails here would
-			// leak those batches.
+			// A rolled-back txn must not be published as logtail:
+			// CollectLogtail walks the txn store without filtering by
+			// final state, so the batches captured above reflect
+			// pre-cleanup mutations that subscribers must never see.
+			// Release the collected batches explicitly via closeCB and
+			// skip publish by returning nil.
 			state := txn.GetTxnState(true)
-			if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
-				panic(fmt.Sprintf("wrong state %v", state))
+			if state != txnif.TxnStateCommitted {
+				if state != txnif.TxnStateRollbacked {
+					panic(fmt.Sprintf("wrong state %v", state))
+				}
+				closeCB()
+				return nil
 			}
 			return txnTail
 		},

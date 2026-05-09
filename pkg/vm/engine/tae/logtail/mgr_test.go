@@ -156,6 +156,61 @@ func TestOrderedCollectAndPublish_NilResultSkipped(t *testing.T) {
 		"slot returning nil must be skipped without breaking order")
 }
 
+// TestOrderedCollectAndPublish_RollbackReleasesCloseCBInCollect exercises
+// the rollback contract used by onTxnLogTails: CollectLogtail has already
+// produced batches (and a closeCB to release them) by the time the txn's
+// final state is inspected, so the collect callback must release closeCB
+// explicitly before returning nil. Failing to do so leaks the batches, and
+// publishing the tail would leak rolled-back mutations to subscribers.
+func TestOrderedCollectAndPublish_RollbackReleasesCloseCBInCollect(t *testing.T) {
+	const n = 3
+	rolledBack := map[int]bool{1: true} // slot 1 rolls back
+
+	var closeCBCalls atomic.Int32
+	mkCloseCB := func() func() {
+		return func() { closeCBCalls.Add(1) }
+	}
+
+	tails := make([]*txnWithLogtails, n)
+	for i := 0; i < n; i++ {
+		tails[i] = &txnWithLogtails{closeCB: mkCloseCB()}
+	}
+
+	var mu sync.Mutex
+	var published []*txnWithLogtails
+	var publishedCloseCBCalls atomic.Int32
+
+	orderedCollectAndPublish(
+		n,
+		func(int) bool { return false },
+		goSubmit,
+		func(i int) *txnWithLogtails {
+			t := tails[i]
+			if rolledBack[i] {
+				// Mirror onTxnLogTails: rollback must release closeCB
+				// and skip publish.
+				t.closeCB()
+				return nil
+			}
+			return t
+		},
+		func(v *txnWithLogtails) {
+			mu.Lock()
+			defer mu.Unlock()
+			published = append(published, v)
+			v.closeCB()
+			publishedCloseCBCalls.Add(1)
+		},
+	)
+
+	require.Equal(t, []*txnWithLogtails{tails[0], tails[2]}, published,
+		"rollback slot must not be published")
+	require.Equal(t, int32(3), closeCBCalls.Load(),
+		"closeCB must fire exactly once per slot (rollback: direct; committed: via publish)")
+	require.Equal(t, int32(2), publishedCloseCBCalls.Load(),
+		"publish-path closeCB count must match committed slots only")
+}
+
 func TestOrderedCollectAndPublish_SkipInterleaved(t *testing.T) {
 	// Even slots are skipped; odd slots publish. Publisher sees 1, 3.
 	const n = 5
