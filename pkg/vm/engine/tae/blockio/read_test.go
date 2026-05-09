@@ -365,11 +365,17 @@ func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
 	require.Nil(t, dists)
 	require.Equal(t, []int64{3, 5}, rows)
 
-	unsortedInfo := &objectio.BlockInfo{}
-	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, unsortedInfo, -1, objectio.Bitmap{}, cacheVectors)
+	deleteMask.Add(0)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, deleteMask, cacheVectors)
 	require.NoError(t, err)
 	require.Nil(t, dists)
-	require.Equal(t, []int64{0, 1, 2, 3, 4, 5}, rows)
+	require.Equal(t, []int64{1, 2}, rows)
+
+	unsortedInfo := &objectio.BlockInfo{}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, unsortedInfo, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{1, 2, 3, 5}, rows)
 }
 
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
