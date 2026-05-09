@@ -129,6 +129,178 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestLoopJoinConstNullAfterNonEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConstNull())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	int32Type := types.T_int32.ToType()
+
+	tag++
+	join := &LoopJoin{
+		ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		LeftTypes:  []types.Type{int32Type},
+		RightTypes: []types.Type{int32Type},
+		JoinType:   plan.Node_OUTER,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 1,
+			},
+		},
+		JoinMapTag: tag,
+	}
+	build := &hashbuild.HashBuild{
+		NeedBatches:   true,
+		JoinMapTag:    tag,
+		JoinMapRefCnt: 1,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx: 0,
+			},
+		},
+	}
+
+	resetChildrenWithBatch(join, makeInt32LoopJoinBatch(proc.Mp(), []int32{7}))
+	resetHashBuildChildrenWithBatch(build, batch.EmptyBatch)
+	require.NoError(t, join.Prepare(proc))
+	require.NoError(t, build.Prepare(proc))
+
+	res, err := vm.Exec(build, proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(join, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConst())
+
+	join.Reset(proc, false, nil)
+	build.Reset(proc, false, nil)
+
+	resetChildrenWithBatch(join, batch.EmptyBatch)
+	resetHashBuildChildrenWithBatch(build, makeInt32LoopJoinBatch(proc.Mp(), []int32{10, 20}))
+	proc.GetMessageBoard().Reset()
+	require.NoError(t, join.Prepare(proc))
+	require.NoError(t, build.Prepare(proc))
+
+	res, err = vm.Exec(build, proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(join, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.False(t, res.Batch.Vecs[1].IsConst())
+	require.Equal(t, []int32{10, 20}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[1])[:2])
+	require.True(t, res.Batch.Vecs[0].GetNulls().Contains(0))
+	require.True(t, res.Batch.Vecs[0].GetNulls().Contains(1))
+
+	join.Reset(proc, false, nil)
+	build.Reset(proc, false, nil)
+	join.Free(proc, false, nil)
+	build.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
@@ -427,14 +599,20 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 }
 
 func resetChildren(arg *LoopJoin, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
+	resetChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetChildrenWithBatch(arg *LoopJoin, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
 func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
+	resetHashBuildChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
