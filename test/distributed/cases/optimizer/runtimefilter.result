@@ -20,7 +20,7 @@ explain select * from t1 where t1.c2 in( select c1 from t2 where t2.c2=1);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
-        Join Type: SEMI  𝄀
+        Join Type: SEMI   hashOnPK  𝄀
         Join Cond: (t1.c2 = t2.c1)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1  𝄀
@@ -58,7 +58,7 @@ explain select * from t1,t2 where t1.c2=t2.c1 and t2.c2=1;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
-        Join Type: INNER  𝄀
+        Join Type: INNER   hashOnPK  𝄀
         Join Cond: (t1.c2 = t2.c1)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1  𝄀

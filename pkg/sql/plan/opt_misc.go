@@ -663,17 +663,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 			expr := condImpl.F.Args[0]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
-				//the nullable column ref is not primary key.
-				//can not use the hashOnPk.
-				if !expr.Typ.NotNullable {
-					return nil
-				}
 				exprLeftCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}
 			expr = condImpl.F.Args[1]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
-				//same as above.
+				//the nullable column ref is not primary key.
+				//can not use the hashOnPk.
+				//it assume build hashamp on right side.
 				if !expr.Typ.NotNullable {
 					return nil
 				}

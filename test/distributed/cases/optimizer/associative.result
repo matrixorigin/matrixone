@@ -32,16 +32,14 @@ Project  𝄀
         Group Key: t.id  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (f.job_id = job.id), (f.task_id = t.id)  𝄀
-              ->  Table Scan on associative.file  𝄀
-                    Filter Cond: (f.table_id = 1)  𝄀
+              Join Cond: (t.id = job.task_id), (t.id = f.task_id)  𝄀
+              ->  Table Scan on associative.task  𝄀
+                    Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
               ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (t.id = job.task_id)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on associative.task  𝄀
-                          Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
-                          Runtime Filter Probe: t.id  𝄀
+                    Join Type: INNER   hashOnPK  𝄀
+                    Join Cond: (f.job_id = job.id)  𝄀
+                    ->  Table Scan on associative.file  𝄀
+                          Filter Cond: (f.table_id = 1)  𝄀
                     ->  Table Scan on associative.connector_job  𝄀
                           Filter Cond: (job.status <> 5), (job.status <> 4)
 CREATE TABLE `lineitem` (

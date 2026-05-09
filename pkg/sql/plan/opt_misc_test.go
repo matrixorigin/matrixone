@@ -41,6 +41,7 @@ func TestDetermineHashOnPKRequiresNonNullableJoinKeys(t *testing.T) {
 			name:             "left join key is nullable",
 			leftNotNullable:  false,
 			rightNotNullable: true,
+			wantHashOnPK:     true,
 		},
 		{
 			name:             "right primary key join key is nullable",
