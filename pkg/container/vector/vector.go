@@ -1115,10 +1115,25 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
+			if !v.typ.IsFixedLen() {
+				vva := MustFixedColNoTypeCheck[types.Varlena](v)
+				// Null varlen slots may retain stale offset/len metadata, so clear
+				// the destination header before marking the row null.
+				vva[vi] = types.Varlena{}
+			}
 			v.nsp.Set(uint64(vi))
 			return nil
 		}
+		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
+	}
+	if w.GetNulls().Contains(uint64(wi)) {
+		if !v.typ.IsFixedLen() {
+			vva := MustFixedColNoTypeCheck[types.Varlena](v)
+			vva[vi] = types.Varlena{}
+		}
+		v.GetNulls().Set(uint64(vi))
+		return nil
 	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
@@ -1138,11 +1153,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		}
 	}
 
-	if w.GetNulls().Contains(uint64(wi)) {
-		v.GetNulls().Set(uint64(vi))
-	} else {
-		v.GetNulls().Unset(uint64(vi))
-	}
+	v.GetNulls().Unset(uint64(vi))
 	return nil
 }
 

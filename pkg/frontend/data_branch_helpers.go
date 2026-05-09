@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -29,8 +30,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
+
+func containsDataBranchTempTableName(sqlLower string) bool {
+	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
+		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
+}
+
+func containsTempTableMarker(sqlLower, marker string) bool {
+	searchFrom := 0
+	for {
+		offset := strings.Index(sqlLower[searchFrom:], marker)
+		if offset < 0 {
+			return false
+		}
+		idx := searchFrom + offset
+		if idx == 0 {
+			return true
+		}
+		switch sqlLower[idx-1] {
+		case ' ', '\t', '\n', '\r', '.', '(', ',':
+			return true
+		}
+		searchFrom = idx + len(marker)
+	}
+}
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
 	if pool == nil {
@@ -94,6 +124,11 @@ func runSql(
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
 	if strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
+		useBackExec = true
+	} else if containsDataBranchTempTableName(trimmedLower) {
+		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
+		// The internal SQL fast path skips per-statement workspace increments and can
+		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
 	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
@@ -162,17 +197,201 @@ func runSql(
 		WithDisableIncrStatement().
 		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
-		WithTimeZone(ses.GetTimeZone())
+		WithTimeZone(ses.GetTimeZone()).
+		WithDatabase(ses.GetDatabaseName())
 
 	if streamChan != nil && errChan != nil {
 		opts = opts.WithStreaming(streamChan, errChan)
 	}
 
 	if sqlRet, err = exec.Exec(ctx, sql, opts); err != nil {
+		logutil.Error(
+			"DataBranch-RunSQL-Error",
+			zap.Bool("use-back-exec", useBackExec),
+			zap.String("txn", backSes.GetTxnInfo()),
+			zap.String("sql", sql),
+			zap.Error(err),
+		)
 		return sqlRet, err
 	}
 
 	return sqlRet, nil
+}
+
+// shouldUseLCAReaderFallback returns true only for recoverable snapshot-read
+// failures where an engine reader based fallback can preserve LCA semantics.
+// After GC, time travelling by account/db/table name can fail if no snapshot or
+// PITR history was created for the corresponding account/db/table and the
+// historical catalog can no longer resolve that name. In that case, branch diff
+// should fall back to table-id based readers.
+//
+// ErrParseError is included because the SQL compiler emits it as
+// "table X does not exist" when getRelation() returns nil after catalog
+// name lookup fails at an old snapshot (the original ErrNoSuchTable is
+// swallowed in sql_executor_context.getRelation).
+func shouldUseLCAReaderFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrStaleRead) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrParseError)
+}
+
+// shouldFallbackToFullScan returns true when CollectChanges or hashDiff fails
+// with an error that makes incremental change tracking unreliable, but a
+// full-table-scan comparison of the two tables' current states can still
+// produce correct results.
+//
+// Two classes of failure trigger this fallback:
+//   - ErrNoCommitTSColumn: TN merge objects on 3.0-dev lack per-row commit-ts,
+//     making row-level time filtering impossible.
+//   - ErrFileNotFound: GC deleted object files referenced by the change handle;
+//     the current table state is still readable via live objects.
+func shouldFallbackToFullScan(err error) bool {
+	if err == nil {
+		return false
+	}
+	return engine.IsErrNoCommitTSColumn(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+}
+
+// scanSnapshotRelationByID scans a relation with a split-view strategy:
+//   - current relation: resolved at the current transaction view to collect
+//     only currently valid physical objects (avoid stale/GC'ed object names).
+//   - snapshot reader: rebuilt directly from the requested snapshot timestamp
+//     and the current relation's stable table handle, without re-resolving the
+//     historical relation through catalog name lookup.
+//
+// After GC, time travelling by account/db/table name can fail if no snapshot or
+// PITR history was created for the corresponding account/db/table. This helper
+// keeps object selection and row visibility decoupled so data-branch fallback
+// paths can still probe old snapshots without requiring snapshotRelation lookup.
+func scanSnapshotRelationByID(
+	ctx context.Context,
+	caller string,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+	attrs []string,
+	colTypes []types.Type,
+	filterExpr *plan.Expr,
+	scanParallelism int,
+	onBatch func(*batch.Batch) error,
+) error {
+	if len(attrs) == 0 {
+		return nil
+	}
+	if len(attrs) != len(colTypes) {
+		return moerr.NewInternalErrorNoCtxf(
+			"scanSnapshotRelationByID: attrs/colTypes length mismatch, attrs=%d colTypes=%d",
+			len(attrs),
+			len(colTypes),
+		)
+	}
+
+	storage := ses.GetTxnHandler().GetStorage()
+	baseTxnOp := ses.GetTxnHandler().GetTxn()
+	rangeTS := types.TimestampToTS(baseTxnOp.SnapshotTS())
+	logutil.Info(
+		"DataBranch-SnapshotScan-Start",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Bool("has-filter-expr", filterExpr != nil),
+		zap.Int("attr-cnt", len(attrs)),
+		zap.Int("scan-parallelism", scanParallelism),
+	)
+
+	_, _, rangeRel, err := storage.GetRelationById(ctx, baseTxnOp, tableID)
+	if err != nil {
+		return err
+	}
+	if rangeRel == nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"scanSnapshotRelationByID: cannot resolve range relation by id %d at current txn view",
+			tableID,
+		)
+	}
+
+	rangesParam := engine.DefaultRangesParam
+	if filterExpr != nil {
+		rangesParam.BlockFilters = []*plan.Expr{filterExpr}
+	}
+
+	relData, err := rangeRel.Ranges(ctx, rangesParam)
+	if err != nil {
+		logutil.Error(
+			"DataBranch-SnapshotScan-Ranges-Error",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Error(err),
+		)
+		return err
+	}
+	rangeBlocks := relData.GetBlockInfoSlice()
+	rangeBlockCnt := rangeBlocks.Len()
+	logutil.Info(
+		"DataBranch-SnapshotScan-Ranges-Done",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Int("rel-data-type", int(relData.GetType())),
+		zap.Int("range-data-cnt", relData.DataCnt()),
+		zap.Int("range-block-cnt", rangeBlockCnt),
+	)
+
+	var (
+		readBatchCnt atomic.Int64
+		readRowCnt   atomic.Int64
+	)
+
+	if err = disttae.ScanSnapshotWithCurrentRanges(
+		ctx,
+		caller,
+		rangeRel,
+		relData,
+		snapshotTS,
+		attrs,
+		colTypes,
+		filterExpr,
+		scanParallelism,
+		ses.proc.Mp(),
+		func(readBatch *batch.Batch) error {
+			readBatchCnt.Add(1)
+			readRowCnt.Add(int64(readBatch.RowCount()))
+			return onBatch(readBatch)
+		},
+	); err != nil {
+		logutil.Error(
+			"DataBranch-SnapshotScan-Reader-Error",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("range-ts", rangeTS.ToString()),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Int("range-data-cnt", relData.DataCnt()),
+			zap.Int("range-block-cnt", rangeBlockCnt),
+			zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+			zap.Int64("read-row-cnt", readRowCnt.Load()),
+			zap.Error(err),
+		)
+		return err
+	}
+	logutil.Info(
+		"DataBranch-SnapshotScan-Done",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+		zap.Int64("read-row-cnt", readRowCnt.Load()),
+	)
+	return nil
 }
 
 func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {

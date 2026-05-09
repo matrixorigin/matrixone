@@ -17,7 +17,29 @@ package types
 import (
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+// TestStringToArray_RejectsNaN ensures the array string parser refuses
+// NaN inputs so arrays never hold non-finite floats.
+func TestStringToArray_RejectsNaN(t *testing.T) {
+	for _, in := range []string{"[NaN]", "[1, NaN, 2]", "[+Inf]", "[-Inf]"} {
+		if _, err := StringToArray[float32](in); err == nil {
+			t.Fatalf("StringToArray[float32](%q) expected error, got nil", in)
+		}
+		if _, err := StringToArray[float64](in); err == nil {
+			t.Fatalf("StringToArray[float64](%q) expected error, got nil", in)
+		}
+	}
+}
+
+// TestStringToArray_AcceptsFinite confirms normal values still parse.
+func TestStringToArray_AcceptsFinite(t *testing.T) {
+	got, err := StringToArray[float32]("[1, 2, 3]")
+	require.NoError(t, err)
+	require.Equal(t, []float32{1, 2, 3}, got)
+}
 
 func Test_unsafeStringAt(t *testing.T) {
 	type args struct {

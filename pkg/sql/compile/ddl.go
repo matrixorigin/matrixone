@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -188,7 +189,29 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	var ignoreTables []string
+
+	// Hidden index tables are referenced from the source table's constraint metadata.
+	//
+	// In healthy metadata, every referenced hidden index table should also appear in
+	// the database relation list. In practice, DROP ACCOUNT / DROP DATABASE may have
+	// to clean up tenants whose catalog metadata is already partially inconsistent
+	// (for example, the source table still references internal index tables that no
+	// longer exist, or the same hidden table name is recorded more than once).
+	//
+	// The old implementation used len(relations)-len(ignoreTables) as the slice
+	// capacity for deleteTables. Once the metadata became inconsistent, that value
+	// could go negative and panic with "makeslice: cap out of range", turning a
+	// recoverable cleanup problem into a process-level crash.
+	//
+	// To make DROP DATABASE resilient, build the ignore list as a set, filter the
+	// relation list against that set, and only warn when constraint metadata points
+	// to hidden index tables that are already missing from the relation list.
+	relationSet := make(map[string]struct{}, len(relations))
+	for _, r := range relations {
+		relationSet[r] = struct{}{}
+	}
+
+	ignoreTables := make(map[string]struct{})
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
@@ -203,22 +226,34 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		for _, ct := range constrain.Cts {
 			if ds, ok := ct.(*engine.IndexDef); ok {
 				for _, d := range ds.Indexes {
-					ignoreTables = append(ignoreTables, d.IndexTableName)
+					if d.IndexTableName != "" {
+						ignoreTables[d.IndexTableName] = struct{}{}
+					}
 				}
 			}
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
-	for _, r := range relations {
-		isIndexTable := false
-		for _, d := range ignoreTables {
-			if d == r {
-				isIndexTable = true
-				break
-			}
+	missingIndexTables := make([]string, 0)
+	for tableName := range ignoreTables {
+		if _, ok := relationSet[tableName]; !ok {
+			missingIndexTables = append(missingIndexTables, tableName)
 		}
-		if !isIndexTable {
+	}
+	if len(missingIndexTables) > 0 {
+		sort.Strings(missingIndexTables)
+		logutil.Warn(
+			"drop database found dangling hidden index metadata; continuing without missing internal index tables",
+			zap.String("database", dbName),
+			zap.Strings("missing index tables", missingIndexTables),
+			zap.Int("relations", len(relations)),
+			zap.Int("hidden index tables referenced", len(ignoreTables)),
+		)
+	}
+
+	deleteTables := make([]string, 0, len(relations))
+	for _, r := range relations {
+		if _, isIndexTable := ignoreTables[r]; !isIndexTable {
 			deleteTables = append(deleteTables, r)
 		}
 	}
@@ -2649,9 +2684,28 @@ func (s *Scope) DropTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropTable()
+	if len(qry.GetTables()) > 0 {
+		for _, entry := range qry.GetTables() {
+			sub := plan2.DeepCopyDropTable(entry)
+			if sub == nil {
+				continue
+			}
+			if err := s.dropTableSingle(c, sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return s.dropTableSingle(c, qry)
+}
+
+func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
+	if tblName == "" {
+		return nil
+	}
 	if !isView && qry.TableDef == nil {
 		if qry.IfExists {
 			return nil
@@ -2779,6 +2833,16 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		_, _, childRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblId)
 		if err != nil {
+			if strings.Contains(err.Error(), "can not find table by id") {
+				logutil.Warn(
+					"cannot find the child table when drop table",
+					zap.String("table", fmt.Sprintf("%s-%s", dbName, tblName)),
+					zap.Uint64("child table id", childTblId),
+					zap.String("txn info", c.proc.GetTxnOperator().Txn().DebugString()),
+					zap.Error(err),
+				)
+				continue
+			}
 			return err
 		}
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)

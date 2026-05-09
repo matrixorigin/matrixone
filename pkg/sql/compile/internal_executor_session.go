@@ -35,6 +35,17 @@ func attachInternalExecutorSession(ctx context.Context, ses internalExecutorSess
 	return context.WithValue(ctx, internalExecutorSessionKey{}, ses)
 }
 
+// AttachInternalExecutorSession attaches the original frontend session to
+// internal SQL so temp-table aliases and other session-scoped metadata resolve
+// the same way they do for the user's statement.
+func AttachInternalExecutorSession(ctx context.Context, ses any) context.Context {
+	internalSes, ok := ses.(internalExecutorSession)
+	if !ok {
+		return ctx
+	}
+	return attachInternalExecutorSession(ctx, internalSes)
+}
+
 func getInternalExecutorSession(ctx context.Context) internalExecutorSession {
 	if ctx == nil {
 		return nil
@@ -50,6 +61,12 @@ func getInternalExecutorSession(ctx context.Context) internalExecutorSession {
 func attachInternalExecutorPrivilegeCheck(ctx context.Context) context.Context {
 	// Mark this internal SQL to run with normal privilege validation path.
 	return context.WithValue(ctx, internalExecutorPrivilegeCheckKey{}, true)
+}
+
+// AttachInternalExecutorPrivilegeCheck forces internal SQL to run through the
+// normal privilege validation path instead of bypassing auth as trusted SQL.
+func AttachInternalExecutorPrivilegeCheck(ctx context.Context) context.Context {
+	return attachInternalExecutorPrivilegeCheck(ctx)
 }
 
 func needInternalExecutorPrivilegeCheck(ctx context.Context) bool {

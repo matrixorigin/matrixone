@@ -43,6 +43,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -641,6 +648,35 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				} else {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 				}
+			}
+		}
+
+	case tree.NULL_SAFE_EQUAL:
+		op = "<=>"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := 0; i < len(leftexpr.Exprs); i++ {
+						expr2, err = b.bindFuncExprImplByAstExpr(op, []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						if i == 0 {
+							expr1 = expr2
+							continue
+						}
+						expr1, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				}
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
 			}
 		}
 
@@ -1871,6 +1907,25 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "timestampadd":
+		// MySQL behavior: DATE input + date unit returns DATE, while time units return DATETIME.
+		if len(args) >= 3 && argsType[2].Oid == types.T_date {
+			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
+				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
+					unitStr := strings.ToUpper(sval.Sval)
+					iTyp, err := types.IntervalTypeOf(unitStr)
+					if err == nil {
+						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
+							iTyp == types.Month || iTyp == types.Quarter ||
+							iTyp == types.Year
+						if isDateUnit {
+							returnType = types.T_date.ToType()
+						}
+					}
+				}
+			}
+		}
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]
@@ -1997,7 +2052,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
-			return nil, err
+			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
 		}
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)
@@ -2096,8 +2151,10 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	firstExpr, secondExpr, err := getIntervalExprArgs(ctx, intervalExpr)
+	if err != nil {
+		return nil, err
+	}
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
@@ -2202,9 +2259,18 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 	return resetIntervalFunctionArgs(ctx, intervalExpr)
 }
 
+func getIntervalExprArgs(ctx context.Context, intervalExpr *Expr) (*Expr, *Expr, error) {
+	if intervalExpr == nil || intervalExpr.GetList() == nil || len(intervalExpr.GetList().List) < 2 {
+		return nil, nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	return intervalExpr.GetList().List[0], intervalExpr.GetList().List[1], nil
+}
+
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	firstExpr, secondExpr, err := getIntervalExprArgs(ctx, intervalExpr)
+	if err != nil {
+		return nil, err
+	}
 
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)

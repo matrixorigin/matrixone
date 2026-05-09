@@ -32,12 +32,12 @@ create table insert_t5(col1 bool);
 insert into insert_t5 values("true");
 select * from insert_t5;
 col1
-true
+1
 delete from insert_t5;;
 insert into insert_t5 values("false");
 select * from insert_t5;
 col1
-false
+0
 drop table insert_t5;
 drop table if exists insert_t6;
 create table insert_t6(col1 timestamp);

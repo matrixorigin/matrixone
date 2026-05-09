@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
@@ -31,6 +32,18 @@ func init() {
 		func() *AlterRole { return &AlterRole{} },
 		func(a *AlterRole) { a.reset() },
 		reuse.DefaultOptions[AlterRole](), //.
+	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterRoleAddRule](
+		func() *AlterRoleAddRule { return &AlterRoleAddRule{} },
+		func(a *AlterRoleAddRule) { a.reset() },
+		reuse.DefaultOptions[AlterRoleAddRule](), //.
+	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterRoleDropRule](
+		func() *AlterRoleDropRule { return &AlterRoleDropRule{} },
+		func(a *AlterRoleDropRule) { a.reset() },
+		reuse.DefaultOptions[AlterRoleDropRule](), //.
 	) // WithEnableChecker()
 
 	reuse.CreatePool[AlterAccount](
@@ -337,6 +350,84 @@ func (node *AlterRole) reset() {
 func (node *AlterRole) GetStatementType() string { return "Alter Role" }
 func (node *AlterRole) GetQueryType() string     { return QueryTypeDCL }
 
+// AlterRoleAddRule represents ALTER ROLE <role> ADD RULE <rule_sql> ON TABLE <db>.<tbl>
+type AlterRoleAddRule struct {
+	statementImpl
+	RoleName string
+	RuleName string // 规则名称，字符串字面量
+	RuleSQL  string // 改写 SQL，字符串字面量
+	DbName   string // 目标数据库名
+	TblName  string // 目标表名
+}
+
+func NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName string) *AlterRoleAddRule {
+	node := reuse.Alloc[AlterRoleAddRule](nil)
+	node.RoleName = roleName
+	node.RuleName = ruleName
+	node.RuleSQL = ruleSQL
+	node.DbName = dbName
+	node.TblName = tblName
+	return node
+}
+
+func (node *AlterRoleAddRule) Free() { reuse.Free[AlterRoleAddRule](node, nil) }
+
+func (node *AlterRoleAddRule) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role ")
+	ctx.WriteString(node.RoleName)
+	ctx.WriteString(" add rule ")
+	ctx.WriteString(fmt.Sprintf("'%s'", node.RuleSQL))
+	ctx.WriteString(" on table ")
+	ctx.WriteString(node.DbName)
+	ctx.WriteString(".")
+	ctx.WriteString(node.TblName)
+}
+
+func (node AlterRoleAddRule) TypeName() string { return "tree.AlterRoleAddRule" }
+
+func (node *AlterRoleAddRule) reset() {
+	*node = AlterRoleAddRule{}
+}
+
+func (node *AlterRoleAddRule) GetStatementType() string { return "Alter Role Add Rule" }
+func (node *AlterRoleAddRule) GetQueryType() string     { return QueryTypeDCL }
+
+// AlterRoleDropRule represents ALTER ROLE <role> DROP RULE ON TABLE <db>.<tbl>
+type AlterRoleDropRule struct {
+	statementImpl
+	RoleName string
+	DbName   string
+	TblName  string
+}
+
+func NewAlterRoleDropRule(roleName, dbName, tblName string) *AlterRoleDropRule {
+	node := reuse.Alloc[AlterRoleDropRule](nil)
+	node.RoleName = roleName
+	node.DbName = dbName
+	node.TblName = tblName
+	return node
+}
+
+func (node *AlterRoleDropRule) Free() { reuse.Free[AlterRoleDropRule](node, nil) }
+
+func (node *AlterRoleDropRule) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role ")
+	ctx.WriteString(node.RoleName)
+	ctx.WriteString(" drop rule on table ")
+	ctx.WriteString(node.DbName)
+	ctx.WriteString(".")
+	ctx.WriteString(node.TblName)
+}
+
+func (node AlterRoleDropRule) TypeName() string { return "tree.AlterRoleDropRule" }
+
+func (node *AlterRoleDropRule) reset() {
+	*node = AlterRoleDropRule{}
+}
+
+func (node *AlterRoleDropRule) GetStatementType() string { return "Alter Role Drop Rule" }
+func (node *AlterRoleDropRule) GetQueryType() string     { return QueryTypeDCL }
+
 type AlterAccountAuthOption struct {
 	Exist          bool
 	Equal          string
@@ -415,18 +506,20 @@ func (node *AlterAccount) reset() {
 
 type AlterView struct {
 	statementImpl
-	IfExists bool
-	Name     *TableName
-	ColNames IdentifierList
-	AsSource *Select
+	IfExists     bool
+	Name         *TableName
+	ColNames     IdentifierList
+	AsSource     *Select
+	SecurityType string // "DEFINER", "INVOKER", or "" (not specified)
 }
 
-func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select) *AlterView {
+func NewAlterView(exist bool, name *TableName, colNames IdentifierList, asSource *Select, securityType string) *AlterView {
 	a := reuse.Alloc[AlterView](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.ColNames = colNames
 	a.AsSource = asSource
+	a.SecurityType = securityType
 	return a
 }
 
@@ -434,6 +527,11 @@ func (node *AlterView) Free() { reuse.Free[AlterView](node, nil) }
 
 func (node *AlterView) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter ")
+	if node.SecurityType != "" {
+		ctx.WriteString("sql security ")
+		ctx.WriteString(strings.ToLower(node.SecurityType))
+		ctx.WriteByte(' ')
+	}
 
 	ctx.WriteString("view ")
 

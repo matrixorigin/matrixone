@@ -485,7 +485,6 @@ func (e *Engine) getOrCreateSnapPartBy(
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
 	}
-
 	// Try to find existing snapshot that can serve this timestamp
 	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil {
 		return ps, nil
@@ -551,7 +550,6 @@ func (e *Engine) getOrCreateSnapPartBy(
 			"snapshot partition cannot serve ts after consuming checkpoints, ts:%s, table:%s",
 			ts.ToString(), tbl.tableName)
 	}
-
 	// Add the new snapshot with LRU eviction
 	ps := e.snapshotMgr.Add(
 		tbl.db.databaseId,

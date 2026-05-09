@@ -146,6 +146,46 @@ var (
 		"last_run",
 		"details",
 	}
+
+	sqlTaskRows = []string{
+		"task_id",
+		"task_name",
+		"account_id",
+		"database_name",
+		"cron_expr",
+		"timezone",
+		"sql_body",
+		"gate_condition",
+		"retry_limit",
+		"timeout_seconds",
+		"enabled",
+		"next_fire_time",
+		"trigger_count",
+		"creator",
+		"creator_user_id",
+		"creator_role_id",
+		"created_at",
+		"updated_at",
+	}
+
+	sqlTaskRunRows = []string{
+		"run_id",
+		"task_id",
+		"task_name",
+		"account_id",
+		"scheduled_at",
+		"started_at",
+		"finished_at",
+		"duration_seconds",
+		"status",
+		"trigger_type",
+		"attempt_number",
+		"rows_affected",
+		"error_code",
+		"error_message",
+		"gate_result",
+		"runner_cn",
+	}
 )
 
 func TestPingContext(t *testing.T) {
@@ -209,6 +249,151 @@ func TestCronTaskInSqlMock(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(cronTask))
 	assert.Equal(t, "a", cronTask[0].Metadata.ID)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestSQLTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	now := time.Now()
+	sqlTask := newTestSQLTask("task_a", 1)
+	sqlTask.CreatedAt = now
+	sqlTask.UpdatedAt = now
+
+	mock.ExpectExec(insertSQLTask).
+		WithArgs(
+			sqlTask.TaskName,
+			sqlTask.AccountID,
+			sqlTask.DatabaseName,
+			sqlTask.CronExpr,
+			sqlTask.Timezone,
+			sqlTask.SQLBody,
+			sqlTask.GateCondition,
+			sqlTask.RetryLimit,
+			sqlTask.TimeoutSeconds,
+			uint8(1),
+			sqlTask.NextFireTime,
+			sqlTask.TriggerCount,
+			sqlTask.Creator,
+			sqlTask.CreatorUserID,
+			sqlTask.CreatorRoleID,
+			sqlTask.CreatedAt,
+			sqlTask.UpdatedAt,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	affected, err := storage.AddSQLTask(context.Background(), sqlTask)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectQuery(selectSQLTask + " AND task_name = 'task_a' order by task_id").
+		WillReturnRows(sqlmock.NewRows(sqlTaskRows).
+			AddRow(1, "task_a", 1, "db1", "0 * * * *", "UTC", "select 1", "select 1", 1, 30, 1, 10, 0, "root", 0, 0, now, now))
+	tasks, err := storage.QuerySQLTask(context.Background(), WithTaskName(EQ, "task_a"))
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.True(t, tasks[0].Enabled)
+
+	mock.ExpectExec(updateSQLTask+" AND task_id=1").
+		WithArgs(
+			sqlTask.TaskName,
+			sqlTask.AccountID,
+			sqlTask.DatabaseName,
+			sqlTask.CronExpr,
+			"Asia/Shanghai",
+			sqlTask.SQLBody,
+			sqlTask.GateCondition,
+			sqlTask.RetryLimit,
+			sqlTask.TimeoutSeconds,
+			uint8(1),
+			sqlTask.NextFireTime,
+			sqlTask.TriggerCount,
+			sqlTask.Creator,
+			sqlTask.CreatorUserID,
+			sqlTask.CreatorRoleID,
+			sqlTask.CreatedAt,
+			sqlTask.UpdatedAt,
+			uint64(1),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	tasks[0].Timezone = "Asia/Shanghai"
+	affected, err = storage.UpdateSQLTask(context.Background(), tasks, WithTaskIDCond(EQ, 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectExec(deleteSQLTask + " AND task_id=1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	affected, err = storage.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestSQLTaskRunInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	now := time.Now()
+	run := newTestSQLTaskRun(1, "task_a", SQLTaskStatusRunning)
+	run.ScheduledAt = now
+	run.StartedAt = now
+
+	mock.ExpectExec(insertSQLTaskRun).
+		WithArgs(
+			run.TaskID,
+			run.TaskName,
+			run.AccountID,
+			run.ScheduledAt,
+			run.StartedAt,
+			nil,
+			run.DurationSeconds,
+			run.Status,
+			run.TriggerType,
+			run.AttemptNumber,
+			run.RowsAffected,
+			run.ErrorCode,
+			nil,
+			uint8(1),
+			run.RunnerCN,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	affected, err := storage.AddSQLTaskRun(context.Background(), run)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectQuery(selectSQLTaskRun + " AND status = 'RUNNING' order by run_id desc").
+		WillReturnRows(sqlmock.NewRows(sqlTaskRunRows).
+			AddRow(1, 1, "task_a", 1, now, now, nil, 0, SQLTaskStatusRunning, SQLTaskTriggerScheduled, 1, 0, 0, nil, 1, "cn1"))
+	runs, err := storage.QuerySQLTaskRun(context.Background(), WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.True(t, runs[0].GateResult)
+
+	runs[0].Status = SQLTaskStatusSuccess
+	runs[0].FinishedAt = now
+	mock.ExpectExec(updateSQLTaskRun+" AND run_id=1").
+		WithArgs(
+			runs[0].TaskID,
+			runs[0].TaskName,
+			runs[0].AccountID,
+			runs[0].ScheduledAt,
+			runs[0].StartedAt,
+			runs[0].FinishedAt,
+			runs[0].DurationSeconds,
+			runs[0].Status,
+			runs[0].TriggerType,
+			runs[0].AttemptNumber,
+			runs[0].RowsAffected,
+			runs[0].ErrorCode,
+			nil,
+			uint8(1),
+			runs[0].RunnerCN,
+			uint64(1),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	affected, err = storage.UpdateSQLTaskRun(context.Background(), runs, WithSQLTaskRunIDCond(EQ, 1))
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
 
 	mock.ExpectClose()
 	require.NoError(t, storage.Close())
@@ -771,6 +956,284 @@ func TestAddCronTaskWithDuplicateEntry(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
+func TestTriggerSQLTaskInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	sqlTask := newTestSQLTask("task_a", 1)
+	sqlTask.TaskID = 10
+	sqlTask.TriggerCount = 1
+	sqlTask.NextFireTime = 200
+	sqlTask.UpdatedAt = time.Now()
+	asyncTask := newTestAsyncTask("sql_task:10:1")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+	mock.ExpectQuery(countSQLTaskTrigger).WithArgs(sqlTask.TaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"trigger_count"}).AddRow(uint64(0)))
+	mock.ExpectExec("update sql_task set trigger_count=?, next_fire_time=?, updated_at=? where task_id=? and trigger_count=?").
+		WithArgs(sqlTask.TriggerCount, sqlTask.NextFireTime, sqlTask.UpdatedAt, sqlTask.TaskID, uint64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+		WithArgs(
+			asyncTask.Metadata.ID,
+			asyncTask.Metadata.Executor,
+			asyncTask.Metadata.Context,
+			sqlmock.AnyArg(),
+			asyncTask.ParentTaskID,
+			asyncTask.Status,
+			asyncTask.TaskRunner,
+			asyncTask.Epoch,
+			asyncTask.LastHeartbeat,
+			asyncTask.CreateAt,
+			asyncTask.CompletedAt,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	affected, err := storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+	require.NoError(t, err)
+	require.Equal(t, 2, affected)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestAcquireAndCompleteSQLTaskRunInSqlMock(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	run := newTestSQLTaskRun(10, "task_a", SQLTaskStatusRunning)
+	run.StartedAt = time.Now()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("select task_id from sql_task where task_id=? for update").
+		WithArgs(run.TaskID).
+		WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(run.TaskID))
+	mock.ExpectQuery("select count(*) from sql_task_run where task_id=? and status=?").
+		WithArgs(run.TaskID, SQLTaskStatusRunning).
+		WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(0))
+	mock.ExpectExec(insertSQLTaskRun).
+		WithArgs(
+			run.TaskID,
+			run.TaskName,
+			run.AccountID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			nil,
+			run.DurationSeconds,
+			run.Status,
+			run.TriggerType,
+			run.AttemptNumber,
+			run.RowsAffected,
+			run.ErrorCode,
+			nil,
+			1,
+			run.RunnerCN,
+		).
+		WillReturnResult(sqlmock.NewResult(7, 1))
+	mock.ExpectCommit()
+
+	runID, err := storage.AcquireSQLTaskRun(context.Background(), SQLTask{TaskID: run.TaskID}, run)
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), runID)
+
+	run.RunID = runID
+	run.Status = SQLTaskStatusSuccess
+	run.FinishedAt = time.Now()
+	run.DurationSeconds = 2.5
+	mock.ExpectExec(updateSQLTaskRun).
+		WithArgs(
+			run.TaskID,
+			run.TaskName,
+			run.AccountID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			run.DurationSeconds,
+			run.Status,
+			run.TriggerType,
+			run.AttemptNumber,
+			run.RowsAffected,
+			run.ErrorCode,
+			nil,
+			1,
+			run.RunnerCN,
+			run.RunID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	affected, err := storage.CompleteSQLTaskRun(context.Background(), run)
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+}
+
+func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
+	t.Run("add sql task", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		affected, err := storage.AddSQLTask(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+
+		sqlTask := newTestSQLTask("task_dup", 1)
+		mock.ExpectExec(insertSQLTask).
+			WillReturnError(&mysqlDriver.MySQLError{Number: moerr.ER_DUP_ENTRY, Message: "Duplicate entry"})
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectExec(insertSQLTask).WillReturnError(assert.AnError)
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectExec(insertSQLTask).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		affected, err = storage.AddSQLTask(context.Background(), sqlTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("delete and complete rows affected", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectExec(deleteSQLTask).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		affected, err := storage.DeleteSQLTask(context.Background())
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		run := newTestSQLTaskRun(10, "task_a", SQLTaskStatusSuccess)
+		mock.ExpectExec(updateSQLTaskRun).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		affected, err = storage.CompleteSQLTaskRun(context.Background(), run)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("acquire run", func(t *testing.T) {
+		run := newTestSQLTaskRun(10, "task_a", SQLTaskStatusRunning)
+
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery("select task_id from sql_task where task_id=? for update").
+			WithArgs(run.TaskID).
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectRollback()
+		_, err := storage.AcquireSQLTaskRun(context.Background(), SQLTask{TaskID: run.TaskID}, run)
+		require.ErrorIs(t, err, ErrSQLTaskNotFound)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery("select task_id from sql_task where task_id=? for update").
+			WithArgs(run.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(run.TaskID))
+		mock.ExpectQuery("select count(*) from sql_task_run where task_id=? and status=?").
+			WithArgs(run.TaskID, SQLTaskStatusRunning).
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(1))
+		mock.ExpectRollback()
+		_, err = storage.AcquireSQLTaskRun(context.Background(), SQLTask{TaskID: run.TaskID}, run)
+		require.ErrorIs(t, err, ErrSQLTaskOverlap)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery("select task_id from sql_task where task_id=? for update").
+			WithArgs(run.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"task_id"}).AddRow(run.TaskID))
+		mock.ExpectQuery("select count(*) from sql_task_run where task_id=? and status=?").
+			WithArgs(run.TaskID, SQLTaskStatusRunning).
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(0))
+		mock.ExpectExec(insertSQLTaskRun).WillReturnResult(sqlmock.NewErrorResult(assert.AnError))
+		mock.ExpectRollback()
+		_, err = storage.AcquireSQLTaskRun(context.Background(), SQLTask{TaskID: run.TaskID}, run)
+		require.ErrorIs(t, err, assert.AnError)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("trigger sql task", func(t *testing.T) {
+		sqlTask := newTestSQLTask("task_a", 1)
+		sqlTask.TaskID = 10
+		sqlTask.TriggerCount = 1
+		asyncTask := newTestAsyncTask("sql-task:10:1")
+
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(1))
+		mock.ExpectRollback()
+		affected, err := storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+		mock.ExpectQuery(countSQLTaskTrigger).WithArgs(sqlTask.TaskID).WillReturnError(sql.ErrNoRows)
+		mock.ExpectRollback()
+		affected, err = storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+		mock.ExpectQuery(countSQLTaskTrigger).WithArgs(sqlTask.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"trigger_count"}).AddRow(uint64(99)))
+		mock.ExpectRollback()
+		affected, err = storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+		mock.ExpectQuery(countSQLTaskTrigger).WithArgs(sqlTask.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"trigger_count"}).AddRow(uint64(0)))
+		mock.ExpectExec("update sql_task set trigger_count=?, next_fire_time=?, updated_at=? where task_id=? and trigger_count=?").
+			WithArgs(sqlTask.TriggerCount, sqlTask.NextFireTime, nil, sqlTask.TaskID, uint64(0)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectRollback()
+		affected, err = storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+		require.NoError(t, err)
+		require.Equal(t, 0, affected)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+
+		storage, mock = newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(countTaskId).WithArgs(asyncTask.Metadata.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"count(task_metadata_id)"}).AddRow(0))
+		mock.ExpectQuery(countSQLTaskTrigger).WithArgs(sqlTask.TaskID).
+			WillReturnRows(sqlmock.NewRows([]string{"trigger_count"}).AddRow(uint64(0)))
+		mock.ExpectExec("update sql_task set trigger_count=?, next_fire_time=?, updated_at=? where task_id=? and trigger_count=?").
+			WithArgs(sqlTask.TriggerCount, sqlTask.NextFireTime, nil, sqlTask.TaskID, uint64(0)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(insertAsyncTask + "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+			WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		affected, err = storage.TriggerSQLTask(context.Background(), sqlTask, asyncTask)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 0, affected)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+}
+
 func TestMysqlTaskStorageDisabledBranch(t *testing.T) {
 	storage, mock := newMockStorage(t)
 	DebugCtlTaskFramework(true)
@@ -792,11 +1255,25 @@ func TestMysqlTaskStorageDisabledBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, affected)
 
+	affected, err = storage.AddSQLTask(context.Background(), newTestSQLTask("task-disabled", 1))
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	affected, err = storage.AddSQLTaskRun(context.Background(), newTestSQLTaskRun(1, "task-disabled", SQLTaskStatusRunning))
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
 	_, err = storage.QueryAsyncTask(context.Background())
 	require.NoError(t, err)
 	_, err = storage.QueryCronTask(context.Background())
 	require.NoError(t, err)
 	_, err = storage.QueryDaemonTask(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QuerySQLTask(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QuerySQLTaskRun(context.Background())
+	require.NoError(t, err)
+	_, err = storage.QueryLatestSQLTaskRun(context.Background(), 1, []uint64{1})
 	require.NoError(t, err)
 
 	mock.ExpectClose()

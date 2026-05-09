@@ -281,6 +281,28 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 		// Clear error for next test
 		sinker.ClearError()
 	})
+
+	t.Run("SkipBatchCommandWhenErrorExists_CleansUp", func(t *testing.T) {
+		// Set error so processCommand skips
+		sinker.SetError(moerr.NewInternalErrorNoCtx("test error"))
+
+		// Create an InsertBatch command with real batch data
+		bat := &batch.Batch{
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+		}
+		bat.SetRowCount(1)
+		fromTs := types.BuildTS(100, 0)
+		toTs := types.BuildTS(200, 0)
+		cmd := NewInsertBatchCommand(bat, nil, fromTs, toTs)
+
+		// processCommand should skip AND call cmd.Close() to clean up batch
+		sinker.processCommand(ctx, cmd)
+
+		// Batch should have been cleaned (nil'd by Close)
+		assert.Nil(t, cmd.InsertBatch)
+
+		sinker.ClearError()
+	})
 }
 
 func TestMysqlSinker2_Reset(t *testing.T) {
@@ -557,7 +579,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
-		cmd := NewInsertBatchCommand(bat, fromTs, toTs)
+		cmd := NewInsertBatchCommand(bat, mp, fromTs, toTs)
 
 		// Expect SQL execution
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -614,7 +636,7 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
-		cmd := NewInsertBatchCommand(bat, fromTs, toTs)
+		cmd := NewInsertBatchCommand(bat, mp, fromTs, toTs)
 
 		// Expect SQL execution to fail
 		mock.ExpectExec("fakeSql").WillReturnError(sqlmock.ErrCancelled)
@@ -626,8 +648,233 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 	})
 }
 
-// Skipping complex async workflow tests for now
-// Will be tested through integration tests with reader
+func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	executor := &Executor{conn: db}
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+
+	t.Run("SendCommandAfterClose_CleansBatch", func(t *testing.T) {
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-1",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			nil, builder, NewCdcActiveRoutine(),
+		)
+		// Close sinker first
+		sinker.Close()
+
+		// Create a batch command
+		bat := &batch.Batch{
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+		}
+		bat.SetRowCount(1)
+		cmd := NewInsertBatchCommand(bat, nil, types.BuildTS(1, 0), types.BuildTS(2, 0))
+
+		// sendCommand should detect closed and call cmd.Close()
+		sinker.sendCommand(cmd)
+		assert.Nil(t, cmd.InsertBatch, "batch should be cleaned on closed sinker")
+	})
+
+	t.Run("SendCommandWhileCloseCh_CleansBatch", func(t *testing.T) {
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-2",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			nil, builder, NewCdcActiveRoutine(),
+		)
+
+		// Create a batch command
+		insertBatch := NewAtomicBatch(nil)
+		deleteBatch := NewAtomicBatch(nil)
+		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
+
+		// cmdCh is unbuffered — sendCommand will block on it.
+		// Close sinker in another goroutine to unblock via closeCh.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sinker.sendCommand(cmd)
+		}()
+
+		time.Sleep(10 * time.Millisecond)
+		sinker.Close()
+		wg.Wait()
+
+		// Batch should be cleaned via closeCh path
+		assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
+		assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+	})
+}
+
+func TestMysqlSinker2_SinkEarlyReturnCleansData(t *testing.T) {
+	mp, err := mpool.NewMPool("test_sink_cleanup", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	executor := &Executor{conn: db}
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	require.NoError(t, err)
+
+	t.Run("SinkOnClosedSinker_CleansSnapshotData", func(t *testing.T) {
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-1",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			nil, builder, NewCdcActiveRoutine(),
+		)
+		sinker.Close()
+
+		data := &DecoderOutput{
+			outputTyp:     OutputTypeSnapshot,
+			checkpointBat: &batch.Batch{Vecs: make([]*vector.Vector, 0)},
+			mp:            mp,
+			fromTs:        types.BuildTS(1, 0),
+			toTs:          types.BuildTS(2, 0),
+		}
+
+		ctx := context.Background()
+		sinker.Sink(ctx, data)
+
+		// data.Close() should have cleaned up via defer
+		assert.Nil(t, data.checkpointBat)
+		assert.Nil(t, data.mp)
+	})
+
+	t.Run("SinkOnClosedSinker_CleansTailData", func(t *testing.T) {
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-2",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			nil, builder, NewCdcActiveRoutine(),
+		)
+		sinker.Close()
+
+		data := &DecoderOutput{
+			outputTyp:      OutputTypeTail,
+			insertAtmBatch: NewAtomicBatch(nil),
+			deleteAtmBatch: NewAtomicBatch(nil),
+			fromTs:         types.BuildTS(1, 0),
+			toTs:           types.BuildTS(2, 0),
+		}
+
+		ctx := context.Background()
+		sinker.Sink(ctx, data)
+
+		assert.Nil(t, data.insertAtmBatch)
+		assert.Nil(t, data.deleteAtmBatch)
+	})
+
+	t.Run("SinkWithSuccessfulOwnershipTransfer_NilsOutDataFields", func(t *testing.T) {
+		// Create a watermark updater with a cached watermark
+		wu := &CDCWatermarkUpdater{
+			cacheUncommitted:    make(map[WatermarkKey]types.TS),
+			cacheCommitting:     make(map[WatermarkKey]types.TS),
+			cacheCommitted:      make(map[WatermarkKey]types.TS),
+			errorMetadataCache:  make(map[WatermarkKey]*ErrorMetadata),
+			commitFailureCount:  make(map[WatermarkKey]uint32),
+			commitCircuitOpen:   make(map[WatermarkKey]time.Time),
+			previousErrorLabels: make(map[string]bool),
+		}
+		key := WatermarkKey{AccountId: 1, TaskId: "task-3", DBName: "src", TableName: "test"}
+		wu.cacheCommitted[key] = types.BuildTS(0, 0) // Set a zero watermark
+
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-3",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			wu, builder, NewCdcActiveRoutine(),
+		)
+
+		data := &DecoderOutput{
+			outputTyp:      OutputTypeTail,
+			insertAtmBatch: NewAtomicBatch(nil),
+			deleteAtmBatch: NewAtomicBatch(nil),
+			fromTs:         types.BuildTS(1, 0),
+			toTs:           types.BuildTS(2, 0),
+		}
+
+		// Start a goroutine to drain the command channel
+		go func() {
+			cmd := <-sinker.cmdCh
+			cmd.Close()
+		}()
+
+		ctx := context.Background()
+		sinker.Sink(ctx, data)
+
+		// After ownership transfer, data fields should be nil'd
+		assert.Nil(t, data.insertAtmBatch)
+		assert.Nil(t, data.deleteAtmBatch)
+
+		sinker.Close()
+	})
+
+	t.Run("SinkSnapshotOwnershipTransfer_NilsOutDataFields", func(t *testing.T) {
+		wu := &CDCWatermarkUpdater{
+			cacheUncommitted:    make(map[WatermarkKey]types.TS),
+			cacheCommitting:     make(map[WatermarkKey]types.TS),
+			cacheCommitted:      make(map[WatermarkKey]types.TS),
+			errorMetadataCache:  make(map[WatermarkKey]*ErrorMetadata),
+			commitFailureCount:  make(map[WatermarkKey]uint32),
+			commitCircuitOpen:   make(map[WatermarkKey]time.Time),
+			previousErrorLabels: make(map[string]bool),
+		}
+		key := WatermarkKey{AccountId: 1, TaskId: "task-snap", DBName: "src", TableName: "test"}
+		wu.cacheCommitted[key] = types.BuildTS(0, 0)
+
+		sinker := NewMysqlSinker2(
+			executor, 1, "task-snap",
+			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+			wu, builder, NewCdcActiveRoutine(),
+		)
+
+		data := &DecoderOutput{
+			outputTyp:     OutputTypeSnapshot,
+			checkpointBat: &batch.Batch{Vecs: make([]*vector.Vector, 0)},
+			mp:            mp,
+			fromTs:        types.BuildTS(1, 0),
+			toTs:          types.BuildTS(2, 0),
+		}
+
+		go func() {
+			cmd := <-sinker.cmdCh
+			cmd.Close()
+		}()
+
+		ctx := context.Background()
+		sinker.Sink(ctx, data)
+
+		// After snapshot ownership transfer, data fields should be nil'd
+		assert.Nil(t, data.checkpointBat)
+		assert.Nil(t, data.mp)
+
+		sinker.Close()
+	})
+}
 
 // TestCreateMysqlSinker2 verifies CreateMysqlSinker2 handles various scenarios
 func TestCreateMysqlSinker2(t *testing.T) {

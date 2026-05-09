@@ -32,7 +32,8 @@ type taskService struct {
 	cronParser cron.Parser
 	rt         runtime.Runtime
 
-	crons crons
+	crons    crons
+	sqlCrons sqlTaskCrons
 }
 
 // NewTaskService create a task service based on a task storage.
@@ -251,6 +252,7 @@ func (s *taskService) UpdateCDCTask(
 
 func (s *taskService) Close() error {
 	s.StopScheduleCronTask()
+	s.StopScheduleSQLTask()
 	return s.store.Close()
 }
 

@@ -26,6 +26,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -659,6 +660,79 @@ func TestScope_Database(t *testing.T) {
 
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.DropDatabase(c))
+	})
+}
+
+func TestScope_DropDatabase_ToleratesDanglingHiddenIndexMetadata(t *testing.T) {
+	dropDbDef := &plan2.DropDatabase{
+		IfExists:   false,
+		Database:   "test",
+		DatabaseId: 42,
+	}
+
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+
+	s := &Scope{
+		Magic:     DropDatabase,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	proc.Ctx = ctx
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.ReplaceTopCtx(ctx)
+
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+	relation.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		&engine.ConstraintDef{
+			Cts: []engine.Constraint{
+				&engine.IndexDef{
+					Indexes: []*plan2.IndexDef{
+						{IndexTableName: "__idx_meta", IndexAlgo: "hnsw"},
+						{IndexTableName: "__idx_store", IndexAlgo: "hnsw"},
+					},
+				},
+			},
+		},
+	}, nil).AnyTimes()
+
+	mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+	mockDbMeta.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDbMeta.EXPECT().Relations(gomock.Any()).Return([]string{"__idx_meta"}, nil).AnyTimes()
+	mockDbMeta.EXPECT().Relation(gomock.Any(), "__idx_meta", gomock.Any()).Return(relation, nil).AnyTimes()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+	eng.EXPECT().Delete(gomock.Any(), "test", gomock.Any()).Return(moerr.NewInternalErrorNoCtx("engine delete reached")).Times(1)
+
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDb.Reset()
+
+	c := NewCompile("test", "test", "drop database test", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NotPanics(t, func() {
+		err := s.DropDatabase(c)
+		require.EqualError(t, err, "internal error: engine delete reached")
 	})
 }
 

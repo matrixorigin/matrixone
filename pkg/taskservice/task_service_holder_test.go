@@ -105,21 +105,81 @@ func TestRefreshTaskStorageCanRefresh(t *testing.T) {
 	}()
 
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	s.refresh(ctx, "s2")
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	address = "s2"
 	s.refresh(ctx, "s1")
 	s.mu.RLock()
-	assert.Equal(t, stores["s2"], s.mu.store)
+	assert.Same(t, stores["s2"], s.mu.store)
 	assert.Equal(t, "s2", s.mu.lastAddress)
+	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageSkipStaleRefreshKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.TODO()
+
+	current := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	next := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{stores: map[string]TaskStorage{
+			"s1": current,
+			"s2": next,
+		}},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	s.refresh(ctx, "s2")
+
+	require.False(t, current.closed)
+	s.mu.RLock()
+	assert.Same(t, current, s.mu.store)
+	assert.Equal(t, "s1", s.mu.lastAddress)
+	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageCreateFailureKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.TODO()
+
+	current := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{
+			stores: map[string]TaskStorage{
+				"s1": current,
+			},
+			errs: map[string]error{
+				"s2": assert.AnError,
+			},
+		},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	address = "s2"
+	s.refresh(ctx, "s1")
+
+	require.False(t, current.closed)
+	s.mu.RLock()
+	assert.Same(t, current, s.mu.store)
+	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 }
 
@@ -261,6 +321,26 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.HeartbeatDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d3")})
 	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTask(ctx, []SQLTask{newTestSQLTask("task-2", 1)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.DeleteSQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTaskRun(ctx, []SQLTaskRun{newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTaskRun(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.CompleteSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.TriggerSQLTask(ctx, newTestSQLTask("task-1", 1), newTestAsyncTask("task-1:1"))
+	require.ErrorIs(t, err, ErrNotReady)
 }
 
 func TestMySQLBasedTaskStorageFactoryCreate(t *testing.T) {
@@ -273,8 +353,22 @@ func TestMySQLBasedTaskStorageFactoryCreate(t *testing.T) {
 
 type testStorageFactory struct {
 	stores map[string]TaskStorage
+	errs   map[string]error
 }
 
 func (f *testStorageFactory) Create(address string) (TaskStorage, error) {
+	if err, ok := f.errs[address]; ok {
+		return nil, err
+	}
 	return f.stores[address], nil
+}
+
+type trackedTaskStorage struct {
+	TaskStorage
+	closed bool
+}
+
+func (s *trackedTaskStorage) Close() error {
+	s.closed = true
+	return s.TaskStorage.Close()
 }

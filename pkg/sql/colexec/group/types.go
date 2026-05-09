@@ -167,6 +167,22 @@ func (ctr *container) isDataSourceEmpty() bool {
 	return ctr.dataSourceIsEmpty
 }
 
+func (ctr *container) memUsed() int64 {
+	var sz int64
+	if ctr.hr.Hash != nil {
+		sz += ctr.hr.Hash.Size()
+	}
+	for _, bat := range ctr.result1.ToPopped {
+		if bat != nil {
+			sz += int64(bat.Allocated())
+		}
+	}
+	if ctr.result1.Popped != nil {
+		sz += int64(ctr.result1.Popped.Allocated())
+	}
+	return sz
+}
+
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 	group.freeCannotReuse(proc.Mp())
 

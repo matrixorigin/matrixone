@@ -571,9 +571,18 @@ func (e *Executor) ensureConnection(ctx context.Context) error {
 	return nil
 }
 
+// Maximum number of SQL statements to record per transaction for debugging.
+// Prevents unbounded memory growth when recording is enabled on high-volume tables.
+const maxDebugTxnSQLEntries = 1000
+
 // recordTxnSQL records SQL for debugging
 func (e *Executor) recordTxnSQL(sqlBuf []byte) {
 	if !e.debugTxnRecorder.doRecord {
+		return
+	}
+
+	// Cap the number of recorded SQL statements to prevent unbounded memory growth
+	if len(e.debugTxnRecorder.txnSQL) >= maxDebugTxnSQLEntries {
 		return
 	}
 

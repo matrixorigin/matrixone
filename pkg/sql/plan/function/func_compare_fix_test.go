@@ -41,6 +41,11 @@ func TestShouldUseTypeMismatchPath(t *testing.T) {
 		{"uint64 vs float64 - mismatch", types.T_uint64, types.T_float64, true},
 		{"int8 vs uint8 - mismatch", types.T_int8, types.T_uint8, true},
 		{"float32 vs float64 - mismatch", types.T_float32, types.T_float64, true},
+		{"decimal128 vs int64 - mismatch", types.T_decimal128, types.T_int64, true},
+		{"int64 vs decimal128 - mismatch", types.T_int64, types.T_decimal128, true},
+		{"decimal64 vs decimal128 - mismatch", types.T_decimal64, types.T_decimal128, true},
+		{"decimal128 vs decimal128 - same type", types.T_decimal128, types.T_decimal128, false},
+		{"decimal64 vs float64 - mismatch", types.T_decimal64, types.T_float64, true},
 		{"varchar vs int64 - not numeric", types.T_varchar, types.T_int64, false},
 		{"int64 vs varchar - not numeric", types.T_int64, types.T_varchar, false},
 		{"varchar vs varchar - not numeric", types.T_varchar, types.T_varchar, false},
@@ -79,8 +84,8 @@ func TestIsNumericType(t *testing.T) {
 		{types.T_char, false},
 		{types.T_date, false},
 		{types.T_datetime, false},
-		{types.T_decimal64, false},
-		{types.T_decimal128, false},
+		{types.T_decimal64, true},
+		{types.T_decimal128, true},
 		{types.T_bool, false},
 	}
 
@@ -172,6 +177,28 @@ func TestGetAsFloat64Slice(t *testing.T) {
 		defer v.Free(mp)
 		result := getAsFloat64Slice(v)
 		require.Nil(t, result)
+	})
+
+	t.Run("decimal64 to float64", func(t *testing.T) {
+		// Decimal64 with scale=2: values 100, 250, 50 represent 1.00, 2.50, 0.50
+		typ := types.New(types.T_decimal64, 10, 2)
+		v := testutil.NewDecimal64Vector(3, typ, mp, false, []types.Decimal64{100, 250, 50})
+		defer v.Free(mp)
+		result := getAsFloat64Slice(v)
+		require.InDeltaSlice(t, []float64{1.00, 2.50, 0.50}, result, 0.0001)
+	})
+
+	t.Run("decimal128 to float64", func(t *testing.T) {
+		// Decimal128 with scale=2: values 100, 250, 50 represent 1.00, 2.50, 0.50
+		typ := types.New(types.T_decimal128, 38, 2)
+		v := testutil.NewDecimal128Vector(3, typ, mp, false, []types.Decimal128{
+			{B0_63: 100, B64_127: 0},
+			{B0_63: 250, B64_127: 0},
+			{B0_63: 50, B64_127: 0},
+		})
+		defer v.Free(mp)
+		result := getAsFloat64Slice(v)
+		require.InDeltaSlice(t, []float64{1.00, 2.50, 0.50}, result, 0.0001)
 	})
 }
 
@@ -496,6 +523,79 @@ func TestVariousNumericTypeMismatches(t *testing.T) {
 				[]bool{true, true, false}, []bool{false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+// TestEqualFnDecimalIntMismatch tests equalFn with decimal128 vs int64
+// This is the exact scenario from issue #24081 where ROW_NUMBER() (int64)
+// is compared with a literal that was cast to decimal128.
+func TestEqualFnDecimalIntMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// decimal128 = int64 (this used to panic)
+	t.Run("decimal128 == int64", func(t *testing.T) {
+		tc := tcTemp{
+			info: "decimal128 == int64 type mismatch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal128, 38, 0),
+					[]types.Decimal128{
+						{B0_63: 1, B64_127: 0},
+						{B0_63: 2, B64_127: 0},
+						{B0_63: 3, B64_127: 0},
+					}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2, 2, 2}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, []bool{false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	// int64 = decimal128 (reversed order)
+	t.Run("int64 == decimal128", func(t *testing.T) {
+		tc := tcTemp{
+			info: "int64 == decimal128 type mismatch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 2, 3}, []bool{false, false, false}),
+				NewFunctionTestInput(types.New(types.T_decimal128, 38, 0),
+					[]types.Decimal128{
+						{B0_63: 2, B64_127: 0},
+						{B0_63: 2, B64_127: 0},
+						{B0_63: 2, B64_127: 0},
+					}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, []bool{false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	// decimal64 vs decimal128
+	t.Run("decimal64 == decimal128", func(t *testing.T) {
+		tc := tcTemp{
+			info: "decimal64 == decimal128 type mismatch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, 10, 0),
+					[]types.Decimal64{1, 2, 3}, []bool{false, false, false}),
+				NewFunctionTestInput(types.New(types.T_decimal128, 38, 0),
+					[]types.Decimal128{
+						{B0_63: 2, B64_127: 0},
+						{B0_63: 2, B64_127: 0},
+						{B0_63: 2, B64_127: 0},
+					}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, []bool{false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})

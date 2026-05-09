@@ -54,7 +54,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 
 	nwords := GetResultCountFromPattern(ps)
 	return &SearchAccum{SrcTblName: srctbl, TblName: tblname, Mode: mode,
-		Pattern: ps, Params: params, Nkeywords: nwords, ScoreAlgo: scoreAlgo}, nil
+		Pattern: ps, Params: params, Nkeywords: nwords, AnyPlus: hasPatternAnyPlus(ps), ScoreAlgo: scoreAlgo}, nil
 }
 
 // find pattern by operator
@@ -83,7 +83,11 @@ func findValuePattern(ps []*Pattern) []*Pattern {
 }
 
 func (s *SearchAccum) PatternAnyPlus() bool {
-	for _, p := range s.Pattern {
+	return s.AnyPlus
+}
+
+func hasPatternAnyPlus(ps []*Pattern) bool {
+	for _, p := range ps {
 		if p.Operator == PLUS || p.Operator == JOIN {
 			return true
 		}

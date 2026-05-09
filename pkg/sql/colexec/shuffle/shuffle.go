@@ -125,6 +125,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				return result, nil
 			}
+			analyzer.SetMemUsed(shuffle.ctr.shufflePool.Size())
 		}
 	}
 
