@@ -564,6 +564,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Expr: scanHiddenKeyExpr,
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
+	applyRegularIndexBlockTop(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
 
 	if !hasTopValueMessage(ctx.sortNode) {
 		msgHeader := plan.MsgHeader{
@@ -572,6 +573,16 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		}
 		ctx.sortNode.SendMsgList = append([]plan.MsgHeader{msgHeader}, ctx.sortNode.SendMsgList...)
 		ctx.scanNode.RecvMsgList = append(ctx.scanNode.RecvMsgList, msgHeader)
+	}
+}
+
+func applyRegularIndexBlockTop(scanNode *plan.Node, orderBy *plan.OrderBySpec, limit *plan.Expr) {
+	if scanNode == nil || orderBy == nil || limit == nil || len(scanNode.BlockOrderBy) != 0 {
+		return
+	}
+	if limitLit := limit.GetLit(); limitLit != nil && limitLit.GetU64Val() > 0 {
+		scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, DeepCopyOrderBy(orderBy))
+		scanNode.BlockLimit = DeepCopyExpr(limit)
 	}
 }
 

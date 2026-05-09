@@ -688,31 +688,9 @@ func BlockDataReadInner(
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
-	// No pre-filter rows, but vector TopN pushdown is requested:
-	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		vecColPos := orderByLimit.ColPos
-		if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
-			vecColPos--
-		}
-		vecCol := &cacheVectors[vecColPos]
-
-		var topInputRows []int64
-		if !deleteMask.IsEmpty() {
-			capHint := vecCol.Length() - deleteMask.Count()
-			if capHint < 0 {
-				capHint = 0
-			}
-			topInputRows = make([]int64, 0, capHint)
-			for i := 0; i < vecCol.Length(); i++ {
-				if !deleteMask.Contains(uint64(i)) {
-					topInputRows = append(topInputRows, int64(i))
-				}
-			}
-		}
-
 		var dists []float64
-		selectRows, dists, err = HandleOrderByLimitOnIVFFlatIndex(ctx, topInputRows, vecCol, orderByLimit)
+		selectRows, dists, err = handleOrderByLimitOnLiveRows(ctx, orderByLimit, info, phyAddrColumnPos, deleteMask, cacheVectors)
 		if err != nil {
 			return err
 		}
@@ -926,4 +904,44 @@ func handleOrderByLimitOnSelectRows(
 	vecCol := &cacheVectors[vecColPos]
 
 	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func handleOrderByLimitOnLiveRows(
+	ctx context.Context,
+	orderByLimit *objectio.BlockReadTopOp,
+	info *objectio.BlockInfo,
+	phyAddrColumnPos int,
+	deleteMask objectio.Bitmap,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	vecCol := &cacheVectors[vecColPos]
+	selectRows := buildLiveRows(vecCol.Length(), deleteMask, orderByLimit.OrderedLimit)
+	if orderByLimit.OrderedLimit {
+		return handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
+	}
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func buildLiveRows(rowCount int, deleteMask objectio.Bitmap, includeAll bool) []int64 {
+	if rowCount <= 0 || (deleteMask.IsEmpty() && !includeAll) {
+		return nil
+	}
+	capHint := rowCount
+	if !deleteMask.IsEmpty() {
+		capHint -= deleteMask.Count()
+		if capHint < 0 {
+			capHint = 0
+		}
+	}
+	rows := make([]int64, 0, capHint)
+	for i := 0; i < rowCount; i++ {
+		if deleteMask.IsEmpty() || !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
 }

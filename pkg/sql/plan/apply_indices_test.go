@@ -483,6 +483,15 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testi
 	assert.Equal(t, int32(0), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
 	assert.Equal(t, planpb.OrderBySpec_DESC, scanNode.OrderBy[0].Flag)
+	require.Len(t, scanNode.BlockOrderBy, 1)
+	require.NotNil(t, scanNode.BlockLimit)
+	assert.Equal(t, uint64(20), scanNode.BlockLimit.GetLit().GetU64Val())
+	blockOrderCol := scanNode.BlockOrderBy[0].Expr.GetCol()
+	require.NotNil(t, blockOrderCol)
+	assert.Equal(t, int32(100), blockOrderCol.RelPos)
+	assert.Equal(t, int32(0), blockOrderCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, blockOrderCol.Name)
+	assert.Equal(t, planpb.OrderBySpec_DESC, scanNode.BlockOrderBy[0].Flag)
 
 	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
 	require.NotNil(t, sortOrderCol)
@@ -516,6 +525,9 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), sortNode.OrderBy[0].Flag)
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.OrderBy[0].Flag)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+	require.Len(t, scanNode.BlockOrderBy, 1)
+	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.BlockOrderBy[0].Flag)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.BlockOrderBy[0].Expr.GetCol().Name)
 }
 
 func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *testing.T) {

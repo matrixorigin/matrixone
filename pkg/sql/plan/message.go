@@ -101,11 +101,8 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, scanOrderBy)
-	if enableBlockTop && len(scanNode.BlockOrderBy) == 0 {
-		if limitLit := node.Limit.GetLit(); limitLit != nil && limitLit.GetU64Val() > 0 {
-			scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, DeepCopyOrderBy(scanOrderBy))
-			scanNode.BlockLimit = DeepCopyExpr(node.Limit)
-		}
+	if enableBlockTop {
+		applyRegularIndexBlockTop(scanNode, scanOrderBy, node.Limit)
 	}
 }
 

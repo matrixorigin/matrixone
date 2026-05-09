@@ -321,6 +321,32 @@ func TestHandleOrderByLimitOnSelectRowsForOrderedLimit(t *testing.T) {
 	require.Equal(t, []int64{2, 4}, ascRows)
 }
 
+func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec0 := vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 4; i++ {
+		vector.AppendFixed(vec0, int32(i), false, mp)
+	}
+	cacheVectors := make(containers.Vectors, 1)
+	cacheVectors[0] = *vec0
+
+	orderByLimit := &objectio.BlockReadTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+		Desc:         true,
+	}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	rows, dists, err := handleOrderByLimitOnLiveRows(context.Background(), orderByLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{2, 3}, rows)
+}
+
 // TestHandleOrderByLimitAllNullVectors verifies that HandleOrderByLimitOnIVFFlatIndex
 // returns empty sels/dists when all vector rows are NULL.
 // This is the root cause of the IVF-Flat entries table panic: when the InMem
