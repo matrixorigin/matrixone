@@ -20,8 +20,101 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDetermineHashOnPKRequiresNonNullableJoinKeys(t *testing.T) {
+	tests := []struct {
+		name             string
+		leftNotNullable  bool
+		rightNotNullable bool
+		wantHashOnPK     bool
+	}{
+		{
+			name:             "both join keys are not nullable",
+			leftNotNullable:  true,
+			rightNotNullable: true,
+			wantHashOnPK:     true,
+		},
+		{
+			name:             "left join key is nullable",
+			leftNotNullable:  false,
+			rightNotNullable: true,
+			wantHashOnPK:     true,
+		},
+		{
+			name:             "right primary key join key is nullable",
+			leftNotNullable:  true,
+			rightNotNullable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(tt.leftNotNullable, tt.rightNotNullable)
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, tt.wantHashOnPK, builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
+func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *QueryBuilder {
+	leftType := plan.Type{Id: int32(types.T_int64), NotNullable: leftNotNullable}
+	rightType := plan.Type{Id: int32(types.T_int64), NotNullable: rightNotNullable}
+
+	leftExpr := GetColExpr(leftType, 1, 0)
+	rightExpr := GetColExpr(rightType, 2, 0)
+	eqExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
+				Args: []*plan.Expr{leftExpr, rightExpr},
+			},
+		},
+	}
+
+	return &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      0,
+					BindingTags: []int32{1},
+					TableDef: &plan.TableDef{
+						Name:          "left_t",
+						Cols:          []*plan.ColDef{{Name: "l_col", Typ: leftType}},
+						Name2ColIndex: map[string]int32{"l_col": 0},
+					},
+				},
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      1,
+					BindingTags: []int32{2},
+					TableDef: &plan.TableDef{
+						Name:          "right_t",
+						Cols:          []*plan.ColDef{{Name: "r_pk", Typ: rightType}},
+						Name2ColIndex: map[string]int32{"r_pk": 0},
+						Pkey:          &plan.PrimaryKeyDef{PkeyColName: "r_pk", Names: []string{"r_pk"}},
+					},
+				},
+				{
+					NodeType: plan.Node_JOIN,
+					NodeId:   2,
+					Stats: &plan.Stats{
+						HashmapStats: &plan.HashMapStats{},
+					},
+					Children: []int32{0, 1},
+					JoinType: plan.Node_INNER,
+					OnList:   []*plan.Expr{eqExpr},
+				},
+			},
+		},
+	}
+}
 
 func TestRemapWindowClause(t *testing.T) {
 	b := &QueryBuilder{
