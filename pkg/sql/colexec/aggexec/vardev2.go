@@ -220,13 +220,21 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
-				if exec.state[i].argCnt[j] <= 1 {
-					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+				cnt := int64(exec.state[i].argCnt[j])
+				if cnt <= 1 {
+					//cnt == 1 && exec is samp
+					if 0 == cnt || !exec.isPop {
+						if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+							return nil, err
+						}
+						continue
+					}
+					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
+					if err := vector.AppendFixed(vecs[i], z, false, exec.mp); err != nil {
 						return nil, err
 					}
 					continue
 				} else {
-					cnt := int64(exec.state[i].argCnt[j])
 					s := float64(0)
 					s2 := float64(0)
 					err := exec.state[i].iter(uint16(j), func(k []byte) error {
@@ -261,8 +269,13 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 			sumsqs := vector.MustFixedColNoTypeCheck[float64](exec.state[i].vecs[2])
 			for j, cnt := range cnts {
 				if cnt <= 1 {
-					vector.AppendNull(vecs[i], exec.mp)
-					continue
+					//cnt == 1 && exec is samp
+					if 0 == cnt || !exec.isPop {
+						vector.AppendNull(vecs[i], exec.mp)
+						continue
+					}
+					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
+					vector.AppendFixed(vecs[i], z, false, exec.mp)
 				} else {
 					result, err := exec.getResult(sums[j], sumsqs[j], cnt)
 					if err != nil {
