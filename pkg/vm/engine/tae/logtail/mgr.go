@@ -90,8 +90,6 @@ type Manager struct {
 	eventOnce       sync.Once
 	nextCompactTS   types.TS
 
-	orderedList []*txnWithLogtails
-	collectWg   sync.WaitGroup
 	collectPool *ants.Pool
 }
 
@@ -111,7 +109,6 @@ func NewManager(
 	}
 
 	const batSize = 100
-	mgr.orderedList = make([]*txnWithLogtails, batSize*2)
 	// Re-panic from ants's internal recover so a panic inside a
 	// collect goroutine crashes the process instead of being silently
 	// swallowed. If we only logged and continued, a committed txn
@@ -197,16 +194,21 @@ type txnLogtailCollector func(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func
 // collectOneTxn runs the per-slot logic used by onTxnLogTails:
 //   - WaitEvent(WalPreparing) — make sure WAL marshal is done first
 //   - collect(txn) — materialize the logtail batches
-//   - DoneEvent(TailCollecting) (deferred) — balance OnEndPrepareWAL's
-//     matching AddEvent so WaitWalAndTail never hangs, even on panic
-//   - closeCB (deferred unless we hand it to publish) — release
-//     batches whenever we're not publishing
+//   - DoneEvent(TailCollecting) — balance OnEndPrepareWAL's matching
+//     AddEvent so the owning txn's WaitWalAndTail can proceed. MUST
+//     fire before GetTxnState(true): apply runs WaitWalAndTail then
+//     DoneApply which flips the state, so if we wait on the state
+//     first the commit goroutine is blocked behind our event and we
+//     deadlock.
 //   - GetTxnState — only committed txns get published; rollback
 //     returns nil and the deferred closer releases batches
+//   - closeCB (deferred unless we hand it to publish) — release
+//     batches whenever we're not publishing
 //
-// On panic (e.g. GetTxnState on an unexpected state) the defers still
-// fire: DoneEvent runs so apply doesn't hang locally, closeCB runs so
-// batches don't leak. The panic then propagates out of this function
+// A doneTail flag plus a deferred fallback guarantees DoneEvent still
+// fires if collect(txn) panics before we reach the inline call. closeCB
+// is only defined after collect succeeds, so its deferred release is
+// registered afterwards. The panic then propagates out of this function
 // into the collect goroutine, where the pool's PanicHandler re-panics
 // to terminate the process so a committed-but-unpublished tail can
 // never leak to subscribers.
@@ -216,9 +218,20 @@ func collectOneTxn(
 ) *txnWithLogtails {
 	txn.GetStore().WaitEvent(txnif.WalPreparing)
 
-	defer txn.GetStore().DoneEvent(txnif.TailCollecting)
+	doneTail := false
+	defer func() {
+		if !doneTail {
+			txn.GetStore().DoneEvent(txnif.TailCollecting)
+		}
+	}()
 
 	entries, closeCB := collect(txn)
+
+	// Unblock apply's WaitWalAndTail before waiting on the txn state.
+	// Waiting first would deadlock: apply holds the commit state flip
+	// behind WaitWalAndTail, which waits on TailCollecting.
+	txn.GetStore().DoneEvent(txnif.TailCollecting)
+	doneTail = true
 
 	runCloseCB := true
 	defer func() {

@@ -350,15 +350,13 @@ func (s *fakeTxnStore) DoneEvent(typ int) {
 // test loudly, which is actually the safety behavior we want.
 type fakeAsyncTxn struct {
 	txnif.AsyncTxn
-	store    *fakeTxnStore
-	replay   bool
-	state    txnif.TxnState
-	stateFn  func() txnif.TxnState // overrides state when set
-	prepTS   struct{}              // unused, kept for parity with real txn
-	_padding int
+	store   *fakeTxnStore
+	replay  bool
+	state   txnif.TxnState
+	stateFn func() txnif.TxnState // overrides state when set
 }
 
-func (t *fakeAsyncTxn) IsReplay() bool         { return t.replay }
+func (t *fakeAsyncTxn) IsReplay() bool           { return t.replay }
 func (t *fakeAsyncTxn) GetStore() txnif.TxnStore { return t.store }
 func (t *fakeAsyncTxn) GetTxnState(bool) txnif.TxnState {
 	if t.stateFn != nil {
@@ -423,10 +421,10 @@ func TestCollectOneTxn_Rollback_ReleasesCloseCBAndReturnsNil(t *testing.T) {
 
 func TestCollectOneTxn_Panic_StillCleansUpAndPropagates(t *testing.T) {
 	// Simulate GetTxnState returning an unexpected state, which
-	// collectOneTxn handles with a panic. The defers must still fire
-	// so (a) DoneEvent balances (b) closeCB releases batches, and the
-	// panic must propagate so the pool's PanicHandler can terminate
-	// the process instead of silently dropping the slot.
+	// collectOneTxn handles with a panic. DoneEvent fires inline
+	// before GetTxnState, and the deferred closeCB still runs during
+	// panic unwind. The panic must propagate so the pool's
+	// PanicHandler can terminate the process.
 	txn := &fakeAsyncTxn{
 		store:   &fakeTxnStore{},
 		stateFn: func() txnif.TxnState { return txnif.TxnState(999) },
@@ -442,6 +440,50 @@ func TestCollectOneTxn_Panic_StillCleansUpAndPropagates(t *testing.T) {
 		"closeCB must still run during panic unwind")
 	require.Equal(t, int32(0), txn.store.tailCollecting.Load(),
 		"DoneEvent(TailCollecting) must still fire during panic unwind")
+}
+
+func TestCollectOneTxn_DoneEventFiresBeforeGetTxnState(t *testing.T) {
+	// The real apply path does: WaitWalAndTail (waits TailCollecting)
+	// then DoneApply (flips state). If collectOneTxn calls
+	// GetTxnState(true) before DoneEvent(TailCollecting), the commit
+	// goroutine is blocked on our event and we wait forever for the
+	// state it was about to flip — deadlock.
+	store := &fakeTxnStore{}
+	store.AddEvent(txnif.TailCollecting)
+
+	var observedEventAtGetState int32
+	txn := &fakeAsyncTxn{
+		store: store,
+		stateFn: func() txnif.TxnState {
+			observedEventAtGetState = store.tailCollecting.Load()
+			return txnif.TxnStateCommitted
+		},
+	}
+	collect, _ := makeCollectStub()
+
+	tail := collectOneTxn(txn, collect)
+	require.NotNil(t, tail)
+	require.Equal(t, int32(0), observedEventAtGetState,
+		"DoneEvent(TailCollecting) must fire before GetTxnState(true); "+
+			"otherwise apply is blocked on the event and the state never flips")
+}
+
+// panicCollector panics inside collect(), before the inline
+// DoneEvent call. The deferred fallback must still balance AddEvent.
+func TestCollectOneTxn_PanicInCollect_StillFiresDoneEvent(t *testing.T) {
+	store := &fakeTxnStore{}
+	store.AddEvent(txnif.TailCollecting)
+	txn := &fakeAsyncTxn{store: store, state: txnif.TxnStateCommitted}
+
+	panicCollector := func(txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+		panic("simulated CollectLogtail panic")
+	}
+
+	require.Panics(t, func() {
+		collectOneTxn(txn, panicCollector)
+	})
+	require.Equal(t, int32(0), store.tailCollecting.Load(),
+		"DoneEvent(TailCollecting) must fire during unwind when collect panics")
 }
 
 func TestOrderedCollectAndPublish_SyncSubmit(t *testing.T) {
