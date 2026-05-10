@@ -112,7 +112,17 @@ func NewManager(
 
 	const batSize = 100
 	mgr.orderedList = make([]*txnWithLogtails, batSize*2)
-	mgr.collectPool, _ = ants.NewPool(runtime.NumCPU())
+	// Re-panic from ants's internal recover so a panic inside a
+	// collect goroutine crashes the process instead of being silently
+	// swallowed. If we only logged and continued, a committed txn
+	// whose collect panicked would apply to storage but its logtail
+	// would never be published, breaking CN-side consistency. Fatal
+	// crash matches what logservicedriver does for unrecoverable WAL
+	// errors and is the safer failure mode here.
+	mgr.collectPool, _ = ants.NewPool(
+		runtime.NumCPU(),
+		ants.WithPanicHandler(func(v any) { panic(v) }),
+	)
 	mgr.logtailQueue = sm.NewSafeQueue(batSize*batSize, batSize, mgr.onTxnLogTails)
 
 	return mgr
@@ -179,65 +189,83 @@ func orderedCollectAndPublish(
 	}
 }
 
+// txnLogtailCollector is how onTxnLogTails invokes the real logtail
+// builder. Exposed as a field only so tests can inject a stub without
+// standing up a full TAE runtime.
+type txnLogtailCollector func(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func())
+
+// collectOneTxn runs the per-slot logic used by onTxnLogTails:
+//   - WaitEvent(WalPreparing) — make sure WAL marshal is done first
+//   - collect(txn) — materialize the logtail batches
+//   - DoneEvent(TailCollecting) (deferred) — balance OnEndPrepareWAL's
+//     matching AddEvent so WaitWalAndTail never hangs, even on panic
+//   - closeCB (deferred unless we hand it to publish) — release
+//     batches whenever we're not publishing
+//   - GetTxnState — only committed txns get published; rollback
+//     returns nil and the deferred closer releases batches
+//
+// On panic (e.g. GetTxnState on an unexpected state) the defers still
+// fire: DoneEvent runs so apply doesn't hang locally, closeCB runs so
+// batches don't leak. The panic then propagates out of this function
+// into the collect goroutine, where the pool's PanicHandler re-panics
+// to terminate the process so a committed-but-unpublished tail can
+// never leak to subscribers.
+func collectOneTxn(
+	txn txnif.AsyncTxn,
+	collect txnLogtailCollector,
+) *txnWithLogtails {
+	txn.GetStore().WaitEvent(txnif.WalPreparing)
+
+	defer txn.GetStore().DoneEvent(txnif.TailCollecting)
+
+	entries, closeCB := collect(txn)
+
+	runCloseCB := true
+	defer func() {
+		if runCloseCB {
+			closeCB()
+		}
+	}()
+
+	// A rolled-back txn must not be published as logtail:
+	// CollectLogtail walks the txn store without filtering by final
+	// state, so the batches captured above reflect pre-cleanup
+	// mutations that subscribers must never see. Release via the
+	// deferred closer and skip publish by returning nil.
+	state := txn.GetTxnState(true)
+	if state != txnif.TxnStateCommitted {
+		if state != txnif.TxnStateRollbacked {
+			panic(fmt.Sprintf("wrong state %v", state))
+		}
+		return nil
+	}
+
+	// Committed: hand closeCB over to the publish path.
+	runCloseCB = false
+	return &txnWithLogtails{
+		txn:     txn,
+		tails:   entries,
+		closeCB: closeCB,
+	}
+}
+
 func (mgr *Manager) onTxnLogTails(items ...any) {
 	// Collect logtails for all txns in parallel via collectPool.
 	// A slow txn only blocks the publisher up to its slot, not the
 	// collection of later slots nor the publishing of earlier already-ready
 	// slots. generateLogtailWithTxn is still called in PrepareTS order.
+	collect := func(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+		builder := NewTxnLogtailRespBuilder(mgr.rt)
+		return builder.CollectLogtail(txn)
+	}
 	orderedCollectAndPublish(
 		len(items),
 		func(i int) bool {
 			return items[i].(txnif.AsyncTxn).IsReplay()
 		},
 		func(fn func()) { _ = mgr.collectPool.Submit(fn) },
-		func(i int) (result *txnWithLogtails) {
-			txn := items[i].(txnif.AsyncTxn)
-			txn.GetStore().WaitEvent(txnif.WalPreparing)
-
-			// DoneEvent(TailCollecting) must fire on every return path
-			// — success, rollback, or panic — otherwise
-			// OnEndPrepareWAL's matching AddEvent(TailCollecting) never
-			// balances and the owning txn's WaitWalAndTail hangs
-			// forever, stalling apply.
-			defer txn.GetStore().DoneEvent(txnif.TailCollecting)
-
-			builder := NewTxnLogtailRespBuilder(mgr.rt)
-			entries, closeCB := builder.CollectLogtail(txn)
-
-			// closeCB releases the batches built by CollectLogtail.
-			// Normally the committed path hands closeCB to publish,
-			// which runs it after callback.call drains the tails. For
-			// the rollback and panic paths that do not reach publish we
-			// must release here. The flag is flipped to false once we
-			// decide to hand closeCB over to the publisher.
-			runCloseCB := true
-			defer func() {
-				if runCloseCB {
-					closeCB()
-				}
-			}()
-
-			// A rolled-back txn must not be published as logtail:
-			// CollectLogtail walks the txn store without filtering by
-			// final state, so the batches captured above reflect
-			// pre-cleanup mutations that subscribers must never see.
-			// Release the collected batches (via the deferred closeCB
-			// above) and skip publish by returning nil.
-			state := txn.GetTxnState(true)
-			if state != txnif.TxnStateCommitted {
-				if state != txnif.TxnStateRollbacked {
-					panic(fmt.Sprintf("wrong state %v", state))
-				}
-				return nil
-			}
-
-			// Committed: hand closeCB over to the publish path.
-			runCloseCB = false
-			return &txnWithLogtails{
-				txn:     txn,
-				tails:   entries,
-				closeCB: closeCB,
-			}
+		func(i int) *txnWithLogtails {
+			return collectOneTxn(items[i].(txnif.AsyncTxn), collect)
 		},
 		mgr.generateLogtailWithTxn,
 	)

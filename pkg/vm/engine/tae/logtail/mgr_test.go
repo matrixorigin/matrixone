@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
 
@@ -306,6 +309,139 @@ func TestOrderedCollectAndPublish_CollectPanicDoesNotBlock(t *testing.T) {
 
 	require.Equal(t, []int{0, 2}, publishOrder,
 		"panicking slot must not block progress of surrounding slots")
+}
+
+// ---------------------------------------------------------------------
+// Tests for collectOneTxn: the real per-slot contract onTxnLogTails
+// depends on. These assert the invariants reviewers asked for:
+//   - DoneEvent(TailCollecting) fires on every path (committed,
+//     rollback, panic) — otherwise WaitWalAndTail hangs
+//   - closeCB fires exactly once in every non-publishing path
+//   - committed txns return a non-nil tail and do NOT run closeCB
+//     locally (it is handed to the publisher)
+//   - rolled-back txns return nil
+//   - a panic inside collect propagates (so the pool's PanicHandler
+//     re-panics and the process is terminated); we still run both
+//     defers before leaving
+// ---------------------------------------------------------------------
+
+// fakeTxnStore embeds NoopTxnStore and only tracks the balance of
+// TailCollecting Add/Done events. WaitEvent(WalPreparing) is a no-op
+// here because the test injects collect directly.
+type fakeTxnStore struct {
+	txnbase.NoopTxnStore
+	tailCollecting atomic.Int32
+}
+
+func (s *fakeTxnStore) WaitEvent(int) {}
+func (s *fakeTxnStore) AddEvent(typ int) {
+	if typ == txnif.TailCollecting {
+		s.tailCollecting.Add(1)
+	}
+}
+func (s *fakeTxnStore) DoneEvent(typ int) {
+	if typ == txnif.TailCollecting {
+		s.tailCollecting.Add(-1)
+	}
+}
+
+// fakeAsyncTxn embeds a nil AsyncTxn so only the methods we override
+// are reachable. Any other call from collectOneTxn would nil-panic the
+// test loudly, which is actually the safety behavior we want.
+type fakeAsyncTxn struct {
+	txnif.AsyncTxn
+	store    *fakeTxnStore
+	replay   bool
+	state    txnif.TxnState
+	stateFn  func() txnif.TxnState // overrides state when set
+	prepTS   struct{}              // unused, kept for parity with real txn
+	_padding int
+}
+
+func (t *fakeAsyncTxn) IsReplay() bool         { return t.replay }
+func (t *fakeAsyncTxn) GetStore() txnif.TxnStore { return t.store }
+func (t *fakeAsyncTxn) GetTxnState(bool) txnif.TxnState {
+	if t.stateFn != nil {
+		return t.stateFn()
+	}
+	return t.state
+}
+
+func newFakeCommittedTxn() *fakeAsyncTxn {
+	return &fakeAsyncTxn{
+		store: &fakeTxnStore{},
+		state: txnif.TxnStateCommitted,
+	}
+}
+
+func newFakeRollbackTxn() *fakeAsyncTxn {
+	return &fakeAsyncTxn{
+		store: &fakeTxnStore{},
+		state: txnif.TxnStateRollbacked,
+	}
+}
+
+// makeCollectStub returns a txnLogtailCollector that records whether
+// its returned closeCB was invoked.
+func makeCollectStub() (txnLogtailCollector, *atomic.Int32) {
+	var closeCalls atomic.Int32
+	fn := func(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+		tails := &[]logtail.TableLogtail{}
+		return tails, func() { closeCalls.Add(1) }
+	}
+	return fn, &closeCalls
+}
+
+func TestCollectOneTxn_Committed_HandsCloseCBToPublisher(t *testing.T) {
+	txn := newFakeCommittedTxn()
+	// Mirror OnEndPrepareWAL which balances with DoneEvent later.
+	txn.store.AddEvent(txnif.TailCollecting)
+	collect, closeCalls := makeCollectStub()
+
+	tail := collectOneTxn(txn, collect)
+
+	require.NotNil(t, tail, "committed txn must return non-nil tail")
+	require.Equal(t, int32(0), closeCalls.Load(),
+		"committed path must NOT call closeCB locally; it is handed to publisher")
+	require.Equal(t, int32(0), txn.store.tailCollecting.Load(),
+		"DoneEvent(TailCollecting) must balance AddEvent")
+}
+
+func TestCollectOneTxn_Rollback_ReleasesCloseCBAndReturnsNil(t *testing.T) {
+	txn := newFakeRollbackTxn()
+	txn.store.AddEvent(txnif.TailCollecting)
+	collect, closeCalls := makeCollectStub()
+
+	tail := collectOneTxn(txn, collect)
+
+	require.Nil(t, tail, "rollback must NOT be published")
+	require.Equal(t, int32(1), closeCalls.Load(),
+		"rollback path must release closeCB locally")
+	require.Equal(t, int32(0), txn.store.tailCollecting.Load(),
+		"DoneEvent(TailCollecting) must balance AddEvent even on rollback")
+}
+
+func TestCollectOneTxn_Panic_StillCleansUpAndPropagates(t *testing.T) {
+	// Simulate GetTxnState returning an unexpected state, which
+	// collectOneTxn handles with a panic. The defers must still fire
+	// so (a) DoneEvent balances (b) closeCB releases batches, and the
+	// panic must propagate so the pool's PanicHandler can terminate
+	// the process instead of silently dropping the slot.
+	txn := &fakeAsyncTxn{
+		store:   &fakeTxnStore{},
+		stateFn: func() txnif.TxnState { return txnif.TxnState(999) },
+	}
+	txn.store.AddEvent(txnif.TailCollecting)
+	collect, closeCalls := makeCollectStub()
+
+	require.Panics(t, func() {
+		collectOneTxn(txn, collect)
+	}, "unknown txn state must panic (propagates to PanicHandler)")
+
+	require.Equal(t, int32(1), closeCalls.Load(),
+		"closeCB must still run during panic unwind")
+	require.Equal(t, int32(0), txn.store.tailCollecting.Load(),
+		"DoneEvent(TailCollecting) must still fire during panic unwind")
 }
 
 func TestOrderedCollectAndPublish_SyncSubmit(t *testing.T) {
