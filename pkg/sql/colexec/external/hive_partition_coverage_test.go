@@ -15,7 +15,6 @@
 package external
 
 import (
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -54,6 +53,13 @@ func TestNewListDirFunc_InfileETL(t *testing.T) {
 		break
 	}
 	_ = gotAny
+}
+
+func TestDeriveHiveListReadPath(t *testing.T) {
+	assert.Equal(t, "/bucket/table", deriveHiveListReadPath("/bucket/table", "/bucket/table", "/bucket/table"))
+	assert.Equal(t, "/bucket/table/year=2024", deriveHiveListReadPath("/bucket/table", "/bucket/table", "/bucket/table/year=2024"))
+	assert.Equal(t, "table/year=2024/month=05", deriveHiveListReadPath("/table", "table", "/table/year=2024/month=05"))
+	assert.Equal(t, "/other/path", deriveHiveListReadPath("/bucket/table", "/bucket/table", "/other/path"))
 }
 
 // ---------------------------------------------------------------------------
@@ -820,6 +826,3 @@ func TestTryExtractPredicate_NotAnExprF(t *testing.T) {
 	_, ok := tryExtractPredicate(td, makeLitInt64(1), partColSet)
 	assert.False(t, ok)
 }
-
-// Touch math so the import survives even if the file is thinned.
-var _ = math.MaxInt32
