@@ -17,12 +17,12 @@ package model
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"iter"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -40,7 +40,7 @@ func (fs *failWriteFS) Name() string { return "fail-write-fs" }
 func (fs *failWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
 	n := fs.failCount.Add(1)
 	if n <= fs.maxFails {
-		return fmt.Errorf("injected IO error (attempt %d)", n)
+		return moerr.NewInternalErrorNoCtxf("injected IO error (attempt %d)", n)
 	}
 	return nil
 }
