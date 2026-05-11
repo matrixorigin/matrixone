@@ -474,7 +474,25 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 }
 
 func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
-	if param == nil {
+	if param == nil || len(param.OrderBy) == 0 || param.Limit == nil {
+		return
+	}
+	if r.orderByLimit == nil {
+		r.orderByLimit = &objectio.IndexReaderTopOp{}
+	}
+
+	if col := param.OrderBy[0].Expr.GetCol(); col != nil {
+		r.orderByLimit.Typ = types.T(param.OrderBy[0].Expr.Typ.Id)
+		r.orderByLimit.ColPos = col.ColPos
+		r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+		r.orderByLimit.OrderedLimit = true
+		r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+		r.orderByLimit.NumVec = nil
+		r.orderByLimit.DistHeap = nil
+		r.orderByLimit.LowerBoundType = 0
+		r.orderByLimit.UpperBoundType = 0
+		r.orderByLimit.LowerBound = 0
+		r.orderByLimit.UpperBound = 0
 		return
 	}
 
@@ -498,15 +516,13 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		panic("unsupported order function")
 	}
 
-	if r.orderByLimit == nil {
-		r.orderByLimit = &objectio.IndexReaderTopOp{}
-	}
-
 	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
 	r.orderByLimit.MetricType = metricType
 	r.orderByLimit.ColPos = col.ColPos
 	r.orderByLimit.NumVec = []byte(numVec)
 	r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+	r.orderByLimit.OrderedLimit = false
+	r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 
 	if param.DistRange != nil {
 		r.orderByLimit.LowerBoundType = param.DistRange.LowerBoundType
@@ -620,7 +636,7 @@ func (r *reader) Read(
 	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
 	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
 	var detachedDistVec *vector.Vector
-	if r.orderByLimit != nil && len(outBatch.Vecs) > len(cols) {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && len(outBatch.Vecs) > len(cols) {
 		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
 			candidate.GetType().Oid == types.T_float64 {
 			candidate.CleanOnlyData()
@@ -663,7 +679,7 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		if r.orderByLimit != nil {
+		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
 			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
 			if err != nil {
 				return false, err
@@ -712,7 +728,7 @@ func (r *reader) Read(
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
-	if r.orderByLimit != nil && detachedDistVec != nil {
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
 		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
 		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
 		detachedDistVec = nil

@@ -69,3 +69,30 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Zero(t, len(r.orderByLimit.DistHeap))
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
 }
+
+func TestReaderSetIndexParamSupportsOrderedLimit(t *testing.T) {
+	r := &reader{}
+	param := &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 1},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			},
+		},
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(8),
+	}
+
+	r.SetIndexParam(param)
+
+	require.NotNil(t, r.orderByLimit)
+	require.True(t, r.orderByLimit.OrderedLimit)
+	require.True(t, r.orderByLimit.Desc)
+	require.Equal(t, int32(1), r.orderByLimit.ColPos)
+	require.Equal(t, uint64(8), r.orderByLimit.Limit)
+	require.Nil(t, r.orderByLimit.NumVec)
+}
