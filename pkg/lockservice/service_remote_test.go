@@ -183,6 +183,37 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 	)
 }
 
+func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			s.setStatus(pb.Status_ServiceCanRestart)
+
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: pb.LockTable{Table: 10},
+				Lock: pb.LockRequest{
+					TxnID:     []byte("txn1"),
+					ServiceID: "remote-service",
+					Rows:      [][]byte{{1}},
+					Options:   newTestRowExclusiveOptions(),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleForwardLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.False(t, cs.closeCalled)
+			require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrRetryForCNRollingRestart))
+		},
+	)
+}
+
 func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(

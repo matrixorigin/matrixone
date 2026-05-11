@@ -105,6 +105,7 @@ func TestWriteResponseWithDeadlineClosesSessionOnWriteError(t *testing.T) {
 	resp.Method = lock.Method_Lock
 
 	cs := &testClientSession{
+		closeErr: moerr.NewInternalErrorNoCtx("close failed"),
 		ctx:      context.Background(),
 		writeErr: context.DeadlineExceeded,
 	}
