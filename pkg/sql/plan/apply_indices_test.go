@@ -27,6 +27,143 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
+	// Simulates sysbench random_ranges on a 10M-row table with secondary index on k.
+	// Query: SELECT count(k) FROM sbtest1 WHERE k BETWEEN ? AND ? OR k BETWEEN ? AND ? ...
+	// With 10 ranges, estimated outcnt ≈ 10000, selectivity ≈ 0.001.
+	//
+	// The old guard used InFilterCardLimitNonPK (10000) which rejects this case.
+	// The new guard uses GetInFilterCardLimitOnPK which for a 10M table returns 1000000.
+	tableCnt := float64(10_000_000)
+	outcnt := float64(10_000)
+	selectivity := 0.001
+
+	// Old behavior (regression): would reject index-only scan
+	oldThreshold := float64(InFilterCardLimitNonPK) // 10000
+	oldReject := selectivity >= InFilterSelectivityLimit || outcnt >= oldThreshold
+	assert.True(t, oldReject, "old guard should reject random_ranges (outcnt=10000 >= threshold=10000)")
+
+	// New behavior (fix): uses PK card limit scaled to table size
+	// GetInFilterCardLimitOnPK("", 10M) = min(10M*0.3, 1M) = 1M (capped at InFilterCardLimitPK)
+	newThreshold := float64(GetInFilterCardLimitOnPK("", tableCnt))
+	newReject := selectivity >= InFilterSelectivityLimit || outcnt >= newThreshold
+	assert.False(t, newReject, "new guard should allow random_ranges (outcnt=10000 < threshold=%v)", newThreshold)
+	assert.Equal(t, int32(1_000_000), GetInFilterCardLimitOnPK("", tableCnt))
+
+	// The OOM scenario: truly non-selective query on 10M table (selectivity 0.5, outcnt 5M)
+	oomOutcnt := float64(5_000_000)
+	oomSelectivity := 0.5
+	oomRejectOld := oomSelectivity >= InFilterSelectivityLimit || oomOutcnt >= oldThreshold
+	oomRejectNew := oomSelectivity >= InFilterSelectivityLimit || oomOutcnt >= newThreshold
+	assert.True(t, oomRejectOld, "old guard should reject non-selective scan")
+	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
+}
+
+func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
+	// End-to-end test: call tryIndexOnlyScan with a node that simulates
+	// sysbench random_ranges (10M rows, outcnt=10000, selectivity=0.001).
+	// Verify the guard does NOT reject the index-only scan.
+	//
+	// Strategy: if the guard rejects, tryIndexOnlyScan returns -1 cleanly.
+	// If the guard passes, execution continues to ResolveIndexTableByRef which
+	// returns nil (mock has no index table), causing a nil-pointer panic downstream.
+	// We use recover() to detect this: panic = guard passed, no panic = guard rejected.
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+
+	idxDef := &IndexDef{
+		IndexName:      "idx_k",
+		Parts:          []string{"k", catalog.FakePrimaryKeyColName},
+		Unique:         false,
+		IndexTableName: "idx_tbl_k",
+		TableExist:     true,
+	}
+
+	kColPos := int32(1)
+	bindTag := builder.genNewBindTag()
+
+	makeNode := func(tableCnt, outcnt, selectivity float64) *planpb.Node {
+		return &planpb.Node{
+			BindingTags: []int32{bindTag},
+			TableDef: &planpb.TableDef{
+				Name: "sbtest1",
+				Name2ColIndex: map[string]int32{
+					"k":                           kColPos,
+					catalog.FakePrimaryKeyColName: 0,
+				},
+				Cols: []*planpb.ColDef{
+					{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+					{Name: "k", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				},
+				Pkey: &planpb.PrimaryKeyDef{
+					PkeyColName: catalog.FakePrimaryKeyColName,
+				},
+				Indexes: []*planpb.IndexDef{idxDef},
+			},
+			Stats: &planpb.Stats{
+				TableCnt:    tableCnt,
+				Outcnt:      outcnt,
+				Selectivity: selectivity,
+			},
+			FilterList: []*planpb.Expr{
+				{
+					Expr: &planpb.Expr_F{
+						F: &planpb.Function{
+							Func: &ObjectRef{ObjName: "between"},
+							Args: []*planpb.Expr{
+								{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: bindTag, ColPos: kColPos}}},
+								{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 100}}}},
+								{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 200}}}},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	colRefCnt := map[[2]int32]int{
+		{bindTag, kColPos}: 1,
+	}
+
+	// Helper: returns true if guard passed (panic from nil deref after guard),
+	// false if guard rejected (clean -1 return).
+	guardPassed := func(node *planpb.Node) bool {
+		passed := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					passed = true
+				}
+			}()
+			builder.tryIndexOnlyScan(idxDef, node, colRefCnt, nil, &Snapshot{})
+		}()
+		return passed
+	}
+
+	// random_ranges scenario: 10M rows, outcnt=10000, selectivity=0.001
+	// With the fix (PK card limit = 1M), guard should PASS.
+	assert.True(t, guardPassed(makeNode(10_000_000, 10_000, 0.001)),
+		"random_ranges (10M rows, outcnt=10000) should pass the guard")
+
+	// Same but with outcnt=50000 (still well below 1M threshold)
+	assert.True(t, guardPassed(makeNode(10_000_000, 50_000, 0.005)),
+		"moderate outcnt (50000) on 10M table should pass the guard")
+
+	// High outcnt (2M on 10M table) → guard should REJECT
+	assert.False(t, guardPassed(makeNode(10_000_000, 2_000_000, 0.2)),
+		"high outcnt (2M) should be rejected by guard")
+
+	// High selectivity (0.5) → guard should REJECT
+	assert.False(t, guardPassed(makeNode(10_000_000, 5_000_000, 0.5)),
+		"high selectivity (0.5) should be rejected by guard")
+
+	// Verify threshold arithmetic
+	assert.True(t, 10_000 >= InFilterCardLimitNonPK,
+		"random_ranges outcnt (10000) >= old threshold (10000) → old code would reject")
+	assert.True(t, float64(10_000) < float64(GetInFilterCardLimitOnPK("", 10_000_000)),
+		"random_ranges outcnt (10000) < new threshold (1M) → new code allows")
+}
+
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	const scanID int32 = 42
