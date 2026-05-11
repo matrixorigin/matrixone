@@ -1,0 +1,31 @@
+drop database if exists protect_db9_parent;
+drop database if exists protect_db9_branch;
+create database protect_db9_parent;
+use protect_db9_parent;
+create table t1(a int primary key);
+insert into t1 values (1);
+data branch create database protect_db9_branch from protect_db9_parent;
+use protect_db9_branch;
+data branch create table t_extra from t1;
+set @b1_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db9_branch' and relname='t1');
+set @b_extra_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db9_branch' and relname='t_extra');
+set @b1_sname = concat('__mo_branch_', cast(@b1_tid as char));
+set @b_extra_sname = concat('__mo_branch_', cast(@b_extra_tid as char));
+select count(*) as branch_rows_before
+from mo_catalog.mo_snapshots
+where sname like '__mo_branch_%' and sname in (@b1_sname, @b_extra_sname);
+➤ branch_rows_before[-5,64,0]  𝄀
+2
+use protect_db9_parent;
+drop database protect_db9_branch;
+select count(*) as branch_rows_after
+from mo_catalog.mo_snapshots
+where sname like '__mo_branch_%' and sname in (@b1_sname, @b_extra_sname);
+➤ branch_rows_after[-5,64,0]  𝄀
+0
+select count(*) as deleted_branch_meta_rows
+from mo_catalog.mo_branch_metadata
+where table_id in (@b1_tid, @b_extra_tid) and table_deleted = true;
+➤ deleted_branch_meta_rows[-5,64,0]  𝄀
+2
+drop database protect_db9_parent;

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -188,8 +189,9 @@ func constructRecoveryWindow(
 	}
 
 	snapSearchSQL = fmt.Sprintf(
-		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s",
+		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s and sname not like '%s'",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapPitrSearchCond,
+		databranchutils.BranchSnapshotSnameLikePattern,
 	)
 
 	pitrSearchSQL = fmt.Sprintf(
