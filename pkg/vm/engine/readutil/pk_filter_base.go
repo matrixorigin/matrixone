@@ -29,6 +29,9 @@ const (
 	RangeLeftOpen = iota + math.MaxInt16
 	RangeRightOpen
 	RangeBothOpen
+	PrefixRangeLeftOpen
+	PrefixRangeRightOpen
+	PrefixRangeBothOpen
 )
 
 type BasePKFilter struct {
@@ -51,10 +54,13 @@ func (b *BasePKFilter) String() string {
 		RangeLeftOpen:           "range_left_open",
 		RangeRightOpen:          "range_right_open",
 		RangeBothOpen:           "range_both_open",
+		PrefixRangeLeftOpen:     "prefix_range_left_open",
+		PrefixRangeRightOpen:    "prefix_range_right_open",
+		PrefixRangeBothOpen:     "prefix_range_both_open",
 		function.EQUAL:          "equal",
 		function.IN:             "in",
 		function.BETWEEN:        "between",
-		function.PREFIX_EQ:      "prefix_in",
+		function.PREFIX_EQ:      "prefix_eq",
 		function.PREFIX_IN:      "prefix_in",
 		function.PREFIX_BETWEEN: "prefix_between",
 	}
@@ -303,6 +309,28 @@ func ConstructBasePKFilter(
 			}
 			filter.Oid = oid
 
+		case "in_range":
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
+				return
+			}
+			switch vals[2][0] {
+			case 0:
+				filter.Op = function.BETWEEN
+			case 1:
+				filter.Op = RangeLeftOpen
+			case 2:
+				filter.Op = RangeRightOpen
+			case 3:
+				filter.Op = RangeBothOpen
+			default:
+				return
+			}
+			filter.Valid = true
+			filter.LB = vals[0]
+			filter.UB = vals[1]
+			filter.Oid = oid
+
 		case "between":
 			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
@@ -321,6 +349,28 @@ func ConstructBasePKFilter(
 			}
 			filter.Valid = true
 			filter.Op = function.PREFIX_BETWEEN
+			filter.LB = vals[0]
+			filter.UB = vals[1]
+			filter.Oid = oid
+
+		case "prefix_in_range":
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			if !ok || len(vals) < 3 || len(vals[2]) == 0 {
+				return
+			}
+			switch vals[2][0] {
+			case 0:
+				filter.Op = function.PREFIX_BETWEEN
+			case 1:
+				filter.Op = PrefixRangeLeftOpen
+			case 2:
+				filter.Op = PrefixRangeRightOpen
+			case 3:
+				filter.Op = PrefixRangeBothOpen
+			default:
+				return
+			}
+			filter.Valid = true
 			filter.LB = vals[0]
 			filter.UB = vals[1]
 			filter.Oid = oid

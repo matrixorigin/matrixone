@@ -938,7 +938,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 			} else {
 				ret = 0.5
 			}
-		case "prefix_between":
+		case "prefix_between", "prefix_in_range":
 			ret = 0.001
 		case "isnull", "is_null":
 			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
@@ -958,7 +958,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	if expr == nil || expr.GetF() == nil {
 		return 0 //something error
 	}
-	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" {
+	if expr.GetF().Func.ObjName == "prefix_in" || expr.GetF().Func.ObjName == "prefix_eq" || expr.GetF().Func.ObjName == "prefix_between" || expr.GetF().Func.ObjName == "prefix_in_range" {
 		return 0 //make prefix_in and prefix_eq always the first filter
 	}
 	switch expr.Typ.Id {
@@ -2167,7 +2167,7 @@ func getOverlap(s *pb.StatsInfo, colname string) float64 {
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
 	switch expr.GetF().Func.ObjName {
-	case "isnull", "is_null", "prefix_eq", "prefix_in": //special handle
+	case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
 		return sel
 	}
 	overlap := getOverlap(s, colname)

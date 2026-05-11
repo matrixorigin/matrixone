@@ -751,6 +751,9 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Expr: scanHiddenKeyExpr,
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
+	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil {
+		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
+	}
 
 	if !hasTopValueMessage(ctx.sortNode) {
 		msgHeader := plan.MsgHeader{
@@ -759,6 +762,19 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		}
 		ctx.sortNode.SendMsgList = append([]plan.MsgHeader{msgHeader}, ctx.sortNode.SendMsgList...)
 		ctx.scanNode.RecvMsgList = append(ctx.scanNode.RecvMsgList, msgHeader)
+	}
+}
+
+func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.OrderBySpec, limit *plan.Expr) {
+	if scanNode == nil || orderBy == nil || limit == nil {
+		return
+	}
+	if limitLit := limit.GetLit(); limitLit == nil || limitLit.GetU64Val() == 0 {
+		return
+	}
+	scanNode.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{DeepCopyOrderBySpec(orderBy)},
+		Limit:   DeepCopyExpr(limit),
 	}
 }
 
@@ -935,7 +951,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				return nodeID
 			}
 		}
-		if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
 			return nodeID
 		}
 	}
@@ -979,10 +995,15 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
-		if fn == nil {
+		if fn == nil || len(fn.Args) < 2 {
 			continue
 		}
+		colArgIdx := 0
 		col := fn.Args[0].GetCol()
+		if col == nil {
+			col = fn.Args[1].GetCol()
+			colArgIdx = 1
+		}
 		if col == nil {
 			continue
 		}
@@ -991,11 +1012,10 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			if colIdx != col.ColPos {
 				continue
 			}
-			// it's an extra filter and can be applied on index
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
 			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[0] = deserialExpr
+			newFilter.GetF().Args[colArgIdx] = deserialExpr
 			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			applied = true
 		}
@@ -1003,23 +1023,20 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			continue
 		}
 
-		//if this is extra filter on PK
 		if len(node.TableDef.Pkey.Names) == 1 {
-			//single pk
 			if col.Name == node.TableDef.Pkey.PkeyColName {
 				idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
 				newFilter := DeepCopyExpr(node.FilterList[i])
-				newFilter.GetF().Args[0] = idxColExpr
+				newFilter.GetF().Args[colArgIdx] = idxColExpr
 				idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 			}
 		} else {
-			//composite pk
 			for k := range node.TableDef.Pkey.Names {
 				if col.Name == node.TableDef.Pkey.Names[k] {
 					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[0].Typ, int64(k))
+					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
 					newFilter := DeepCopyExpr(node.FilterList[i])
-					newFilter.GetF().Args[0] = deserialExpr
+					newFilter.GetF().Args[colArgIdx] = deserialExpr
 					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
 					continue
 				}
@@ -1082,6 +1099,20 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	case "in", "between":
 		col := fn.Args[0].GetCol()
 		if col != nil {
+			return NonEqualIndexCondition, col
+		}
+
+	case ">", ">=", "<", "<=":
+		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return NonEqualIndexCondition, fn.Args[0].GetCol()
+		}
+		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			return NonEqualIndexCondition, fn.Args[1].GetCol()
+		}
+
+	case "in_range":
+		col := fn.Args[0].GetCol()
+		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
 
@@ -1163,6 +1194,24 @@ func (builder *QueryBuilder) replaceNonEqualCondition(filter *plan.Expr, idxTag 
 		return expr
 	}
 
+	switch fn.Func.ObjName {
+	case ">", ">=", "<", "<=":
+		// Canonicalize: ensure column is on the left
+		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+			switch fn.Func.ObjName {
+			case ">":
+				fn.Func.ObjName = "<"
+			case ">=":
+				fn.Func.ObjName = "<="
+			case "<":
+				fn.Func.ObjName = ">"
+			case "<=":
+				fn.Func.ObjName = ">="
+			}
+		}
+	}
+
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
@@ -1175,6 +1224,13 @@ func (builder *QueryBuilder) replaceNonEqualCondition(filter *plan.Expr, idxTag 
 		case "in":
 			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
 			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
+		case ">", ">=", "<", "<=":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+		case "in_range":
+			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
+			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[2]})
+			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", fn.Args)
 		}
 	}
 	return expr
@@ -1214,6 +1270,12 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		leadingPos = tryMatchMoreLeadingFilters(idxDef, node, leadingPos[0])
 	}
 
+	if !leadingEqualCond && node.Stats != nil && node.Stats.TableCnt >= 50000 {
+		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			return -1
+		}
+	}
+
 	missFilterIdx := make([]int, 0, len(node.FilterList))
 	for i := range node.FilterList {
 		isLeading := false
@@ -1234,6 +1296,17 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 			return -1
 		}
 		if !leadingEqualCond && numParts > 1 {
+			return -1
+		}
+	}
+
+	// For multi-part indexes, single <= or > with raw byte comparison is incorrect.
+	// <= under-fetches (misses rows at boundary), > over-fetches.
+	// Only allow these when paired (handled by getIndexForNonEquiCond).
+	// This check recurses into OR arms to catch `col <= 5 OR col > 9`.
+	if !leadingEqualCond && numParts > 1 && len(leadingPos) == 1 {
+		fn := node.FilterList[leadingPos[0]].GetF()
+		if fn != nil && hasUnsafeRangeOp(fn) {
 			return -1
 		}
 	}
@@ -1391,8 +1464,34 @@ func (builder *QueryBuilder) getIndexForSpatialCond(indexes []*IndexDef, node *p
 	return -1, nil
 }
 
+func isLowerBoundOp(name string) bool {
+	return name == ">=" || name == ">"
+}
+
+func isUpperBoundOp(name string) bool {
+	return name == "<=" || name == "<"
+}
+
+// classifyRangeBound returns the column and whether the filter is a lower bound.
+// Returns nil if the filter is not a range comparison with a column and constant.
+func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
+	if fn == nil || len(fn.Args) < 2 {
+		return nil, false
+	}
+	op := canonicalRangeOp(fn)
+	if !isLowerBoundOp(op) && !isUpperBoundOp(op) {
+		return nil, false
+	}
+	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return fn.Args[0].GetCol(), isLowerBoundOp(op)
+	}
+	if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		return fn.Args[1].GetCol(), isLowerBoundOp(op)
+	}
+	return nil, false
+}
+
 func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *plan.Node) (int, []int32) {
-	// Apply single-column unique/secondary indices for non-equi expression
 	colPos2Idx := make(map[int32]int)
 	for i, idxDef := range indexes {
 		numParts := len(idxDef.Parts)
@@ -1406,16 +1505,100 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		}
 	}
 
+	// Find non-equi conditions (in, between, in_range, or, single range ops)
 	for i := range node.FilterList {
 		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
 		if filterType == NonEqualIndexCondition {
 			idxPos, ok := colPos2Idx[col.ColPos]
-			if ok {
-				return idxPos, []int32{int32(i)}
+			if !ok {
+				continue
 			}
+			fn := node.FilterList[i].GetF()
+			if fn != nil {
+				numParts := len(indexes[idxPos].Parts)
+				if numParts > 1 && hasUnsafeRangeOp(fn) {
+					continue
+				}
+				if isSingleRangeOp(fn) && node.Stats != nil && node.Stats.TableCnt >= 50000 {
+					if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(InFilterCardLimitNonPK) {
+						continue
+					}
+				}
+			}
+			return idxPos, []int32{int32(i)}
 		}
 	}
 	return -1, nil
+}
+
+// hasUnsafeRangeOp returns true if fn (or any OR arm within it) uses <= or >
+// which are unsafe on serialized multi-part composite index keys.
+// For prefix-encoded keys, serial(v, pk) is always > serial(v) because
+// the full key is longer. Therefore:
+//   - >= is safe: serial(v, pk) >= serial(bound) correctly matches v >= bound
+//   - <  is safe: serial(v, pk) < serial(bound) correctly matches v < bound
+//   - <= is UNSAFE: serial(v, pk) <= serial(v) is always FALSE (under-fetches)
+//   - >  is UNSAFE: serial(v, pk) > serial(v) is always TRUE (over-fetches)
+//
+// Only recurses into OR arms; AND arms are safe because checkIndexFilter pre-rejects
+// any AND-nested expression that isn't a simple comparison on an indexed column.
+func hasUnsafeRangeOp(fn *plan.Function) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.Func.ObjName == "or" {
+		for _, arg := range fn.Args {
+			if hasUnsafeRangeOp(arg.GetF()) {
+				return true
+			}
+		}
+		return false
+	}
+	op := canonicalRangeOp(fn)
+	return op == "<=" || op == ">"
+}
+
+func isSingleRangeOp(fn *plan.Function) bool {
+	switch fn.Func.ObjName {
+	case ">=", ">", "<=", "<":
+		return true
+	}
+	return false
+}
+
+func canonicalRangeOp(fn *plan.Function) string {
+	if len(fn.Args) < 2 {
+		return fn.Func.ObjName
+	}
+	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return fn.Func.ObjName
+	}
+	if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		switch fn.Func.ObjName {
+		case ">":
+			return "<"
+		case ">=":
+			return "<="
+		case "<":
+			return ">"
+		case "<=":
+			return ">="
+		}
+	}
+	return fn.Func.ObjName
+}
+
+func rangeFilterConstValue(fn *plan.Function) *plan.Expr {
+	if len(fn.Args) < 2 {
+		return nil
+	}
+	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+		return fn.Args[1]
+	}
+	if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		return fn.Args[0]
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {

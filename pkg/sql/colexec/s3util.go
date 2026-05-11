@@ -45,9 +45,10 @@ const (
 )
 
 type CNS3Writer struct {
-	sinker       *ioutil.Sinker
-	isTombstone  bool
-	blockInfoBat *batch.Batch
+	sinker              *ioutil.Sinker
+	isTombstone         bool
+	blockInfoBat        *batch.Batch
+	memorySizeThreshold int
 }
 
 func (w *CNS3Writer) String() string {
@@ -190,6 +191,7 @@ func NewCNS3DataWriter(
 		// do not flush on sync, so the threshold is the max int
 		memoryThreshold = math.MaxInt
 	}
+	writer.memorySizeThreshold = memoryThreshold
 
 	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
@@ -213,6 +215,10 @@ func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	return w.sinker.Write(ctx, bat)
 }
 
+func (w *CNS3Writer) MemorySizeThreshold() int {
+	return w.memorySizeThreshold
+}
+
 func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
 	return w.sinker.WriteOwned(ctx, bat)
 }
@@ -224,6 +230,30 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 
 	stats, _ = w.sinker.GetResult()
 	return
+}
+
+func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	w.ResetBlockInfoBat()
+	if len(stats) == 0 {
+		return w.blockInfoBat, nil
+	}
+
+	if err = ExpandObjectStatsToBatch(
+		w.sinker.GetMPool(),
+		w.isTombstone,
+		w.blockInfoBat,
+		true,
+		stats...,
+	); err != nil {
+		return nil, err
+	}
+
+	return w.blockInfoBat, nil
 }
 
 func (w *CNS3Writer) Close() (err error) {

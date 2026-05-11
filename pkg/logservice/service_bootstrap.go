@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	util "github.com/matrixorigin/matrixone/pkg/util/logservice"
 	"go.uber.org/zap"
@@ -33,6 +34,21 @@ const restoredTagFile = "./RESTORED"
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	replicaID, bootstrapping := cfg.Bootstrapping()
 	if !bootstrapping {
+		return nil
+	}
+	// Honor the decision that startReplicas's membership self-check already
+	// made. If (HAKeeperShardID, replicaID) has been classified as a zombie
+	// -- i.e. the authoritative peer view no longer lists this replica in
+	// shard 0 membership -- bootstrap must not recreate it. Starting it here
+	// would undo the skip and resurrect the exact zombie startReplicas
+	// avoided. The existing HAKeeper L/Add -> L/Kill -> L/Start recovery
+	// flow remains authoritative; once HAKeeper has a leader it will
+	// re-add this store with a fresh replicaID.
+	if s.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, replicaID) {
+		s.runtime.SubLogger(runtime.SystemInit).Warn(
+			"BootstrapHAKeeper: skipping zombie replica, deferring to HAKeeper recovery",
+			zap.Uint64("shardID", hakeeper.DefaultHAKeeperShardID),
+			zap.Uint64("replicaID", replicaID))
 		return nil
 	}
 	members, err := cfg.GetInitHAKeeperMembers()

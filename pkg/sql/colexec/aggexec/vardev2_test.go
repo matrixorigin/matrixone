@@ -135,6 +135,45 @@ func TestGetResultVarClampsTinyVarianceToZero(t *testing.T) {
 	require.Equal(t, 0.0, got)
 }
 
+func TestVarSampleSingleNonNullValueReturnsNull(t *testing.T) {
+	tests := []struct {
+		name       string
+		isDistinct bool
+	}{
+		{
+			name: "non-distinct",
+		},
+		{
+			name:       "distinct",
+			isDistinct: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			param := types.T_int32.ToType()
+			exec := makeVarSampleExec(mp, 0, tc.isDistinct, param)
+			require.NoError(t, exec.GroupGrow(1))
+
+			v := vector.NewVec(param)
+			require.NoError(t, vector.AppendFixed(v, int32(4), false, mp))
+			require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
+			v.Free(mp)
+
+			vecs, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, vecs, 1)
+			require.True(t, vecs[0].IsNull(0))
+
+			for _, vec := range vecs {
+				vec.Free(mp)
+			}
+			exec.Free()
+		})
+	}
+}
+
 func TestNumericToFloat64ViaVarExec(t *testing.T) {
 	mp := mpool.MustNewZero()
 
