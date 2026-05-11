@@ -464,9 +464,24 @@ func writeResponseWithDeadline(
 		defer stop()
 	}
 	if err := cs.Write(writeCtx, resp); err != nil {
+		if detail == "" {
+			detail = resp.DebugString()
+		}
 		logger.Error("write response failed",
 			zap.Error(err),
+			zap.Uint64("request-id", resp.RequestID),
+			zap.String("method", resp.Method.String()),
+			zap.String("remote", cs.RemoteAddress()),
 			zap.String("response", detail))
+		// A dropped response leaves the peer's Future waiting unless the
+		// session is closed and the client-side backend fails pending futures.
+		if closeErr := cs.Close(); closeErr != nil {
+			logger.Error("close client session after write response failed",
+				zap.Error(closeErr),
+				zap.Uint64("request-id", resp.RequestID),
+				zap.String("method", resp.Method.String()),
+				zap.String("remote", cs.RemoteAddress()))
+		}
 		return err
 	}
 	return nil
