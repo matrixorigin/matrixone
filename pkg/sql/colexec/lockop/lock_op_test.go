@@ -97,6 +97,55 @@ func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t
 	require.Less(t, time.Since(start), 200*time.Millisecond)
 }
 
+func TestLockWaitTimeoutFromValue(t *testing.T) {
+	timeout, err := lockWaitTimeoutFromValue(int64(2))
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Second, timeout)
+
+	timeout, err = lockWaitTimeoutFromValue("3")
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Second, timeout)
+
+	timeout, err = lockWaitTimeoutFromValue(nil)
+	require.NoError(t, err)
+	require.Equal(t, defaultLockWaitTimeout, timeout)
+
+	_, err = lockWaitTimeoutFromValue(int64(0))
+	require.Error(t, err)
+}
+
+func TestConvertLockWaitTimeoutError(t *testing.T) {
+	ctx := context.Background()
+	lockCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := convertLockWaitTimeoutError(ctx, lockCtx, context.DeadlineExceeded)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout))
+
+	err = convertLockWaitTimeoutError(ctx, lockCtx, moerr.NewBackendCannotConnectNoCtx("context deadline exceeded"))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout))
+
+	stmtCtx, stmtCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stmtCancel()
+	err = convertLockWaitTimeoutError(stmtCtx, stmtCtx, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	activeLockCtx, activeLockCancel := context.WithTimeout(context.Background(), time.Hour)
+	defer activeLockCancel()
+	err = convertLockWaitTimeoutError(ctx, activeLockCtx, moerr.NewBackendCannotConnectNoCtx("backend down"))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+}
+
+func TestContextWithLockWaitTimeoutKeepsShorterExistingDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	lockCtx, lockCancel := contextWithLockWaitTimeout(ctx, time.Hour)
+	defer lockCancel()
+
+	require.True(t, lockCtx == ctx)
+}
+
 func TestLockWithRetryReturnsBackendErrorWhenCanceledContextStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

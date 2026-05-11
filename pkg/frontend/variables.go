@@ -2154,7 +2154,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("lock_wait_timeout", 1, 31536000, false),
-		Default:           int64(31536000),
+		Default:           int64(50),
 	},
 	"locked_in_memory": {
 		Name:              "locked_in_memory",

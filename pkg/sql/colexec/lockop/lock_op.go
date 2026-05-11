@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +52,7 @@ var (
 	retryError                 = moerr.NewTxnNeedRetryNoCtx()
 	retryWithDefChangedError   = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 	defaultWaitTimeOnRetryLock = time.Second
+	defaultLockWaitTimeout     = 50 * time.Second
 	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
 	// holding CN resources for hours while the outer statement context is still alive.
 	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
@@ -545,8 +548,15 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
+	lockWaitTimeout, err := getLockWaitTimeout(proc)
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+	lockCtx, cancel := contextWithLockWaitTimeout(ctx, lockWaitTimeout)
+	defer cancel()
+
 	result, err := lockWithRetry(
-		ctx,
+		lockCtx,
 		lockService,
 		table,
 		rows,
@@ -559,6 +569,7 @@ func doLock(
 		pkType,
 	)
 	if err != nil {
+		err = convertLockWaitTimeoutError(ctx, lockCtx, err)
 		return false, false, timestamp.Timestamp{}, err
 	}
 
@@ -763,6 +774,86 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+}
+
+func getLockWaitTimeout(proc *process.Process) (time.Duration, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return defaultLockWaitTimeout, nil
+	}
+	value, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false)
+	if err != nil {
+		return 0, err
+	}
+	return lockWaitTimeoutFromValue(value)
+}
+
+func lockWaitTimeoutFromValue(value any) (time.Duration, error) {
+	var seconds int64
+	switch v := value.(type) {
+	case nil:
+		return defaultLockWaitTimeout, nil
+	case int:
+		seconds = int64(v)
+	case int8:
+		seconds = int64(v)
+	case int16:
+		seconds = int64(v)
+	case int32:
+		seconds = int64(v)
+	case int64:
+		seconds = v
+	case uint:
+		seconds = int64(v)
+	case uint8:
+		seconds = int64(v)
+	case uint16:
+		seconds = int64(v)
+	case uint32:
+		seconds = int64(v)
+	case uint64:
+		if v > uint64(1<<63-1) {
+			return 0, moerr.NewInvalidInputNoCtx("lock_wait_timeout is too large")
+		}
+		seconds = int64(v)
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		seconds = n
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("unsupported lock_wait_timeout type %T", value)
+	}
+	if seconds <= 0 {
+		return 0, moerr.NewInvalidInputNoCtx("lock_wait_timeout must be positive")
+	}
+	if seconds > int64(1<<63-1)/int64(time.Second) {
+		return 0, moerr.NewInvalidInputNoCtx("lock_wait_timeout is too large")
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
+func contextWithLockWaitTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func convertLockWaitTimeoutError(ctx, lockCtx context.Context, err error) error {
+	if err == nil ||
+		ctx.Err() != nil ||
+		lockCtx.Err() != context.DeadlineExceeded {
+		return err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) &&
+		!isBoundedRetryLockError(err) {
+		return err
+	}
+	return moerr.NewLockWaitTimeout(ctx)
 }
 
 func lockWithRetry(

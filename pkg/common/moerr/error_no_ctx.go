@@ -408,6 +408,10 @@ func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
 }
 
+func NewLockWaitTimeoutNoCtx() *Error {
+	return newError(Context(), ErrLockWaitTimeout)
+}
+
 func NewLockNeedUpgradeNoCtx() *Error {
 	return newError(Context(), ErrLockNeedUpgrade)
 }
