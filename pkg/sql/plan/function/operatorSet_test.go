@@ -96,6 +96,27 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+
+	{
+		d1, err := types.ParseDecimal256("11111111111111111111111111111111.1111", 65, 4)
+		require.NoError(t, err)
+		d2, err := types.ParseDecimal256("22222222222222222222222222222222.2222", 65, 4)
+		require.NoError(t, err)
+		tc := tcTemp{
+			info: "select -(decimal256) with big values and a null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 4),
+					[]types.Decimal256{d1, d2, {}},
+					[]bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal256, 65, 4), false,
+				[]types.Decimal256{d1.Minus(), d2.Minus(), {}},
+				[]bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinusDecimal256)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
 }
 
 func Test_Operator_Unary_Plus(t *testing.T) {

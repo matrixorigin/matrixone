@@ -103,6 +103,23 @@ func TestGetUnionAllFunctionSupportsYearAndDecimal256(t *testing.T) {
 	require.Equal(t, types.MoYear(1999), years[1])
 	require.True(t, dstYear.IsNull(2))
 
+	// Exercise the ConstNull and Const branches of the T_year union closure.
+	yearConstNull := NewConstNull(yearType, 2, mp)
+	require.NoError(t, unionYear(dstYear, yearConstNull))
+	require.Equal(t, 5, dstYear.Length())
+	require.True(t, dstYear.IsNull(3))
+	require.True(t, dstYear.IsNull(4))
+	yearConstNull.Free(mp)
+
+	yearConst, err := NewConstFixed(yearType, types.MoYear(2030), 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, unionYear(dstYear, yearConst))
+	require.Equal(t, 7, dstYear.Length())
+	years = MustFixedColNoTypeCheck[types.MoYear](dstYear)
+	require.Equal(t, types.MoYear(2030), years[5])
+	require.Equal(t, types.MoYear(2030), years[6])
+	yearConst.Free(mp)
+
 	decType := types.New(types.T_decimal256, 65, 4)
 	d1, err := types.ParseDecimal256("11111111111111111111111111111111.1111", 65, 4)
 	require.NoError(t, err)
@@ -113,15 +130,282 @@ func TestGetUnionAllFunctionSupportsYearAndDecimal256(t *testing.T) {
 	defer srcDec.Free(mp)
 	require.NoError(t, AppendFixed(srcDec, d1, false, mp))
 	require.NoError(t, AppendFixed(srcDec, d2, false, mp))
+	require.NoError(t, AppendFixed(srcDec, types.Decimal256{}, true, mp))
 
 	dstDec := NewVec(decType)
 	defer dstDec.Free(mp)
 	unionDec := GetUnionAllFunction(decType, mp)
 	require.NoError(t, unionDec(dstDec, srcDec))
-	require.Equal(t, 2, dstDec.Length())
+	require.Equal(t, 3, dstDec.Length())
 	decs := MustFixedColNoTypeCheck[types.Decimal256](dstDec)
 	require.Equal(t, d1.Format(4), decs[0].Format(4))
 	require.Equal(t, d2.Format(4), decs[1].Format(4))
+	require.True(t, dstDec.IsNull(2))
+
+	decConstNull := NewConstNull(decType, 1, mp)
+	require.NoError(t, unionDec(dstDec, decConstNull))
+	require.Equal(t, 4, dstDec.Length())
+	require.True(t, dstDec.IsNull(3))
+	decConstNull.Free(mp)
+
+	decConst, err := NewConstFixed(decType, d1, 2, mp)
+	require.NoError(t, err)
+	require.NoError(t, unionDec(dstDec, decConst))
+	require.Equal(t, 6, dstDec.Length())
+	decs = MustFixedColNoTypeCheck[types.Decimal256](dstDec)
+	require.Equal(t, d1.Format(4), decs[4].Format(4))
+	require.Equal(t, d1.Format(4), decs[5].Format(4))
+	decConst.Free(mp)
+}
+
+func TestYearAndDecimal256AcrossVectorAPIs(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	yearType := types.T_year.ToType()
+	yearVec := NewVec(yearType)
+	defer yearVec.Free(mp)
+	require.NoError(t, AppendFixed(yearVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(yearVec, types.MoYear(1999), false, mp))
+	require.NoError(t, AppendFixed(yearVec, types.MoYear(2155), false, mp))
+
+	// GetAny for T_year.
+	require.Equal(t, types.MoYear(2024), GetAny(yearVec, 0, false))
+
+	// AppendAny for T_year.
+	appendVec := NewVec(yearType)
+	defer appendVec.Free(mp)
+	require.NoError(t, AppendAny(appendVec, types.MoYear(2030), false, mp))
+	require.Equal(t, 1, appendVec.Length())
+	require.Equal(t, types.MoYear(2030), GetAny(appendVec, 0, false))
+
+	// RowToString and String render the new types.
+	require.NotEmpty(t, yearVec.RowToString(0))
+	require.NotEmpty(t, yearVec.String())
+
+	// Min/max for T_year.
+	ok, minv, maxv := yearVec.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, types.MoYear(1999), types.DecodeMoYear(minv))
+	require.Equal(t, types.MoYear(2155), types.DecodeMoYear(maxv))
+
+	// Shrink on T_year.
+	shrinkVec := NewVec(yearType)
+	defer shrinkVec.Free(mp)
+	require.NoError(t, AppendFixed(shrinkVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(shrinkVec, types.MoYear(1999), false, mp))
+	require.NoError(t, AppendFixed(shrinkVec, types.MoYear(2155), false, mp))
+	shrinkVec.Shrink([]int64{0, 2}, false)
+	require.Equal(t, 2, shrinkVec.Length())
+
+	// Shuffle on T_year.
+	shuffleVec := NewVec(yearType)
+	defer shuffleVec.Free(mp)
+	require.NoError(t, AppendFixed(shuffleVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(shuffleVec, types.MoYear(1999), false, mp))
+	require.NoError(t, AppendFixed(shuffleVec, types.MoYear(2155), false, mp))
+	require.NoError(t, shuffleVec.Shuffle([]int64{2, 0, 1}, mp))
+	years := MustFixedColNoTypeCheck[types.MoYear](shuffleVec)
+	require.Equal(t, types.MoYear(2155), years[0])
+
+	// InplaceSort on T_year.
+	sortVec := NewVec(yearType)
+	defer sortVec.Free(mp)
+	require.NoError(t, AppendFixed(sortVec, types.MoYear(2155), false, mp))
+	require.NoError(t, AppendFixed(sortVec, types.MoYear(1999), false, mp))
+	require.NoError(t, AppendFixed(sortVec, types.MoYear(2024), false, mp))
+	sortVec.InplaceSort()
+	years = MustFixedColNoTypeCheck[types.MoYear](sortVec)
+	require.Equal(t, types.MoYear(1999), years[0])
+	require.Equal(t, types.MoYear(2024), years[1])
+	require.Equal(t, types.MoYear(2155), years[2])
+
+	// InplaceSortAndCompact on T_year (includes Compact dedup path).
+	dedupVec := NewVec(yearType)
+	defer dedupVec.Free(mp)
+	require.NoError(t, AppendFixed(dedupVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(dedupVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(dedupVec, types.MoYear(1999), false, mp))
+	dedupVec.InplaceSortAndCompact()
+	require.Equal(t, 2, dedupVec.Length())
+
+	// GetConstSetFunction on T_year — cover non-const, const-null, and const paths.
+	setConstYear := GetConstSetFunction(yearType, mp)
+	constDst := NewVec(yearType)
+	defer constDst.Free(mp)
+	require.NoError(t, setConstYear(constDst, yearVec, 1, 3))
+	require.Equal(t, 3, constDst.Length())
+	require.True(t, constDst.IsConst())
+
+	yearNullConst := NewConstNull(yearType, 1, mp)
+	constDstNull := NewVec(yearType)
+	defer constDstNull.Free(mp)
+	require.NoError(t, setConstYear(constDstNull, yearNullConst, 0, 2))
+	require.True(t, constDstNull.IsConstNull())
+	yearNullConst.Free(mp)
+
+	yearConstValue, err := NewConstFixed(yearType, types.MoYear(2024), 1, mp)
+	require.NoError(t, err)
+	constDstFixed := NewVec(yearType)
+	defer constDstFixed.Free(mp)
+	require.NoError(t, setConstYear(constDstFixed, yearConstValue, 0, 3))
+	require.True(t, constDstFixed.IsConst())
+	yearConstValue.Free(mp)
+
+	// ============ Decimal256 coverage ============
+	decType := types.New(types.T_decimal256, 65, 4)
+	d1, err := types.ParseDecimal256("11111111111111111111111111111111.1111", 65, 4)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("22222222222222222222222222222222.2222", 65, 4)
+	require.NoError(t, err)
+	d3, err := types.ParseDecimal256("33333333333333333333333333333333.3333", 65, 4)
+	require.NoError(t, err)
+
+	decVec := NewVec(decType)
+	defer decVec.Free(mp)
+	require.NoError(t, AppendFixed(decVec, d1, false, mp))
+	require.NoError(t, AppendFixed(decVec, d2, false, mp))
+	require.NoError(t, AppendFixed(decVec, d3, false, mp))
+
+	// GetAny for T_decimal256.
+	require.Equal(t, d1, GetAny(decVec, 0, false))
+
+	// AppendAny for T_decimal256.
+	appendDec := NewVec(decType)
+	defer appendDec.Free(mp)
+	require.NoError(t, AppendAny(appendDec, d2, false, mp))
+	require.Equal(t, 1, appendDec.Length())
+
+	// RowToString renders decimal256 via implDecimalRowToString.
+	require.NotEmpty(t, decVec.RowToString(0))
+
+	// Min/max for T_decimal256 (no-null branch).
+	ok, minv, maxv = decVec.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, d1.Format(4), types.DecodeDecimal256(minv).Format(4))
+	require.Equal(t, d3.Format(4), types.DecodeDecimal256(maxv).Format(4))
+
+	// Min/max for T_decimal256 (HasNull branch). Order null/d1/d3 so the
+	// maxVal.Less branch fires on d3.
+	decWithNull := NewVec(decType)
+	defer decWithNull.Free(mp)
+	require.NoError(t, AppendFixed(decWithNull, types.Decimal256{}, true, mp))
+	require.NoError(t, AppendFixed(decWithNull, d1, false, mp))
+	require.NoError(t, AppendFixed(decWithNull, d3, false, mp))
+	ok, minv, maxv = decWithNull.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, d1.Format(4), types.DecodeDecimal256(minv).Format(4))
+	require.Equal(t, d3.Format(4), types.DecodeDecimal256(maxv).Format(4))
+
+	// Same for no-null branch, include the maxVal.Less path.
+	decMinMaxMax := NewVec(decType)
+	defer decMinMaxMax.Free(mp)
+	require.NoError(t, AppendFixed(decMinMaxMax, d2, false, mp))
+	require.NoError(t, AppendFixed(decMinMaxMax, d1, false, mp))
+	require.NoError(t, AppendFixed(decMinMaxMax, d3, false, mp))
+	ok, minv, maxv = decMinMaxMax.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, d1.Format(4), types.DecodeDecimal256(minv).Format(4))
+	require.Equal(t, d3.Format(4), types.DecodeDecimal256(maxv).Format(4))
+
+	// Min/max for T_year (HasNull branch).
+	yearWithNull := NewVec(yearType)
+	defer yearWithNull.Free(mp)
+	require.NoError(t, AppendFixed(yearWithNull, types.MoYear(0), true, mp))
+	require.NoError(t, AppendFixed(yearWithNull, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(yearWithNull, types.MoYear(1999), false, mp))
+	ok, minv, maxv = yearWithNull.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, types.MoYear(1999), types.DecodeMoYear(minv))
+	require.Equal(t, types.MoYear(2024), types.DecodeMoYear(maxv))
+
+	// Shrink on T_decimal256.
+	shrinkDec := NewVec(decType)
+	defer shrinkDec.Free(mp)
+	require.NoError(t, AppendFixed(shrinkDec, d1, false, mp))
+	require.NoError(t, AppendFixed(shrinkDec, d2, false, mp))
+	require.NoError(t, AppendFixed(shrinkDec, d3, false, mp))
+	shrinkDec.Shrink([]int64{0, 2}, false)
+	require.Equal(t, 2, shrinkDec.Length())
+
+	// Shuffle on T_decimal256.
+	shuffleDec := NewVec(decType)
+	defer shuffleDec.Free(mp)
+	require.NoError(t, AppendFixed(shuffleDec, d1, false, mp))
+	require.NoError(t, AppendFixed(shuffleDec, d2, false, mp))
+	require.NoError(t, AppendFixed(shuffleDec, d3, false, mp))
+	require.NoError(t, shuffleDec.Shuffle([]int64{2, 0, 1}, mp))
+
+	// InplaceSort on T_decimal256.
+	sortDec := NewVec(decType)
+	defer sortDec.Free(mp)
+	require.NoError(t, AppendFixed(sortDec, d3, false, mp))
+	require.NoError(t, AppendFixed(sortDec, d1, false, mp))
+	require.NoError(t, AppendFixed(sortDec, d2, false, mp))
+	sortDec.InplaceSort()
+	decs := MustFixedColNoTypeCheck[types.Decimal256](sortDec)
+	require.Equal(t, d1.Format(4), decs[0].Format(4))
+	require.Equal(t, d2.Format(4), decs[1].Format(4))
+	require.Equal(t, d3.Format(4), decs[2].Format(4))
+
+	// InplaceSortAndCompact on T_decimal256.
+	dedupDec := NewVec(decType)
+	defer dedupDec.Free(mp)
+	require.NoError(t, AppendFixed(dedupDec, d1, false, mp))
+	require.NoError(t, AppendFixed(dedupDec, d1, false, mp))
+	require.NoError(t, AppendFixed(dedupDec, d2, false, mp))
+	dedupDec.InplaceSortAndCompact()
+	require.Equal(t, 2, dedupDec.Length())
+
+	// GetConstSetFunction on T_decimal256 — cover non-const, const-null, and const paths.
+	setConstDec := GetConstSetFunction(decType, mp)
+	decConstDst := NewVec(decType)
+	defer decConstDst.Free(mp)
+	require.NoError(t, setConstDec(decConstDst, decVec, 0, 2))
+	require.Equal(t, 2, decConstDst.Length())
+	require.True(t, decConstDst.IsConst())
+
+	decNullConst := NewConstNull(decType, 1, mp)
+	decConstDstNull := NewVec(decType)
+	defer decConstDstNull.Free(mp)
+	require.NoError(t, setConstDec(decConstDstNull, decNullConst, 0, 2))
+	require.True(t, decConstDstNull.IsConstNull())
+	decNullConst.Free(mp)
+
+	decConstValue, err := NewConstFixed(decType, d1, 1, mp)
+	require.NoError(t, err)
+	decConstDstFixed := NewVec(decType)
+	defer decConstDstFixed.Free(mp)
+	require.NoError(t, setConstDec(decConstDstFixed, decConstValue, 0, 3))
+	require.True(t, decConstDstFixed.IsConst())
+	decConstValue.Free(mp)
+
+	// ShrinkByMask on T_year and T_decimal256. The bitmap.BMask.Count()
+	// returns the bitmap length (capacity), which shrinkFixedByMask uses as
+	// the final length when negate=false. So a mask with length N set to all
+	// 1s makes ShrinkByMask keep the first N entries.
+	maskVec := NewVec(yearType)
+	defer maskVec.Free(mp)
+	require.NoError(t, AppendFixed(maskVec, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(maskVec, types.MoYear(1999), false, mp))
+	bm1 := &bitmap.Bitmap{}
+	bm1.InitWithSize(1)
+	bm1.Add(0)
+	var bmask1 bitmap.BMask
+	bmask1.Init(bm1)
+	maskVec.ShrinkByMask(&bmask1, false, 0)
+	require.Equal(t, 1, maskVec.Length())
+
+	maskDec := NewVec(decType)
+	defer maskDec.Free(mp)
+	require.NoError(t, AppendFixed(maskDec, d1, false, mp))
+	require.NoError(t, AppendFixed(maskDec, d2, false, mp))
+	bm2 := &bitmap.Bitmap{}
+	bm2.InitWithSize(1)
+	bm2.Add(0)
+	var bmask2 bitmap.BMask
+	bmask2.Init(bm2)
+	maskDec.ShrinkByMask(&bmask2, false, 0)
+	require.Equal(t, 1, maskDec.Length())
 }
 
 func TestSize(t *testing.T) {

@@ -569,3 +569,38 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 		}
 	})
 }
+
+func TestZMYear(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(1999)
+	y2 := types.MoYear(2024)
+	y3 := types.MoYear(2155)
+	UpdateZM(zm, types.EncodeMoYear(&y2))
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y3))
+	require.Equal(t, y1, types.DecodeMoYear(zm.GetMinBuf()))
+	require.Equal(t, y3, types.DecodeMoYear(zm.GetMaxBuf()))
+	require.Equal(t, any(y1), zm.GetMin())
+	require.Equal(t, any(y3), zm.GetMax())
+}
+
+func TestZMDecimal256Skipped(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	d, err := types.ParseDecimal256("12345.6789", 65, 4)
+	require.NoError(t, err)
+
+	// UpdateZM should be a no-op for decimal256 — the ZM stays uninitialized
+	// and the payload buffers stay empty. Without the skip, this would panic
+	// because the 64-byte decimal256 payload does not fit the 32-byte ZM min/max
+	// slots.
+	UpdateZM(zm, types.EncodeDecimal256(&d))
+	require.False(t, zm.IsInited())
+
+	// BatchUpdateZM on a decimal256 vector must also be a no-op.
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 4))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, d, false, mp))
+	require.NoError(t, BatchUpdateZM(zm, vec))
+	require.False(t, zm.IsInited())
+}
