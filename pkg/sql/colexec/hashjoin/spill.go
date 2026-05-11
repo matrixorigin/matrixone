@@ -45,9 +45,9 @@ const (
 	spillMagic      = 0x12345678DEADBEEF
 	spillMaxPass    = 3
 	// spillRowBufferSize is the number of rows accumulated in memory before
-	// flushing to a spill file during scatter. Keeping this at 1024 rows
+	// flushing to a spill file during scatter. Keeping this at 8192 rows
 	// limits per-bucket buffer memory for wide-row queries (e.g. multi-join).
-	spillRowBufferSize = 1024
+	spillRowBufferSize = 8192
 	// spillIOBufferSize is the size of the bufio.Reader read-ahead buffer used
 	// when reading spill files. A large buffer reduces the number of read()
 	// syscalls when scanning multi-hundred-MB spill files during multi-level
@@ -467,7 +467,7 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if sz > ctr.spillThreshold {
 		return true
 	}
-	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
+	if mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
 		return true
 	}
 	if system.HasCgroupMemLimit() {
@@ -552,9 +552,9 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		if system.HasCgroupMemLimit() {
 			systemPressure = system.MemoryUsed() > system.MemoryTotal()*2/3
 		}
-		if systemPressure || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
+		if systemPressure || mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
 			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, mpool=%dMB, rows=%d, bucket=%s",
-				mpool.GlobalStats().NumCurrBytes.Load()/1024/1024, builder.InputBatchRowCount, bucket.baseName)
+				mpool.GlobalUsedWithPending()/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.
 			// reSpillBucket will re-partition from builder.Batches.Buf and
 			// the reader loop will immediately hit EOF — no double-counting.

@@ -19,6 +19,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -332,4 +333,57 @@ func TestMakeAggListFreesPartialOnExtraConfigError(t *testing.T) {
 		),
 	})
 	require.Error(t, err)
+}
+
+// TestGroupSpillReloadManyGroups exercises the spill-and-reload path with more
+// than 8192 accumulated rows per spilled bucket. This is a regression test for
+// the panic caused by PreAllocateGroups creating empty agg state chunks that
+// BatchMerge then dereferences (fixed by removing PreAllocateGroups from
+// buildHashTableWithHint).
+func TestGroupSpillReloadManyGroups(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const numRows = 10000
+
+	makeBatch := func(mp *mpool.MPool, startKey int32, count int) *batch.Batch {
+		keys := make([]int32, count)
+		vals := make([]int32, count)
+		for i := 0; i < count; i++ {
+			keys[i] = startKey + int32(i)
+			vals[i] = 1
+		}
+		bat := batch.New([]string{"key", "val"})
+		bat.Vecs[0] = testutil.MakeInt32Vector(keys, nil, mp)
+		bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, mp)
+		bat.SetRowCount(count)
+		return bat
+	}
+
+	bat := makeBatch(proc.Mp(), 0, numRows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{sumAgg(1)})
+	g.NeedEval = true
+	// SpillMem < 10000 triggers group-count-based spill (spill when GroupCount >= SpillMem)
+	g.SpillMem = 100
+
+	mockOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	g.AppendChild(mockOp)
+
+	require.NoError(t, g.Prepare(proc))
+
+	var totalRows int
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		totalRows += result.Batch.RowCount()
+	}
+
+	// Each key is unique, so we should get numRows groups
+	require.Equal(t, numRows, totalRows)
+
+	g.Free(proc, false, nil)
 }

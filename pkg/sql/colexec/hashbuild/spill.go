@@ -34,7 +34,7 @@ import (
 const (
 	spillNumBuckets = 32
 	spillMagic      = 0x12345678DEADBEEF
-	spillBufferSize = 1024 // Buffer 1024 rows before flushing (limits overshoot during rebuild)
+	spillBufferSize = 8192 // Buffer 8192 rows before flushing
 )
 
 func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch, file *os.File, analyzer process.Analyzer) (int64, error) {
@@ -274,7 +274,7 @@ func (ctr *container) rowCnt() int64 {
 }
 
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
-	if !hashBuild.CanSpill || !hashBuild.NeedHashMap {
+	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
 		return false
 	}
 	ctr := &hashBuild.ctr

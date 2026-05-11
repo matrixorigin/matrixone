@@ -270,8 +270,11 @@ func (d *DiskCache) Read(
 	openedFiles := make(map[string]*os.File)
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
+		tight := memoryTight()
 		for _, file := range openedFiles {
-			system.FadviseDontNeed(int(file.Fd()))
+			if tight {
+				system.FadviseDontNeed(int(file.Fd()))
+			}
 			_ = file.Close()
 		}
 		LogEvent(ctx, str_close_disk_files_end)

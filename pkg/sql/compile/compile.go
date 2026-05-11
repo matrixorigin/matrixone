@@ -1800,11 +1800,11 @@ func capLoadParallelism(cpuNum int) int {
 	}
 
 	// Total-memory-based cap: each worker also pressures Go heap during PK
-	// dedup (object metadata loads). Estimate ~1GB total footprint per worker
-	// (mpool buffers + Go heap for metadata + GC overhead). Allow at most
-	// totalMem/4GB workers to prevent OOM on small containers.
+	// dedup (object metadata loads). Estimate ~4GB total footprint per worker
+	// (mpool buffers + Go heap for metadata + GC overhead). Cap at
+	// totalMem/4GB workers to prevent OOM.
 	totalMem := int64(system.MemoryTotal())
-	if totalMem > 0 && totalMem < 64*mpool.GB {
+	if totalMem > 0 {
 		maxWorkers := int(totalMem / (4 * mpool.GB))
 		if maxWorkers < 1 {
 			maxWorkers = 1
@@ -1830,6 +1830,7 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
 
+	// TODO: engine.Node doesn't expose per-CN memory; using coordinator memory as proxy.
 	perCNCap := capLoadParallelism(system.NumCPU())
 	if param.ScanType == tree.S3 {
 		for i := 0; i < len(c.cnList); i++ {
