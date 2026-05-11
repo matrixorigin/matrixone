@@ -470,9 +470,12 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
 		return true
 	}
-	used := int64(system.MemoryUsed())
-	total := int64(system.MemoryTotal())
-	return used > total*2/3
+	if system.HasCgroupMemLimit() {
+		used := int64(system.MemoryUsed())
+		total := int64(system.MemoryTotal())
+		return used > total*2/3
+	}
+	return false
 }
 
 // rebuildHashmapForBucket loads a spill bucket into a JoinMap.
@@ -545,11 +548,13 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	// which, across 64 operators, causes a memory spike. Re-spill if system memory
 	// is already high to prevent the thundering-herd OOM.
 	if ctr.spillThreshold > 0 && bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
-		used := int64(system.MemoryUsed())
-		total := int64(system.MemoryTotal())
-		if used > total*2/3 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
-			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, used=%dMB, total=%dMB, rows=%d, bucket=%s",
-				used/1024/1024, total*2/3/1024/1024, builder.InputBatchRowCount, bucket.baseName)
+		systemPressure := false
+		if system.HasCgroupMemLimit() {
+			systemPressure = system.MemoryUsed() > system.MemoryTotal()*2/3
+		}
+		if systemPressure || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
+			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, mpool=%dMB, rows=%d, bucket=%s",
+				mpool.GlobalStats().NumCurrBytes.Load()/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.
 			// reSpillBucket will re-partition from builder.Batches.Buf and
 			// the reader loop will immediately hit EOF — no double-counting.

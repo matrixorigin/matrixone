@@ -679,7 +679,7 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	if !needSpill {
 		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
 	}
-	if !needSpill {
+	if !needSpill && system.HasCgroupMemLimit() {
 		total := system.MemoryTotal()
 		if total > 0 {
 			needSpill = system.MemoryUsed() > total*3/4

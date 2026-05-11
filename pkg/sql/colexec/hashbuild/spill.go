@@ -298,12 +298,13 @@ func processMemoryOverBudget() bool {
 	if curr > globalCap*2/3 {
 		return true
 	}
-	// Also check system/cgroup memory to catch Go heap and page cache pressure
-	// that mpool alone can't see.
-	total := system.MemoryTotal()
-	if total > 0 {
-		used := system.MemoryUsed()
-		if used > total*3/4 {
+	// Also check cgroup memory to catch Go heap and page cache pressure
+	// that mpool alone can't see. Only meaningful when a cgroup memory limit
+	// was detected — on shared bare-metal hosts, system memory includes
+	// other processes and would cause false positives.
+	if system.HasCgroupMemLimit() {
+		total := system.MemoryTotal()
+		if total > 0 && system.MemoryUsed() > total*3/4 {
 			return true
 		}
 	}

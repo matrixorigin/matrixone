@@ -37,6 +37,9 @@ var (
 	cpuNum atomic.Int32
 	// memoryTotal is the total memory of this node.
 	memoryTotal atomic.Uint64
+	// hasCgroupMemLimit is true when a valid cgroup memory limit was detected
+	// during init. Unlike InContainer() (pid==1), this works with tini/other inits.
+	hasCgroupMemLimit atomic.Bool
 	// lastMallocTrim tracks the last time MallocTrim was called (UnixNano).
 	lastMallocTrim atomic.Int64
 	// cpuUsage is the CPU statistics updated every second.
@@ -70,6 +73,12 @@ func NumCPU() int {
 func CPUAvailable() float64 {
 	usage := math.Float64frombits(cpuUsage.Load())
 	return math.Round((1 - usage) * float64(cpuNum.Load()))
+}
+
+// HasCgroupMemLimit returns true if a valid cgroup memory limit was detected.
+// Use this instead of InContainer() for memory pressure decisions.
+func HasCgroupMemLimit() bool {
+	return hasCgroupMemLimit.Load()
 }
 
 // MemoryTotal returns the total size of memory of this node.
@@ -322,6 +331,7 @@ func refreshQuotaConfig() {
 			memFromCgroup = true
 		}
 	}
+	hasCgroupMemLimit.Store(memFromCgroup)
 	if !memFromCgroup {
 		if memErr != nil {
 			logutil.Errorf("failed to get memory stats: %v", memErr)
