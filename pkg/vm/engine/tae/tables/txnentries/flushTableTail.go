@@ -169,8 +169,10 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 	now := time.Now()
+	if writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector); writeErr != nil {
+		logutil.Warnf("[FlushTableTail] persist transfer page failed, keeping in-memory pages: %v", writeErr)
+	}
 	for _, page := range pages {
 		if page.BornTS() != bts {
 			page.SetBornTS(now.Add(time.Minute))
