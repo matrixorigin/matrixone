@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -685,12 +684,6 @@ func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, localOnly bool)
 	}
 	if !needSpill {
 		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
-	}
-	if !needSpill && system.HasCgroupMemLimit() {
-		total := system.MemoryTotal()
-		if total > 0 {
-			needSpill = system.MemoryUsed() > total*3/4
-		}
 	}
 
 	return needSpill
