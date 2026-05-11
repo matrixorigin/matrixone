@@ -375,6 +375,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("mpool cap %d too small", cap)
 		}
 		if cap > GlobalCap() {
+			logutil.Infof("mpool cap %d exceeds global cap %d, clamping", cap, GlobalCap())
 			cap = GlobalCap()
 		}
 	}

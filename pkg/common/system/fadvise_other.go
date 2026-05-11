@@ -16,5 +16,5 @@
 
 package system
 
-// MallocTrim is a no-op on non-Linux platforms.
-func MallocTrim() {}
+// FadviseDontNeed is a no-op on non-Linux platforms.
+func FadviseDontNeed(fd int) {}

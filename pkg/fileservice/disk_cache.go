@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/sys/unix"
 
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -271,7 +271,7 @@ func (d *DiskCache) Read(
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
 		for _, file := range openedFiles {
-			unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+			system.FadviseDontNeed(int(file.Fd()))
 			_ = file.Close()
 		}
 		LogEvent(ctx, str_close_disk_files_end)
@@ -543,7 +543,7 @@ func (d *DiskCache) writeFile(
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
-	unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
+	system.FadviseDontNeed(int(f.Fd()))
 
 	stat, err = f.Stat()
 	if err != nil {

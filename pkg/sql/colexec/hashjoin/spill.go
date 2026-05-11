@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
@@ -39,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -387,10 +385,7 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	if err != nil {
 		return 0, err
 	}
-	// Advise kernel to drop page cache for spill data immediately.
-	// In cgroup-limited containers, page cache counts toward the memory limit
-	// and can trigger OOM even when the Go heap is well within budget.
-	unix.Fadvise(int(w.file.Fd()), 0, 0, unix.FADV_DONTNEED)
+	system.FadviseDontNeed(int(w.file.Fd()))
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)
 
@@ -456,8 +451,6 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) e
 //   - threshold <= 0: never re-spill
 //   - threshold <= 100000: treat as a row-count limit
 //   - threshold > 100000: treat as a memory-size limit
-var reSpillCheckCounter uint64
-
 func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if ctr.spillThreshold <= 0 {
 		return false
@@ -479,17 +472,7 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	}
 	used := int64(system.MemoryUsed())
 	total := int64(system.MemoryTotal())
-	if used > total*2/3 {
-		logutil.Debugf("shouldReSpill: system trigger used=%dMB > total*2/3=%dMB, builderRows=%d",
-			used/1024/1024, total*2/3/1024/1024, builder.InputBatchRowCount)
-		return true
-	}
-	cnt := atomic.AddUint64(&reSpillCheckCounter, 1)
-	if cnt%500 == 0 {
-		logutil.Debugf("shouldReSpill check #%d: sz=%dMB, threshold=%dMB, rows=%d, sysMem=%dMB",
-			cnt, sz/1024/1024, ctr.spillThreshold/1024/1024, builder.InputBatchRowCount, used/1024/1024)
-	}
-	return false
+	return used > total*2/3
 }
 
 // rebuildHashmapForBucket loads a spill bucket into a JoinMap.

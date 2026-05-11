@@ -21,15 +21,14 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -67,7 +66,7 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	if err != nil {
 		return 0, err
 	}
-	unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+	system.FadviseDontNeed(int(file.Fd()))
 	analyzer.Spill(int64(written))
 	analyzer.SpillRows(cnt)
 
@@ -274,7 +273,6 @@ func (ctr *container) rowCnt() int64 {
 	return int64(sz)
 }
 
-
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	if !hashBuild.CanSpill || !hashBuild.NeedHashMap {
 		return false
@@ -289,8 +287,6 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	}
 	mu := ctr.memUsed()
 	if mu > ctr.spillThreshold {
-		logutil.Debugf("shouldSpillBatches: per-op trigger memUsed=%dMB > threshold=%dMB",
-			mu/1024/1024, ctr.spillThreshold/1024/1024)
 		return true
 	}
 	return processMemoryOverBudget()
@@ -298,8 +294,8 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 
 func processMemoryOverBudget() bool {
 	curr := mpool.GlobalUsedWithPending()
-	cap := mpool.GlobalCap()
-	return curr > cap*2/3
+	globalCap := mpool.GlobalCap()
+	return curr > globalCap*2/3
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).

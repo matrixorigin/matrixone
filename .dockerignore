@@ -1,8 +1,6 @@
 # Ignore build artifacts
 mo-data/
-**/mo-data/
 logs/
-**/logs/
 *.log
 
 # Ignore IDE files

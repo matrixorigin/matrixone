@@ -16,11 +16,11 @@
 
 package system
 
-// #include <malloc.h>
-import "C"
+import "golang.org/x/sys/unix"
 
-// MallocTrim calls glibc's malloc_trim(0) to release free memory back to the OS.
-// Only effective on Linux with glibc.
-func MallocTrim() {
-	C.malloc_trim(0)
+// FadviseDontNeed advises the kernel that the file data is no longer needed
+// and can be evicted from page cache. This is important in cgroup-limited
+// containers where page cache counts toward the memory limit.
+func FadviseDontNeed(fd int) {
+	unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED)
 }
