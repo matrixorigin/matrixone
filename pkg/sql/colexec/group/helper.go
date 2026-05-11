@@ -574,7 +574,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		// free spill agg list after merging.
 		ctr.freeSpillAggList()
 
-		if ctr.needSpill(opAnalyzer) {
+		if ctr.needSpillImpl(opAnalyzer, true) {
 			if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
 				return false, err
 			} else {
@@ -663,6 +663,10 @@ func (ctr *container) memUsed() int64 {
 }
 
 func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
+	return ctr.needSpillImpl(opAnalyzer, false)
+}
+
+func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, localOnly bool) bool {
 
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
@@ -675,6 +679,9 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
 	} else {
 		needSpill = memUsed > ctr.spillMem
+	}
+	if localOnly {
+		return needSpill
 	}
 	if !needSpill {
 		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
