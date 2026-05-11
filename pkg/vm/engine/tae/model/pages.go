@@ -392,22 +392,35 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector) err
 	return nil
 }
 
-func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
-	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWriteTransferPage)
-	defer cancel()
-	err := fs.Write(ctx, ioVector)
-	if err != nil {
-		for _, page := range pages {
-			page.SetBornTS(page.BornTS().Add(time.Minute))
+const (
+	transferPageWriteMaxRetry = 3
+	transferPageWriteBaseWait = 100 * time.Millisecond
+)
+
+func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) error {
+	var err error
+	for attempt := range transferPageWriteMaxRetry {
+		writeCtx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWriteTransferPage)
+		err = fs.Write(writeCtx, ioVector)
+		cancel()
+		if err == nil {
+			for i, page := range pages {
+				path := Path{
+					Name:   ioVector.FilePath,
+					Offset: ioVector.Entries[i].Offset,
+					Size:   ioVector.Entries[i].Size,
+				}
+				page.SetPath(path)
+			}
+			return nil
 		}
-		logutil.Errorf("[TransferPage] write transfer page error, page count %v", len(pages))
-	}
-	for i, page := range pages {
-		path := Path{
-			Name:   ioVector.FilePath,
-			Offset: ioVector.Entries[i].Offset,
-			Size:   ioVector.Entries[i].Size,
+		logutil.Warnf("[TransferPage] write transfer page error (attempt %d/%d), page count %v: %v",
+			attempt+1, transferPageWriteMaxRetry, len(pages), err)
+		if attempt < transferPageWriteMaxRetry-1 {
+			time.Sleep(transferPageWriteBaseWait << attempt)
 		}
-		page.SetPath(path)
 	}
+	logutil.Errorf("[TransferPage] write transfer page failed after %d retries, page count %v",
+		transferPageWriteMaxRetry, len(pages))
+	return err
 }
