@@ -88,6 +88,7 @@ func (bkt *spillBucket) free() error {
 	}
 	err := bkt.flushWriter()
 	if bkt.file != nil {
+		system.FadviseDontNeed(int(bkt.file.Fd()))
 		if closeErr := bkt.file.Close(); err == nil {
 			err = closeErr
 		}

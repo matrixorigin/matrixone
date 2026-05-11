@@ -301,6 +301,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err := f.Sync(); err != nil {
 		return 0, err
 	}
+	system.FadviseDontNeed(int(f.Fd()))
 	if err := f.Close(); err != nil {
 		return 0, err
 	}
@@ -1014,6 +1015,8 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 			if err := f.Sync(); err != nil {
 				return err
 			}
+			// release page cache before close
+			system.FadviseDontNeed(int(f.Fd()))
 			// close
 			if err := f.Close(); err != nil {
 				return err

@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 )
 
 // LocalETLFS is a FileService implementation backed by local file system and suitable for ETL operations
@@ -170,6 +171,7 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 			return moerr.NewSizeNotMatchNoCtx(path.File)
 		}
 	}
+	system.FadviseDontNeed(int(f.Fd()))
 	if err := f.Close(); err != nil {
 		return err
 	}
@@ -591,6 +593,8 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 	return &writeCloser{
 		w: f,
 		closeFunc: func() error {
+			// release page cache before close
+			system.FadviseDontNeed(int(f.Fd()))
 			// close
 			if err := f.Close(); err != nil {
 				return err

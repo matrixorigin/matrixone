@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -191,6 +192,7 @@ func (ctr *container) free(proc *process.Process) {
 
 func (ctr *container) cleanupSpill() {
 	if ctr.spillFile != nil {
+		system.FadviseDontNeed(int(ctr.spillFile.Fd()))
 		name := ctr.spillFile.Name()
 		ctr.spillFile.Close()
 		os.Remove(name)

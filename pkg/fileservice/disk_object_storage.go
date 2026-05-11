@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -256,6 +257,7 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
+	system.FadviseDontNeed(int(tempFile.Fd()))
 	if err := tempFile.Close(); err != nil {
 		return err
 	}
