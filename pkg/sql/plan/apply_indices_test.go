@@ -542,6 +542,15 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testi
 	assert.Equal(t, int32(0), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
 	assert.Equal(t, planpb.OrderBySpec_DESC, scanNode.OrderBy[0].Flag)
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+	indexParamCol := scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, indexParamCol)
+	assert.Equal(t, int32(100), indexParamCol.RelPos)
+	assert.Equal(t, int32(0), indexParamCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
+	assert.Equal(t, planpb.OrderBySpec_DESC, scanNode.IndexReaderParam.OrderBy[0].Flag)
 
 	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
 	require.NotNil(t, sortOrderCol)
@@ -575,6 +584,11 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), sortNode.OrderBy[0].Flag)
 	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.OrderBy[0].Flag)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+	assert.Equal(t, planpb.OrderBySpec_OrderByFlag(0), scanNode.IndexReaderParam.OrderBy[0].Flag)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
 }
 
 func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *testing.T) {
@@ -588,6 +602,9 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	require.Len(t, sortNode.SendMsgList, 1)
 	require.Len(t, scanNode.RecvMsgList, 1)
 	require.Len(t, scanNode.OrderBy, 1)
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 
 	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
 	require.NotNil(t, sortOrderCol)
@@ -600,6 +617,11 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, int32(100), scanOrderCol.RelPos)
 	assert.Equal(t, int32(0), scanOrderCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanOrderCol.Name)
+	indexParamCol := scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol()
+	require.NotNil(t, indexParamCol)
+	assert.Equal(t, int32(100), indexParamCol.RelPos)
+	assert.Equal(t, int32(0), indexParamCol.ColPos)
+	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
 }
 
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
@@ -613,6 +635,7 @@ func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T
 	require.Len(t, sortNode.SendMsgList, 1)
 	require.Len(t, scanNode.RecvMsgList, 1)
 	require.Len(t, scanNode.OrderBy, 1)
+	assert.Nil(t, scanNode.IndexReaderParam)
 
 	sortOrderCol := sortNode.OrderBy[0].Expr.GetCol()
 	require.NotNil(t, sortOrderCol)
@@ -643,6 +666,7 @@ func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality
 	assert.Empty(t, sortNode.SendMsgList)
 	assert.Empty(t, scanNode.RecvMsgList)
 	assert.Empty(t, scanNode.OrderBy)
+	assert.Nil(t, scanNode.IndexReaderParam)
 	require.Len(t, sortProjectNode.ProjectList, 1)
 }
 
@@ -664,7 +688,92 @@ func TestApplyIndicesForProjectSkipsRegularIndexPKOrderForNonPKSortColumn(t *tes
 	assert.Empty(t, sortNode.SendMsgList)
 	assert.Empty(t, scanNode.RecvMsgList)
 	assert.Empty(t, scanNode.OrderBy)
+	assert.Nil(t, scanNode.IndexReaderParam)
 	require.Len(t, sortProjectNode.ProjectList, 1)
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*planpb.Node)
+	}{
+		{
+			name: "offset",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.Offset = &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_uint64)},
+					Expr: &planpb.Expr_Lit{
+						Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 3}},
+					},
+				}
+			},
+		},
+		{
+			name: "rank",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.RankOption = &planpb.RankOption{}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			sortNode := builder.qry.Nodes[1]
+			tc.setup(sortNode)
+
+			builder.handleMessageFromTopToScan(rootNodeID)
+
+			scanNode := builder.qry.Nodes[0]
+			require.Len(t, sortNode.SendMsgList, 1)
+			require.Len(t, scanNode.RecvMsgList, 1)
+			require.Len(t, scanNode.OrderBy, 1)
+			assert.Nil(t, scanNode.IndexReaderParam)
+		})
+	}
+}
+
+func TestApplyIndicesForProjectSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*planpb.Node)
+	}{
+		{
+			name: "offset",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.Offset = &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_uint64)},
+					Expr: &planpb.Expr_Lit{
+						Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 3}},
+					},
+				}
+			},
+		},
+		{
+			name: "rank",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.RankOption = &planpb.RankOption{}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+				t,
+				2,
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+				planpb.OrderBySpec_DESC,
+			)
+			sortNode := builder.qry.Nodes[2]
+			tc.setup(sortNode)
+
+			_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+
+			scanNode := builder.qry.Nodes[0]
+			assert.Empty(t, sortNode.SendMsgList)
+			assert.Empty(t, scanNode.RecvMsgList)
+			assert.Empty(t, scanNode.OrderBy)
+			assert.Nil(t, scanNode.IndexReaderParam)
+		})
+	}
 }
 
 // Benchmark the function to ensure it's fast
