@@ -1716,6 +1716,13 @@ func parseHiveOptionKV(param *tree.ExternParam, key, val string) (bool, error) {
 	return false, nil
 }
 
+func validateHiveOptionConsistency(param *tree.ExternParam) error {
+	if !param.HivePartitioning && len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "hive_partition_columns requires hive_partitioning='true'")
+	}
+	return nil
+}
+
 func InitInfileParam(param *tree.ExternParam) error {
 	for i := 0; i < len(param.Option); i += 2 {
 		key := strings.ToLower(param.Option[i])
@@ -1746,6 +1753,9 @@ func InitInfileParam(param *tree.ExternParam) error {
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if len(param.Filepath) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
@@ -1792,7 +1802,7 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
@@ -1806,6 +1816,9 @@ func InitS3Param(param *tree.ExternParam) error {
 		default:
 			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
@@ -1892,7 +1905,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		switch key {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
@@ -1908,6 +1921,9 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		}
 	}
 
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
+	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
 	}

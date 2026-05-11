@@ -461,7 +461,7 @@ amount double,
 year int not null
 ) infile{'filepath'='$resources/hive_partition/not_null_default/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_not_null_default;
-constraint violation: partition column 'year' is NOT NULL but directory has __HIVE_DEFAULT_PARTITION__ in path 'year=__HIVE_DEFAULT_PARTITION__/data.parquet'
+constraint violation: partition column 'year' is NOT NULL but directory has __HIVE_DEFAULT_PARTITION__ in path 'year=__HIVE_DEFAULT_PARTITION__/data.parquet'; allow NULL on the partition column or remove/rename the default partition directory
 drop table if exists hive_col_overlap;
 create external table hive_col_overlap (
 id int,

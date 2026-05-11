@@ -5044,12 +5044,18 @@ func parseHiveOptionsFromRawOptions(ctx context.Context, options []string) (enab
 		}
 	}
 	if hiveVal == "" {
+		if strings.TrimSpace(colsVal) != "" {
+			return false, nil, moerr.NewBadConfig(ctx, "hive_partition_columns requires hive_partitioning='true'")
+		}
 		return false, nil, nil
 	}
 	if hiveVal != "true" && hiveVal != "false" {
 		return false, nil, moerr.NewBadConfigf(ctx, "hive_partitioning must be 'true' or 'false', got '%s'", hiveVal)
 	}
 	if hiveVal == "false" {
+		if strings.TrimSpace(colsVal) != "" {
+			return false, nil, moerr.NewBadConfig(ctx, "hive_partition_columns requires hive_partitioning='true'")
+		}
 		return false, nil, nil
 	}
 	if colsVal == "" {
