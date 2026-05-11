@@ -47,12 +47,16 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -533,4 +537,95 @@ func TestLockMeta_doLock(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 
 	assert.Error(t, lm.doLock(eng, proc))
+}
+
+func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope := newShuffleGroupV2InputScope(1)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+}
+
+func TestCompileShuffleGroupV2UsesShuffleWhenScopeMcpuMatchesDop(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope := newShuffleGroupV2InputScope(16)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	shuffleOp, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffleV2.ShuffleV2)
+	require.True(t, ok)
+	require.Equal(t, int32(16), shuffleOp.BucketNum)
+	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)
+}
+
+func newCompileForShuffleGroupV2Test(t *testing.T) *Compile {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+	return c
+}
+
+func newShuffleGroupV2InputScope(mcpu int) *Scope {
+	scope := newScope(Merge)
+	scope.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: mcpu}
+	scope.setRootOperator(colexec.NewMockOperator())
+	return scope
+}
+
+func newShuffleGroupV2TestNodes(dop int32) (*plan.Node, []*plan.Node) {
+	col := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 0},
+		},
+	}
+	child := &plan.Node{
+		NodeId:   3,
+		NodeType: plan.Node_SORT,
+		Stats:    &plan.Stats{Dop: dop},
+		ProjectList: []*plan.Expr{
+			col,
+		},
+	}
+	agg := &plan.Node{
+		NodeId:   4,
+		NodeType: plan.Node_AGG,
+		Stats: &plan.Stats{
+			Dop: dop,
+			HashmapStats: &plan.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Range,
+				ShuffleMethod: plan.ShuffleMethod_Normal,
+			},
+		},
+		Children: []int32{0},
+		GroupBy:  []*plan.Expr{col},
+	}
+	return agg, []*plan.Node{child}
+}
+
+func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
+	if op == nil {
+		return false
+	}
+	if op.OpType() == opType {
+		return true
+	}
+	for i := 0; i < op.GetOperatorBase().NumChildren(); i++ {
+		if hasOperatorType(op.GetOperatorBase().GetChildren(i), opType) {
+			return true
+		}
+	}
+	return false
 }
