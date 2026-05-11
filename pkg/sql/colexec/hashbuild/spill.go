@@ -295,7 +295,19 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 func processMemoryOverBudget() bool {
 	curr := mpool.GlobalUsedWithPending()
 	globalCap := mpool.GlobalCap()
-	return curr > globalCap*2/3
+	if curr > globalCap*2/3 {
+		return true
+	}
+	// Also check system/cgroup memory to catch Go heap and page cache pressure
+	// that mpool alone can't see.
+	total := system.MemoryTotal()
+	if total > 0 {
+		used := system.MemoryUsed()
+		if used > total*3/4 {
+			return true
+		}
+	}
+	return false
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
