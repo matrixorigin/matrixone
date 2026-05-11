@@ -331,24 +331,24 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 cnt
 0
 explain select * from hive_single where year = 2024;
-AP QUERY PLAN ON MULTICN(10 core)
+AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  External Scan on hive_part_db.hive_single
         Filter Cond: (hive_single.year = 2024)
 explain (analyze true) select * from hive_single where year = 2024;
-ap query plan on multicn(10 core)
+ap query plan on multicn(4 core)
 Project
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 InputSize=80bytes OutputSize=80bytes MemorySize=80bytes
   ->  External Scan on hive_part_db.hive_single
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=5 outputRows=5 InputSize=80bytes OutputSize=80bytes MemorySize=165bytes
         Filter Cond: (hive_single.year = 2024)
 explain select * from hive_multi where year = 2024 and month = '01';
-AP QUERY PLAN ON MULTICN(10 core)
+AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  External Scan on hive_part_db.hive_multi
         Filter Cond: (hive_multi.year = 2024), (hive_multi.month = '01')
 explain select * from hive_single where year in (2020, 2024);
-AP QUERY PLAN ON MULTICN(10 core)
+AP QUERY PLAN ON MULTICN(4 core)
 Project
   ->  External Scan on hive_part_db.hive_single
         Filter Cond: hive_single.year in ([2020 2024])
