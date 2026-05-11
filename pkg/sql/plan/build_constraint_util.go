@@ -524,17 +524,16 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		colTyp := tableDef.Cols[colIdx].Typ
-		switch {
-		case isEnumPlanType(&colTyp):
-			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, colTyp)
-		case isSetPlanType(&colTyp):
-			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, colTyp)
-		default:
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, colTyp)
-		}
-		if err != nil {
-			return false, nil, nil, err
+		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
+			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
+		} else {
+			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
 		}
 		insertColToExpr[column] = projExpr
 		if ifInsertFromUniqueColMap != nil {
@@ -1182,7 +1181,7 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
 						return err
@@ -1205,14 +1204,11 @@ func buildValueScan(
 					if err != nil {
 						return err
 					}
-					switch {
-					case isEnumPlanType(&col.Typ):
+					if col.Typ.Id == int32(types.T_enum) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
-					case isSetPlanType(&col.Typ):
-						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
-					}
-					if err != nil {
-						return err
+						if err != nil {
+							return err
+						}
 					}
 				}
 				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)

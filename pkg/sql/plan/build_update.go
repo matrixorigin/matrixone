@@ -130,15 +130,13 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				if err != nil {
 					return err
 				}
-				if col != nil {
-					switch {
-					case isEnumPlanType(&col.Typ):
-						lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, col.Typ)
-					case isSetPlanType(&col.Typ):
-						lastNode.ProjectList[pos], err = funcCastForSetType(builder.GetContext(), posExpr, col.Typ)
-					default:
-						lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, col.Typ)
+					if err != nil {
+						return err
 					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -155,15 +153,13 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = newDefExpr
 				}
 
-				if col != nil {
-					switch {
-					case isEnumPlanType(&col.Typ):
-						lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
-					case isSetPlanType(&col.Typ):
-						lastNode.ProjectList[pos], err = funcCastForSetType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
-					default:
-						lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					if err != nil {
+						return err
 					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
