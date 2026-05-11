@@ -222,7 +222,7 @@ func TestHandleOrderByLimitOnSelectRows(t *testing.T) {
 		DistHeap:   make(objectio.Float64Heap, 0, 2),
 	}
 
-	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, -1, cacheVectors)
+	resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, nil, -1, cacheVectors)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(resSels))
 	require.Equal(t, 2, len(resDists))
@@ -676,7 +676,82 @@ func TestHandleOrderByLimitOnSelectRowsRejectsOverflowLimit(t *testing.T) {
 		MetricType: metric.Metric_L2Distance,
 	}
 
-	_, _, err := handleOrderByLimitOnSelectRows(context.Background(), []int64{0}, orderByLimit, -1, cacheVectors)
+	_, _, err := handleOrderByLimitOnSelectRows(context.Background(), []int64{0}, orderByLimit, nil, -1, cacheVectors)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "overflows int")
+}
+
+func TestHandleOrderByLimitOnSelectRowsForOrderedLimit(t *testing.T) {
+	ctx := context.Background()
+	selectRows := []int64{2, 4, 6, 8}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	descLimit := &objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true, Desc: true}
+	descRows, descDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, descLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, descDists)
+	require.Equal(t, []int64{6, 8}, descRows)
+
+	ascLimit := &objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true}
+	ascRows, ascDists, err := handleOrderByLimitOnSelectRows(ctx, selectRows, ascLimit, info, -1, nil)
+	require.NoError(t, err)
+	require.Nil(t, ascDists)
+	require.Equal(t, []int64{2, 4}, ascRows)
+}
+
+func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec0 := vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 6; i++ {
+		vector.AppendFixed(vec0, int32(i), false, mp)
+	}
+	cacheVectors := make(containers.Vectors, 1)
+	cacheVectors[0] = *vec0
+
+	descLimit := &objectio.IndexReaderTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+		Desc:         true,
+	}
+	info := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+
+	rows, dists, err := handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{4, 5}, rows)
+
+	ascLimit := &objectio.IndexReaderTopOp{
+		Typ:          types.T_int32,
+		ColPos:       0,
+		Limit:        2,
+		OrderedLimit: true,
+	}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, objectio.Bitmap{}, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{0, 1}, rows)
+
+	deleteMask := objectio.GetReusableBitmap()
+	defer deleteMask.Release()
+	deleteMask.Add(4)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), descLimit, info, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{3, 5}, rows)
+
+	deleteMask.Add(0)
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, info, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{1, 2}, rows)
+
+	unsortedInfo := &objectio.BlockInfo{}
+	rows, dists, err = handleOrderByLimitOnLiveRows(context.Background(), ascLimit, unsortedInfo, -1, deleteMask, cacheVectors)
+	require.NoError(t, err)
+	require.Nil(t, dists)
+	require.Equal(t, []int64{1, 2, 3, 5}, rows)
 }
