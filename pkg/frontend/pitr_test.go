@@ -2959,7 +2959,7 @@ func Test_restoreViews(t *testing.T) {
 
 		sql := "select * from mo_catalog.mo_snapshots where sname = 'sp01'"
 		// string/ string/ int64/ string/ string/ string/ string/ uint64
-		mrs := newMrsForPitrRecord([][]interface{}{{"1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1)}})
+		mrs := newMrsForSnapshotRecord("1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1))
 		bh.sql2result[sql] = mrs
 
 		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'sys'"

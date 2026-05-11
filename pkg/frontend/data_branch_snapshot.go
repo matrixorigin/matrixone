@@ -50,8 +50,14 @@ func loadBranchDAGWithBH(
 ) (databranchutils.BranchReclaimDag, error) {
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 	bh.ClearExecResultSet()
+	// `FOR UPDATE` serialises sibling reclaim paths (design §5.3). Without
+	// it, two concurrent drops in the same DAG `A → {B, C}` would each
+	// read `mo_branch_metadata` from their own txn snapshot, each miss
+	// their sibling's `table_deleted=true` flip, and each decline to
+	// reclaim `__mo_branch_<A>` — leaking the snapshot forever (review
+	// PR#24313 blocking issue #1).
 	sql := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, table_deleted from %s.%s",
+		"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	if err := bh.Exec(sysCtx, sql); err != nil {

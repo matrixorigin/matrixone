@@ -1864,8 +1864,15 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		return nil
 	}
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
+		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
+		// drops from the same parent would otherwise each miss the
+		// other's table_deleted flip and both skip the ancestor
+		// reclaim, leaking the parent snapshot forever (review PR#24313
+		// blocking issue #1). Sharing the txn lock across the whole
+		// table keeps the check atomic at minimal cost; drops are
+		// low-frequency.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s",
+			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))

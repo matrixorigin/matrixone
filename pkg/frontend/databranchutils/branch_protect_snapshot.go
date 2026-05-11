@@ -18,6 +18,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // BranchSnapshotKind is the value stored in mo_snapshots.kind for rows that
@@ -108,6 +111,16 @@ func (d BranchReclaimDag) subtreeAllDeletedMemo(
 		// Cycle: assume deleted so the cycle does not hold up the rest of
 		// the subtree. The enclosing caller's visited bookkeeping prevents
 		// an infinite loop regardless of what the true `Deleted` bit says.
+		//
+		// mo_branch_metadata is supposed to be acyclic (table_id is PK,
+		// the row is only ever written once by updateBranchMetaTable).
+		// Hitting this branch therefore indicates catalog corruption —
+		// surface a WARN so the operator can investigate.
+		logutil.Warn(
+			"DataBranch-ProtectSnapshot-CycleDetected",
+			zap.Uint64("table-id", root),
+			zap.String("reason", "mo_branch_metadata ancestor chain forms a cycle; treating node as deleted to avoid infinite recursion"),
+		)
 		return true
 	}
 	visited[root] = struct{}{}
@@ -142,10 +155,24 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 	candidates := make(map[uint64]struct{}, len(deadTIDs)*2)
 	for _, tid := range deadTIDs {
 		cursor := tid
+		// `walkVisited` is scoped to a single dead-tid walk so we can
+		// distinguish "hit a sibling's already-seen ancestor" (benign)
+		// from "hit a node in our own walk's history" (cycle).
+		walkVisited := make(map[uint64]struct{})
 		for cursor != 0 {
+			if _, inThisWalk := walkVisited[cursor]; inThisWalk {
+				logutil.Warn(
+					"DataBranch-ProtectSnapshot-CycleDetected",
+					zap.Uint64("table-id", cursor),
+					zap.Uint64("walk-origin-tid", tid),
+					zap.String("reason", "mo_branch_metadata ancestor chain forms a cycle; breaking walk"),
+				)
+				break
+			}
+			walkVisited[cursor] = struct{}{}
 			if _, seen := candidates[cursor]; seen {
-				// Already walked from a previous dead tid or hit a cycle —
-				// either way there is nothing new above this cursor.
+				// Already covered by a previous dead tid's walk (normal
+				// fan-out): nothing new above this cursor.
 				break
 			}
 			candidates[cursor] = struct{}{}
