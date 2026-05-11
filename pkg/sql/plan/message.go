@@ -76,6 +76,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
+	enableOrderedLimit := false
 	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
 		orderByName := orderByCol.Name
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
@@ -89,6 +90,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
+		enableOrderedLimit = node.Offset == nil && node.RankOption == nil
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
@@ -99,6 +101,9 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, scanOrderBy)
+	if enableOrderedLimit {
+		applyRegularIndexOrderedLimitParam(scanNode, scanOrderBy, node.Limit)
+	}
 }
 
 func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
