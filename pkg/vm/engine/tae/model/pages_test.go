@@ -32,13 +32,17 @@ import (
 )
 
 type failWriteFS struct {
-	failCount atomic.Int32
-	maxFails  int32
+	failCount        atomic.Int32
+	maxFails         int32
+	fileExistsOnFail int32
 }
 
 func (fs *failWriteFS) Name() string { return "fail-write-fs" }
 func (fs *failWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
 	n := fs.failCount.Add(1)
+	if fs.fileExistsOnFail > 0 && n == fs.fileExistsOnFail {
+		return moerr.NewFileAlreadyExistsNoCtx(vector.FilePath)
+	}
 	if n <= fs.maxFails {
 		return moerr.NewInternalErrorNoCtxf("injected IO error (attempt %d)", n)
 	}
@@ -128,6 +132,36 @@ func TestWriteTransferPage_SucceedsAfterRetry(t *testing.T) {
 
 func TestWriteTransferPage_SucceedsFirstTry(t *testing.T) {
 	fs := &failWriteFS{maxFails: 0}
+	pages, ioVector, bufs := makeTestPages(2)
+
+	err := WriteTransferPage(context.Background(), fs, pages, ioVector, bufs)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fs.failCount.Load())
+	for i, page := range pages {
+		assert.Equal(t, ioVector.FilePath, page.path.Name)
+		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
+		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+	}
+}
+
+func TestWriteTransferPage_FileAlreadyExistsOnRetry(t *testing.T) {
+	fs := &failWriteFS{maxFails: 10, fileExistsOnFail: 2}
+	pages, ioVector, bufs := makeTestPages(2)
+
+	err := WriteTransferPage(context.Background(), fs, pages, ioVector, bufs)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), fs.failCount.Load())
+	for i, page := range pages {
+		assert.Equal(t, ioVector.FilePath, page.path.Name)
+		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
+		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+	}
+}
+
+func TestWriteTransferPage_FileAlreadyExistsOnFirstAttempt(t *testing.T) {
+	fs := &failWriteFS{maxFails: 10, fileExistsOnFail: 1}
 	pages, ioVector, bufs := makeTestPages(2)
 
 	err := WriteTransferPage(context.Background(), fs, pages, ioVector, bufs)
