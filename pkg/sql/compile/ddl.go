@@ -1863,14 +1863,49 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	if len(deadTIDs) == 0 {
 		return nil
 	}
+	// Fast path: the vast majority of DROP TABLE operations are on tables
+	// that have nothing to do with data branch. Skip the `FOR UPDATE`
+	// reclaim scan entirely unless at least one of the dead tids actually
+	// participates in mo_branch_metadata (as a child row or as a parent
+	// referenced by some child). This keeps DROP TABLE fast and, more
+	// importantly, avoids lock-contention with unrelated drops that
+	// stacked up in `restore account` / `drop database` cascades.
+	var idList strings.Builder
+	for i, tid := range deadTIDs {
+		if i > 0 {
+			idList.WriteByte(',')
+		}
+		idList.WriteString(strconv.FormatUint(tid, 10))
+	}
+	probeSQL := fmt.Sprintf(
+		"select 1 from %s.%s where table_id in (%s) or p_table_id in (%s) limit 1",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		idList.String(), idList.String(),
+	)
+	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	hasBranchRow := false
+	probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
+		if n > 0 {
+			hasBranchRow = true
+		}
+		return true
+	})
+	probeRes.Close()
+	if !hasBranchRow {
+		return nil
+	}
+
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
 		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
 		// drops from the same parent would otherwise each miss the
 		// other's table_deleted flip and both skip the ancestor
 		// reclaim, leaking the parent snapshot forever (review PR#24313
-		// blocking issue #1). Sharing the txn lock across the whole
-		// table keeps the check atomic at minimal cost; drops are
-		// low-frequency.
+		// blocking issue #1). Only reached when the fast-path probe
+		// above already confirmed the drop touches mo_branch_metadata,
+		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
 			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
