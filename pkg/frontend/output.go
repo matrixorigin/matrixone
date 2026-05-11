@@ -88,7 +88,7 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		row[i] = vector.GetFixedAtNoTypeCheck[float32](vec, rowIndex)
 	case types.T_float64:
 		row[i] = vector.GetFixedAtNoTypeCheck[float64](vec, rowIndex)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt(rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
@@ -122,12 +122,17 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		scale := vec.GetType().Scale
 		timeZone := ses.GetTimeZone()
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+	case types.T_year:
+		row[i] = int16(vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex))
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIndex).Format(scale)
 	case types.T_uuid:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIndex).String()
 	case types.T_Rowid:
@@ -206,7 +211,7 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		row[i] = colSlices.arrFloat32[sliceIdx][rowIndex]
 	case types.T_float64:
 		row[i] = colSlices.arrFloat64[sliceIdx][rowIndex]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		row[i] = commonutil.CloneBytesIf(vec.GetBytesAt2(colSlices.arrVarlena[sliceIdx], rowIndex), !safeRefSlice)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
@@ -240,12 +245,17 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		scale := vec.GetType().Scale
 		timeZone := ses.GetTimeZone()
 		row[i] = colSlices.arrTimestamp[sliceIdx][rowIndex].String2(timeZone, scale)
+	case types.T_year:
+		row[i] = int16(colSlices.arrMoYear[sliceIdx][rowIndex])
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
 		row[i] = colSlices.arrDecimal64[sliceIdx][rowIndex].Format(scale)
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		row[i] = colSlices.arrDecimal128[sliceIdx][rowIndex].Format(scale)
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		row[i] = colSlices.arrDecimal256[sliceIdx][rowIndex].Format(scale)
 	case types.T_uuid:
 		row[i] = colSlices.arrUuid[sliceIdx][rowIndex].String()
 	case types.T_Rowid:
@@ -287,6 +297,8 @@ type ColumnSlices struct {
 	arrTimestamp    [][]types.Timestamp
 	arrDecimal64    [][]types.Decimal64
 	arrDecimal128   [][]types.Decimal128
+	arrDecimal256   [][]types.Decimal256
+	arrMoYear       [][]types.MoYear
 	arrUuid         [][]types.Uuid
 	arrRowid        [][]types.Rowid
 	arrBlockid      [][]types.Blockid
@@ -320,6 +332,8 @@ func (slices *ColumnSlices) Close() {
 	slices.arrTimestamp = nil
 	slices.arrDecimal64 = nil
 	slices.arrDecimal128 = nil
+	slices.arrDecimal256 = nil
+	slices.arrMoYear = nil
 	slices.arrUuid = nil
 	slices.arrRowid = nil
 	slices.arrBlockid = nil
@@ -390,7 +404,10 @@ func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 		return uint64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return uint64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16:
+	case types.T_int16, types.T_year:
+		if typ.Oid == types.T_year {
+			return uint64(slices.arrMoYear[sliceIdx][r]), nil
+		}
 		return uint64(slices.arrInt16[sliceIdx][r]), nil
 	case types.T_uint16:
 		return uint64(slices.arrUint16[sliceIdx][r]), nil
@@ -422,7 +439,10 @@ func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 		return int64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return int64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16:
+	case types.T_int16, types.T_year:
+		if typ.Oid == types.T_year {
+			return int64(slices.arrMoYear[sliceIdx][r]), nil
+		}
 		return int64(slices.arrInt16[sliceIdx][r]), nil
 	case types.T_uint16:
 		return int64(slices.arrUint16[sliceIdx][r]), nil
@@ -456,6 +476,9 @@ func (slices *ColumnSlices) GetDecimal(r uint64, i uint64) (string, error) {
 	case types.T_decimal128:
 		scale := vec.GetType().Scale
 		return slices.arrDecimal128[sliceIdx][r].Format(scale), nil
+	case types.T_decimal256:
+		scale := vec.GetType().Scale
+		return slices.arrDecimal256[sliceIdx][r].Format(scale), nil
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid decimal slice")
 	}
@@ -708,7 +731,7 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_float64:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrFloat64)
 		colSlices.arrFloat64 = append(colSlices.arrFloat64, vector.ToSliceNoTypeCheck2[float64](vec))
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float32:
@@ -735,12 +758,18 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 	case types.T_timestamp:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrTimestamp)
 		colSlices.arrTimestamp = append(colSlices.arrTimestamp, vector.ToSliceNoTypeCheck2[types.Timestamp](vec))
+	case types.T_year:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrMoYear)
+		colSlices.arrMoYear = append(colSlices.arrMoYear, vector.ToSliceNoTypeCheck2[types.MoYear](vec))
 	case types.T_decimal64:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal64)
 		colSlices.arrDecimal64 = append(colSlices.arrDecimal64, vector.ToSliceNoTypeCheck2[types.Decimal64](vec))
 	case types.T_decimal128:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal128)
 		colSlices.arrDecimal128 = append(colSlices.arrDecimal128, vector.ToSliceNoTypeCheck2[types.Decimal128](vec))
+	case types.T_decimal256:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrDecimal256)
+		colSlices.arrDecimal256 = append(colSlices.arrDecimal256, vector.ToSliceNoTypeCheck2[types.Decimal256](vec))
 	case types.T_uuid:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUuid)
 		colSlices.arrUuid = append(colSlices.arrUuid, vector.ToSliceNoTypeCheck2[types.Uuid](vec))

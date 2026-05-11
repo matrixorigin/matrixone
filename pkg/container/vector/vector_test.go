@@ -83,6 +83,47 @@ func TestMakeAppendBytesFuncSupportsYearAndDecimal256(t *testing.T) {
 	require.Equal(t, "123456789012345678901234567890.1234", decimals[0].Format(4))
 }
 
+func TestGetUnionAllFunctionSupportsYearAndDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	yearType := types.T_year.ToType()
+	srcYear := NewVec(yearType)
+	defer srcYear.Free(mp)
+	require.NoError(t, AppendFixed(srcYear, types.MoYear(2024), false, mp))
+	require.NoError(t, AppendFixed(srcYear, types.MoYear(1999), false, mp))
+	require.NoError(t, AppendFixed(srcYear, types.MoYear(0), true, mp))
+
+	dstYear := NewVec(yearType)
+	defer dstYear.Free(mp)
+	unionYear := GetUnionAllFunction(yearType, mp)
+	require.NoError(t, unionYear(dstYear, srcYear))
+	require.Equal(t, 3, dstYear.Length())
+	years := MustFixedColNoTypeCheck[types.MoYear](dstYear)
+	require.Equal(t, types.MoYear(2024), years[0])
+	require.Equal(t, types.MoYear(1999), years[1])
+	require.True(t, dstYear.IsNull(2))
+
+	decType := types.New(types.T_decimal256, 65, 4)
+	d1, err := types.ParseDecimal256("11111111111111111111111111111111.1111", 65, 4)
+	require.NoError(t, err)
+	d2, err := types.ParseDecimal256("22222222222222222222222222222222.2222", 65, 4)
+	require.NoError(t, err)
+
+	srcDec := NewVec(decType)
+	defer srcDec.Free(mp)
+	require.NoError(t, AppendFixed(srcDec, d1, false, mp))
+	require.NoError(t, AppendFixed(srcDec, d2, false, mp))
+
+	dstDec := NewVec(decType)
+	defer dstDec.Free(mp)
+	unionDec := GetUnionAllFunction(decType, mp)
+	require.NoError(t, unionDec(dstDec, srcDec))
+	require.Equal(t, 2, dstDec.Length())
+	decs := MustFixedColNoTypeCheck[types.Decimal256](dstDec)
+	require.Equal(t, d1.Format(4), decs[0].Format(4))
+	require.Equal(t, d2.Format(4), decs[1].Format(4))
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())

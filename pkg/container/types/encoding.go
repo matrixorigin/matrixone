@@ -253,6 +253,22 @@ func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeDecimal256(v *Decimal256) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeDecimal256(v []byte) Decimal256 {
+	return *(*Decimal256)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeMoYear(v *MoYear) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeMoYear(v []byte) MoYear {
+	return *(*MoYear)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeUuid(v *Uuid) []byte {
 	return util.UnsafeToBytes(v)
 }
