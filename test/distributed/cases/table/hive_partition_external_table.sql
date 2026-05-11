@@ -331,16 +331,19 @@ select count(*) as cnt from hive_single where year = 2024 and __mo_filepath like
 -- ============================================================================
 
 -- 8.1 EXPLAIN shows External Scan with Filter Cond
+-- @hint:External Scan,Filter Cond,hive_single.year = 2024
 explain select * from hive_single where year = 2024;
 
 -- 8.2 EXPLAIN ANALYZE has runtime stats
--- @regex("inputRows=",true)
+-- @hint:inputRows=,External Scan,Filter Cond,hive_single.year = 2024
 explain (analyze true) select * from hive_single where year = 2024;
 
 -- 8.3 EXPLAIN multi-level partition scan shows both filter conditions retained (double-filter safety)
+-- @hint:External Scan,Filter Cond,hive_multi.year = 2024,hive_multi.month = '01'
 explain select * from hive_multi where year = 2024 and month = '01';
 
 -- 8.4 EXPLAIN with IN list
+-- @hint:External Scan,Filter Cond,hive_single.year in
 explain select * from hive_single where year in (2020, 2024);
 
 -- ============================================================================
