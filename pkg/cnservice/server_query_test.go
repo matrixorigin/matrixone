@@ -80,7 +80,7 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 				resp: &query.Response{},
 			},
 			wantErr: nil,
-			want:    &query.Response{GoMaxProcsResponse: query.GoMaxProcsResponse{MaxProcs: int32(goruntime.NumCPU())}},
+			want:    &query.Response{GoMaxProcsResponse: query.GoMaxProcsResponse{MaxProcs: int32(goruntime.GOMAXPROCS(0))}},
 		},
 	}
 	for _, tt := range tests {
