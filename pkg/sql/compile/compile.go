@@ -1730,12 +1730,6 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 		return c.compileExternValueScan(node, param, strictSqlMode)
 	}
 
-	// Hive partition tables must not enter parallel read paths — the parallel loop
-	// mutates param.Filepath per file, which breaks ExtractPartitionValues' base path.
-	if param.HivePartitioning {
-		param.Parallel = false
-	}
-
 	fileList, fileSize, err := c.getExternalFileListAndSize(node, param)
 	if err != nil {
 		return nil, err
@@ -1759,6 +1753,10 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 
 		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
+	}
+
+	if param.HivePartitioning {
+		return c.compileExternScanHiveFileFanout(node, param, fileList, fileSize, strictSqlMode)
 	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
@@ -1849,6 +1847,152 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 		return parallelSize
 	}
 	return cpuNum
+}
+
+type hiveFileShard struct {
+	node     engine.Node
+	fileList []string
+	fileSize []int64
+}
+
+func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
+	shards := splitHiveFileShards(fileList, fileSize, nodes)
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		// Each fanout scope scans whole parquet files. Keeping Parallel=false
+		// avoids the generic parallel path's per-file offset splitting while
+		// preserving Extern.Filepath as the Hive base path for partition fills.
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
+	if fileCount <= 0 {
+		return nil
+	}
+	if param.ScanType == tree.S3 && len(c.cnList) > 0 {
+		nodes := make([]engine.Node, 0, fileCount)
+		for _, node := range c.cnList {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			if mcpu > external.S3ParallelMaxnum {
+				mcpu = external.S3ParallelMaxnum
+			}
+			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
+				n := node
+				n.Mcpu = 1
+				nodes = append(nodes, n)
+			}
+			if len(nodes) >= fileCount {
+				break
+			}
+		}
+		if len(nodes) > 0 {
+			return nodes
+		}
+	}
+
+	mcpu := c.ncpu
+	if mcpu <= 0 {
+		mcpu = 1
+	}
+	if mcpu > fileCount {
+		mcpu = fileCount
+	}
+	nodes := make([]engine.Node, mcpu)
+	for i := range nodes {
+		nodes[i] = engine.Node{Addr: c.addr, Mcpu: 1}
+	}
+	return nodes
+}
+
+func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Node) []hiveFileShard {
+	if len(fileList) == 0 || len(nodes) == 0 {
+		return nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(fileList) {
+		shardCount = len(fileList)
+	}
+	shards := make([]hiveFileShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+	}
+
+	indices := make([]int, len(fileList))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	})
+
+	for _, fileIdx := range indices {
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].fileList) < len(shards[shardIdx].fileList)) {
+				shardIdx = i
+			}
+		}
+		shards[shardIdx].fileList = append(shards[shardIdx].fileList, fileList[fileIdx])
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
+		loads[shardIdx] += size
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.fileList) > 0 {
+			nonEmpty = append(nonEmpty, shard)
+		}
+	}
+	return nonEmpty
+}
+
+func hiveFileSizeAt(fileSize []int64, idx int) int64 {
+	if idx >= 0 && idx < len(fileSize) {
+		return fileSize[idx]
+	}
+	return 0
+}
+
+func makeWholeFileOffsets(count int) []*pipeline.FileOffset {
+	offsets := make([]*pipeline.FileOffset, count)
+	for i := range offsets {
+		offsets[i] = &pipeline.FileOffset{Offset: []int64{0, -1}}
+	}
+	return offsets
 }
 
 func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {

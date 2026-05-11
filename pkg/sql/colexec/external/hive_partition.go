@@ -85,9 +85,19 @@ type HivePartSegment struct {
 type ListDirFunc func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error]
 
 // NewListDirFunc creates a ListDirFunc backed by GetForETLWithType.
-// TODO: For S3 this re-creates an S3FS instance per List call; pre-build the
-// FS once and reuse across recursive calls for better performance.
 func NewListDirFunc(param *tree.ExternParam) ListDirFunc {
+	if param.ScanType == tree.S3 {
+		basePath := normalizeExternalPath(param.Filepath)
+		fs, baseReadPath, initErr := plan2.GetForETLWithType(param, basePath)
+		return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
+			if initErr != nil {
+				return func(yield func(*fileservice.DirEntry, error) bool) {
+					yield(nil, initErr)
+				}
+			}
+			return fs.List(ctx, deriveHiveListReadPath(basePath, baseReadPath, prefix))
+		}
+	}
 	return func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
 		fs, readPath, err := plan2.GetForETLWithType(param, prefix)
 		if err != nil {
@@ -97,6 +107,24 @@ func NewListDirFunc(param *tree.ExternParam) ListDirFunc {
 		}
 		return fs.List(ctx, readPath)
 	}
+}
+
+func deriveHiveListReadPath(basePath, baseReadPath, prefix string) string {
+	prefix = normalizeExternalPath(prefix)
+	if prefix == basePath {
+		return baseReadPath
+	}
+	if !strings.HasPrefix(prefix, basePath+"/") {
+		return prefix
+	}
+	rel := strings.TrimPrefix(prefix, basePath+"/")
+	if rel == "" {
+		return baseReadPath
+	}
+	if baseReadPath == "" || baseReadPath == "." {
+		return rel
+	}
+	return path.Join(baseReadPath, rel)
 }
 
 // normalizeExternalPath ensures consistent path format for prefix matching.
@@ -141,7 +169,47 @@ func ParseHivePartitionSegment(segment string) (seg HivePartSegment, isHive bool
 	}
 	seg.Key = segment[:idx]
 	seg.Value = segment[idx+1:]
+	if err := validateHivePartitionSegmentPart("key", seg.Key, false); err != nil {
+		return HivePartSegment{}, true, err
+	}
+	if err := validateHivePartitionSegmentPart("value", seg.Value, true); err != nil {
+		return HivePartSegment{}, true, err
+	}
 	return seg, true, nil
+}
+
+func validateHivePartitionSegmentPart(kind, value string, allowEmpty bool) error {
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return moerr.NewInternalErrorNoCtxf("invalid hive partition %s: empty", kind)
+	}
+	if value == "." || value == ".." {
+		return moerr.NewInternalErrorNoCtxf("invalid hive partition %s '%s': path traversal segment is not allowed", kind, value)
+	}
+	for _, r := range value {
+		if r == '/' || r == '\\' {
+			return moerr.NewInternalErrorNoCtxf("invalid hive partition %s '%s': path separator is not allowed", kind, value)
+		}
+		if r == '%' {
+			return moerr.NewInternalErrorNoCtxf("invalid hive partition %s '%s': URL-encoded values are not supported", kind, value)
+		}
+		if r == 0 || r < 0x20 || r == 0x7f {
+			return moerr.NewInternalErrorNoCtxf("invalid hive partition %s '%s': control character is not allowed", kind, value)
+		}
+		if kind == "key" && !isHivePartitionKeyRune(r) {
+			return moerr.NewInternalErrorNoCtxf("invalid hive partition key '%s': only letters, digits, and '_' are allowed", value)
+		}
+	}
+	return nil
+}
+
+func isHivePartitionKeyRune(r rune) bool {
+	return r == '_' ||
+		(r >= '0' && r <= '9') ||
+		(r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z')
 }
 
 // ExtractPartitionValues parses partition key=value segments from a file path
@@ -659,6 +727,8 @@ func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, 
 	}
 
 	vec := vector.NewVec(types.New(oid, typ.Width, typ.Scale))
+	// UnmarshalBinary aliases litVec.Data and marks vector buffers non-freeable,
+	// so a nil MPool is intentional here.
 	defer vec.Free(nil)
 	if err := vec.UnmarshalBinary(litVec.Data); err != nil {
 		return nil, false

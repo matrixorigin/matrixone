@@ -52,12 +52,11 @@ func TestParseHivePartitionSegment_EmptyValue(t *testing.T) {
 	assert.Equal(t, "", seg.Value)
 }
 
-func TestParseHivePartitionSegment_PercentLiteral(t *testing.T) {
-	seg, isHive, err := ParseHivePartitionSegment("country=US%2FCA")
-	require.NoError(t, err)
+func TestParseHivePartitionSegment_RejectsPercentLiteral(t *testing.T) {
+	_, isHive, err := ParseHivePartitionSegment("country=US%2FCA")
 	assert.True(t, isHive)
-	assert.Equal(t, "country", seg.Key)
-	assert.Equal(t, "US%2FCA", seg.Value)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "URL-encoded values are not supported")
 }
 
 func TestParseHivePartitionSegment_NotPartition(t *testing.T) {
@@ -73,11 +72,10 @@ func TestParseHivePartitionSegment_StartsWithEquals(t *testing.T) {
 }
 
 func TestParseHivePartitionSegment_InvalidPercentLiteral(t *testing.T) {
-	seg, isHive, err := ParseHivePartitionSegment("country=US%ZZ")
+	_, isHive, err := ParseHivePartitionSegment("country=US%ZZ")
 	assert.True(t, isHive)
-	require.NoError(t, err)
-	assert.Equal(t, "country", seg.Key)
-	assert.Equal(t, "US%ZZ", seg.Value)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "URL-encoded values are not supported")
 }
 
 func TestParseHivePartitionSegment_DefaultPartition(t *testing.T) {
@@ -85,6 +83,23 @@ func TestParseHivePartitionSegment_DefaultPartition(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, isHive)
 	assert.Equal(t, "__HIVE_DEFAULT_PARTITION__", seg.Value)
+}
+
+func TestParseHivePartitionSegment_RejectsUnsafeNames(t *testing.T) {
+	cases := []string{
+		"year=..",
+		"year=.",
+		"ye-ar=2024",
+		"year=2024/05",
+		"year=2024\\05",
+		"year=2024\n",
+		"year=2024\x00",
+	}
+	for _, tc := range cases {
+		_, isHive, err := ParseHivePartitionSegment(tc)
+		require.True(t, isHive, tc)
+		require.Error(t, err, tc)
+	}
 }
 
 // --- ExtractPartitionValues tests ---
@@ -422,6 +437,25 @@ func TestDiscoverHivePartitions_PercentInDirName(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "%")
+}
+
+func TestDiscoverHivePartitions_RejectsUnsafeDirName(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=..", IsDir: true},
+		},
+	}
+
+	_, err := DiscoverHivePartitions(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_varchar)}},
+		nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
 }
 
 func TestDiscoverHivePartitions_INPredicate(t *testing.T) {
@@ -1751,7 +1785,3 @@ func TestDiscoverHivePartitions_WarnPartitionCount(t *testing.T) {
 	assert.True(t, result.warnEmitted, "warning should have been emitted for >5000 partitions")
 	assert.Equal(t, 5001, len(result.Files))
 }
-
-// Verify that the unused imports are consumed
-var _ = catalog.ExternalFilePath
-var _ = function.EQUAL
