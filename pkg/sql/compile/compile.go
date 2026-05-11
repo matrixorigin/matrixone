@@ -3246,9 +3246,11 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
+
 	groupOp := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(groupOp)
+
 	return inputSS
 }
 
