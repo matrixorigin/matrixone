@@ -816,7 +816,7 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 // ReportTopPools returns the top N pools by current memory usage.
 func ReportTopPools(topN int) string {
 	type poolInfo struct {
-		tag      string
+		tag       string
 		currBytes int64
 	}
 	var pools []poolInfo

@@ -1929,7 +1929,6 @@ func calcDOP(ncpu int32, stats *plan.Stats, isPrepare bool) int32 {
 	return ret
 }
 
-
 // set node dop and left child recursively
 func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 	qry := p.GetQuery()
