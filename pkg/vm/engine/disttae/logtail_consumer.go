@@ -1915,18 +1915,41 @@ func dispatchUpdateResponse(
 		}
 	}
 
+	var (
+		lastLogtailIndex [consumerNumber]int
+		hasLogtail       [consumerNumber]bool
+	)
+	for i := range lastLogtailIndex {
+		lastLogtailIndex[i] = -1
+	}
 	for index := 0; index < len(list); index++ {
 		table := list[index].Table
 		if ifShouldNotDistribute(table.DbId, table.TbId) {
 			continue
 		}
 		recIndex := table.TbId % consumerNumber
-		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
+		lastLogtailIndex[recIndex] = index
+	}
+	for index := 0; index < len(list); index++ {
+		table := list[index].Table
+		if ifShouldNotDistribute(table.DbId, table.TbId) {
+			continue
+		}
+		recIndex := table.TbId % consumerNumber
+		hasLogtail[recIndex] = true
+		recRoutines[recIndex].sendTableLogTailWithTimestamp(
+			list[index],
+			*response.To,
+			lastLogtailIndex[recIndex] == index,
+			receiveAt,
+		)
 	}
 	// should update all the timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
 	for i := range recRoutines {
-		recRoutines[i].updateTimeFromT(*response.To, receiveAt)
+		if !hasLogtail[i] {
+			recRoutines[i].updateTimeFromT(*response.To, receiveAt)
+		}
 	}
 
 	n := 0
@@ -1989,6 +2012,14 @@ func (rc *routineController) sendSubscribeResponse(
 }
 
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
+	rc.sendTableLogTailWithTimestamp(r, timestamp.Timestamp{}, false, receiveAt)
+}
+
+func (rc *routineController) sendTableLogTailWithTimestamp(
+	r logtail.TableLogtail,
+	applied timestamp.Timestamp,
+	notifyApplied bool,
+	receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Info(
@@ -2000,6 +2031,8 @@ func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt 
 
 	log := rc.cmdLogPool.Get().(*cmdToConsumeLog)
 	log.log = r
+	log.applied = applied
+	log.notifyApplied = notifyApplied
 	log.receiveAt = receiveAt
 	rc.signalChan <- log
 }
@@ -2102,8 +2135,10 @@ type cmdToConsumeSub struct {
 	receiveAt time.Time
 }
 type cmdToConsumeLog struct {
-	log       logtail.TableLogtail
-	receiveAt time.Time
+	log           logtail.TableLogtail
+	applied       timestamp.Timestamp
+	notifyApplied bool
+	receiveAt     time.Time
 }
 type cmdToUpdateTime struct {
 	time      timestamp.Timestamp
@@ -2126,10 +2161,19 @@ func (cmd *cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routine
 }
 
 func (cmd *cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
-	defer ctrl.cmdLogPool.Put(cmd)
+	defer func() {
+		cmd.log = logtail.TableLogtail{}
+		cmd.applied = timestamp.Timestamp{}
+		cmd.notifyApplied = false
+		cmd.receiveAt = time.Time{}
+		ctrl.cmdLogPool.Put(cmd)
+	}()
 	response := cmd.log
 	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt); err != nil {
 		return err
+	}
+	if cmd.notifyApplied {
+		e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.applied, cmd.receiveAt)
 	}
 	return nil
 }
