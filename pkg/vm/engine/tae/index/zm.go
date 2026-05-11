@@ -422,6 +422,8 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.DecodeFixed[types.Datetime](buf)
 	case types.T_timestamp:
 		return types.DecodeFixed[types.Timestamp](buf)
+	case types.T_year:
+		return types.DecodeFixed[types.MoYear](buf)
 	case types.T_enum:
 		return types.DecodeFixed[types.Enum](buf)
 	case types.T_decimal64:
@@ -881,6 +883,17 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	case types.T_timestamp:
 		col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 		minVal, maxVal := types.DecodeTimestamp(zm.GetMinBuf()), types.DecodeTimestamp(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_year:
+		col := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		minVal, maxVal := types.DecodeMoYear(zm.GetMinBuf()), types.DecodeMoYear(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
 			return minVal <= col[i]
 		})
@@ -1664,6 +1677,12 @@ func adjustBytes(bs []byte) {
 }
 
 func UpdateZM(zm ZM, v []byte) {
+	if zm.GetType() == types.T_decimal256 {
+		// Decimal256 values exceed the fixed raw byte budget of the current ZM layout.
+		// Keep the type usable by skipping ZM maintenance instead of panicking in flush.
+		// This means decimal256 currently has no ZM pruning/statistical min-max help.
+		return
+	}
 	if !zm.IsInited() {
 		if zm.IsArray() {
 			// If the zm is of type ARRAY, we don't init it.
@@ -1701,6 +1720,13 @@ func UpdateZMAny(zm ZM, v any) {
 }
 
 func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
+	if vec.GetType().Oid == types.T_decimal256 {
+		// See the UpdateZM comment: Decimal256 is too wide for the fixed ZM
+		// payload, so we deliberately skip zonemap maintenance for it. This
+		// avoids the panic in compute.Compare when flushObj hands a 64-byte
+		// Decimal256 value to a 32-byte ZM buffer.
+		return nil
+	}
 	if ok, minv, maxv := vec.GetMinMaxValue(); ok {
 		UpdateZM(zm, minv)
 		UpdateZM(zm, maxv)
