@@ -98,8 +98,6 @@ func (sp *ShufflePoolV2) hold() {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
 	sp.holders++
-	logutil.Infof("shuffleV2 pool hold, pool=%p, bucketNum=%d, maxHolders=%d, holders=%d, stoppers=%d, finished=%d",
-		sp, sp.bucketNum, sp.maxHolders, sp.holders, sp.stoppers, sp.finished)
 	if sp.holders > sp.maxHolders {
 		panic("shuffle pool too many holders!")
 	}
@@ -109,14 +107,8 @@ func (sp *ShufflePoolV2) stopWriting() {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
 	sp.stoppers++
-	logutil.Infof("shuffleV2 pool stop writing, pool=%p, bucketNum=%d, maxHolders=%d, holders=%d, stoppers=%d, finished=%d",
-		sp, sp.bucketNum, sp.maxHolders, sp.holders, sp.stoppers, sp.finished)
 	if sp.stoppers > sp.holders || sp.stoppers > sp.maxHolders {
 		panic("shuffle pool too many stoppers!")
-	}
-	if sp.stoppers == sp.holders && sp.holders < sp.maxHolders {
-		logutil.Warnf("shuffleV2 pool has no active registered writers but is still waiting for more holders, pool=%p, bucketNum=%d, maxHolders=%d, holders=%d, stoppers=%d, finished=%d",
-			sp, sp.bucketNum, sp.maxHolders, sp.holders, sp.stoppers, sp.finished)
 	}
 
 	if sp.stoppers == sp.maxHolders {
@@ -130,12 +122,6 @@ func (sp *ShufflePoolV2) allStop() bool {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
 	return sp.stoppers == sp.maxHolders
-}
-
-func (sp *ShufflePoolV2) holderSnapshot() (bucketNum, maxHolders, holders, stoppers, finished int32) {
-	sp.holderLock.Lock()
-	defer sp.holderLock.Unlock()
-	return sp.bucketNum, sp.maxHolders, sp.holders, sp.stoppers, sp.finished
 }
 
 func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
@@ -216,11 +202,6 @@ func (sp *ShufflePoolV2) DebugPrint() { // only for debug
 
 // shuffle operator is ending, release buf and sending remaining batches
 func (sp *ShufflePoolV2) waitBatchOrEnd(shuffleIDX int32, proc *process.Process) {
-	bucketNum, maxHolders, holders, stoppers, finished := sp.holderSnapshot()
-	if holders < maxHolders || stoppers < maxHolders {
-		logutil.Warnf("shuffleV2 wait batch or end, pool=%p, shuffleIdx=%d, bucketNum=%d, maxHolders=%d, holders=%d, stoppers=%d, finished=%d",
-			sp, shuffleIDX, bucketNum, maxHolders, holders, stoppers, finished)
-	}
 	for {
 		select {
 		case <-sp.batchWaiters[shuffleIDX]:

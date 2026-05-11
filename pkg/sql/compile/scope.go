@@ -28,7 +28,6 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -746,16 +745,7 @@ func (s *Scope) isTableScan() bool {
 }
 
 func newParallelScope(s *Scope) (*Scope, []*Scope) {
-	hasShuffleV2 := containsOperatorType(s.RootOp, vm.ShuffleV2)
-	if hasShuffleV2 {
-		logutil.Warnf("compile newParallelScope sees shuffleV2 tree, scope=%p, scopeMagic=%s, scopeMcpu=%d, scopeAddr=%s, rootOp=%T",
-			s, s.Magic.String(), s.NodeInfo.Mcpu, s.NodeInfo.Addr, s.RootOp)
-	}
 	if s.NodeInfo.Mcpu == 1 {
-		if hasShuffleV2 {
-			logutil.Warnf("compile newParallelScope skips shuffleV2 producer clone because scopeMcpu=1, scope=%p, scopeMagic=%s, scopeAddr=%s, rootOp=%T",
-				s, s.Magic.String(), s.NodeInfo.Addr, s.RootOp)
-		}
 		return s, nil
 	}
 
@@ -778,10 +768,6 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		parallelScopes[i].TxnOffset = s.TxnOffset
 		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
 	}
-	if hasShuffleV2 {
-		logutil.Warnf("compile newParallelScope cloned shuffleV2 tree, sourceScope=%p, sourceMcpu=%d, parallelScopes=%d, rootOp=%T",
-			s, s.NodeInfo.Mcpu, len(parallelScopes), s.RootOp)
-	}
 
 	rs.PreScopes = parallelScopes
 	s.PreScopes = append(s.PreScopes, rs)
@@ -793,21 +779,6 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	//   |
 	//   |_ prescopes
 	return rs, parallelScopes
-}
-
-func containsOperatorType(op vm.Operator, opType vm.OpType) bool {
-	if op == nil {
-		return false
-	}
-	if op.OpType() == opType {
-		return true
-	}
-	for i := 0; i < op.GetOperatorBase().NumChildren(); i++ {
-		if containsOperatorType(op.GetOperatorBase().GetChildren(i), opType) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Scope) doSetRootOperator(op vm.Operator) {

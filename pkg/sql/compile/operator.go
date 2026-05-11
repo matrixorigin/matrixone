@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -390,8 +389,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.ShuffleV2:
 		sourceArg := sourceOp.(*shuffleV2.ShuffleV2)
 		if sourceArg.GetShufflePool() == nil {
-			logutil.Warnf("compile dupOperatorRecursively creates shuffleV2 shared pool, source=%p, bucketNum=%d, maxParallel=%d, cloneIndex=%d",
-				sourceArg, sourceArg.BucketNum, maxParallel, index)
 			sourceArg.SetShufflePool(shuffleV2.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
 		}
 		op := shuffleV2.NewArgument()
@@ -406,8 +403,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.ShuffleExpr = sourceArg.ShuffleExpr
 		op.CurrentShuffleIdx = int32(index)
 		op.SetInfo(&info)
-		logutil.Infof("compile dupOperatorRecursively cloned shuffleV2 producer, source=%p, clone=%p, pool=%p, cloneIndex=%d, maxParallel=%d, bucketNum=%d, currentShuffleIdx=%d",
-			sourceArg, op, op.GetShufflePool(), index, maxParallel, op.BucketNum, op.CurrentShuffleIdx)
 		return op
 	case vm.Shuffle:
 		sourceArg := sourceOp.(*shuffle.Shuffle)

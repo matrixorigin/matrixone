@@ -2968,15 +2968,8 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 	}
 	c.anal.isFirst = false
 
-	beforeMergeScopeCnt := len(ss)
 	ss = c.mergeShuffleScopesIfNeeded(ss, false)
 	rs := c.newMergeScope(ss)
-	nodeDop := int32(0)
-	if node.Stats != nil {
-		nodeDop = node.Stats.Dop
-	}
-	logutil.Warnf("compileOrder creates merge scope, nodeId=%d, nodeDop=%d, beforeMergeScopes=%d, afterMergeScopes=%d, mergeScopeMcpu=%d, mergeScopeAddr=%s, rootOp=%T",
-		node.NodeId, nodeDop, beforeMergeScopeCnt, len(ss), rs.NodeInfo.Mcpu, rs.NodeInfo.Addr, rs.RootOp)
 
 	currentFirstFlag = c.anal.isFirst
 	mergeOrder := constructMergeOrder(node)
@@ -3228,27 +3221,6 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 	if node.Stats.Dop != nodes[node.Children[0]].Stats.Dop {
 		panic("wrong shuffle dop for shuffle group!")
 	}
-	firstScopeMcpu := 0
-	firstScopeAddr := ""
-	firstScopeMagic := magicType(0)
-	var firstScopeRootOp any
-	if len(inputSS) > 0 && inputSS[0] != nil {
-		firstScopeMcpu = inputSS[0].NodeInfo.Mcpu
-		firstScopeAddr = inputSS[0].NodeInfo.Addr
-		firstScopeMagic = inputSS[0].Magic
-		firstScopeRootOp = inputSS[0].RootOp
-	}
-	shuffleMethod := plan.ShuffleMethod_Normal
-	shuffleType := plan.ShuffleType_Hash
-	shuffleColIdx := int32(-1)
-	if node.Stats.HashmapStats != nil {
-		shuffleMethod = node.Stats.HashmapStats.ShuffleMethod
-		shuffleType = node.Stats.HashmapStats.ShuffleType
-		shuffleColIdx = node.Stats.HashmapStats.ShuffleColIdx
-	}
-	childNode := nodes[node.Children[0]]
-	logutil.Warnf("compileShuffleGroupV2 enter, nodeId=%d, nodeDop=%d, childNodeId=%d, childDop=%d, childNodeType=%s, inputScopes=%d, firstScopeMcpu=%d, firstScopeAddr=%s, firstScopeMagic=%v, firstScopeRootOp=%T, shuffleMethod=%s, shuffleType=%s, shuffleColIdx=%d",
-		node.NodeId, node.Stats.Dop, childNode.NodeId, childNode.Stats.Dop, childNode.NodeType.String(), len(inputSS), firstScopeMcpu, firstScopeAddr, firstScopeMagic, firstScopeRootOp, shuffleMethod.String(), shuffleType.String(), shuffleColIdx)
 	if node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 		currentFirstFlag := c.anal.isFirst
 		for i := range inputSS {
@@ -3260,9 +3232,8 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 		return inputSS
 	}
 
+	//fallback to non-shuffle group
 	if len(inputSS) != 1 || inputSS[0].NodeInfo.Mcpu <= 1 || inputSS[0].NodeInfo.Mcpu != int(node.Stats.Dop) {
-		logutil.Warnf("compileShuffleGroupV2 fallback to non-shuffle group, nodeId=%d, nodeDop=%d, inputScopes=%d, firstScopeMcpu=%d, firstScopeMagic=%v, firstScopeRootOp=%T",
-			node.NodeId, node.Stats.Dop, len(inputSS), firstScopeMcpu, firstScopeMagic, firstScopeRootOp)
 		if c.IsSingleScope(inputSS) {
 			return c.compileTPGroup(node, inputSS, nodes)
 		}
@@ -3275,15 +3246,9 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
-	logutil.Warnf("compileShuffleGroupV2 attach shuffleV2, nodeId=%d, bucketNum=%d, inputScopeMcpu=%d, inputScopeAddr=%s, currentShuffleIdx=%d, shuffleType=%s",
-		node.NodeId, shuffleArg.BucketNum, inputSS[0].NodeInfo.Mcpu, inputSS[0].NodeInfo.Addr, shuffleArg.CurrentShuffleIdx, plan.ShuffleType(shuffleArg.ShuffleType).String())
-
 	groupOp := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], true, inputSS[0].NodeInfo.Mcpu, c.proc)
 	groupOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(groupOp)
-	logutil.Warnf("compileShuffleGroupV2 attach group over shuffleV2, nodeId=%d, inputScopeMcpu=%d, groupParallelism=%d, rootOp=%T",
-		node.NodeId, inputSS[0].NodeInfo.Mcpu, inputSS[0].NodeInfo.Mcpu, inputSS[0].RootOp)
-
 	return inputSS
 }
 

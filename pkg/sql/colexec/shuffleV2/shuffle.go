@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -50,14 +49,9 @@ func (shuffle *ShuffleV2) Prepare(proc *process.Process) error {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
 	}
 	if shuffle.GetShufflePool() == nil {
-		logutil.Warnf("shuffleV2 prepare creates fallback pool, currentShuffleIdx=%d, bucketNum=%d, maxHolders=%d",
-			shuffle.CurrentShuffleIdx, shuffle.BucketNum, shuffle.BucketNum)
 		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, shuffle.BucketNum))
 	}
 	shuffle.ctr.shufflePool.hold()
-	bucketNum, maxHolders, holders, stoppers, finished := shuffle.ctr.shufflePool.holderSnapshot()
-	logutil.Infof("shuffleV2 prepare producer, pool=%p, currentShuffleIdx=%d, bucketNum=%d, poolBucketNum=%d, maxHolders=%d, holders=%d, stoppers=%d, finished=%d",
-		shuffle.ctr.shufflePool, shuffle.CurrentShuffleIdx, shuffle.BucketNum, bucketNum, maxHolders, holders, stoppers, finished)
 	shuffle.ctr.ending = false
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
