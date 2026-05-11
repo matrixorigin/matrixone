@@ -164,7 +164,7 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 		// through mpool (off-heap). Divide by GOMAXPROCS to get per-worker
 		// share, then divide by 4 to allow concurrent operators headroom.
 		budget := mpool.GlobalCap()
-		if budget <= 0 || budget >= 1<<62 {
+		if budget <= 0 || budget >= mpool.PB {
 			budget = int64(system.MemoryTotal())
 		}
 		procs := int64(system.GoMaxProcs())

@@ -159,7 +159,7 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 
 	if m == 0 {
 		budget := mpool.GlobalCap()
-		if budget <= 0 || budget >= 1<<62 {
+		if budget <= 0 || budget >= mpool.PB {
 			budget = int64(system.MemoryTotal())
 		}
 		// GroupBy spill is very expensive (serialize/deserialize agg state +

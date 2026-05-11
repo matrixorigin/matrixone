@@ -412,17 +412,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.ViewSql = tableDef.ViewSql
 	createView.TableDef.Defs = tableDef.Defs
 
-	if len(stmt.ColNames) > 0 {
-		if len(stmt.ColNames) != len(createView.TableDef.Cols) {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(),
-				"view column name list has %d names, but view query has %d columns",
-				len(stmt.ColNames), len(createView.TableDef.Cols))
-		}
-		for i, name := range stmt.ColNames {
-			createView.TableDef.Cols[i].Name = string(name)
-		}
-	}
-
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

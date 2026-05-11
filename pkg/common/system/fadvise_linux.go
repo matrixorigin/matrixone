@@ -16,11 +16,17 @@
 
 package system
 
-import "golang.org/x/sys/unix"
+import (
+	"golang.org/x/sys/unix"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+)
 
 // FadviseDontNeed advises the kernel that the file data is no longer needed
 // and can be evicted from page cache. This is important in cgroup-limited
 // containers where page cache counts toward the memory limit.
 func FadviseDontNeed(fd int) {
-	unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED)
+	if err := unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED); err != nil {
+		logutil.Debugf("fadvise DONTNEED fd=%d: %v", fd, err)
+	}
 }

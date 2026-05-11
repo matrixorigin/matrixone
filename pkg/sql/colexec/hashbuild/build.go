@@ -177,22 +177,16 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		estimatedSize := int64(result.Batch.Size())
 		reservation := mpool.Reserve(estimatedSize)
 
-		// Check spill AFTER reservation so other operators see our intent
-		shouldSpill := hashBuild.shouldSpillBatches()
-		if !shouldSpill {
-			// Store original batch
-			err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
-			if err != nil {
-				reservation.Cancel()
-				return err
-			}
-			reservation.Commit()
-
-			// Post-alloc check
-			shouldSpill = hashBuild.shouldSpillBatches()
-		} else {
+		// Always store the batch first — never drop it
+		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
+		if err != nil {
 			reservation.Cancel()
+			return err
 		}
+		reservation.Commit()
+
+		// Check if we should transition to spill mode
+		shouldSpill := hashBuild.shouldSpillBatches()
 
 		if shouldSpill {
 			spillMode = true

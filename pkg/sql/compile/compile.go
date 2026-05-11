@@ -1789,7 +1789,7 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 func capLoadParallelism(cpuNum int) int {
 	// Mpool-based cap: each worker uses adaptive threshold + arena overhead.
 	memPerWorker := int64(colexec.AdaptiveWriteS3Threshold()) + 64*mpool.MB
-	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < 1<<62 {
+	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
 		memLimit := int(globalCap / 3 / memPerWorker)
 		if memLimit < 1 {
 			memLimit = 1

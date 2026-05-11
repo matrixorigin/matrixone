@@ -385,7 +385,7 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 func (ctr *container) setSpillThreshold(threshold int64) {
 	if threshold == 0 {
 		budget := mpool.GlobalCap()
-		if budget <= 0 || budget >= 1<<62 {
+		if budget <= 0 || budget >= mpool.PB {
 			budget = int64(system.MemoryTotal())
 		}
 		procs := int64(system.GoMaxProcs())

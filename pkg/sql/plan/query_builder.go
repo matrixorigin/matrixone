@@ -4604,8 +4604,8 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 
 	case *tree.JoinTableExpr:
 		var err, err0 error
-		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_FULL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
-			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport outer join (LEFT/RIGHT/FULL) in recursive CTE: %T", stmt)
+		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport LEFT, RIGHT or OUTER JOIN in recursive CTE: %T", stmt)
 		}
 		c1, err1 := builder.checkRecursiveTable(tbl.Left, name)
 		c2, err2 := builder.checkRecursiveTable(tbl.Right, name)
@@ -4716,13 +4716,6 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-
-	if len(viewStmt.ColNames) > 0 && len(viewStmt.ColNames) <= len(viewCtx.headings) {
-		for i, name := range viewStmt.ColNames {
-			viewCtx.headings[i] = string(name)
-		}
-	}
-
 	ctx.recordViews([]string{schema + "#" + table})
 	ctx.recordViews(viewCtx.views)
 	return
@@ -5252,7 +5245,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
 		joinType = plan.Node_RIGHT
-	case tree.JOIN_TYPE_FULL, tree.JOIN_TYPE_NATURAL_FULL:
+	case tree.JOIN_TYPE_FULL:
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
@@ -5323,7 +5316,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
-		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
+		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
 				for i, col := range binding.cols {

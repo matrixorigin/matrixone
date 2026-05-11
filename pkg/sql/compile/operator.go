@@ -1721,6 +1721,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
+		ret.CanSpill = true
 		ret.IsDedup = true
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
@@ -1737,6 +1738,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = false
 		ret.NeedAllocateSels = false
+		ret.CanSpill = true
 		ret.IsDedup = false
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName

@@ -79,9 +79,10 @@ func MemoryTotal() uint64 {
 
 // MemoryAvailable returns the available size of memory of this node.
 func MemoryAvailable() uint64 {
+	total := memoryTotal.Load()
 	used, err := cgroup.GetMemUsage(pid)
-	if err == nil && used > 0 {
-		return memoryTotal.Load() - uint64(used)
+	if err == nil && used > 0 && uint64(used) <= total {
+		return total - uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()
@@ -92,8 +93,9 @@ func MemoryAvailable() uint64 {
 }
 
 func MemoryUsed() uint64 {
+	total := memoryTotal.Load()
 	used, err := cgroup.GetMemUsage(pid)
-	if err == nil && used > 0 {
+	if err == nil && used > 0 && uint64(used) <= total {
 		return uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}

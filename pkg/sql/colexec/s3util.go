@@ -49,7 +49,7 @@ const (
 // parallelism loads.
 func AdaptiveWriteS3Threshold() int {
 	cap := mpool.GlobalCap()
-	if cap <= 0 || cap >= 1<<62 {
+	if cap <= 0 || cap >= mpool.PB {
 		return WriteS3Threshold
 	}
 	// With limited memory, use a smaller threshold: cap / 128 gives each of
