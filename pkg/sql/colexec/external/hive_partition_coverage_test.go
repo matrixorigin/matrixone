@@ -307,7 +307,7 @@ func TestExtractVecValues_EmptyAndNilData(t *testing.T) {
 }
 
 func TestExtractVecValues_CorruptDataRejects(t *testing.T) {
-	// Garbage bytes — validateLiteralVecBinary should reject.
+	// Garbage bytes should be rejected before Vector.UnmarshalBinary can panic.
 	_, ok := extractVecValues(
 		&plan.LiteralVec{Len: 1, Data: []byte{0, 0, 0, 0}},
 		plan.Type{Id: int32(types.T_int32)})

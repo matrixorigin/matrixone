@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -127,25 +126,21 @@ func relPartitionPath(filePath, basePath string) string {
 }
 
 // ParseHivePartitionSegment parses a directory segment like "year=2024" into key/value.
-// This is the ONLY place URL decoding happens for partition values.
+// MatrixOne intentionally treats Hive partition segment values as raw path
+// segment text. DiscoverHivePartitions rejects '%' before this parser is called,
+// so URL-encoded partition directory names are unsupported instead of being
+// partially decoded in some call paths.
 //
 // Returns:
 //   - (seg, true, nil): valid key=value segment (value may be empty string)
 //   - (_, false, nil): not a key=value format (caller treats as non-partition dir)
-//   - (_, true, err): looks like key=value but URL decode failed
 func ParseHivePartitionSegment(segment string) (seg HivePartSegment, isHive bool, err error) {
 	idx := strings.IndexByte(segment, '=')
 	if idx <= 0 {
 		return HivePartSegment{}, false, nil
 	}
 	seg.Key = segment[:idx]
-	raw := segment[idx+1:]
-	v, decodeErr := url.PathUnescape(raw)
-	if decodeErr != nil {
-		return HivePartSegment{Key: seg.Key}, true, moerr.NewBadConfigNoCtxf(
-			"invalid Hive partition directory '%s': URL decode failed: %v", segment, decodeErr)
-	}
-	seg.Value = v
+	seg.Value = segment[idx+1:]
 	return seg, true, nil
 }
 
@@ -262,6 +257,9 @@ func discoverRecursive(
 				continue
 			}
 
+			// URL-encoded partition directories are unsupported. Reject '%' during
+			// discovery so values cannot be silently interpreted differently by
+			// different code paths.
 			if strings.Contains(entry.Name, "%") {
 				return moerr.NewInternalErrorNoCtxf(
 					"hive partition directory name contains '%%' which is not supported: '%s'", entry.Name)
@@ -348,11 +346,11 @@ func collectFiles(
 
 // filterPartitionDir returns true if the directory should be kept (not pruned).
 // Only MatchFalse causes pruning; MatchUnknown is conservative (keeps directory).
-func filterPartitionDir(decodedDirValue string, colType tree.HivePartColType, pred *PartitionPredicate) bool {
+func filterPartitionDir(dirValue string, colType tree.HivePartColType, pred *PartitionPredicate) bool {
 	if pred == nil {
 		return true
 	}
-	result := matchPartitionValue(decodedDirValue, pred.Values, colType)
+	result := matchPartitionValue(dirValue, pred.Values, colType)
 	return result != MatchFalse
 }
 
@@ -365,9 +363,9 @@ const (
 	MatchUnknown                    // cannot determine (must keep directory)
 )
 
-// matchPartitionValue compares a decoded directory value against predicate values.
+// matchPartitionValue compares a partition directory value against predicate values.
 // Conservative: returns MatchUnknown whenever precise comparison isn't possible.
-func matchPartitionValue(decodedDirValue string, predicateValues []string, colType tree.HivePartColType) MatchResult {
+func matchPartitionValue(dirValue string, predicateValues []string, colType tree.HivePartColType) MatchResult {
 	// SET/ENUM columns stored as numeric types but with Enumvalues must not be
 	// pruned numerically — their directory values are member names.
 	if !canPruneType(colType) {
@@ -378,26 +376,26 @@ func matchPartitionValue(decodedDirValue string, predicateValues []string, colTy
 		return MatchUnknown
 
 	case types.T_int8:
-		return matchInt(decodedDirValue, predicateValues, 8)
+		return matchInt(dirValue, predicateValues, 8)
 	case types.T_int16:
-		return matchInt(decodedDirValue, predicateValues, 16)
+		return matchInt(dirValue, predicateValues, 16)
 	case types.T_int32:
-		return matchInt(decodedDirValue, predicateValues, 32)
+		return matchInt(dirValue, predicateValues, 32)
 	case types.T_int64:
-		return matchInt(decodedDirValue, predicateValues, 64)
+		return matchInt(dirValue, predicateValues, 64)
 
 	case types.T_uint8:
-		return matchUint(decodedDirValue, predicateValues, 8)
+		return matchUint(dirValue, predicateValues, 8)
 	case types.T_uint16:
-		return matchUint(decodedDirValue, predicateValues, 16)
+		return matchUint(dirValue, predicateValues, 16)
 	case types.T_uint32:
-		return matchUint(decodedDirValue, predicateValues, 32)
+		return matchUint(dirValue, predicateValues, 32)
 	case types.T_uint64:
-		return matchUint(decodedDirValue, predicateValues, 64)
+		return matchUint(dirValue, predicateValues, 64)
 
 	case types.T_char, types.T_varchar, types.T_text:
 		for _, pv := range predicateValues {
-			if decodedDirValue == pv {
+			if dirValue == pv {
 				return MatchTrue
 			}
 		}
@@ -652,20 +650,20 @@ func tryExtractIn(tableDef *plan.TableDef, args []*plan.Expr, partColSet map[str
 
 // extractVecValues decodes a folded LiteralVec into string values for pruning.
 func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, ok bool) {
-	if litVec == nil || len(litVec.Data) == 0 {
+	if litVec == nil || litVec.Len <= 0 || len(litVec.Data) == 0 {
 		return nil, false
 	}
 	oid := types.T(typ.Id)
-	if !validateLiteralVecBinary(litVec, oid) {
+	if !vectorBinaryEnvelopeInBounds(litVec.Data) {
 		return nil, false
 	}
 
 	vec := vector.NewVec(types.New(oid, typ.Width, typ.Scale))
+	defer vec.Free(nil)
 	if err := vec.UnmarshalBinary(litVec.Data); err != nil {
 		return nil, false
 	}
-	defer vec.Free(nil)
-	if vec.GetType().Oid != oid {
+	if vec.GetType().Oid != oid || vec.Length() != int(litVec.Len) {
 		return nil, false
 	}
 
@@ -728,63 +726,31 @@ func extractVecValues(litVec *plan.LiteralVec, typ plan.Type) (values []string, 
 	return values, true
 }
 
-func validateLiteralVecBinary(litVec *plan.LiteralVec, expectedOid types.T) bool {
-	data := litVec.Data
-	if litVec.Len <= 0 {
+// vectorBinaryEnvelopeInBounds only checks the bounds of Vector.UnmarshalBinary's
+// envelope before calling it. It does not validate type semantics; those are
+// checked after UnmarshalBinary succeeds.
+func vectorBinaryEnvelopeInBounds(data []byte) bool {
+	if len(data) == 0 || int(data[0]) != vector.FLAT {
 		return false
 	}
-	minLen := 1 + types.TSize + 4 + 4 + 4 + 4 + 1
-	if len(data) < minLen {
+	pos := 1 + types.TSize
+	if len(data) < pos+4 {
 		return false
 	}
+	pos += 4 // vector length
 
-	pos := 0
-	if int(data[pos]) != vector.FLAT {
-		return false
+	for i := 0; i < 3; i++ {
+		if len(data) < pos+4 {
+			return false
+		}
+		n := types.DecodeUint32(data[pos : pos+4])
+		pos += 4
+		if uint64(n) > uint64(len(data)-pos) {
+			return false
+		}
+		pos += int(n)
 	}
-	pos++
-
-	vecType := types.DecodeType(data[pos : pos+types.TSize])
-	pos += types.TSize
-	if vecType.Oid != expectedOid || vecType.TypeSize() <= 0 {
-		return false
-	}
-
-	length := types.DecodeUint32(data[pos : pos+4])
-	pos += 4
-	if length != uint32(litVec.Len) {
-		return false
-	}
-
-	dataLen := types.DecodeUint32(data[pos : pos+4])
-	pos += 4
-	expectedDataLen := uint64(vecType.TypeSize()) * uint64(length)
-	if uint64(dataLen) != expectedDataLen || uint64(dataLen) > uint64(len(data)-pos) {
-		return false
-	}
-	pos += int(dataLen)
-
-	if len(data)-pos < 4 {
-		return false
-	}
-	areaLen := types.DecodeUint32(data[pos : pos+4])
-	pos += 4
-	if uint64(areaLen) > uint64(len(data)-pos) {
-		return false
-	}
-	pos += int(areaLen)
-
-	if len(data)-pos < 4 {
-		return false
-	}
-	nspLen := types.DecodeUint32(data[pos : pos+4])
-	pos += 4
-	if nspLen != 0 || uint64(nspLen) > uint64(len(data)-pos) {
-		return false
-	}
-	pos += int(nspLen)
-
-	return len(data)-pos == 1
+	return len(data) >= pos+1
 }
 
 func safeVarlenaBytes(v *types.Varlena, area []byte) ([]byte, bool) {

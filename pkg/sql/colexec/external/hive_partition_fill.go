@@ -106,7 +106,7 @@ func (h *ParquetHandler) fillPartitionColumns(bat *batch.Batch, param *ExternalP
 			notNullable := col.Default != nil && !col.Default.NullAbility
 			if notNullable {
 				return moerr.NewConstraintViolationf(param.Ctx,
-					"partition column '%s' is NOT NULL but directory has __HIVE_DEFAULT_PARTITION__ in path '%s'",
+					"partition column '%s' is NOT NULL but directory has __HIVE_DEFAULT_PARTITION__ in path '%s'; allow NULL on the partition column or remove/rename the default partition directory",
 					colName, relPath)
 			}
 			if err := vector.SetConstNull(vec, rowCount, mp); err != nil {

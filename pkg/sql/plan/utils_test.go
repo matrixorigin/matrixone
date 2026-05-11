@@ -616,6 +616,19 @@ func TestInitInfileParam_Errors(t *testing.T) {
 	param.Ctx = context.Background()
 	param.Option = []string{"filepath", "/x", "format", "parquet", "hive_partitioning", "yes"}
 	require.Error(t, InitInfileParam(param))
+
+	// Columns with hive_partitioning disabled are rejected after legacy parsing.
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"filepath", "/x",
+		"format", "parquet",
+		"hive_partitioning", "false",
+		"hive_partition_columns", "year",
+	}
+	err := InitInfileParam(param)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 }
 
 // TestInitS3Param_Plain exercises the S3 arm with normal options.
@@ -693,6 +706,19 @@ func TestInitS3Param_Errors(t *testing.T) {
 	param.Ctx = context.Background()
 	param.Option = []string{"bucket", "b", "format", "parquet", "hive_partitioning", "maybe"}
 	require.Error(t, InitS3Param(param))
+
+	// Columns with hive_partitioning disabled are rejected after legacy parsing.
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"bucket", "b",
+		"format", "parquet",
+		"hive_partitioning", "false",
+		"hive_partition_columns", "year",
+	}
+	err := InitS3Param(param)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 }
 
 // -------------------------------------------------------------------------
@@ -713,6 +739,16 @@ func TestParseHiveOptionsFromRawOptions_AllPaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, en)
 	assert.Nil(t, cols)
+
+	// Columns without an enabled hive_partitioning flag are inconsistent.
+	_, _, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partition_columns", "year"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+
+	_, _, err = parseHiveOptionsFromRawOptions(ctx,
+		[]string{"hive_partitioning", "false", "hive_partition_columns", "year"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 
 	// Invalid value → error
 	_, _, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partitioning", "yes"})
@@ -821,6 +857,37 @@ func TestValidateAndSetHivePartitionOptions_Disabled(t *testing.T) {
 	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
 	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
 	assert.False(t, stmt.Param.HivePartitioning)
+}
+
+func TestValidateAndSetHivePartitionOptions_DisabledWithColumnsRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []string
+	}{
+		{
+			name: "columns without hive_partitioning",
+			opts: []string{"filepath", "/x", "format", "parquet", "hive_partition_columns", "year"},
+		},
+		{
+			name: "columns with hive_partitioning false",
+			opts: []string{
+				"filepath", "/x",
+				"format", "parquet",
+				"hive_partitioning", "false",
+				"hive_partition_columns", "year",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+			stmt.Param.Option = tc.opts
+			ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+			err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+		})
+	}
 }
 
 func TestValidateAndSetHivePartitionOptions_HappyPath(t *testing.T) {
@@ -1159,6 +1226,19 @@ func TestInitStageS3Param_HappyAndErrors(t *testing.T) {
 		}
 		require.NoError(t, InitStageS3Param(param, sd))
 		assert.True(t, param.HivePartitioning)
+	})
+
+	t.Run("hive_legacy_columns_disabled_under_stage", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"hive_partitioning", "false", "hive_partition_columns", "year"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		err := InitStageS3Param(param, sd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
 	})
 }
 

@@ -52,12 +52,12 @@ func TestParseHivePartitionSegment_EmptyValue(t *testing.T) {
 	assert.Equal(t, "", seg.Value)
 }
 
-func TestParseHivePartitionSegment_URLEncoded(t *testing.T) {
+func TestParseHivePartitionSegment_PercentLiteral(t *testing.T) {
 	seg, isHive, err := ParseHivePartitionSegment("country=US%2FCA")
 	require.NoError(t, err)
 	assert.True(t, isHive)
 	assert.Equal(t, "country", seg.Key)
-	assert.Equal(t, "US/CA", seg.Value)
+	assert.Equal(t, "US%2FCA", seg.Value)
 }
 
 func TestParseHivePartitionSegment_NotPartition(t *testing.T) {
@@ -72,11 +72,12 @@ func TestParseHivePartitionSegment_StartsWithEquals(t *testing.T) {
 	assert.False(t, isHive)
 }
 
-func TestParseHivePartitionSegment_InvalidEncoding(t *testing.T) {
-	_, isHive, err := ParseHivePartitionSegment("country=US%ZZ")
+func TestParseHivePartitionSegment_InvalidPercentLiteral(t *testing.T) {
+	seg, isHive, err := ParseHivePartitionSegment("country=US%ZZ")
 	assert.True(t, isHive)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "country=US%ZZ")
+	require.NoError(t, err)
+	assert.Equal(t, "country", seg.Key)
+	assert.Equal(t, "US%ZZ", seg.Value)
 }
 
 func TestParseHivePartitionSegment_DefaultPartition(t *testing.T) {
@@ -212,6 +213,13 @@ func TestMatchPartitionValue_ZeroPaddedInt(t *testing.T) {
 	ct := tree.HivePartColType{Id: int32(types.T_int32)}
 	assert.Equal(t, MatchTrue, matchPartitionValue("01", []string{"1"}, ct))
 	assert.Equal(t, MatchTrue, matchPartitionValue("007", []string{"7"}, ct))
+}
+
+func TestMatchPartitionValue_ZeroPaddedVarcharConservative(t *testing.T) {
+	ct := tree.HivePartColType{Id: int32(types.T_varchar)}
+	assert.Equal(t, MatchTrue, matchPartitionValue("01", []string{"01"}, ct))
+	assert.Equal(t, MatchUnknown, matchPartitionValue("01", []string{"1"}, ct),
+		"varchar partitions keep string semantics; a mismatch is not pruned away")
 }
 
 // --- DiscoverHivePartitions tests ---
@@ -663,6 +671,26 @@ func TestClassifyFilters_NoColumnRefs(t *testing.T) {
 	assert.Equal(t, 1, len(rowF), "constant expression goes to rowFilters")
 }
 
+func TestClassifyFilters_FunctionWrappedPartitionColumnConservative(t *testing.T) {
+	td := makeTableDef("year", "data")
+	partColSet := map[string]bool{"year": true}
+
+	wrappedYear := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: 123, ObjName: "cast"},
+			Args: []*plan.Expr{makeColExpr(0, "year")},
+		}},
+	}
+	filter := makeEqExpr(wrappedYear, makeLitInt64(2024))
+	partF, fpF, rowF := ClassifyFilters(td, []*plan.Expr{filter}, partColSet)
+
+	require.Len(t, partF, 1, "Expr_F wrappers must still expose the partition column")
+	assert.Empty(t, fpF)
+	require.Len(t, rowF, 1, "row-level filtering remains the correctness backstop")
+	assert.Empty(t, ExtractPartitionPredicatesFromExprs(td, partF, partColSet),
+		"CAST/function-wrapped partition columns are not structurally pruned")
+}
+
 // TestClassifyFilters_AccountAsPhysicalCol guards against classifying a
 // physical column literally named "account" as a filepath pseudo column.
 // The CSV-only per-batch "account" virtual column does not exist on Hive /
@@ -936,6 +964,35 @@ func TestExtractPartitionPredicates_InVec(t *testing.T) {
 	require.Equal(t, 1, len(preds))
 	assert.Equal(t, PartOpIn, preds[0].Op)
 	assert.Equal(t, []string{"2024", "2025"}, preds[0].Values)
+}
+
+func TestExtractPartitionPredicates_InVecLengthMismatch(t *testing.T) {
+	td := makeTableDef("year", "data")
+	partColSet := map[string]bool{"year": true}
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+	require.NoError(t, vector.AppendFixed(vec, int32(2024), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int32(2025), false, mp))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(mp)
+
+	vecExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 3, Data: data}},
+	}
+	colExpr := makeColExpr(0, "year")
+	colExpr.Typ = plan.Type{Id: int32(types.T_int32)}
+	inExpr := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.InFunctionEncodedID},
+			Args: []*plan.Expr{colExpr, vecExpr},
+		}},
+	}
+	preds := ExtractPartitionPredicatesFromExprs(td, []*plan.Expr{inExpr}, partColSet)
+	assert.Empty(t, preds, "LiteralVec length mismatch must disable partition pruning")
 }
 
 func TestExtractPartitionPredicates_InVecVarchar(t *testing.T) {
