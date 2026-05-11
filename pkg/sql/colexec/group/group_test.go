@@ -364,8 +364,10 @@ func TestGroupSpillReloadManyGroups(t *testing.T) {
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{sumAgg(1)})
 	g.NeedEval = true
-	// SpillMem < 10000 triggers group-count-based spill (spill when GroupCount >= SpillMem)
-	g.SpillMem = 100
+	// SpillMem < 10000 triggers group-count-based spill (spill when GroupCount >= SpillMem).
+	// With 32 buckets per level, 10000/32 ≈ 312 rows per bucket at level 1.
+	// Set to 500 so it spills at level 0 but not at level 1 during reload.
+	g.SpillMem = 500
 
 	mockOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	g.AppendChild(mockOp)
