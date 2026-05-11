@@ -449,6 +449,8 @@ func AddTransferPage(page *TransferHashPage, ioVector *fileservice.IOVector, buf
 
 const (
 	transferPageWriteMaxRetry = 3
+	// Safe for shift-based backoff: 100ms << 0, 100ms << 1 (200ms).
+	// Do not increase transferPageWriteMaxRetry without capping the shift.
 	transferPageWriteBaseWait = 100 * time.Millisecond
 )
 
@@ -459,6 +461,9 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 		err = fs.Write(writeCtx, ioVector)
 		cancel()
 		if err == nil {
+			if attempt > 0 {
+				v2.TransferPageWriteRetrySucceededCounter.Add(float64(attempt))
+			}
 			ReleaseMarshalBufs(bufs)
 			for i, page := range pages {
 				path := Path{
@@ -470,14 +475,32 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 			}
 			return nil
 		}
-		logutil.Warnf("[TransferPage] write transfer page error (attempt %d/%d), page count %v: %v",
+		// FileAlreadyExists means a prior attempt actually persisted the file
+		// (e.g. Rename succeeded but syncDir failed). Treat as success.
+		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			if attempt > 0 {
+				v2.TransferPageWriteRetrySucceededCounter.Add(float64(attempt))
+			}
+			ReleaseMarshalBufs(bufs)
+			for i, page := range pages {
+				path := Path{
+					Name:   ioVector.FilePath,
+					Offset: ioVector.Entries[i].Offset,
+					Size:   ioVector.Entries[i].Size,
+				}
+				page.SetPath(path)
+			}
+			return nil
+		}
+		logutil.Warnf("[TransferPage] write transfer page error (attempt %d/%d), page count %d: %v",
 			attempt+1, transferPageWriteMaxRetry, len(pages), err)
 		if attempt < transferPageWriteMaxRetry-1 {
 			time.Sleep(transferPageWriteBaseWait << attempt)
 		}
 	}
 	ReleaseMarshalBufs(bufs)
-	logutil.Errorf("[TransferPage] write transfer page failed after %d retries, page count %v",
+	v2.TransferPageWriteRetryExhaustedCounter.Inc()
+	logutil.Errorf("[TransferPage] write transfer page failed after %d retries, page count %d",
 		transferPageWriteMaxRetry, len(pages))
 	return err
 }

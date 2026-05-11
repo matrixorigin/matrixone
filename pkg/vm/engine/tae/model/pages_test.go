@@ -44,20 +44,26 @@ func (fs *failWriteFS) Write(ctx context.Context, vector fileservice.IOVector) e
 	}
 	return nil
 }
-func (fs *failWriteFS) Read(ctx context.Context, vector *fileservice.IOVector) error { return nil }
+func (fs *failWriteFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	panic("unimplemented")
+}
 func (fs *failWriteFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) error {
-	return nil
+	panic("unimplemented")
 }
 func (fs *failWriteFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
-	return func(yield func(*fileservice.DirEntry, error) bool) {}
+	panic("unimplemented")
 }
-func (fs *failWriteFS) Delete(ctx context.Context, filePaths ...string) error { return nil }
+func (fs *failWriteFS) Delete(ctx context.Context, filePaths ...string) error {
+	panic("unimplemented")
+}
 func (fs *failWriteFS) StatFile(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
-	return nil, nil
+	panic("unimplemented")
 }
-func (fs *failWriteFS) PrefetchFile(ctx context.Context, filePath string) error { return nil }
-func (fs *failWriteFS) Cost() *fileservice.CostAttr                             { return nil }
-func (fs *failWriteFS) Close(ctx context.Context)                               {}
+func (fs *failWriteFS) PrefetchFile(ctx context.Context, filePath string) error {
+	panic("unimplemented")
+}
+func (fs *failWriteFS) Cost() *fileservice.CostAttr { panic("unimplemented") }
+func (fs *failWriteFS) Close(ctx context.Context)   {}
 
 func makeTestPages(n int) ([]*TransferHashPage, fileservice.IOVector, []*bytes.Buffer) {
 	sid := objectio.NewSegmentid()
