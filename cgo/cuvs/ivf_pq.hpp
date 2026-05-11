@@ -150,8 +150,10 @@ namespace matrixone {
 //   - SHARDED: sync_shard_bitset() → bitset_filter over shard-local bit slice
 //     Bit j of the shard bitset = global bit (rank * rows_per_shard + j)
 //
-// search_batch_internal() aggregates multiple concurrent float queries into one
-// cuVS call via the worker's batch submission mechanism.
+// search_batchable_typed() / search_batchable_float() are the optional
+// dequeue-time batching path: when worker->batch_window() > 0 they submit via
+// worker->submit_batchable so the worker can fuse concurrent
+// same-(index,variant,limit) requests into one cuVS call (see cuvs_worker.hpp).
 //
 //
 // ID OFFSET IN SHARDED SEARCH
@@ -871,18 +873,13 @@ public:
 
         // std::cout << "[DEBUG] IVF-PQ search: num_queries=" << num_queries << " limit=" << limit << " n_probes=" << sp.n_probes << std::endl;
 
-        if (this->worker->batch_window() == 0) {
-            auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_internal(handle, queries_data, num_queries, limit, sp);
-            };
-            if (!this->worker) throw std::runtime_error("Worker not initialized");
-            uint64_t job_id = this->worker->submit(task);
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-            return std::any_cast<search_result_t>(result_wait.result);
-        }
-
-        return this->search_batch_internal(queries_data, num_queries, limit, sp);
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        // The helper picks the standalone or dequeue-time-fused path; queries_data
+        // outlives the wait().get() below (this thread blocks in it), so owner=null.
+        uint64_t job_id = this->search_batchable_typed(nullptr, queries_data, num_queries, limit, sp);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
     }
 
     // Filtered variant of search(). Per-query filters make request-level
@@ -963,16 +960,9 @@ public:
             return this->worker->submit_main(task);
         }
 
-        // Single-GPU / replicated. Honor batch_window like the sync path:
-        // when > 0, route through submit_batched_async so concurrent async
-        // callers coalesce into one GPU kernel.
-        if (this->worker->batch_window() > 0) {
-            return this->search_batch_internal_async(queries_copy, num_queries, limit, sp);
-        }
-        auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp);
-        };
-        return this->worker->submit(task);
+        // Single-GPU / replicated: the helper decides standalone vs fused; the
+        // shared_ptr keeps the copied queries alive until the search runs.
+        return this->search_batchable_typed(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
     search_result_t search_wait(uint64_t job_id) {
@@ -981,50 +971,30 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
-    search_result_t search_batch_internal(const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
-        struct search_req_t { const T* data; uint64_t n; };
-        std::string batch_key = "ivf_pq_s_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
-
-        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-            uint64_t total_queries = 0;
-            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
-
-            std::vector<T> aggregated_queries(total_queries * this->dimension);
-            uint64_t offset = 0;
-            for (const auto& r_any : reqs) {
-                auto req = std::any_cast<search_req_t>(r_any);
-                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
-                offset += req.n;
-            }
-
-            auto results = this->search_internal(handle, aggregated_queries.data(), total_queries, limit, sp);
-
-            offset = 0;
-            for (size_t i = 0; i < reqs.size(); ++i) {
-                auto req = std::any_cast<search_req_t>(reqs[i]);
-                search_result_t individual_res;
-                individual_res.neighbors.resize(req.n * limit);
-                individual_res.distances.resize(req.n * limit);
-                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
-                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](individual_res);
-                offset += req.n;
-            }
-        };
-
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
-        return future.get();
-    }
-
-    // Async counterpart of search_batch_internal. The request struct holds a
-    // shared_ptr keeping the queries memory alive across the async boundary
-    // (the calling Go thread returns immediately after this submit, so the
-    // raw pointer must be backed by an owner that survives until flush_batch
-    // and the per-request setter run).
-    uint64_t search_batch_internal_async(std::shared_ptr<std::vector<T>> queries_copy, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
+    // Submit a T-typed search. When dequeue-time batching is enabled
+    // (worker->batch_window() > 0) and a batch key is available, it goes through
+    // worker->submit_batchable so the worker can fuse concurrent same-(index,
+    // variant,limit) requests into one cuVS call; otherwise it runs standalone
+    // via worker->submit — byte-identical to the non-batched search path.
+    // `owner` is null on the sync path (the caller blocks in wait().get(), so the
+    // query buffer stays alive) and on the async path is the shared_ptr that
+    // keeps the copied queries alive until the search runs. Returns a job id
+    // resolvable via worker->wait().
+    uint64_t search_batchable_typed(std::shared_ptr<std::vector<T>> owner, const T* queries_data,
+                                    uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
         struct search_req_t { std::shared_ptr<std::vector<T>> owner; const T* data; uint64_t n; };
-        std::string batch_key = "ivf_pq_s_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+
+        // Standalone unless batching is on AND a batch key is available. Checking
+        // batch_window() first keeps the default (batching-off) path free of the
+        // batch_key_for mutex.
+        uint64_t bk = (this->worker->batch_window() == 0) ? 0 : this->batch_key_for(/*variant=*/0, limit);
+        if (bk == 0) {
+            auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_internal(handle, queries_data, num_queries, limit, sp);
+            };
+            return this->worker->submit(task);
+        }
 
         auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
             uint64_t total_queries = 0;
@@ -1048,14 +1018,13 @@ public:
                 individual_res.distances.resize(req.n * limit);
                 std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
                 std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](individual_res);
+                setters[i](std::any(std::move(individual_res)));
                 offset += req.n;
             }
         };
 
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        const T* data_ptr = queries_copy->data();
-        return this->worker->template submit_batched_async<search_result_t>(batch_key, search_req_t{queries_copy, data_ptr, num_queries}, exec_fn);
+        return this->worker->submit_batchable(bk,
+            std::any(search_req_t{std::move(owner), queries_data, num_queries}), num_queries, std::move(exec_fn));
     }
 
     // =====================================================================
@@ -1361,18 +1330,12 @@ public:
 
         // std::cout << "[DEBUG] IVF-PQ search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
 
-        if (this->worker->batch_window() == 0) {
-            auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-            };
-            if (!this->worker) throw std::runtime_error("Worker not initialized");
-            uint64_t job_id = this->worker->submit(task);
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-            return std::any_cast<search_result_t>(result_wait.result);
-        }
-
-        return this->search_float_batch_internal(queries_data, num_queries, limit, sp);
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        (void)query_dimension;  // search_float_internal ignores it (== this->dimension)
+        uint64_t job_id = this->search_batchable_float(nullptr, queries_data, num_queries, limit, sp);
+        auto result_wait = this->worker->wait(job_id).get();
+        if (result_wait.error) std::rethrow_exception(result_wait.error);
+        return std::any_cast<search_result_t>(result_wait.result);
     }
 
     // Filtered variant of search_float() — see search_with_filter() for rationale.
@@ -1498,60 +1461,27 @@ public:
             return this->worker->submit_main(task);
         }
 
-        // Single-GPU / replicated. Honor batch_window like the sync path:
-        // when > 0, route through submit_batched_async so concurrent async
-        // callers coalesce into one GPU kernel.
-        if (this->worker->batch_window() > 0) {
-            return this->search_float_batch_internal_async(queries_copy, num_queries, limit, sp);
-        }
-        auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
-        };
-        return this->worker->submit(task);
+        // Single-GPU / replicated: the helper decides standalone vs fused; the
+        // shared_ptr keeps the copied queries alive until the search runs.
+        return this->search_batchable_float(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
-    search_result_t search_float_batch_internal(const float* queries_data, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
-        struct search_req_t { const float* data; uint64_t n; };
-        std::string batch_key = "ivf_pq_sf_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
-
-        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-            uint64_t total_queries = 0;
-            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
-
-            std::vector<float> aggregated_queries(total_queries * this->dimension);
-            uint64_t offset = 0;
-            for (const auto& r_any : reqs) {
-                auto req = std::any_cast<search_req_t>(r_any);
-                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
-                offset += req.n;
-            }
-
-            auto results = this->search_float_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
-
-            offset = 0;
-            for (size_t i = 0; i < reqs.size(); ++i) {
-                auto req = std::any_cast<search_req_t>(reqs[i]);
-                search_result_t individual_res;
-                individual_res.neighbors.resize(req.n * limit);
-                individual_res.distances.resize(req.n * limit);
-                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
-                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](individual_res);
-                offset += req.n;
-            }
-        };
-
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        auto future = this->worker->template submit_batched<search_result_t>(batch_key, search_req_t{queries_data, num_queries}, exec_fn);
-        return future.get();
-    }
-
-    // Async counterpart of search_float_batch_internal. Same shape as
-    // search_batch_internal_async — request struct holds a shared_ptr keeping
-    // the queries memory alive across the async boundary.
-    uint64_t search_float_batch_internal_async(std::shared_ptr<std::vector<float>> queries_copy, uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
+    // float32-input search. Mirrors search_batchable_typed (standalone unless
+    // batching is on and a key is available) but the request holds a vector<float>
+    // owner, the fused runner calls search_float_internal, and the batch key uses
+    // variant=1 so it never fuses with T-typed searches.
+    uint64_t search_batchable_float(std::shared_ptr<std::vector<float>> owner, const float* queries_data,
+                                    uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
         struct search_req_t { std::shared_ptr<std::vector<float>> owner; const float* data; uint64_t n; };
-        std::string batch_key = "ivf_pq_sf_" + std::to_string((uintptr_t)this) + "_" + std::to_string(limit);
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+
+        uint64_t bk = (this->worker->batch_window() == 0) ? 0 : this->batch_key_for(/*variant=*/1, limit);
+        if (bk == 0) {
+            auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
+                return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
+            };
+            return this->worker->submit(task);
+        }
 
         auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
             uint64_t total_queries = 0;
@@ -1575,14 +1505,13 @@ public:
                 individual_res.distances.resize(req.n * limit);
                 std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
                 std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](individual_res);
+                setters[i](std::any(std::move(individual_res)));
                 offset += req.n;
             }
         };
 
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        const float* data_ptr = queries_copy->data();
-        return this->worker->template submit_batched_async<search_result_t>(batch_key, search_req_t{queries_copy, data_ptr, num_queries}, exec_fn);
+        return this->worker->submit_batchable(bk,
+            std::any(search_req_t{std::move(owner), queries_data, num_queries}), num_queries, std::move(exec_fn));
     }
 
     // See `search_internal` for the contract on `prebuilt`.

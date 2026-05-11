@@ -42,6 +42,8 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <unordered_map>
 #include <sys/stat.h>
 #include <cerrno>
@@ -225,6 +227,21 @@ using ::distribution_mode_t;
 // init_deleted_bitset() to recreate GPU caches.
 //
 // =============================================================================
+
+// Process-wide monotone allocator of batch keys for dequeue-time search fusion.
+// 0 is reserved (means "non-batchable"); the first allocated key is 1.
+inline std::atomic<uint64_t>& g_next_batch_key() {
+    static std::atomic<uint64_t> v{1};
+    return v;
+}
+// Latched true the first time g_next_batch_key wraps 2^64-1 -> 0. After that
+// batch_key_for() returns 0 forever (everything runs standalone) — reusing a
+// non-zero key post-wrap could make the worker fuse two unrelated indices'
+// searches. Reaching this takes ~58,000 years of index churn at 1e9 keys/yr.
+inline std::atomic<bool>& g_batch_keys_exhausted() {
+    static std::atomic<bool> b{false};
+    return b;
+}
 
 /**
  * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
@@ -726,7 +743,37 @@ public:
         if (worker) worker->set_batch_window(window_us);
     }
 
-    uint64_t cap() const { 
+    // Stable, process-unique key for (this index, variant, limit) used by the
+    // worker's dequeue-time batching: two requests share a key iff same index
+    // instance + same variant + same limit — exactly the requests the worker
+    // can fuse into one search. `variant` distinguishes search shapes that must
+    // NOT fuse, e.g. T-typed search (0) vs float32-input search (1). Keys are
+    // monotone-allocated, so collisions are impossible.
+    //
+    // Precondition (documented, not enforced): the search params `sp` passed to
+    // search/search_float are assumed constant per (index, limit) — the fused
+    // search uses the first arrival's exec_fn (which closed over its `sp`). In
+    // practice `sp` is fixed by the query plan, so this holds.
+    //
+    // Returns 0 if the process has exhausted the 2^64-1 key space (latched, so
+    // it stays 0 forever after the first wrap). Callers treat a 0 key the same
+    // as batch_window()==0: run the search standalone, never fuse.
+    uint64_t batch_key_for(uint32_t variant, uint32_t limit) {
+        if (g_batch_keys_exhausted().load(std::memory_order_relaxed)) return 0;
+        uint64_t k = (uint64_t(variant) << 32) | uint64_t(limit);
+        std::lock_guard<std::mutex> lk(batch_key_mu_);
+        auto it = batch_key_map_.find(k);
+        if (it != batch_key_map_.end()) return it->second;
+        uint64_t a = g_next_batch_key().fetch_add(1, std::memory_order_relaxed);
+        if (a == 0) {  // counter wrapped — disable batching process-wide, do NOT memoize
+            g_batch_keys_exhausted().store(true, std::memory_order_relaxed);
+            return 0;
+        }
+        batch_key_map_.emplace(k, a);
+        return a;
+    }
+
+    uint64_t cap() const {
         std::shared_lock<std::shared_mutex> lock(mutex_);
         return count; 
     }
@@ -1499,6 +1546,11 @@ protected:
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
+
+    // (variant<<32 | limit) -> stable batch key, for dequeue-time search fusion.
+    // See batch_key_for(). Tiny map; guarded by its own mutex.
+    std::mutex batch_key_mu_;
+    std::unordered_map<uint64_t, uint64_t> batch_key_map_;
 };
 
 } // namespace matrixone
