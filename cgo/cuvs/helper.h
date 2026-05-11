@@ -55,6 +55,18 @@ void save_host_matrix(const std::string& filename, raft::host_matrix_view<const 
 void set_errmsg(void* errmsg, const char* context, const char* message);
 
 /**
+ * @brief "HH:MM:SS.mmm" wall-clock timestamp used as a prefix for log lines.
+ */
+std::string get_timestamp();
+
+/**
+ * @brief Write `msg` to stderr prefixed with "[ERROR <timestamp>] ".
+ * cuvs_worker.hpp's variadic log_err() formats its arguments into `msg`
+ * and delegates here so the sink (timestamp + stream) lives in one place.
+ */
+void log_err(const std::string& msg);
+
+/**
  * @brief Get raft resources for the given device (thread-local, one per device per thread).
  * Also calls cudaSetDevice(device_id) to ensure the calling thread is on the right device.
  */

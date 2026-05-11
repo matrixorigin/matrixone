@@ -21,6 +21,11 @@
 #include <fstream>
 #include <cstring>
 #include <thread>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+#include <iostream>
 #include <raft/util/cudart_utils.hpp>
 
 // F16C / AVX intrinsics for the host fp32→fp16 cast. Available on Haswell+
@@ -48,6 +53,23 @@ void set_errmsg(void* errmsg, const char* context, const char* message) {
     char** err_ptr_ptr = static_cast<char**>(errmsg);
     std::string full_msg = std::string(context) + ": " + message;
     *err_ptr_ptr = strdup(full_msg.c_str());
+}
+
+std::string get_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::tm now_tm;
+    localtime_r(&now_c, &now_tm);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &now_tm);
+    std::ostringstream ss;
+    ss << buf << "." << std::setfill('0') << std::setw(3) << ms.count();
+    return ss.str();
+}
+
+void log_err(const std::string& msg) {
+    std::cerr << "[ERROR " << get_timestamp() << "] " << msg << std::endl;
 }
 
 int get_next_device_id() {
