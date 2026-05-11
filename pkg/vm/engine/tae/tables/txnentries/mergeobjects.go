@@ -159,7 +159,9 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
+		if writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs); writeErr != nil {
+			logutil.Warnf("[MergeObjects] persist transfer page failed, keeping in-memory pages: %v", writeErr)
+		}
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
