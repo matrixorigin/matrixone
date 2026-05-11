@@ -399,3 +399,61 @@ func TestPtrLenReplace(t *testing.T) {
 
 	require.Equal(t, int64(0), mp.CurrNB())
 }
+
+func TestReservationCommit(t *testing.T) {
+	before := GlobalPending()
+
+	r := Reserve(1024)
+	require.Equal(t, before+1024, GlobalPending())
+
+	r.Commit()
+	require.Equal(t, before, GlobalPending())
+
+	// Double commit is safe (idempotent)
+	r.Commit()
+	require.Equal(t, before, GlobalPending())
+}
+
+func TestReservationCancel(t *testing.T) {
+	before := GlobalPending()
+
+	r := Reserve(2048)
+	require.Equal(t, before+2048, GlobalPending())
+
+	r.Cancel()
+	require.Equal(t, before, GlobalPending())
+
+	// Double cancel is safe
+	r.Cancel()
+	require.Equal(t, before, GlobalPending())
+}
+
+func TestGlobalUsedWithPending(t *testing.T) {
+	base := GlobalUsedWithPending()
+
+	r := Reserve(4096)
+	require.Equal(t, base+4096, GlobalUsedWithPending())
+
+	r.Commit()
+	require.Equal(t, base, GlobalUsedWithPending())
+}
+
+func TestNewMPoolClampsOversizedCap(t *testing.T) {
+	oldCap := globalCap.Load()
+	defer globalCap.Store(oldCap)
+
+	globalCap.Store(10 * MB)
+
+	// Cap exceeds global → should be clamped (not error)
+	mp, err := NewMPool("test-clamp", 20*MB, NoFixed)
+	require.NoError(t, err)
+	require.NotNil(t, mp)
+	DeleteMPool(mp)
+}
+
+func TestNewMPoolCapTooSmall(t *testing.T) {
+	// Cap below 1MB → error
+	_, err := NewMPool("test-tiny", 512, NoFixed)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too small")
+}

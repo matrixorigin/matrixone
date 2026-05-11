@@ -470,6 +470,48 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, 64, a.usedOffset)
 	})
 
+	t.Run("heap fallback data is freed safely", func(t *testing.T) {
+		a := &WriteArena{
+			data:       make([]byte, 128),
+			dataOnHeap: true,
+		}
+		a.FreeBuffers()
+		require.Nil(t, a.data)
+		require.False(t, a.dataOnHeap)
+	})
+
+	t.Run("heap fallback compressBuf is freed safely", func(t *testing.T) {
+		a := NewArena(64)
+		a.compressBuf = make([]byte, 256)
+		a.cbufOnHeap = true
+		a.FreeBuffers()
+		require.Nil(t, a.compressBuf)
+		require.False(t, a.cbufOnHeap)
+	})
+
+	t.Run("reset transitions from heap data back to mpool", func(t *testing.T) {
+		a := &WriteArena{
+			data:           make([]byte, 8),
+			dataOnHeap:     true,
+			totalRequested: 64,
+		}
+		a.Reset()
+		require.GreaterOrEqual(t, len(a.data), 64)
+		require.False(t, a.dataOnHeap)
+		a.FreeBuffers()
+	})
+
+	t.Run("CompressBuf transitions from heap cbuf back to mpool", func(t *testing.T) {
+		a := NewArena(64)
+		a.compressBuf = make([]byte, 32)
+		a.cbufOnHeap = true
+
+		cb := a.CompressBuf(64)
+		require.Len(t, cb, 64)
+		require.False(t, a.cbufOnHeap)
+		a.FreeBuffers()
+	})
+
 	t.Run("serial buf is reused across Reset calls", func(t *testing.T) {
 		a := NewArena(256)
 		// First use: grow serialBuf to 100 bytes.
