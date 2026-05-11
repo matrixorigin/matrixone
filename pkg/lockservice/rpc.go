@@ -453,6 +453,7 @@ func writeResponseWithDeadline(
 	err error,
 	cs morpc.ClientSession,
 	timeout time.Duration,
+	extraFields ...zap.Field,
 ) error {
 	if cancel != nil {
 		defer cancel()
@@ -478,20 +479,26 @@ func writeResponseWithDeadline(
 		defer stop()
 	}
 	if err := cs.Write(writeCtx, resp); err != nil {
-		logger.Error("write response failed",
+		fields := []zap.Field{
 			zap.Error(err),
 			zap.Uint64("request-id", requestID),
 			zap.String("method", method),
 			zap.String("remote", remote),
-			zap.String("response", detail))
+			zap.String("response", detail),
+		}
+		fields = append(fields, extraFields...)
+		logger.Error("write response failed", fields...)
 		// A dropped response leaves the peer's Future waiting unless the
 		// session is closed and the client-side backend fails pending futures.
 		if closeErr := cs.Close(); closeErr != nil {
-			logger.Error("close client session after write response failed",
+			closeFields := []zap.Field{
 				zap.Error(closeErr),
 				zap.Uint64("request-id", requestID),
 				zap.String("method", method),
-				zap.String("remote", remote))
+				zap.String("remote", remote),
+			}
+			closeFields = append(closeFields, extraFields...)
+			logger.Error("close client session after write response failed", closeFields...)
 		}
 		return err
 	}
