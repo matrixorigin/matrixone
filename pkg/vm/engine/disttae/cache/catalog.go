@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -62,9 +61,11 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	defer cc.mu.Unlock()
 	cc.mu.start = start
 	cc.mu.end = end
-	logutil.Info("FIND_TABLE CACHE update serve range",
+	logutil.Info(
+		"catalog.cache.update.start.end",
 		zap.String("start", cc.mu.start.ToString()),
-		zap.String("end", cc.mu.end.ToString()))
+		zap.String("end", cc.mu.end.ToString()),
+	)
 }
 
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
@@ -72,9 +73,11 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	defer cc.mu.Unlock()
 	if cc.mu.start != types.MaxTs() && ts.GT(&cc.mu.start) {
 		cc.mu.start = ts
-		logutil.Info("FIND_TABLE CACHE update serve range (by start)",
+		logutil.Info(
+			"catalog.cache.update.start",
 			zap.String("start", cc.mu.start.ToString()),
-			zap.String("end", cc.mu.end.ToString()))
+			zap.String("end", cc.mu.end.ToString()),
+		)
 	}
 }
 
@@ -113,7 +116,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 	*/
 
-	inst := time.Now()
 	r := GCReport{}
 	{ // table cache gc
 		var prevName string
@@ -195,8 +197,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		}
 	}
 	cc.UpdateStart(types.TimestampToTS(ts))
-	duration := time.Since(inst)
-	logutil.Info("FIND_TABLE CACHE gc", zap.Any("report", r), zap.Duration("cost", duration))
 	return r
 }
 

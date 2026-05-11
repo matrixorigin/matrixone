@@ -368,7 +368,7 @@ func (s *storage) Unsubscribe(
 
 	var err error
 	for _, tid := range tables {
-		if e := s.engine.UnsubscribeTable(ctx, 0, tid); e != nil {
+		if e := s.engine.UnsubscribeTable(ctx, 0, 0, tid); e != nil {
 			e = moerr.AttachCause(ctx, e)
 			err = errors.Join(err, e)
 		}

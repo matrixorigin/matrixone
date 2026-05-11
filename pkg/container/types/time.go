@@ -50,8 +50,23 @@ func (t Time) String2(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
-		msecInstr := fmt.Sprintf("%06d\n", ms)
-		msecInstr = msecInstr[:scale]
+		// Format microseconds as 6 digits (max precision we store)
+		msecInstr := fmt.Sprintf("%06d", ms)
+		// For scale > 6, pad with zeros to the right (e.g., scale 9: "000001" -> "000001000")
+		if scale > 6 {
+			// Pad to 9 digits by appending zeros
+			for len(msecInstr) < 9 {
+				msecInstr = msecInstr + "0"
+			}
+			// Truncate to requested scale (max 9)
+			if scale > 9 {
+				scale = 9
+			}
+			msecInstr = msecInstr[:scale]
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 		return fmt.Sprintf("%s%02d:%02d:%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d:%02d:%02d", symbol, h, m, s)
@@ -66,8 +81,22 @@ func (t Time) NumericString(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
-		msecInstr := fmt.Sprintf("%06d\n", ms)
-		msecInstr = msecInstr[:scale]
+		// Format microseconds as 6 digits (max precision we store)
+		msecInstr := fmt.Sprintf("%06d", ms)
+		// For scale > 6, pad with zeros to the right
+		// TIME only stores 6 digits of microsecond precision, so we pad with zeros
+		// to match the requested DECIMAL scale (which can be up to 38)
+		if scale > 6 {
+			// Pad to requested scale by appending zeros
+			for len(msecInstr) < int(scale) {
+				msecInstr = msecInstr + "0"
+			}
+			// Use the full padded string (scale digits)
+			// No truncation needed since we padded to exactly scale length
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 		return fmt.Sprintf("%s%02d%02d%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d%02d%02d", symbol, h, m, s)
@@ -118,12 +147,12 @@ func ParseTime(s string, scale int32) (Time, error) {
 			return Time(0), nil
 		}
 
-		if s[0] == '-' {
+		if timeString[0] == '-' {
 			isNegative = true
 			timeString = timeString[1:]
 		}
 
-		timeParts := strings.Split(s, " ")
+		timeParts := strings.Split(timeString, " ")
 		if len(timeParts) > 1 {
 			day, _ = strconv.ParseUint(timeParts[0], 10, 64)
 			if day > MaxHourInTime/maxHourInDay {
@@ -262,6 +291,46 @@ func (t Time) ToInt64() int64 {
 	return trans
 }
 
+// TruncateToScale truncates a time to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+//   - >6: treated as scale 6 (full precision)
+func (t Time) TruncateToScale(scale int32) Time {
+	// For scale >= 6, return full precision (no truncation)
+	if scale >= 6 {
+		return t
+	}
+
+	isNeg := t < 0
+	absTime := t
+	if isNeg {
+		absTime = -t
+	}
+
+	// Time is stored in microseconds (like Timestamp)
+	// Extract second part and microsecond part
+	secPart := (absTime / MicroSecsPerSec) * MicroSecsPerSec
+	microPart := absTime % MicroSecsPerSec
+
+	// Use same scale table as Timestamp (from timestamp.go)
+	scaleTable := [...]int64{1000000, 100000, 10000, 1000, 100, 10, 1}
+	divisor := scaleTable[scale]
+	base := int64(microPart) / divisor
+
+	// Round up if the next digit >= 5
+	if scale < 6 && int64(microPart)%divisor/(divisor/10) >= 5 {
+		base += 1
+	}
+
+	result := secPart + Time(base*divisor)
+	if isNeg {
+		return -result
+	}
+	return result
+}
+
 func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, error) {
 	tToStr := t.NumericString(scale)
 	ret, err := ParseDecimal64(tToStr, width, scale)
@@ -336,14 +405,16 @@ func (t Time) ToDatetime(scale int32) Datetime {
 	// TODO: Get today date from local time zone setting?
 	d := Today(time.UTC)
 	dt := d.ToDatetime()
-	if scale == 6 {
+	// Time type only supports up to 6 digits of microsecond precision
+	// For scale >= 6, use scale 6 (full microsecond precision)
+	if scale >= 6 {
 		return Datetime(int64(dt) + int64(t))
 	}
 
 	// TODO: add the valid check
 	newTime := Datetime(int64(dt) + int64(t))
 	base := newTime / scaleVal[scale]
-	if newTime%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
+	if scale < 6 && newTime%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
 		base += 1
 	}
 	return base * scaleVal[scale]
@@ -353,14 +424,18 @@ func (t Time) ToDatetime(scale int32) Datetime {
 // return type bool means the if the time is valid
 func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	switch its {
-	case Second:
-		nums *= MicroSecsPerSec
-	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
-	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
+	case MicroSecond, Second, Minute, Hour:
+		var ok bool
+		nums, ok = ScaleIntervalToMicroseconds(nums, its)
+		if !ok {
+			return 0, false
+		}
 	}
-	newTime := t + Time(nums)
+	newValue, ok := safeAddInt64(int64(t), nums)
+	if !ok {
+		return 0, false
+	}
+	newTime := Time(newValue)
 
 	// valid
 	h := newTime.Hour()

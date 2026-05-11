@@ -1,0 +1,45 @@
+-- Test case for issue #22396: decimal parsing error with e+06 format
+-- https://github.com/matrixorigin/matrixone/issues/22396
+
+DROP TABLE IF EXISTS t;
+CREATE TABLE t (d DECIMAL(10, 2));
+
+-- Test 1: e+06 format (the bug case)
+INSERT INTO t VALUES ('1.23456789e+06');
+SELECT * FROM t;
+
+-- Test 2: e6 format (should also work)
+TRUNCATE TABLE t;
+INSERT INTO t VALUES ('1.23456789e6');
+SELECT * FROM t;
+
+-- Test 3: Both formats should produce the same result
+TRUNCATE TABLE t;
+INSERT INTO t VALUES ('1.23456789e+06'), ('1.23456789e6');
+SELECT COUNT(DISTINCT d) FROM t;
+
+-- Test 4: e+02 format
+TRUNCATE TABLE t;
+INSERT INTO t VALUES ('12.34e+2');
+SELECT * FROM t;
+
+-- Test 5: e-06 format (negative exponent)
+DROP TABLE IF EXISTS t2;
+CREATE TABLE t2 (d DECIMAL(10, 8));
+INSERT INTO t2 VALUES ('1.23456789e-06');
+SELECT * FROM t2;
+
+-- Test 6: Multiple values with different scientific notation formats
+TRUNCATE TABLE t;
+INSERT INTO t VALUES ('1.1e+1'), ('2.2e+2'), ('3.3e+3');
+SELECT * FROM t ORDER BY d;
+
+-- Test 7: Negative values with e+ format
+TRUNCATE TABLE t;
+INSERT INTO t VALUES ('-1.23456789e+06');
+SELECT * FROM t;
+
+-- Cleanup
+DROP TABLE t;
+DROP TABLE t2;
+

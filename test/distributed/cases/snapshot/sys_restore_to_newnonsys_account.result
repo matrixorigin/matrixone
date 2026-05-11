@@ -25,7 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-19 05:52:55.707381    account    acc01        
+sp01    2025-11-28 11:12:44.041210999    account    acc01        
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -332,8 +332,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-19 05:52:58.143598    account    acc01        
-sp07    2025-07-19 05:52:58.119    account    acc01        
+sp08    2025-11-28 11:12:45.631295999    account    acc01        
+sp07    2025-11-28 11:12:45.611217999    account    acc01        
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
@@ -422,7 +422,6 @@ restore account acc01 from snapshot sp03 to account sys;
 internal error: non-sys account's snapshot can't restore to sys account
 drop snapshot sp03;
 drop database test01;
-set experimental_fulltext_index=1;
 drop database if exists fulltext_index_acc01;
 create database fulltext_index_acc01;
 use fulltext_index_acc01;

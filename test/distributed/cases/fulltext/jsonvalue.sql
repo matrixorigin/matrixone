@@ -1,11 +1,9 @@
--- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json);
-insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthdayhappybirthdayhappybirthday", "f":"winterautumnsummerspring"}'), 
+insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthdayhappybirthdayhappybirthday", "f":"winterautumnsummerspring"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"redbluebrownyelloworange"}', '{"d":"兒童中文"}');
 
@@ -24,7 +22,7 @@ drop table src;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 text, json2 varchar);
-insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'), 
+insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"redbluebrownyelloworange"}', '{"d":"兒童中文"}');
 
@@ -43,7 +41,7 @@ drop table src;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json, FULLTEXT(json1) with parser json_value);
-insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'), 
+insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"redbluebrownyelloworange"}', '{"d":"兒童中文"}');
 
@@ -62,7 +60,7 @@ drop table src;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json_value);
-insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'), 
+insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red..blue--brown@@yellow::orange"}', '{"d":"兒童中文"}');
 

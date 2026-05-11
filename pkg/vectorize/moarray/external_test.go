@@ -15,10 +15,12 @@
 package moarray
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestAdd(t *testing.T) {
@@ -45,6 +47,11 @@ func TestAdd(t *testing.T) {
 			name:    "Test2 - float64",
 			args:    args{leftArgF64: []float64{1, 2, 3}, rightArgF64: []float64{2, 3, 4}},
 			wantF64: []float64{3, 5, 7},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{3, 5, 7, 9, 11, 13, 15, 17, 19, 21},
 		},
 	}
 	for _, tt := range tests {
@@ -88,6 +95,11 @@ func TestSubtract(t *testing.T) {
 			name:    "Test2 - float64",
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 3, 4}},
 			wantF64: []float64{0, 1, -1},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
 		},
 	}
 	for _, tt := range tests {
@@ -136,6 +148,11 @@ func TestMultiply(t *testing.T) {
 			name:    "Test3 - float64",
 			args:    args{leftArgF64: []float64{0.66616553}, rightArgF64: []float64{0.66616553}},
 			wantF64: []float64{0.4437765133601809},
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{2, 6, 12, 20, 30, 42, 56, 72, 90, 110},
 		},
 	}
 	for _, tt := range tests {
@@ -195,6 +212,11 @@ func TestDivide(t *testing.T) {
 			name:    "Test5 - float64 - dimension mismatch",
 			args:    args{leftArgF64: []float64{1, 4}, rightArgF64: []float64{1, 1, 4}},
 			wantErr: true,
+		},
+		{
+			name:    "Test6 - float64",
+			args:    args{leftArgF64: []float64{20, 30, 40, 50, 60, 70, 80, 90, 100, 110}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{10, 10, 10, 10, 10, 10, 10, 10, 10, 10},
 		},
 	}
 	for _, tt := range tests {
@@ -272,7 +294,7 @@ func TestCompare(t *testing.T) {
 			want: -1,
 		},
 		{
-			name: "Test7 - float64 difference dims",
+			name: "Test8 - float64 difference dims",
 			args: args{leftArgF64: []float64{3, 2, 3}, rightArgF64: []float64{3, 2}},
 			want: 1,
 		},
@@ -332,6 +354,22 @@ func TestCast(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Narrowing cast (float64 -> float32) of a finite element whose magnitude
+// exceeds float32's range used to silently return +/-Inf. We now surface an
+// out-of-range error, matching scalar float-cast behaviour.
+func TestCastFloat64ToFloat32OverflowIsRejected(t *testing.T) {
+	_, err := Cast[float64, float32]([]float64{1e300})
+	if err == nil {
+		t.Fatalf("Cast[float64,float32]([1e300]) should return out-of-range error, got nil")
+	}
+
+	// An explicit +Inf on the source passes through without a new error —
+	// we only guard against silent finite -> Inf overflow.
+	if _, err := Cast[float64, float32]([]float64{math.Inf(1)}); err != nil {
+		t.Fatalf("Cast[float64,float32]([+Inf]) should pass through, got %v", err)
 	}
 }
 
@@ -917,5 +955,57 @@ func TestScalarOp(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestScalarOpOverflow(t *testing.T) {
+	maxF32 := float32(math.MaxFloat32)
+	maxF64 := math.MaxFloat64
+
+	// float32 overflow: MaxFloat32 * 2 → +Inf
+	_, err := ScalarOp[float32]([]float32{maxF32}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float32 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// float64 overflow: MaxFloat64 * 2 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "*", 2)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// addition overflow: MaxFloat64 + MaxFloat64 → +Inf
+	_, err = ScalarOp[float64]([]float64{maxF64}, "+", maxF64)
+	if err == nil {
+		t.Fatal("expected out-of-range error for float64 add overflow, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+}
+
+func TestScalarOpNaN(t *testing.T) {
+	// 0 * Inf produces NaN, must be rejected
+	_, err := ScalarOp[float64]([]float64{0}, "*", math.Inf(1))
+	if err == nil {
+		t.Fatal("expected out-of-range error for NaN result, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
+	}
+
+	// float32: 0 * Inf also produces NaN
+	_, err = ScalarOp[float32]([]float32{0}, "*", float64(math.Inf(-1)))
+	if err == nil {
+		t.Fatal("expected out-of-range error for float32 NaN result, got nil")
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+		t.Errorf("expected ErrOutOfRange, got %v", err)
 	}
 }

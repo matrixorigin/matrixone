@@ -687,7 +687,7 @@ func (reader *CKPReader) ForEachRow(
 
 func (reader *CKPReader) ConsumeCheckpointWithTableID(
 	ctx context.Context,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 ) (err error) {
 	if !reader.withTableID {
 		panic("not support")
@@ -730,7 +730,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 				default:
 					panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
 				}
-				if err = forEachObject(ctx, obj, isTombstone); err != nil {
+				if err = forEachObject(ctx, reader.fs, obj, isTombstone); err != nil {
 					return
 				}
 			}
@@ -744,7 +744,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 
 func consumeCheckpointWithTableID(
 	ctx context.Context,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	dataRanges, tombstoneRanges []ckputil.TableRange,
 	tableID uint64,
 	mp *mpool.MPool,
@@ -755,7 +755,7 @@ func consumeCheckpointWithTableID(
 		defer iter.Close()
 		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 			entry := iter.Entry()
-			if err := forEachObject(ctx, entry, false); err != nil {
+			if err := forEachObject(ctx, fs, entry, false); err != nil {
 				return err
 			}
 		}
@@ -765,7 +765,7 @@ func consumeCheckpointWithTableID(
 		defer iter.Close()
 		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
 			entry := iter.Entry()
-			if err := forEachObject(ctx, entry, true); err != nil {
+			if err := forEachObject(ctx, fs, entry, true); err != nil {
 				return err
 			}
 		}
@@ -991,7 +991,7 @@ func ConsumeCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	mp *mpool.MPool,
 	fs fileservice.FileService) (err error) {
 	if metaLoc == "" {

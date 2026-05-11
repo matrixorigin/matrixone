@@ -967,6 +967,18 @@ func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, s
 	sysVarsMp["version"] = verPrefix + verVal
 }
 
+func resolveServerID(ses *Session) string {
+	if ses == nil {
+		return ""
+	}
+	rm := ses.getRoutineManager()
+	if rm == nil || rm.baseService == nil {
+		return ""
+	}
+	serviceID := rm.baseService.ID()
+	return serviceID
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
@@ -976,6 +988,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 
 	CNServiceConfig := getPu(ses.service).SV
 	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
+	sysVarsMp["server_id"] = resolveServerID(ses)
 
 	m.Lock()
 	defer m.Unlock()
@@ -1065,6 +1078,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("version_comment"),
 		Default:           "MatrixOne",
+	},
+	"server_id": {
+		Name:              "server_id",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("server_id"),
+		Default:           "",
 	},
 	"tx_isolation": {
 		Name:              "tx_isolation",
@@ -1702,6 +1723,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("default_storage_engine", "InnoDB"),
 		Default:           "InnoDB",
+	},
+	"view_security_type": {
+		Name:              "view_security_type",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("view_security_type", "DEFINER", "INVOKER"),
+		Default:           "DEFINER",
 	},
 	"default_table_encryption": {
 		Name:              "default_table_encryption",
@@ -3549,7 +3578,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
@@ -3566,6 +3595,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
+	},
+	"enable_vector_prefilter_by_default": {
+		Name:              "enable_vector_prefilter_by_default",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_vector_prefilter_by_default"),
+		Default:           int8(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",
@@ -3605,7 +3642,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,

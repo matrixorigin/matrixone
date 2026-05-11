@@ -43,7 +43,7 @@ func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindC
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 4).")
 	}
 
-	colDefs := _getColDefs(pluginColdefs)
+	colDefs := DeepCopyColDefList(pluginColdefs)
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -57,7 +57,7 @@ func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindC
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

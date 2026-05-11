@@ -42,7 +42,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) CollectChanges(_ context.Context, from, to types.TS, _ *mpool.MPool) (engine.ChangesHandle, error) {
+func (t *Table) CollectChanges(_ context.Context, from, to types.TS, _ bool, _ *mpool.MPool) (engine.ChangesHandle, error) {
 	panic("not support")
 }
 

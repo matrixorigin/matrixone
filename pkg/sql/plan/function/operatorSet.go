@@ -338,10 +338,22 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			needCast = true
 		}
 
+		// Special handling for mixed string/numeric types (issue #19998)
+		// If one is string and the other is numeric, prefer string type
+		// This avoids runtime errors when casting 'All years' to int
+		source := []types.Type{inputs[1], inputs[2]}
+		isNumeric0 := source[0].Oid.IsInteger() || source[0].Oid.IsFloat() || source[0].Oid.IsDecimal()
+		isNumeric1 := source[1].Oid.IsInteger() || source[1].Oid.IsFloat() || source[1].Oid.IsDecimal()
+		if (source[0].Oid.IsMySQLString() && isNumeric1) ||
+			(isNumeric0 && source[1].Oid.IsMySQLString()) {
+			retType := types.T_varchar.ToType()
+			setMaxWidthFromSource(&retType, source)
+			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+		}
+
 		minCost := math.MaxInt32
 		retType := types.Type{}
 
-		source := []types.Type{inputs[1], inputs[2]}
 		target := make([]types.T, 2)
 		for _, rett := range retOperatorIffSupports {
 			target[0], target[1] = rett, rett

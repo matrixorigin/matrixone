@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate
@@ -116,6 +122,10 @@ const (
 	FPCreateUser
 	FPDropUser
 	FPAlterUser
+	FPAlterRole
+	FPAlterRoleAddRule
+	FPAlterRoleDropRule
+	FPShowRules
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction
@@ -191,6 +201,7 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPDataBranch
 )
 
 type (
@@ -410,6 +421,31 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) resetBinaryParamState() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil {
+		prepareStmt.params.GetNulls().Reset()
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil && proc != nil {
+		prepareStmt.params.Free(proc.Mp())
+		prepareStmt.params = nil
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
 type Allocator interface {
 	// Alloc allocate a []byte with len(data) >= size, and the returned []byte cannot
 	// be expanded in use.
@@ -538,8 +574,6 @@ type FeSession interface {
 	getCachedPlan(sql string) *cachedPlan
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	EnterRunSql()
-	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
@@ -682,6 +716,7 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	respr        Responser
+	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
 	// mysql parser
@@ -727,19 +762,29 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	}
 }
 
-func (ses *feSessionImpl) EnterRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.EnterRunSql()
-		}
+func (ses *feSessionImpl) pushRunSQLToken(token uint64) {
+	if token == 0 {
+		return
 	}
+	ses.runSQLTokens = append(ses.runSQLTokens, token)
 }
-func (ses *feSessionImpl) ExitRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.ExitRunSql()
-		}
+
+func (ses *feSessionImpl) popRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
 	}
+	token := ses.runSQLTokens[n-1]
+	ses.runSQLTokens = ses.runSQLTokens[:n-1]
+	return token
+}
+
+func (ses *feSessionImpl) currentRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
+	}
+	return ses.runSQLTokens[n-1]
 }
 
 // Close releases all reference.
@@ -771,6 +816,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
+	ses.runSQLTokens = nil
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
@@ -1106,6 +1152,16 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	} else {
 		ses.sesSysVars.Set(name, val)
 	}
+	if err == nil && name == "sql_mode" {
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
+
+	// Update rewriteEnabled cache when enable_remap_hint is changed
+	if err == nil && name == "enable_remap_hint" {
+		if on, convErr := valueIsBoolTrue(val); convErr == nil {
+			ses.rewriteEnabled.Store(on)
+		}
+	}
 	return
 }
 
@@ -1261,6 +1317,8 @@ type MysqlReader interface {
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	// Disconnect closes the underlying network connection to forcefully disconnect the client.
+	Disconnect() error
 }
 
 // MysqlWriter write batch & control packets using mysql protocol format

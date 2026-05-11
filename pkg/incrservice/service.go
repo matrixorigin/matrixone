@@ -90,18 +90,22 @@ func (s *service) Create(
 	cols []AutoColumn,
 	txnOp client.TxnOperator,
 ) error {
-	s.logger.Info("create auto increment table",
+	s.logger.Info(
+		"incrservice.create.table",
 		zap.Uint64("table-id", tableID),
-		zap.String("txn", txnOp.Txn().DebugString()))
+		zap.String("txn", txnOp.Txn().DebugString()),
+	)
 
 	txnOp.AppendEventCallback(
 		client.ClosedEvent,
 		s.txnClosed)
 	if err := s.store.Create(ctx, tableID, cols, txnOp); err != nil {
-		s.logger.Error("create auto increment cache failed",
+		s.logger.Error(
+			"incrservice.create.cache.failed",
 			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnOp.Txn().ID)),
-			zap.Error(err))
+			zap.Error(err),
+		)
 		return err
 	}
 	c, err := newTableCache(
@@ -134,17 +138,20 @@ func (s *service) Reset(
 	newTableID uint64,
 	keep bool,
 	txnOp client.TxnOperator) error {
-	s.logger.Info("reset auto increment table",
+	s.logger.Info(
+		"incrservice.reset.table",
 		zap.Uint64("table-id", oldTableID),
 		zap.String("txn", txnOp.Txn().DebugString()),
-		zap.Uint64("new-table-id", newTableID))
+		zap.Uint64("new-table-id", newTableID),
+	)
 
 	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
 	if err != nil {
 		return err
 	}
 	if len(cols) == 0 {
-		s.logger.Info("no columns found",
+		s.logger.Info(
+			"incrservice.reset.table.no.columns.found",
 			zap.Uint64("table-id", oldTableID),
 			zap.String("txn", txnOp.Txn().DebugString()),
 		)
@@ -299,9 +306,11 @@ func (s *service) doCreateLocked(
 	txnID []byte) error {
 	s.mu.tables[tableID] = c
 	if s.logger.Enabled(zap.InfoLevel) {
-		s.logger.Info("auto increment cache created",
+		s.logger.Info(
+			"incrservice.cache.created",
 			zap.Uint64("table-id", tableID),
-			zap.String("txn", hex.EncodeToString(txnID)))
+			zap.String("txn", hex.EncodeToString(txnID)),
+		)
 	}
 	return nil
 }
@@ -367,10 +376,11 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 			} else {
 				_ = tc.close()
 				delete(s.mu.tables, id)
-				s.logger.Info("auto increment cache destroyed with txn aborted",
+				s.logger.Info(
+					"incrservice.cache.destroyed",
 					zap.Uint64("table-id", id),
-					zap.String("txn", hex.EncodeToString(txnMeta.ID)))
-
+					zap.String("txn", hex.EncodeToString(txnMeta.ID)),
+				)
 			}
 		}
 	}
@@ -391,10 +401,11 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 				_ = tc.close()
 				delete(s.mu.tables, ctx.tableID)
 				s.mu.destroyed[ctx.tableID] = ctx
-				s.logger.Info("auto increment cache delete",
+				s.logger.Info(
+					"incrservice.cache.deleted",
 					zap.Uint64("table-id", ctx.tableID),
-					zap.String("txn", hex.EncodeToString(txnMeta.ID)))
-
+					zap.String("txn", hex.EncodeToString(txnMeta.ID)),
+				)
 			}
 		}
 	}

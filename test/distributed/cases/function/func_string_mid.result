@@ -173,7 +173,7 @@ mid(f1, 1, 1)
 drop table t1;
 SELECT '1' IN ('1', MID(-9223372036854775809, 1));
 1 in (1, mid(-9223372036854775809, 1))
-true
+1
 SELECT MID('1', year(FROM_UNIXTIME(-1)));
 mid(1, year(from_unixtime(-1)))
 null

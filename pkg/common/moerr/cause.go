@@ -31,7 +31,13 @@ var (
 	CauseAsyncUpgradeTask       = NewInternalError(context.Background(), "asyncUpgradeTask")
 	CauseAsyncUpgradeTenantTask = NewInternalError(context.Background(), "asyncUpgradeTenantTask")
 	//pkg/cdc
-	CauseFinishTxnOp = NewInternalError(context.Background(), "finishTxnOp")
+	CauseFinishTxnOp           = NewInternalError(context.Background(), "finishTxnOp")
+	CauseTableDetectorScan     = NewInternalError(context.Background(), "table detector scan")
+	CauseWatermarkRead         = NewInternalError(context.Background(), "watermark read")
+	CauseWatermarkUpdate       = NewInternalError(context.Background(), "watermark update")
+	CauseWatermarkUpdateErrMsg = NewInternalError(context.Background(), "watermark update err msg")
+	CauseWatermarkAdd          = NewInternalError(context.Background(), "watermark add")
+	CauseGetTableDef           = NewInternalError(context.Background(), "get table def")
 	//pkg/clusterservice
 	CauseDebugUpdateCNLabel     = NewInternalError(context.Background(), "debugUpdateCNLabel")
 	CauseDebugUpdateCNWorkState = NewInternalError(context.Background(), "debugUpdateCNWorkState")

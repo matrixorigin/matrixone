@@ -51,8 +51,10 @@ func TestForwardLock(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			require.NotNil(t, l2.activeTxnHolder.getActiveTxn(txn1, false, ""))
-			require.NotNil(t, l2.activeTxnHolder.getActiveTxn(txn1, false, ""))
+			txn := l2.activeTxnHolder.getActiveTxn(txn1, false, "")
+			require.NotNil(t, txn)
+			require.Equal(t, l1.serviceID, txn.remoteService)
+			require.True(t, l2.activeTxnHolder.hasRemoteLockBind(l1.serviceID, l2.tableGroups.get(0, tableID).getBind(), time.Second))
 		},
 	)
 }

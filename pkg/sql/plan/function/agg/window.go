@@ -27,3 +27,31 @@ func RegisterRowNumber(id int64) {
 func RegisterDenseRank(id int64) {
 	aggexec.RegisterDenseRankWin(id)
 }
+
+func RegisterLag(id int64) {
+	aggexec.RegisterLagWin(id)
+}
+
+func RegisterLead(id int64) {
+	aggexec.RegisterLeadWin(id)
+}
+
+func RegisterFirstValue(id int64) {
+	aggexec.RegisterFirstValueWin(id)
+}
+
+func RegisterLastValue(id int64) {
+	aggexec.RegisterLastValueWin(id)
+}
+
+func RegisterNthValue(id int64) {
+	aggexec.RegisterNthValueWin(id)
+}
+
+func RegisterCumeDist(id int64) {
+	aggexec.RegisterCumeDistWin(id)
+}
+
+func RegisterPercentRank(id int64) {
+	aggexec.RegisterPercentRankWin(id)
+}

@@ -581,4 +581,16 @@ from
 
 drop index idx_1 on t12;
 drop table t12;
+
+drop table if exists t13;
+create table t13(a int primary key, b varchar(100), c varchar(100), fulltext index ftidx(b, c));
+select
+    index_name,
+    column_name,
+    index_type
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't13'
+    order by index_name, seq_in_index;
+drop table t13;
+
 drop database db6;

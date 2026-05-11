@@ -198,6 +198,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: true, requireTyp: []types.Type{types.T_bool.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
 			requireRet: types.T_int64.ToType(),
 		},
+		{
+			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr:  false,
+			requireFid: ELT, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
+		{
+			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr:  false,
+			requireFid: ELT, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_varchar.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
@@ -221,6 +235,29 @@ func Test_GetFunctionByName(t *testing.T) {
 			require.Equal(t, c.requireRet, get.retType, msg)
 		}
 	}
+}
+
+func TestTemporalFunctionReviewTypeCompatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	curtime, err := GetFunctionByName(proc.Ctx, "curtime", nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_time, curtime.retType.Oid)
+	require.Equal(t, int32(6), curtime.retType.Scale)
+
+	stringTypes := []types.T{types.T_varchar, types.T_char, types.T_text}
+	for _, firstType := range stringTypes {
+		for _, secondType := range stringTypes {
+			addtime, err := GetFunctionByName(proc.Ctx, "addtime", []types.Type{firstType.ToType(), secondType.ToType()})
+			require.NoError(t, err, "addtime(%s, %s)", firstType, secondType)
+			require.Equal(t, types.T_datetime, addtime.retType.Oid)
+			require.Equal(t, int32(6), addtime.retType.Scale)
+		}
+	}
+
+	timestampadd, err := GetFunctionByName(proc.Ctx, "timestampadd", []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_char.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_char, timestampadd.retType.Oid)
 }
 
 func TestGetFunctionIsWinfunByName(t *testing.T) {

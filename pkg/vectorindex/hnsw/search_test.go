@@ -22,7 +22,6 @@ import (
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,15 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 
@@ -52,7 +51,6 @@ func mock_runSql_streaming(
 	err_chan chan error,
 ) (executor.Result, error) {
 
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
 	return executor.Result{}, nil

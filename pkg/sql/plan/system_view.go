@@ -97,7 +97,7 @@ func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindCont
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
@@ -167,7 +167,7 @@ func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx 
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
@@ -269,7 +269,7 @@ func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *B
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
@@ -339,7 +339,7 @@ func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindCont
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

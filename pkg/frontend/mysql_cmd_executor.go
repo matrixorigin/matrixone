@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -42,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -155,7 +156,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
 			// case: exec `set @t = 2;` will trigger an internal query with the same session.
@@ -163,11 +164,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
 			//  + envStmt = fmtCtx.String()
-			text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
 		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -1223,7 +1224,19 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	return nil
 }
 
-func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
+func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+	if ses == nil || st == nil {
+		return nil
+	}
+	stmtName := string(st.Name)
+	if stmtName == "" {
+		return nil
+	}
+	preStmt, ok := ses.prepareStmts[stmtName]
+	if !ok || preStmt == nil {
+		return nil
+	}
+	preStmt.resetBinaryParamState()
 	return nil
 }
 
@@ -1478,6 +1491,11 @@ func handleCreateRole(ses FeSession, execCtx *ExecCtx, cr *tree.CreateRole) erro
 // handleDropRole drops the role
 func handleDropRole(ses FeSession, execCtx *ExecCtx, dr *tree.DropRole) error {
 	return doDropRole(execCtx.reqCtx, ses.(*Session), dr)
+}
+
+// handleAlterRole renames the role
+func handleAlterRole(ses FeSession, execCtx *ExecCtx, ar *tree.AlterRole) error {
+	return doAlterRole(execCtx.reqCtx, ses.(*Session), ar)
 }
 
 func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFunction) error {
@@ -2381,6 +2399,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
+		if _, ok := stmt.(*tree.DataBranchPick); ok {
+			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
 			return moerr.NewInternalError(reqCtx, createDropDatabaseErrorInfo())
@@ -2398,7 +2419,7 @@ func canExecuteStatementInUncommittedTransaction(
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (_ bool, _ time.Duration, _ time.Duration, err error) {
 	var readTime, writeTime time.Duration
 	var payload []byte
-	readStart := time.Now()
+	start := time.Now()
 	defer func() {
 		if err != nil {
 			mysqlRrWr.FreeLoadLocal()
@@ -2414,21 +2435,21 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 		}
 		return skipWrite, readTime, writeTime, err
 	}
-	readTime = time.Since(readStart)
+	readTime = time.Since(start)
 
 	//empty packet means the file is over.
-	length := len(payload)
-	if length == 0 {
+	size := len(payload)
+	if size == 0 {
 		return skipWrite, readTime, writeTime, errorInvalidLength0
 	}
-	ses.CountPayload(length)
+	ses.CountPayload(size)
 
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.Base.LoadLocalReader will be closed.
 	// Then write will return error, but we need to read the rest of the data and not write it to pipe.
 	// So we need a flag[skipWrite] to tell us whether we need to write the data to pipe.
 	// https://github.com/matrixorigin/matrixone/issues/6665#issuecomment-1422236478
 
-	writeStart := time.Now()
+	start = time.Now()
 	if !skipWrite {
 		_, err = writer.Write(payload)
 		if err != nil {
@@ -2439,7 +2460,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 				zap.Error(err))
 			skipWrite = true
 		}
-		writeTime = time.Since(writeStart)
+		writeTime = time.Since(start)
 
 	}
 	return skipWrite, readTime, writeTime, err
@@ -2463,73 +2484,111 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	defer func() {
 		close(quitC)
 	}()
-	mysqlRrWr := ses.GetResponser().MysqlRrWr()
+	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
 		err2 := writer.Close()
 		if err == nil {
 			err = err2
 		}
 		//free load local buffer anyway
-		mysqlRrWr.FreeLoadLocal()
+		mysqlRwer.FreeLoadLocal()
 	}()
 	err = plan2.InitInfileParam(param)
 	if err != nil {
 		return
 	}
-	err = mysqlRrWr.WriteLocalInfileRequest(param.Filepath)
+	err = mysqlRwer.WriteLocalInfileRequest(param.Filepath)
 	if err != nil {
 		return
 	}
+
+	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
+	handleNetworkTimeout := func(err error) error {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v, disconnecting client", err)
+			if disconnectErr := mysqlRwer.Disconnect(); disconnectErr != nil {
+				ses.Errorf(execCtx.reqCtx, "failed to disconnect client: %v", disconnectErr)
+			}
+			return moerr.NewInternalErrorf(execCtx.reqCtx,
+				"load local file failed: network read timeout, client connection closed")
+		}
+		return nil
+	}
+
 	var skipWrite bool
 	skipWrite = false
 	var readTime, writeTime time.Duration
+	var retError error
 	start := time.Now()
-	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+	epoch, printTime := uint64(0), uint64(1024*60)
+	minReadTime, maxReadTime, minWriteTime, maxWriteTime := 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
-	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
-	if err != nil {
-		if errors.Is(err, errorInvalidLength0) {
-			return nil
-		}
-	}
-	if readTime > maxReadTime {
-		maxReadTime = readTime
-	}
-	if readTime < minReadTime {
-		minReadTime = readTime
-	}
-
-	if writeTime > maxWriteTime {
-		maxWriteTime = writeTime
-	}
-	if writeTime < minWriteTime {
-		minWriteTime = writeTime
-	}
-
-	for {
-		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
-		if err != nil {
-			if errors.Is(err, errorInvalidLength0) {
-				err = nil
-				break
-			}
-		}
-
+	// updateTimeStats updates min/max time statistics
+	updateTimeStats := func(readTime, writeTime time.Duration) {
 		if readTime > maxReadTime {
 			maxReadTime = readTime
 		}
 		if readTime < minReadTime {
 			minReadTime = readTime
 		}
-
 		if writeTime > maxWriteTime {
 			maxWriteTime = writeTime
 		}
 		if writeTime < minWriteTime {
 			minWriteTime = writeTime
 		}
+	}
 
-		if epoch%printEvery == 0 {
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return nil
+		}
+		if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+			return timeoutErr
+		}
+		retError = err
+	}
+	updateTimeStats(readTime, writeTime)
+
+	const maxRetries = 100               // Maximum number of consecutive errors
+	const maxTotalTime = 3 * time.Minute // Maximum total consecutive processing time
+	var consecutiveErrors int
+	consecutiveLoopStartTime := time.Now()
+
+	for {
+		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
+		if err != nil {
+			if errors.Is(err, errorInvalidLength0) {
+				if retError != nil {
+					err = retError
+					break
+				}
+				err = nil
+				break
+			}
+
+			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+				return timeoutErr
+			}
+
+			retError = err
+			consecutiveErrors++
+			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
+			time.Sleep(10 * time.Millisecond)
+
+			if consecutiveErrors >= maxRetries || time.Since(consecutiveLoopStartTime) > maxTotalTime {
+				return moerr.NewInternalErrorf(execCtx.reqCtx,
+					"load local file failed: consecutive errors (%d), timeout after %v", maxRetries, maxTotalTime)
+			}
+		} else {
+			consecutiveErrors = 0
+			consecutiveLoopStartTime = time.Now()
+		}
+
+		updateTimeStats(readTime, writeTime)
+
+		if epoch%printTime == 0 {
 			if execCtx.isIssue3482 {
 				ses.Infof(execCtx.reqCtx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,\n", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			}
@@ -2568,23 +2627,6 @@ func executeStmtWithResponse(ses *Session,
 	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {
 		return err
-	}
-
-	// TODO put in one txn
-	// insert data after create table in "create table ... as select ..." stmt
-	if ses.createAsSelectSql != "" {
-		ses.EnterFPrint(FPStmtWithResponseCreateAsSelect)
-		defer ses.ExitFPrint(FPStmtWithResponseCreateAsSelect)
-		sql := ses.createAsSelectSql
-		ses.createAsSelectSql = ""
-		tempExecCtx := ExecCtx{
-			ses:    ses,
-			reqCtx: execCtx.reqCtx,
-		}
-		defer tempExecCtx.Close()
-		if err = doComQuery(ses, &tempExecCtx, &UserInput{sql: sql}); err != nil {
-			return err
-		}
 	}
 
 	err = respClientWhenSuccess(ses, execCtx)
@@ -2641,6 +2683,15 @@ func executeStmtWithWorkspace(ses FeSession,
 			ses.Error(execCtx.reqCtx, "recover from panic before finishTxnFunc", zap.Error(err))
 		}
 		err = finishTxnFunc(ses, err, execCtx)
+		// Final sweep: if any error path below Run / Commit surfaces the
+		// internal __mo_index_idx_col key name (tae DedupSnapByPK, disttae
+		// commit-time dedup, etc.), rewrite it to the user-visible column or
+		// index name before the error leaves the statement boundary.
+		if err != nil &&
+			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) &&
+			execCtx.cw != nil {
+			err = plan2.RewriteHiddenIndexDupEntry(execCtx.cw.Plan(), err)
+		}
 	}()
 
 	_, _, _ = fault.TriggerFault("executeStmtWithWorkspace_panic")
@@ -3284,9 +3335,13 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUIT:
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
-		var query = util.UnsafeBytesToString(req.GetData().([]byte))
+		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Inject rewrite rules hint before building UserInput (only if enabled)
+		if ses.rewriteEnabled.Load() {
+			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
+		}
 		ses.addSqlCount(1)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
@@ -3298,7 +3353,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		return resp, nil
 	case COM_INIT_DB:
-		var dbname = util.UnsafeBytesToString(req.GetData().([]byte))
+		var dbname = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3308,7 +3363,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_FIELD_LIST:
-		var payload = util.UnsafeBytesToString(req.GetData().([]byte))
+		var payload = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3324,7 +3379,11 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql = util.UnsafeBytesToString(req.GetData().([]byte))
+		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		// Inject rewrite rules hint before prepare wrapping (only if enabled)
+		if ses.rewriteEnabled.Load() {
+			sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
+		}
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"
@@ -3344,6 +3403,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			if prepareStmt != nil {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+			}
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
 		execCtx.prepareColDef = prepareStmt.ColDefData
@@ -3351,12 +3413,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
 		}
-		if prepareStmt.params != nil {
-			prepareStmt.params.GetNulls().Reset()
-			for k := range prepareStmt.getFromSendLongData {
-				delete(prepareStmt.getFromSendLongData, k)
-			}
-		}
+		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
 
 	case COM_STMT_SEND_LONG_DATA:
@@ -3376,6 +3433,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3397,7 +3455,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var preStmt *PrepareStmt
 		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			resp = NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
 		}
 		prefix := ""
 		if preStmt.IsCloudNonuser {
@@ -3449,7 +3508,7 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
-		return "", nil, err
+		return "", preStmt, err
 	}
 	return sql, preStmt, nil
 }
@@ -3576,11 +3635,11 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 // build plan json when marhal plan error
 func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
 	var bytes [36]byte
-	util.EncodeUUIDHex(bytes[:], uuid[:])
+	commonutil.EncodeUUIDHex(bytes[:], uuid[:])
 	explainData := models.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Uuid:    util.UnsafeBytesToString(bytes[:]),
+		Uuid:    commonutil.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)

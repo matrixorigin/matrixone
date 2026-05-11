@@ -53,6 +53,16 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 
 var NoDefaultCredentialsForETL = os.Getenv("MO_NO_DEFAULT_CREDENTIALS") != ""
 
+func etlParallelMode(ctx context.Context) ParallelMode {
+	if mode, ok := parallelModeFromContext(ctx); ok {
+		return mode
+	}
+	if mode, ok := parseParallelMode(strings.TrimSpace(os.Getenv("MO_ETL_PARALLEL_MODE"))); ok {
+		return mode
+	}
+	return ParallelOff
+}
+
 // GetForETL get or creates a FileService instance for ETL operations
 // if service part of path is empty, a LocalETLFS will be created
 // if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
@@ -110,6 +120,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					KeySecret:          accessSecret,
 					KeyPrefix:          keyPrefix,
 					Name:               name,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,
@@ -143,6 +154,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					Bucket:             bucket,
 					KeyPrefix:          keyPrefix,
 					Name:               name,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,
@@ -157,6 +169,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			}
 			args.NoBucketValidation = true
 			args.IsHDFS = fsPath.Service == "hdfs"
+			args.ParallelMode = etlParallelMode(ctx)
 			res, err = NewS3FS(
 				ctx,
 				args,
@@ -198,6 +211,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					KeyPrefix:          keyPrefix,
 					Name:               name,
 					IsMinio:            true,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,

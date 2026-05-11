@@ -25,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -65,6 +68,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
+
 	for {
 		switch ctr.state {
 		case Build:
@@ -120,6 +124,47 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 	}
+
+}
+
+func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyzer process.Analyzer, centers [][]T, nullvec []T) (cache.VectorIndexSearchIf, error) {
+	ctr := &ap.ctr
+	buildCount := ctr.bat.RowCount()
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+
+	centroidVec := ctr.bat.Vecs[centroidColPos]
+
+	dim := centroidVec.GetType().Width
+	elemSize := uint(centroidVec.GetType().GetArrayElementSize())
+
+	if len(nullvec) > 0 {
+		nullvec[0] = 1
+		for i := 1; i < len(nullvec); i++ {
+			nullvec[i] = 0
+		}
+	}
+
+	for i := 0; i < buildCount; i++ {
+		if centroidVec.IsNull(uint64(i)) {
+			centers[i] = nullvec
+			continue
+		}
+
+		c := types.BytesToArray[T](centroidVec.GetBytesAt(i))
+		centers[i] = c
+	}
+
+	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	err = algo.Load(proc)
+	if err != nil {
+		return nil, err
+	}
+
+	return algo, nil
 }
 
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
@@ -142,74 +187,97 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 		}
 	}
 	mp.Free()
+
+	centroidColPos := productl2.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	centroidVec := ctr.bat.Vecs[centroidColPos]
+
+	switch centroidVec.GetType().Oid {
+	case types.T_array_float32:
+		ctr.centersF32 = get1D[[]float32](&pool2DF32, ctr.bat.RowCount())
+		ctr.nullvecF32 = get1D[float32](&pool1DF32, int(centroidVec.GetType().Width))
+		ctr.brute_force, err = getIndex[float32](productl2, proc, analyzer, *ctr.centersF32, *ctr.nullvecF32)
+		if err != nil {
+			return err
+		}
+	case types.T_array_float64:
+		ctr.centersF64 = get1D[[]float64](&pool2DF64, ctr.bat.RowCount())
+		ctr.nullvecF64 = get1D[float64](&pool1DF64, int(centroidVec.GetType().Width))
+		ctr.brute_force, err = getIndex[float64](productl2, proc, analyzer, *ctr.centersF64, *ctr.nullvecF64)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-//var (
-//	arrayF32Pool = sync.Pool{
-//		New: func() interface{} {
-//			s := make([]float32, 0)
-//			return &s
-//		},
-//	}
-//	arrayF64Pool = sync.Pool{
-//		New: func() interface{} {
-//			s := make([]float64, 0)
-//			return &s
-//		},
-//	}
-//)
+var (
+	pool1DF32 = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
+	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
+	pool2DF32 = sync.Pool{New: func() any { x := make([][]float32, 0); return &x }}
+	pool2DF64 = sync.Pool{New: func() any { x := make([][]float64, 0); return &x }}
+)
 
-func newMat[T types.RealNumbers](ctr *container, ap *Productl2) ([][]T, [][]T) {
-	buildCount := ctr.bat.RowCount()
+func get1D[T any](pool *sync.Pool, n int) *[]T {
+	val := pool.Get()
+	if val == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	v, ok := val.(*[]T)
+	if !ok || v == nil {
+		newSlice := make([]T, n)
+		return &newSlice
+	}
+	if cap(*v) < n {
+		if n > 0 {
+			pool.Put(v)
+			newSlice := make([]T, n)
+			return &newSlice
+		}
+		*v = (*v)[:0]
+		return v
+	}
+	*v = (*v)[:n]
+	return v
+}
+
+func put1D[T any](pool *sync.Pool, v *[]T) {
+	var zero T
+	for i := range *v {
+		(*v)[i] = zero
+	}
+	*v = (*v)[:0]
+	pool.Put(v)
+}
+
+func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nullvec []T) ([][]T, error) {
 	probeCount := ctr.inBat.RowCount()
-	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
-	centroidmat := make([][]T, buildCount)
-	for i := 0; i < buildCount; i++ {
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-				centroidmat[i] = nil
-				continue
-			}
-			centroidmat[i] = types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-		case types.T_array_float64:
-			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-				centroidmat[i] = nil
-				continue
-			}
-			centroidmat[i] = types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+	tblColVec := ctr.inBat.Vecs[tblColPos]
+
+	if len(nullvec) > 0 {
+		nullvec[0] = 1
+		for i := 1; i < len(nullvec); i++ {
+			nullvec[i] = 0
 		}
 	}
 
-	// embedding mat
-	embedmat := make([][]T, probeCount)
 	for j := 0; j < probeCount; j++ {
-
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
-				embedmat[j] = nil
-				continue
-			}
-			embedmat[j] = types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-		case types.T_array_float64:
-			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
-				embedmat[j] = nil
-				continue
-			}
-			embedmat[j] = types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+		if tblColVec.IsNull(uint64(j)) {
+			probes[j] = nullvec
+			continue
 		}
-
+		v := types.BytesToArray[T](tblColVec.GetBytesAt(j))
+		probes[j] = v
 	}
 
-	return centroidmat, embedmat
+	return probes, nil
 }
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
-	switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
+	switch ctr.inBat.Vecs[tblColPos].GetType().Oid {
 	case types.T_array_float32:
 		return probeRun[float32](ctr, ap, proc, result)
 	case types.T_array_float64:
@@ -218,9 +286,37 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	return nil
 }
 
+func (ctr *container) release() {
+	if ctr.brute_force != nil {
+		ctr.brute_force.Destroy()
+		ctr.brute_force = nil
+	}
+	if ctr.centersF32 != nil {
+		put1D(&pool2DF32, ctr.centersF32)
+		ctr.centersF32 = nil
+	}
+	if ctr.centersF64 != nil {
+		put1D(&pool2DF64, ctr.centersF64)
+		ctr.centersF64 = nil
+	}
+	if ctr.nullvecF32 != nil {
+		put1D(&pool1DF32, ctr.nullvecF32)
+		ctr.nullvecF32 = nil
+	}
+	if ctr.nullvecF64 != nil {
+		put1D(&pool1DF64, ctr.nullvecF64)
+		ctr.nullvecF64 = nil
+	}
+}
+
 func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
+	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
+	tblColVec := ctr.inBat.Vecs[tblColPos]
+
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	centroidVec := ctr.bat.Vecs[centroidColPos]
+	dim := int(centroidVec.GetType().Width)
 
 	ncpu := runtime.NumCPU()
 	if probeCount < ncpu {
@@ -234,85 +330,67 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		}
 	}
 
-	leastClusterIndex := make([]int, probeCount)
-	leastDistance := make([]T, probeCount)
+	var _t T
+	var probes [][]T
+	var nullvec []T
 
-	for i := 0; i < probeCount; i++ {
-		leastClusterIndex[i] = 0
-		leastDistance[i] = metric.MaxFloat[T]()
+	switch any(_t).(type) {
+	case float32:
+		p := get1D[[]float32](&pool2DF32, probeCount)
+		defer put1D(&pool2DF32, p)
+		probes = any(*p).([][]T)
+
+		n := get1D[float32](&pool1DF32, dim)
+		defer put1D(&pool1DF32, n)
+		nullvec = any(*n).([]T)
+	case float64:
+		p := get1D[[]float64](&pool2DF64, probeCount)
+		defer put1D(&pool2DF64, p)
+		probes = any(*p).([][]T)
+
+		n := get1D[float64](&pool1DF64, dim)
+		defer put1D(&pool1DF64, n)
+		nullvec = any(*n).([]T)
 	}
 
-	centroidmat, embedmat := newMat[T](ctr, ap)
-	distfn, err := metric.ResolveDistanceFn[T](ctr.metrictype)
+	probes, err := newMat[T](ctr, ap, probes, nullvec)
 	if err != nil {
-		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
+		return err
 	}
 
-	errs := make(chan error, ncpu)
-	var mutex sync.Mutex
-	var wg sync.WaitGroup
+	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: uint(ncpu)}
 
-	for n := 0; n < ncpu; n++ {
+	anykeys, distances, err := ctr.brute_force.Search(proc, probes, rt)
+	if err != nil {
+		return err
+	}
+	_ = distances
 
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for j := 0; j < probeCount; j++ {
+	leastClusterIndex := anykeys.([]int64)
+	// BCE Hint
+	if len(leastClusterIndex) != probeCount {
+		return moerr.NewInternalErrorNoCtx("leastClusterIndex size != probeCount")
+	}
 
-				if j%ncpu != tid {
-					continue
+	//os.Stderr.WriteString(fmt.Sprintf("keys %v\n", keys))
+	//os.Stderr.WriteString(fmt.Sprintf("distances %v\n", distances))
+
+	for j := 0; j < probeCount; j++ {
+
+		if tblColVec.IsNull(uint64(j)) {
+			leastClusterIndex[j] = 0
+		}
+		for k, rp := range ap.Result {
+			if rp.Rel == 0 {
+				if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+					return err
 				}
-
-				// for each row in probe table,
-				// find the nearest cluster center from the build table.
-				for i := 0; i < buildCount; i++ {
-
-					if embedmat[j] == nil || centroidmat[i] == nil {
-						leastDistance[j] = 0
-						leastClusterIndex[j] = i
-					} else {
-						dist, err := distfn(centroidmat[i], embedmat[j])
-						if err != nil {
-							errs <- err
-							return
-						}
-						if dist < leastDistance[j] {
-							leastDistance[j] = dist
-							leastClusterIndex[j] = i
-						}
-					}
-				}
-
-				err := func() error {
-					mutex.Lock()
-					defer mutex.Unlock()
-					for k, rp := range ap.Result {
-						if rp.Rel == 0 {
-							if err := ctr.rbat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								return err
-							}
-						} else {
-							if err := ctr.rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(leastClusterIndex[j]), proc.Mp()); err != nil {
-								return err
-							}
-						}
-					}
-
-					return nil
-				}()
-
-				if err != nil {
-					errs <- err
-					return
+			} else {
+				if err := ctr.rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(leastClusterIndex[j]), proc.Mp()); err != nil {
+					return err
 				}
 			}
-		}(n)
-	}
-
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return <-errs
+		}
 	}
 
 	// ctr.rbat.AddRowCount(count * count2)

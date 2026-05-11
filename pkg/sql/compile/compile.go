@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -123,6 +125,11 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc.SetMessageBoard(c.MessageBoard)
+	// StmtSnapshotTS is statement-scoped. Process objects are reused across
+	// statements, so a fresh compile must clear any snapshot that was only meant
+	// for a previous statement retry. prepareRetry restores the original value
+	// explicitly for same-statement retries.
+	c.proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -176,6 +183,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
+	// Statement snapshot timestamp is statement-scoped; clear it for every new execution
+	// when reusing a prepared Compile to avoid carrying snapshot visibility across EXECUTEs.
+	proc.SetStmtSnapshotTS(timestamp.Timestamp{})
 	c.proc = proc
 
 	c.fill = fill
@@ -520,7 +530,7 @@ func (c *Compile) runOnce() (err error) {
 					if e := recover(); e != nil {
 						err := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", c.sql),
+							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
 						errC <- err
 					}
@@ -739,17 +749,51 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 }
 
 func (c *Compile) lockTable() error {
-	for _, tbl := range c.lockTables {
+	tableIDs := make([]uint64, 0, len(c.lockTables))
+	for tableID := range c.lockTables {
+		tableIDs = append(tableIDs, tableID)
+	}
+	sort.Slice(tableIDs, func(i, j int) bool {
+		return tableIDs[i] < tableIDs[j]
+	})
+	for _, tableID := range tableIDs {
+		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		return lockop.LockTable(
+		if err := lockop.LockTable(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
-			false)
-
+			false); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
+	target.LockTableAtTheEnd = false
+	if !target.LockTable {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	if qry == nil {
+		return true
+	}
+	// For INSERT statements, pre-run table locking can stretch the target-table
+	// lock hold window. Keep the same table-lock semantics by letting LockOp
+	// acquire it when the first batch reaches the target pipeline and by
+	// falling back to EOF-time table locking if the child produces no rows.
+	if qry.StmtType == plan.Query_INSERT {
+		// LOAD DATA always plans a table-locking LockOp. Keeping the pre-pipeline
+		// lock avoids retrying the same whole-table lock on every non-empty batch.
+		if qry.LoadTag {
+			return true
+		}
+		target.LockTableAtTheEnd = true
+		return false
+	}
+	return true
 }
 
 // func (c *Compile) compileAttachedScope(attachedPlan *plan.Plan) ([]*Scope, error) {
@@ -1634,7 +1678,11 @@ func (c *Compile) compileExternScanParallelWrite(n *plan.Node, param *tree.Exter
 	scope := c.constructScopeForExternal("", false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(n, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
-	extern.Es.ParallelLoad = true
+	parallelLoad := true
+	if len(fileList) > 0 && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+		parallelLoad = false
+	}
+	extern.Es.ParallelLoad = parallelLoad
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
@@ -2504,7 +2552,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			}
 		} else {
 			for i := range shuffleJoins {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
 				if shuffleV2 {
 					op.ShuffleIdx = -1
@@ -2734,7 +2782,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op := constructDedupJoin(node, left, c.anal.qry, leftTyps, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -3615,7 +3663,7 @@ func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 func (c *Compile) compileLock(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(n.LockTargets))
 	for _, tbl := range n.LockTargets {
-		if tbl.LockTable {
+		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
 			if _, ok := c.lockTables[tbl.TableId]; !ok {
@@ -4201,9 +4249,13 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	var txnOp client.TxnOperator
 
 	if onRemoteCN {
-		ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
-		c.proc.GetTxnOperator().AddWorkspace(ws)
-		ws.BindTxnOp(c.proc.GetTxnOperator())
+		// Workspace may have been created earlier in remote run scenario (e.g., in remoterunServer.go).
+		// Only create if it doesn't exist to avoid duplicate creation.
+		if c.proc.GetTxnOperator().GetWorkspace() == nil {
+			ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
+			c.proc.GetTxnOperator().AddWorkspace(ws)
+			ws.BindTxnOp(c.proc.GetTxnOperator())
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -4293,6 +4345,21 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		partialResults, _, _ := checkAggOptimize(n)
 		if partialResults != nil {
 			forceSingle = true
+		} else if n.Stats != nil && n.Stats.ForceOneCN {
+			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
+			// Use it directly instead of checking again
+			forceSingle = true
+		} else {
+			// Fallback: Check if any aggregation function uses distinct flag
+			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
+			for _, agg := range n.AggList {
+				if f, ok := agg.Expr.(*plan.Expr_F); ok {
+					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
+						forceSingle = true
+						break
+					}
+				}
+			}
 		}
 	}
 	//if len(n.OrderBy) > 0 {
@@ -4746,16 +4813,41 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
 }
 
+func (c *Compile) getInternalSQLExecutor() executor.SQLExecutor {
+	// Prefer an executor built on current compile engine so follow-up SQL
+	// (for example CTAS INSERT ... SELECT on temporary tables) can see
+	// session-bound temporary engine state in the same transaction.
+	if c != nil &&
+		c.e != nil &&
+		c.proc != nil &&
+		c.proc.Base != nil &&
+		c.proc.Base.TxnClient != nil &&
+		c.proc.GetFileService() != nil &&
+		c.proc.GetQueryClient() != nil {
+		return NewSQLExecutor(
+			c.addr,
+			c.e,
+			c.proc.Mp(),
+			c.proc.Base.TxnClient,
+			c.proc.GetFileService(),
+			c.proc.GetQueryClient(),
+			c.proc.GetHaKeeper(),
+			c.proc.Base.UdfService,
+		)
+	}
+
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	return v.(executor.SQLExecutor)
+}
+
 func (c *Compile) runSqlWithResultAndOptions(
 	sql string,
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
-	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
 	lower := c.getLower()
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
@@ -4764,7 +4856,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		}
 	}
 
-	exec := v.(executor.SQLExecutor)
+	exec := c.getInternalSQLExecutor()
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -4777,6 +4869,14 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
+	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
+	if ctx.Value(config.ParameterUnitKey) == nil {
+		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+			if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+				ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+			}
+		}
+	}
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}
@@ -4843,7 +4943,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 // runDetectSql runs the fk detecting sql
 func runDetectSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err
@@ -4864,7 +4964,7 @@ func runDetectSql(c *Compile, sql string) error {
 
 // runDetectFkReferToDBSql runs the fk detecting sql
 func runDetectFkReferToDBSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err

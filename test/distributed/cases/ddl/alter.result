@@ -603,7 +603,7 @@ Duplicate entry '1' for key 'b'
 create table v2 (a int primary key, b int, c text, fulltext f01(c));
 insert into v2 values (1, 1, "42"), (2, 1, "43");
 alter table v2 modify column b int unique key; -- dup, fuzzy dedup path
-Duplicate entry '1' for key '__mo_index_idx_col'
+Duplicate entry '1' for key 'b'
 create table v3 (a int primary key, b int, c text, unique index IdX2(b));
 load data infile  '$resources/load_data/dup_load.csv' into table v3 fields terminated by ',';
 insert into v3 values (1, 1, "boroborodesu"); -- dup

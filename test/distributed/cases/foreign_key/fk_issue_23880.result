@@ -1,0 +1,39 @@
+drop database if exists fk_issue_23880;
+create database fk_issue_23880;
+use fk_issue_23880;
+drop table if exists c;
+drop table if exists p;
+create table p (
+id int primary key
+);
+create table c (
+id int primary key,
+p1 int,
+p2 int,
+p3 int,
+constraint fk1 foreign key (p1) references p(id) on delete cascade,
+constraint fk2 foreign key (p2) references p(id) on delete cascade,
+constraint fk3 foreign key (p3) references p(id) on delete cascade
+);
+insert into p values (1), (2);
+insert into c values
+(10, 1, null, null),
+(20, null, 1, null),
+(30, null, null, 1),
+(40, 2, null, null);
+delete from p where id = 1;
+select * from p order by id;
+id
+2
+select * from c order by id;
+id    p1    p2    p3
+40    2    NULL    NULL
+select count(*) from p;
+count(*)
+1
+select count(*) from c;
+count(*)
+1
+drop table if exists c;
+drop table if exists p;
+drop database if exists fk_issue_23880;

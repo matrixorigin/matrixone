@@ -56,12 +56,25 @@ type HashmapBuilder struct {
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
+	var sz int64
 	if hb.IntHashMap != nil {
-		return hb.IntHashMap.Size()
+		sz += hb.IntHashMap.Size()
 	} else if hb.StrHashMap != nil {
-		return hb.StrHashMap.Size()
+		sz += hb.StrHashMap.Size()
 	}
-	return 0
+	sz += hb.MultiSels.Size()
+	for _, v := range hb.UniqueJoinKeys {
+		if v != nil {
+			sz += int64(v.Allocated())
+		}
+	}
+	if hb.IgnoreRows != nil {
+		sz += int64(hb.IgnoreRows.Size())
+	}
+	if hb.DelRows != nil {
+		sz += int64(hb.DelRows.Size())
+	}
+	return sz
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -115,8 +128,12 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	if hb.needDupVec {
 		for i := range hb.vecs {
-			for j := range hb.vecs[i] {
-				hb.vecs[i][j].Free(proc.Mp())
+			if hb.vecs[i] != nil {
+				for j := range hb.vecs[i] {
+					if hb.vecs[i][j] != nil {
+						hb.vecs[i][j].Free(proc.Mp())
+					}
+				}
 			}
 		}
 	}
@@ -126,7 +143,9 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.StrHashMap = nil
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].Free(proc.Mp())
+		if hb.UniqueJoinKeys[i] != nil {
+			hb.UniqueJoinKeys[i].Free(proc.Mp())
+		}
 	}
 	hb.UniqueJoinKeys = nil
 	hb.MultiSels.Free()
@@ -151,7 +170,9 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.executors = nil
 	hb.vecs = nil
 	for i := range hb.UniqueJoinKeys {
-		hb.UniqueJoinKeys[i].Free(proc.Mp())
+		if hb.UniqueJoinKeys[i] != nil {
+			hb.UniqueJoinKeys[i].Free(proc.Mp())
+		}
 	}
 	hb.UniqueJoinKeys = nil
 }
@@ -168,6 +189,22 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	hb.Batches.Clean(proc.Mp())
 }
 
+// cleanupPartiallyCreatedVecs frees all vectors in hb.vecs that were successfully created.
+// This is used when an error occurs during evalJoinCondition to prevent memory leaks
+// and nil pointer dereferences in Reset.
+func (hb *HashmapBuilder) cleanupPartiallyCreatedVecs(proc *process.Process) {
+	for i := 0; i < len(hb.vecs); i++ {
+		if hb.vecs[i] != nil {
+			for j := 0; j < len(hb.vecs[i]); j++ {
+				if hb.vecs[i][j] != nil {
+					hb.vecs[i][j].Free(proc.Mp())
+				}
+			}
+		}
+	}
+	hb.vecs = nil
+}
+
 func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 	for idx1 := range hb.Batches.Buf {
 		tmpVes := make([]*vector.Vector, len(hb.executors))
@@ -175,11 +212,15 @@ func (hb *HashmapBuilder) evalJoinCondition(proc *process.Process) error {
 		for idx2 := range hb.executors {
 			vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{hb.Batches.Buf[idx1]}, nil)
 			if err != nil {
+				// Clean up partially created vecs to prevent nil pointer issues in Reset
+				hb.cleanupPartiallyCreatedVecs(proc)
 				return err
 			}
 			if hb.needDupVec {
 				hb.vecs[idx1][idx2], err = vec.Dup(proc.Mp())
 				if err != nil {
+					// Clean up partially created vecs to prevent nil pointer issues in Reset
+					hb.cleanupPartiallyCreatedVecs(proc)
 					return err
 				}
 			} else {
@@ -409,6 +450,10 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		if err != nil {
 			return err
 		}
+		// Update InputBatchRowCount to reflect the actual row count after shrinking
+		// This is critical because IgnoreRows removed duplicate rows, so the actual
+		// row count in batches is now less than the original InputBatchRowCount
+		hb.InputBatchRowCount = hb.Batches.RowCount()
 	}
 
 	// if groupcount == inputrowcount, it means building hashmap on unique rows

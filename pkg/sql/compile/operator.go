@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -679,6 +680,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
@@ -749,8 +751,39 @@ func constructFuzzyFilter(n, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyF
 		}
 	}
 
+	// When the fuzzy filter target is a hidden unique-index table, report the
+	// user-visible column name (e.g. "a") in the duplicate-entry error instead
+	// of the hidden index column ("__mo_index_idx_col"). For composite unique
+	// indexes we fall back to a "(col1,col2)" tuple because the plan message
+	// does not carry the user-declared index name.
+	displayPkName := pkName
+	if n.Fuzzymessage != nil {
+		if len(n.Fuzzymessage.ParentUniqueCols) == 1 {
+			displayPkName = n.Fuzzymessage.ParentUniqueCols[0].Name
+		} else if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
+			names := make([]string, 0, len(n.Fuzzymessage.ParentUniqueCols))
+			for _, c := range n.Fuzzymessage.ParentUniqueCols {
+				if c == nil {
+					continue
+				}
+				names = append(names, catalog.ResolveAlias(c.Name))
+			}
+			if len(names) > 0 {
+				displayPkName = "(" + strings.Join(names, ",") + ")"
+			}
+		}
+	} else if n.TableDef != nil && catalog.IsHiddenTable(n.TableDef.Name) {
+		// Direct-insert path into a hidden UNIQUE index table (e.g.
+		// CREATE UNIQUE INDEX on an existing table). The plan does not
+		// carry Fuzzymessage, so pkName is still __mo_index_idx_col /
+		// __mo_cpkey_col. Mirror the placeholder used in newFuzzyCheck
+		// so runtime duplicate-entry errors do not leak the internal
+		// catalog column name.
+		displayPkName = "unique index"
+	}
+
 	op := fuzzyfilter.NewArgument()
-	op.PkName = pkName
+	op.PkName = displayPkName
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = n.IfInsertFromUnique
 
@@ -1023,6 +1056,8 @@ func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.Table
 	arg.Params = n.TableDef.TblFunc.Param
 	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
+	// probe side runtime filter specs
+	arg.RuntimeFilterSpecs = n.RuntimeFilterProbeList
 	return arg
 }
 
@@ -1216,7 +1251,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	return arg
 }
 
-func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
+func constructDedupJoin(n, left *plan.Node, qry *plan.Query, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -1234,6 +1269,17 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 	arg.OnDuplicateAction = n.OnDuplicateAction
 	arg.DedupColName = n.DedupColName
 	arg.DedupColTypes = n.DedupColTypes
+	arg.InitialSnapshotTS = proc.GetStmtSnapshotTS()
+	if arg.InitialSnapshotTS.IsEmpty() {
+		arg.InitialSnapshotTS = proc.GetTxnOperator().SnapshotTS()
+		proc.SetStmtSnapshotTS(arg.InitialSnapshotTS)
+	}
+	if scanNode := findProbeTableScan(left, qry); scanNode != nil {
+		arg.TargetTableRef = scanNode.ObjRef
+		if scanNode.TableDef != nil {
+			arg.TargetTableID = scanNode.TableDef.TblId
+		}
+	}
 	arg.DelColIdx = -1
 	if n.DedupJoinCtx != nil {
 		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
@@ -1252,6 +1298,27 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findProbeTableScan(node *plan.Node, qry *plan.Query) *plan.Node {
+	if node == nil {
+		return nil
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node
+	}
+	if qry == nil {
+		return nil
+	}
+	for _, childID := range node.Children {
+		if childID < 0 || int(childID) >= len(qry.Nodes) {
+			continue
+		}
+		if scanNode := findProbeTableScan(qry.Nodes[childID], qry); scanNode != nil {
+			return scanNode
+		}
+	}
+	return nil
 }
 
 func constructRightDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *rightdedupjoin.RightDedupJoin {

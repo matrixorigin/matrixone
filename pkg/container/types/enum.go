@@ -15,11 +15,42 @@
 package types
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
+
+const encodedEnumValuesPrefix = "\x00enumjson:"
+
+// EncodeEnumValues encodes enum member values into a string for storage.
+// If no member contains a comma, a simple comma-join is used (backward-compatible).
+// Otherwise, a JSON-encoded form with a prefix marker is used.
+func EncodeEnumValues(values []string) string {
+	for _, v := range values {
+		if strings.Contains(v, ",") {
+			encoded, _ := json.Marshal(values)
+			return encodedEnumValuesPrefix + string(encoded)
+		}
+	}
+	return strings.Join(values, ",")
+}
+
+// DecodeEnumValues decodes enum member values from the stored string.
+func DecodeEnumValues(enumStr string) ([]string, error) {
+	if strings.HasPrefix(enumStr, encodedEnumValuesPrefix) {
+		var values []string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(enumStr, encodedEnumValuesPrefix)), &values); err != nil {
+			return nil, err
+		}
+		return values, nil
+	}
+	if len(enumStr) == 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty")
+	}
+	return strings.Split(enumStr, ","), nil
+}
 
 func ParseIntToEnum(input int64) (Enum, error) {
 	if input < 1 || input > MaxEnumLen {
@@ -30,10 +61,10 @@ func ParseIntToEnum(input int64) (Enum, error) {
 
 // ParseEnum return item index with item name or value.
 func ParseEnum(enumStr string, name string) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	elems, err := DecodeEnumValues(enumStr)
+	if err != nil {
+		return 0, err
 	}
-	elems := strings.Split(enumStr, ",")
 	enumName, _ := parseEnumName(elems, name)
 	if enumName != Enum(0) {
 		// if match name, return
@@ -50,10 +81,10 @@ func ParseEnum(enumStr string, name string) (Enum, error) {
 
 // ParseEnumName return item index with item name.
 func ParseEnumName(enumStr string, name string) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	elems, err := DecodeEnumValues(enumStr)
+	if err != nil {
+		return 0, err
 	}
-	elems := strings.Split(enumStr, ",")
 	return parseEnumName(elems, name)
 }
 func parseEnumName(elems []string, name string) (Enum, error) {
@@ -67,10 +98,10 @@ func parseEnumName(elems []string, name string) (Enum, error) {
 
 // ParseEnumValue return item index with special number.
 func ParseEnumValue(enumStr string, number uint16) (Enum, error) {
-	if len(enumStr) == 0 {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: enum define is empty %v", enumStr)
+	elems, err := DecodeEnumValues(enumStr)
+	if err != nil {
+		return 0, err
 	}
-	elems := strings.Split(enumStr, ",")
 	return parseEnumValue(elems, number)
 }
 func parseEnumValue(elems []string, number uint16) (Enum, error) {
@@ -83,10 +114,10 @@ func parseEnumValue(elems []string, number uint16) (Enum, error) {
 
 // ParseEnumIndex return item value with index.
 func ParseEnumIndex(enumStr string, index Enum) (string, error) {
-	if len(enumStr) == 0 {
-		return "", moerr.NewInternalErrorNoCtxf("parse MySQL enum failed: enum type length err %d", len(enumStr))
+	elems, err := DecodeEnumValues(enumStr)
+	if err != nil {
+		return "", err
 	}
-	elems := strings.Split(enumStr, ",")
 	if index == 0 || index > Enum(len(elems)) {
 		return "", moerr.NewInternalErrorNoCtxf("parse MySQL enum failed: index %d overflow enum boundary [1, %d]", index, len(elems))
 	}

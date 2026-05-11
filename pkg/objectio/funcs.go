@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -55,6 +56,7 @@ func ReadExtent(
 		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return
 	}
 	if ioVec.Entries[0].CachedData == nil {
@@ -145,6 +147,14 @@ func ReadOneBlockWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
+	var generatedIOVec fileservice.IOVector
+	defer func() {
+		if err != nil {
+			ioVec.ReleaseReadResultOnError()
+			generatedIOVec.ReleaseReadResultOnError()
+			ioVec = fileservice.IOVector{}
+		}
+	}()
 
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
@@ -196,7 +206,21 @@ func ReadOneBlockWithMeta(
 		if err != nil {
 			return
 		}
-		//TODO when to call ioVec.Release?
+
+		// Record actual bytes read from storage layer (excluding rowid, which is generated, not loaded)
+		var totalReadSize int64
+		for _, entry := range ioVec.Entries {
+			totalReadSize += entry.Size
+		}
+
+		// Record actual bytes read from storage layer using CounterSet
+		// Note: S3 and Disk read sizes are recorded in filesystem layer (S3FS/LocalFS)
+		// where we can accurately determine the data source
+		if totalReadSize > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.ReadSize.Add(totalReadSize)
+			})
+		}
 	}
 
 	// need to generate vector
@@ -220,6 +244,9 @@ func ReadOneBlockWithMeta(
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
 				filledEntries[i].CachedData = cacheData
+				generatedIOVec.Entries = append(generatedIOVec.Entries, fileservice.IOEntry{
+					CachedData: cacheData,
+				})
 			}
 		}
 		ioVec.Entries = filledEntries
@@ -263,6 +290,11 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, &ioVec)
+	if err != nil {
+		ioVec.ReleaseReadResultOnError()
+		ioVec = fileservice.IOVector{}
+		return
+	}
 	//TODO when to call ioVec.Release?
 	return
 }
@@ -295,6 +327,7 @@ func ReadOneBlockAllColumns(
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return nil, err
 	}
 	defer ioVec.Release()

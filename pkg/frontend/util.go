@@ -38,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -84,14 +84,6 @@ func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
-func Min(a int, b int) int {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
 func Max(a int, b int) int {
 	if a < b {
 		return b
@@ -111,71 +103,6 @@ func GetRoutineId() uint64 {
 		id = invalidGoroutineId
 	}
 	return uint64(id)
-}
-
-type Timeout struct {
-	//last record of the time
-	lastTime atomic.Value //time.Time
-
-	//period
-	timeGap time.Duration
-
-	//auto update
-	autoUpdate bool
-}
-
-func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
-	ret := &Timeout{
-		timeGap:    tg,
-		autoUpdate: autoUpdateWhenChecked,
-	}
-	ret.lastTime.Store(time.Now())
-	return ret
-}
-
-func (t *Timeout) UpdateTime(tn time.Time) {
-	t.lastTime.Store(tn)
-}
-
-/*
-----------+---------+------------------+--------
-
-	lastTime     Now         lastTime + timeGap
-
-return true  :  is timeout. the lastTime has been updated.
-return false :  is not timeout. the lastTime has not been updated.
-*/
-func (t *Timeout) isTimeout() bool {
-	if time.Since(t.lastTime.Load().(time.Time)) <= t.timeGap {
-		return false
-	}
-
-	if t.autoUpdate {
-		t.lastTime.Store(time.Now())
-	}
-	return true
-}
-
-/*
-length:
--1, complete string.
-0, empty string
->0 , length of characters at the header of the string.
-*/
-func SubStringFromBegin(str string, length int) string {
-	if length == 0 || length < -1 {
-		return ""
-	}
-
-	if length == -1 {
-		return str
-	}
-
-	l := Min(len(str), length)
-	if l != len(str) {
-		return str[:l] + "..."
-	}
-	return str[:l]
 }
 
 /*
@@ -484,14 +411,27 @@ func (s statementStatus) String() string {
 }
 
 // logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
+func logStatementStatus(
+	ctx context.Context,
+	ses FeSession,
+	_ tree.Statement,
+	status statementStatus,
+	err error,
+) {
 	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
 // logStatementStringStatus
-// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo
+// (which migrate from logStatementStatus).
 // This op is aim to avoid string copy in 'status == success' case.
-func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
+func logStatementStringStatus(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+) {
 	var outBytes, outPacket int64
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
@@ -503,7 +443,7 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 				str = stm.CopyStatementInfo()
 			}
 		}
-		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
 	switch resper := ses.GetResponser().(type) {
@@ -614,19 +554,6 @@ func getVariableValue(varDefault interface{}) string {
 
 func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
 	return pu.SV.ServerVersionPrefix + version
-}
-
-func copyBytes(src []byte, needCopy bool) []byte {
-	if needCopy {
-		if len(src) > 0 {
-			dst := make([]byte, len(src))
-			copy(dst, src)
-			return dst
-		} else {
-			return []byte{}
-		}
-	}
-	return src
 }
 
 // getUserProfile returns the account, user, role of the account
@@ -1099,11 +1026,16 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 // errCodeRollbackWholeTxn denotes that the error code
 // that should rollback the whole txn
 var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrDeadLockDetected:     false,
-	moerr.ErrLockTableBindChanged: false,
-	moerr.ErrLockTableNotFound:    false,
-	moerr.ErrDeadlockCheckBusy:    false,
-	moerr.ErrLockConflict:         false,
+	moerr.ErrRetryForCNRollingRestart: false,
+	moerr.ErrDeadLockDetected:         false,
+	moerr.ErrLockTableBindChanged:     false,
+	moerr.ErrLockTableNotFound:        false,
+	moerr.ErrDeadlockCheckBusy:        false,
+	moerr.ErrLockConflict:             false,
+	moerr.ErrTxnUnknown:               false,
+	moerr.ErrBackendClosed:            false,
+	moerr.ErrNoAvailableBackend:       false,
+	moerr.ErrBackendCannotConnect:     false,
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
@@ -1129,6 +1061,8 @@ func getRandomErrorRollbackWholeTxn() error {
 		arr = append(arr, k)
 	}
 	switch arr[x] {
+	case moerr.ErrRetryForCNRollingRestart:
+		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
 		return moerr.NewDeadLockDetectedNoCtx()
 	case moerr.ErrLockTableBindChanged:
@@ -1139,6 +1073,14 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrTxnUnknown:
+		return moerr.NewTxnUnknown(context.Background(), "test")
+	case moerr.ErrBackendClosed:
+		return moerr.NewBackendClosedNoCtx()
+	case moerr.ErrNoAvailableBackend:
+		return moerr.NewNoAvailableBackendNoCtx()
+	case moerr.ErrBackendCannotConnect:
+		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
@@ -1468,7 +1410,7 @@ func Copy[T any](src []T) []T {
 
 func hashString(s string) string {
 	hash := sha256.New()
-	hash.Write(util.UnsafeStringToBytes(s))
+	hash.Write(commonutil.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
 }

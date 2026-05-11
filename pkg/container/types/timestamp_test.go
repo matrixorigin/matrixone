@@ -140,3 +140,40 @@ func TestLocation(t *testing.T) {
 	locPtr = (*unsafeLoc)(unsafe.Pointer(loc))
 	require.Greater(t, len(locPtr.zone), 1)
 }
+
+func TestTimestamp_TruncateToScale(t *testing.T) {
+	// Test timestamp with full microsecond precision: 1970-01-01 00:00:01.123456
+	ts := TimestampMinValue + 123456
+
+	// Test scale 0 (seconds, no fractional part)
+	truncated := ts.TruncateToScale(0)
+	require.Equal(t, int64(TimestampMinValue), int64(truncated))
+
+	// Test scale 3 (milliseconds) - should truncate to .123000
+	truncated = ts.TruncateToScale(3)
+	require.Equal(t, int64(TimestampMinValue+123000), int64(truncated))
+
+	// Test scale 6 (microseconds) - should not change
+	truncated = ts.TruncateToScale(6)
+	require.Equal(t, int64(ts), int64(truncated))
+
+	// Test rounding up: 1970-01-01 00:00:01.123500 with scale 3 should round to .124000
+	ts2 := TimestampMinValue + 123500
+	truncated = ts2.TruncateToScale(3)
+	require.Equal(t, int64(TimestampMinValue+124000), int64(truncated))
+
+	// Test rounding up to next second: 1970-01-01 00:00:01.999999 with scale 0 should round to 2 seconds
+	ts3 := TimestampMinValue + 999999
+	truncated = ts3.TruncateToScale(0)
+	require.Equal(t, int64(TimestampMinValue+MicroSecsPerSec), int64(truncated))
+
+	// Test scale 1 (0.1 seconds)
+	ts4 := TimestampMinValue + 156789
+	truncated = ts4.TruncateToScale(1)
+	require.Equal(t, int64(TimestampMinValue+200000), int64(truncated)) // rounds up to .2
+
+	// Test scale 2 (0.01 seconds)
+	ts5 := TimestampMinValue + 125678
+	truncated = ts5.TruncateToScale(2)
+	require.Equal(t, int64(TimestampMinValue+130000), int64(truncated)) // rounds up to .13
+}

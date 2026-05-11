@@ -16,8 +16,10 @@ package window
 
 import (
 	"bytes"
+	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 
@@ -123,6 +125,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
+				winName := window.WinSpecList[i].Expr.(*plan.Expr_W).W.Name
+				if function.GetFunctionIsWinValueFunByName(winName) {
+					continue
+				}
 				ctr.bat.Aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
 				if err != nil {
 					return result, err
@@ -210,7 +216,27 @@ func (ctr *container) resetResultBatch(bat *batch.Batch, vec *vector.Vector) *ba
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	var err error
 	n := ctr.bat.Vecs[0].Length()
-	isWinOrder := function.GetFunctionIsWinOrderFunByName(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Name)
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	funcName := w.Name
+	isWinOrder := function.GetFunctionIsWinOrderFunByName(funcName)
+	isWinValue := function.GetFunctionIsWinValueFunByName(funcName)
+
+	if isWinValue {
+		if ctr.vec != nil {
+			ctr.vec.Free(proc.Mp())
+		}
+		ctr.vec, err = ctr.processValueFunc(idx, ap, proc)
+		if err != nil {
+			return err
+		}
+		if ctr.vec != nil {
+			analyzer.Alloc(int64(ctr.vec.Size()))
+		}
+		ctr.os = nil
+		ctr.ps = nil
+		return nil
+	}
+
 	if isWinOrder {
 		if ctr.ps == nil {
 			ctr.ps = append(ctr.ps, 0)
@@ -248,10 +274,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 		}
 	} else {
-		//nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
-		//defer nullVec.Free(proc.Mp())
-
-		// plan.Function_AGG, plan.Function_WIN_VALUE
+		// plan.Function_AGG
 		for j := 0; j < n; j++ {
 
 			start, end := 0, n
@@ -266,10 +289,6 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 
 			if right < start || left > end || left >= right {
-				// todo: I commented this out because it was a waste of time to fill a null value.
-				//if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
-				//	return err
-				//}
 				continue
 			}
 
@@ -314,6 +333,244 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	ctr.os = nil
 	ctr.ps = nil
 	return nil
+}
+
+func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Process) (result *vector.Vector, err error) {
+	n := ctr.bat.Vecs[0].Length()
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	funcName := w.Name
+
+	srcVec := ctr.aggVecs[idx].Vec[0]
+	retType := types.New(types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale)
+	result = vector.NewVec(retType)
+	defer func() {
+		if err != nil && result != nil {
+			result.Free(proc.Mp())
+			result = nil
+		}
+	}()
+
+	switch funcName {
+	case "lag":
+		var offsetVec *vector.Vector
+		constOffset, constOK := int64(1), true
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			offsetVec = ctr.aggVecs[idx].Vec[1]
+			if offsetVec.IsConst() {
+				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+			}
+		}
+		var defaultVec *vector.Vector
+		if len(ctr.aggVecs[idx].Vec) >= 3 {
+			defaultVec = ctr.aggVecs[idx].Vec[2]
+		}
+		for j := 0; j < n; j++ {
+			offset, ok := constOffset, constOK
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, ok = getInt64FromVec(offsetVec, j)
+			}
+			if !ok || offset < 0 {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return result, err
+				}
+				continue
+			}
+			start := 0
+			if ctr.ps != nil {
+				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			srcRow := j - int(offset)
+			if srcRow < start {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return result, err
+				}
+			} else if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				return result, err
+			}
+		}
+
+	case "lead":
+		var offsetVec *vector.Vector
+		constOffset, constOK := int64(1), true
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			offsetVec = ctr.aggVecs[idx].Vec[1]
+			if offsetVec.IsConst() {
+				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+			}
+		}
+		var defaultVec *vector.Vector
+		if len(ctr.aggVecs[idx].Vec) >= 3 {
+			defaultVec = ctr.aggVecs[idx].Vec[2]
+		}
+		for j := 0; j < n; j++ {
+			offset, ok := constOffset, constOK
+			if offsetVec != nil && !offsetVec.IsConst() {
+				offset, ok = getInt64FromVec(offsetVec, j)
+			}
+			if !ok || offset < 0 {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return result, err
+				}
+				continue
+			}
+			end := n
+			if ctr.ps != nil {
+				_, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			srcRow := j + int(offset)
+			if srcRow >= end {
+				if err := appendDefaultOrNull(result, defaultVec, j, proc.Mp()); err != nil {
+					return result, err
+				}
+			} else if err := result.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
+				return result, err
+			}
+		}
+
+	case "first_value":
+		for j := 0; j < n; j++ {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return result, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			if left >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return result, err
+				}
+			} else if err := result.UnionOne(srcVec, int64(left), proc.Mp()); err != nil {
+				return result, err
+			}
+		}
+
+	case "last_value":
+		for j := 0; j < n; j++ {
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return result, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			if left >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return result, err
+				}
+			} else if err := result.UnionOne(srcVec, int64(right-1), proc.Mp()); err != nil {
+				return result, err
+			}
+		}
+
+	case "nth_value":
+		var nthVec *vector.Vector
+		constNth, constOK := int64(1), true
+		if len(ctr.aggVecs[idx].Vec) >= 2 {
+			nthVec = ctr.aggVecs[idx].Vec[1]
+			if nthVec.IsConst() {
+				constNth, constOK = getInt64FromVec(nthVec, 0)
+			}
+		}
+		for j := 0; j < n; j++ {
+			nthVal, ok := constNth, constOK
+			if nthVec != nil && !nthVec.IsConst() {
+				nthVal, ok = getInt64FromVec(nthVec, j)
+			}
+			if !ok || nthVal < 1 {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return result, err
+				}
+				continue
+			}
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			if err != nil {
+				return result, err
+			}
+			if left < start {
+				left = start
+			}
+			if right > end {
+				right = end
+			}
+			targetRow := left + int(nthVal) - 1
+			if left >= right || targetRow >= right {
+				if err := vector.AppendAny(result, nil, true, proc.Mp()); err != nil {
+					return result, err
+				}
+			} else if err := result.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
+				return result, err
+			}
+		}
+
+	default:
+		err = moerr.NewInternalErrorNoCtxf("unsupported value window function: %s", funcName)
+		return result, err
+	}
+
+	return result, nil
+}
+
+func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
+	if vec.Length() == 0 || vec.IsNull(uint64(row)) {
+		return 0, false
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return int64(vector.MustFixedColNoTypeCheck[int8](vec)[row]), true
+	case types.T_int16:
+		return int64(vector.MustFixedColNoTypeCheck[int16](vec)[row]), true
+	case types.T_int32:
+		return int64(vector.MustFixedColNoTypeCheck[int32](vec)[row]), true
+	case types.T_int64:
+		return vector.MustFixedColNoTypeCheck[int64](vec)[row], true
+	case types.T_uint8:
+		return int64(vector.MustFixedColNoTypeCheck[uint8](vec)[row]), true
+	case types.T_uint16:
+		return int64(vector.MustFixedColNoTypeCheck[uint16](vec)[row]), true
+	case types.T_uint32:
+		return int64(vector.MustFixedColNoTypeCheck[uint32](vec)[row]), true
+	case types.T_uint64:
+		v := vector.MustFixedColNoTypeCheck[uint64](vec)[row]
+		if v > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowIdx int, mp *mpool.MPool) error {
+	if defaultVec == nil {
+		return vector.AppendAny(result, nil, true, mp)
+	}
+	srcRow := int64(0)
+	if !defaultVec.IsConst() {
+		srcRow = int64(rowIdx)
+	}
+	if defaultVec.IsNull(uint64(srcRow)) {
+		return vector.AppendAny(result, nil, true, mp)
+	}
+	return result.UnionOne(defaultVec, srcRow, mp)
 }
 
 func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
@@ -579,9 +836,11 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	// shuffle agg vector
 	for k := idx; k < len(ctr.aggVecs); k++ {
-		if len(ctr.aggVecs[k].Vec) > 0 {
-			if err := ctr.aggVecs[k].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
-				panic(err)
+		for l := range ctr.aggVecs[k].Vec {
+			if ctr.aggVecs[k].Vec[l] != nil {
+				if err := ctr.aggVecs[k].Vec[l].Shuffle(ctr.sels, proc.Mp()); err != nil {
+					panic(err)
+				}
 			}
 		}
 	}
@@ -875,6 +1134,8 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return left, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return left, nil
 }
@@ -1217,6 +1478,8 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], genericGreater[types.Timestamp])
 			}
 		}
+	default:
+		return right, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
 	return right + 1, nil
 }

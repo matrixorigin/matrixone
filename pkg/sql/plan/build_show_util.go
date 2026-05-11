@@ -44,9 +44,9 @@ func ConstructCreateTableSQL(
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := fmt.Sprintf("`%s`", formatIdent(tblName))
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = fmt.Sprintf("`%s`.`%s`", formatIdent(schemaName), formatIdent(tblName))
 	}
 
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
@@ -100,12 +100,18 @@ func ConstructCreateTableSQL(
 		}
 
 		typeStr := FormatColType(col.Typ)
+		// SET and ENUM carry case-sensitive member names in their type string
+		// (e.g. SET('Read','Write')); lower-casing the whole thing would
+		// change the members themselves, which is a correctness bug. Only
+		// lower-case the leading type keyword.
 		if strings.HasPrefix(typeStr, "ENUM") {
 			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
+		} else if strings.HasPrefix(typeStr, "SET") {
+			typeStr = strings.ToLower(typeStr[:3]) + typeStr[3:]
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  `%s` %s", formatIdent(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.Typ.AutoIncr {
@@ -124,7 +130,10 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				// OriginString is free-form SQL text reconstructed from the
+				// AST (e.g. concat(`col`, 'x')). It is already valid SQL —
+				// emit it verbatim; do not re-escape backticks or quotes.
+				buf.WriteString(" DEFAULT " + col.Default.OriginString)
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -133,7 +142,15 @@ func ConstructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			// col.Comment has already been passed through
+			// util.DealCommentString at parse time (see AttributeComment
+			// production in mysql_sql.y), so any embedded single quote
+			// is stored in pre-doubled MySQL string-literal form.
+			// Backslashes still need escaping: the MySQL scanner interprets
+			// \n, \t, \\ etc. inside string literals, so a raw backslash
+			// must be emitted as \\ to round-trip correctly.
+			escaped := strings.ReplaceAll(col.Comment, "\\", "\\\\")
+			buf.WriteString(" COMMENT '" + escaped + "'")
 		}
 
 		createStr += buf.String()
@@ -153,9 +170,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`)", formatIdent(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("`%s`,", formatIdent(def))
 			}
 		}
 		if rowCount != 0 {
@@ -185,7 +202,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(indexdef.IndexName))
 				}
 				indexStr += "("
 				i := 0
@@ -198,7 +215,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(part))
 					i++
 				}
 
@@ -221,7 +238,7 @@ func ConstructCreateTableSQL(
 				} else {
 					indexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("`%s` ", formatIdent(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -236,7 +253,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += fmt.Sprintf("`%s`", formatIdent(part))
 					i++
 				}
 
@@ -251,8 +268,7 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				indexStr += " COMMENT " + formatStrLit(indexdef.Comment)
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -339,20 +355,30 @@ func ConstructCreateTableSQL(
 			fkTableDef = tableDef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
-				fkTableDef, err = updateFKTableDef(fkTableDef)
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			} else {
-				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
-				fkTableDef, err = updateFKTableDef(fkTableDef)
-			}
-			if err != nil {
-				return "", nil, err
+				if _, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			}
 		}
 
 		// fkTable may not exist in snapshot restoration
 		if fkTableDef == nil {
-			return "", nil, moerr.NewInternalErrorNoCtxf("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colOriginNames, ","), snapshot.String())
+			return "", nil, moerr.NewInternalErrorNoCtxf(
+				"can't find fkTable from fk %s.%s.(%s) {%s}",
+				tableDef.DbName, tableDef.Name,
+				strings.Join(colOriginNames, ","),
+				snapshot.String(),
+			)
 		}
 
 		fkColIdToOriginName := make(map[uint64]string)
@@ -368,12 +394,12 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		fkRefDbTblName := fmt.Sprintf("`%s`", formatIdent(fkTableDef.Name))
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatIdent(fkTableDef.DbName), formatIdent(fkTableDef.Name))
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			formatIdent(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	if rowCount != 0 {
@@ -386,7 +412,13 @@ func ConstructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					// Like col.Comment, the table-level comment stored in
+					// kv.Value has already been DealCommentString'd at parse
+					// time, so it is in pre-doubled MySQL string-literal
+					// form. Backslashes still need escaping for the MySQL
+					// scanner to round-trip correctly.
+					escaped := strings.ReplaceAll(kv.Value, "\\", "\\\\")
+					comment = " COMMENT='" + escaped + "'"
 				}
 			}
 		}
@@ -451,14 +483,14 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", `%s`", formatIdent(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf("`%s`", formatIdent(cbName))
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += fmt.Sprintf("`%s`", formatIdent(tableDef.ClusterBy.Name))
 		}
 		clusterby += ")"
 		createStr += clusterby
@@ -478,8 +510,13 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
+		// hide file path. INFILE{} option values must be single-quote-escaped
+		// per MySQL string-literal rules; users can legitimately put a quote
+		// in CompressType/Format/JsonData metadata.
+		createStr += " INFILE{'FILEPATH'=''," +
+			"'COMPRESSION'=" + formatStrLit(param.CompressType) + "," +
+			"'FORMAT'=" + formatStrLit(param.Format) + "," +
+			"'JSONDATA'=" + formatStrLit(param.JsonData) + "}"
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -487,37 +524,31 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+					fields += " TERMINATED BY " + formatStrLit(param.Tail.Fields.Terminated.Value)
 				}
 			}
 
 			escape := func(value byte) string {
 				if value == byte(0) {
 					return ""
-				} else if value == byte('\\') {
-					return "\\\\"
 				}
 				return fmt.Sprintf("%c", value)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
-				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
+				fields += " ENCLOSED BY " + formatStrLit(escape(param.Tail.Fields.EnclosedBy.Value))
 			}
 			if param.Tail.Fields.EscapedBy != nil {
-				fields += " ESCAPED BY '" + escape(param.Tail.Fields.EscapedBy.Value) + "'"
+				fields += " ESCAPED BY " + formatStrLit(escape(param.Tail.Fields.EscapedBy.Value))
 			}
 		}
 
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+				line += " STARTING BY " + formatStrLit(param.Tail.Lines.StartingBy)
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-					line += " TERMINATED BY '\\\\n'"
-				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-				}
+				line += " TERMINATED BY " + formatStrLit(param.Tail.Lines.TerminatedBy.Value)
 			}
 		}
 
@@ -550,12 +581,32 @@ func FormatColType(colType plan.Type) string {
 	if typ.Oid.IsDecimal() {
 		ts = "DECIMAL"
 	}
+	if isSetPlanType(&colType) {
+		ts = "SET"
+	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+	}
 
 	suffix := ""
 	switch types.T(colType.Id) {
-	case types.T_enum: //types.T_set:
-		elements := strings.Split(colType.GetEnumvalues(), ",")
+	case types.T_enum:
+		elements, _ := types.DecodeEnumValues(colType.GetEnumvalues())
 		// format enum as ENUM ('e1', 'e2')
+		elems := make([]string, 0, len(elements))
+		for _, e := range elements {
+			e = EscapeFormat(e)
+			elems = append(elems, e)
+		}
+		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
+	case types.T_uint64:
+		if !isEnumOrSetPlanType(&colType) {
+			break
+		}
+		elements, err := types.DecodeSetValues(colType.GetEnumvalues())
+		if err != nil {
+			elements = strings.Split(colType.GetEnumvalues(), ",")
+		}
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
 			e = EscapeFormat(e)
@@ -587,11 +638,17 @@ func FormatColType(colType plan.Type) string {
 }
 
 // Character replace mapping maps certain special characters to their escape sequences.
+// Backslash must be doubled first (conceptually, though map iteration order is
+// irrelevant because EscapeFormat walks the input exactly once): if it is left
+// bare, a round-trip through the MySQL scanner collapses \<x> to the unescaped
+// form (e.g. "a\b" re-parses as "a" + 0x08, not "a\\b"), silently mutating
+// ENUM/SET member values.
 var replaceMap = map[rune]string{
 	'\000': "\\0",
 	'\'':   "''",
 	'\n':   "\\n",
 	'\r':   "\\r",
+	'\\':   "\\\\",
 }
 
 // EscapeFormat output escape character with backslash.
@@ -607,16 +664,50 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
-func formatStr(str string) string {
-	tmp := strings.Replace(str, "`", "``", -1)
-	strLen := len(tmp)
-	if strLen < 2 {
-		return tmp
+// formatIdent escapes a string for use inside a backtick-quoted identifier,
+// i.e. when the caller wraps the result in `...`. Embedded backticks are
+// doubled per MySQL's identifier-quoting rules.
+//
+// Do NOT use this on free-form SQL text (e.g. an expression default like
+// concat(`col`, 'x')) — that text is not inside a backtick-quoted identifier
+// and doubling interior backticks corrupts the original SQL.
+func formatIdent(s string) string {
+	return strings.ReplaceAll(s, "`", "``")
+}
+
+// formatStrLit returns s as a MySQL single-quoted string literal with both
+// backslashes and single quotes escaped so the output round-trips through
+// the parser unchanged. The MySQL scanner treats \<x> as an escape — \b
+// becomes 0x08, \n becomes newline, etc. — so a value containing a literal
+// backslash must be emitted as \\ or the re-parsed result mutates.
+//
+// NOTE: this helper is for call sites whose input is *raw* text. Column
+// and table comments are stored in pre-quote-escaped form
+// (util.DealCommentString doubles ' at parse time) and go through a plain
+// '...' concatenation instead; do not switch them to this helper without
+// also rethinking the pre-escape contract.
+func formatStrLit(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s) + 2)
+	buf.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\'':
+			buf.WriteString("''")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\x00':
+			buf.WriteString("\\0")
+		default:
+			buf.WriteByte(s[i])
+		}
 	}
-	if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
-	}
-	return strings.Replace(tmp, "'", "''", -1)
+	buf.WriteByte('\'')
+	return buf.String()
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

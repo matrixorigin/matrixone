@@ -133,12 +133,12 @@ func MockTableDelegate(
 	return tbl, nil
 }
 
-func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	if tbl.combined.is {
-		return tbl.combined.tbl.CollectChanges(ctx, from, to, mp)
+		return tbl.combined.tbl.CollectChanges(ctx, from, to, skipDeletes, mp)
 	}
 
-	return tbl.origin.CollectChanges(ctx, from, to, mp)
+	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
 }
 
 func (tbl *txnTableDelegate) Stats(

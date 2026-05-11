@@ -59,6 +59,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	vData, err := json.Marshal(ViewData{
 		"create view v as select a from a",
 		"db",
+		"DEFINER",
 	})
 	assert.NoError(t, err)
 
@@ -380,7 +381,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
-	boundOffsetExpr, boundCountExpr, err := builder.bindLimit(bindCtx, astLimit)
+	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), boundOffsetExpr.Typ.Id)
 	offsetExpr, ok := boundOffsetExpr.Expr.(*plan.Expr_Lit)
@@ -480,8 +481,81 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 // TODO
 func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
-// TODO
-func TestQueryBuilder_appendWindowNode(t *testing.T) {}
+func TestQueryBuilder_appendWindowNode(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundHavingList))
+	require.Len(t, bindCtx.windows, 1)
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.windows, 1)
+
+	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
+
+	nodeID, err = builder.appendWindowNode(bindCtx, nodeID, boundHavingList)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_FILTER, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].FilterList, 1)
+	require.Equal(t, ">", builder.qry.Nodes[nodeID].FilterList[0].Expr.(*plan.Expr_F).F.Func.ObjName)
+	require.True(t, containsTag(builder.qry.Nodes[nodeID].FilterList[0], bindCtx.windowTag))
+
+	windowNodeFound := false
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			windowNodeFound = true
+			break
+		}
+	}
+	require.True(t, windowNodeFound)
+}
+
+func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.groupTag = builder.genNewBindTag()
+	bindCtx.aggregateTag = builder.genNewBindTag()
+	bindCtx.projectTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.sampleTag = builder.genNewBindTag()
+
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		"select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a in (select 1)",
+		1,
+	)
+	require.NoError(t, err)
+
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, boundHavingList, 1)
+	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
+	require.True(t, containsTag(boundHavingList[0], bindCtx.windowTag))
+
+	preWindowHavingList, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, bindCtx.windowTag)
+	require.Len(t, preWindowHavingList, 0)
+	require.Len(t, postWindowHavingList, 1)
+}
 
 func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -575,4 +649,359 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	resultProjectionNode := builder.qry.Nodes[3]
 	require.Equal(t, int32(3), resultProjectionNode.NodeId)
 	require.Equal(t, int32(2), resultProjectionNode.Children[0])
+}
+
+func TestQueryBuilder_buildRemapErrorMessage(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.nameByColRef = map[[2]int32]string{
+		{1, 0}: "col1",
+		{1, 1}: "col2",
+		{2, 0}: "col3",
+	}
+
+	tests := []struct {
+		name         string
+		missingCol   [2]int32
+		colName      string
+		colMap       map[[2]int32][2]int32
+		remapInfo    *RemapInfo
+		wantContains []string
+		desc         string
+	}{
+		{
+			name:       "basic error message",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap: map[[2]int32][2]int32{
+				{1, 0}: {0, 0},
+				{1, 1}: {0, 1},
+			},
+			remapInfo: nil,
+			wantContains: []string{
+				"Column remapping failed",
+				"Missing Column",
+				"RelPos=1, ColPos=2",
+				"missing_col",
+				"Available Columns in Context",
+			},
+			desc: "Basic error message should contain all required sections",
+		},
+		{
+			name:       "error with context - FILTER node",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap: map[[2]int32][2]int32{
+				{1, 0}: {0, 0},
+			},
+			remapInfo: &RemapInfo{
+				step: 0,
+				node: &plan.Node{
+					NodeId:   10,
+					NodeType: plan.Node_FILTER,
+					FilterList: []*plan.Expr{
+						{
+							Typ: plan.Type{Id: int32(types.T_bool)},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{ObjName: "="},
+									Args: []*plan.Expr{
+										{
+											Typ: plan.Type{Id: int32(types.T_int64)},
+											Expr: &plan.Expr_Col{
+												Col: &plan.ColRef{
+													RelPos: 1,
+													ColPos: 2,
+													Name:   "missing_col",
+												},
+											},
+										},
+										{
+											Typ: plan.Type{Id: int32(types.T_int64)},
+											Expr: &plan.Expr_Lit{
+												Lit: &plan.Literal{
+													Value: &plan.Literal_I64Val{I64Val: 1},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				tip:        "FilterList",
+				srcExprIdx: 0,
+			},
+			wantContains: []string{
+				"Context",
+				"Step: 0",
+				"Node ID: 10",
+				"Node Type: FILTER",
+				"Tip: FilterList",
+				"Expression Index: 0",
+				"Related Expression",
+			},
+			desc: "Error with FILTER node context should include all context information",
+		},
+		{
+			name:       "error with context - PROJECT node",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap:     map[[2]int32][2]int32{},
+			remapInfo: &RemapInfo{
+				step: 1,
+				node: &plan.Node{
+					NodeId:   20,
+					NodeType: plan.Node_PROJECT,
+					ProjectList: []*plan.Expr{
+						{
+							Typ: plan.Type{Id: int32(types.T_int64)},
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 1,
+									ColPos: 2,
+									Name:   "missing_col",
+								},
+							},
+						},
+					},
+				},
+				tip:        "ProjectList",
+				srcExprIdx: 0,
+			},
+			wantContains: []string{
+				"Node Type: PROJECT",
+				"No columns available in context",
+			},
+			desc: "Error with PROJECT node and no available columns",
+		},
+		{
+			name:       "error with context - AGG node",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap: map[[2]int32][2]int32{
+				{1, 0}: {0, 0},
+				{2, 0}: {0, 1},
+			},
+			remapInfo: &RemapInfo{
+				step: 2,
+				node: &plan.Node{
+					NodeId:   30,
+					NodeType: plan.Node_AGG,
+					AggList: []*plan.Expr{
+						{
+							Typ: plan.Type{Id: int32(types.T_int64)},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{ObjName: "sum"},
+									Args: []*plan.Expr{
+										{
+											Typ: plan.Type{Id: int32(types.T_int64)},
+											Expr: &plan.Expr_Col{
+												Col: &plan.ColRef{
+													RelPos: 1,
+													ColPos: 2,
+													Name:   "missing_col",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				srcExprIdx: 0,
+			},
+			wantContains: []string{
+				"Node Type: AGG",
+				"Available Columns in Context",
+				"col1",
+				"col3",
+			},
+			desc: "Error with AGG node should include aggregation expression",
+		},
+		{
+			name:       "error without tip",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap:     map[[2]int32][2]int32{},
+			remapInfo: &RemapInfo{
+				step: 0,
+				node: &plan.Node{
+					NodeId:   10,
+					NodeType: plan.Node_FILTER,
+				},
+				tip:        "",
+				srcExprIdx: -1,
+			},
+			wantContains: []string{
+				"Context",
+				"Step: 0",
+				"Node ID: 10",
+			},
+			desc: "Error without tip and expression index should still show context",
+		},
+		{
+			name:       "error with invalid expression index",
+			missingCol: [2]int32{1, 2},
+			colName:    "missing_col",
+			colMap:     map[[2]int32][2]int32{},
+			remapInfo: &RemapInfo{
+				step: 0,
+				node: &plan.Node{
+					NodeId:     10,
+					NodeType:   plan.Node_FILTER,
+					FilterList: []*plan.Expr{},
+				},
+				srcExprIdx: 5, // Out of bounds
+			},
+			wantContains: []string{
+				"Context",
+				"Expression Index: 5",
+			},
+			desc: "Error with out-of-bounds expression index should still show index",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := builder.buildRemapErrorMessage(tt.missingCol, tt.colName, tt.colMap, tt.remapInfo)
+
+			// Check that result contains all expected strings
+			for _, wantStr := range tt.wantContains {
+				assert.Contains(t, result, wantStr, "%s: should contain '%s'", tt.desc, wantStr)
+			}
+
+			// Check that result is not empty
+			assert.NotEmpty(t, result, "%s: result should not be empty", tt.desc)
+
+			// Check that result starts with error header
+			assert.Contains(t, result, "Column remapping failed", "%s: should start with error header", tt.desc)
+		})
+	}
+}
+
+func TestParseRankOption(t *testing.T) {
+	ctx := context.TODO()
+
+	t.Run("valid mode pre", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "pre",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("valid mode post", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "post",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("valid mode case insensitive", func(t *testing.T) {
+		options := map[string]string{
+			"MODE": "PRE",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("valid mode with whitespace", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "  post  ",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("invalid mode value", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "invalid",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.Error(t, err)
+		require.Nil(t, rankOption)
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', or 'force'")
+		require.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("valid mode force", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "force",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "force", rankOption.Mode)
+	})
+
+	t.Run("empty options map", func(t *testing.T) {
+		options := map[string]string{}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("nil options map", func(t *testing.T) {
+		var options map[string]string = nil
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("options without mode", func(t *testing.T) {
+		options := map[string]string{
+			"fudge_factor": "3.0",
+			"nprobe":       "10",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("options with mode and other options", func(t *testing.T) {
+		options := map[string]string{
+			"mode":         "pre",
+			"fudge_factor": "3.0",
+			"nprobe":       "10",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("case insensitive key matching", func(t *testing.T) {
+		options := map[string]string{
+			"MoDe": "post",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("multiple mode keys with different cases", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "pre",
+			"MODE": "post",
+		}
+		// Should match the first one found (order is not guaranteed in map iteration)
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		// The actual value depends on map iteration order, but should be either "pre" or "post"
+		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
+	})
 }

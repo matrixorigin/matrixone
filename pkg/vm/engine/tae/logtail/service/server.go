@@ -461,7 +461,10 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			return
 		}
 		s.waterline.Advance(e.to)
-		s.logger.Info("init waterline", zap.String("to", e.to.String()))
+		s.logger.Info(
+			"logtail.service.init.waterline",
+			zap.String("ts", e.to.String()),
+		)
 	}
 
 	for {

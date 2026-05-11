@@ -23,7 +23,10 @@ import (
 	"iter"
 	"math"
 	gotrace "runtime/trace"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithy "github.com/aws/smithy-go"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,11 +49,12 @@ import (
 )
 
 type AwsSDKv2 struct {
-	name            string
-	bucket          string
-	client          *s3.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int32
+	name               string
+	bucket             string
+	client             *s3.Client
+	perfCounterSets    []*perfcounter.CounterSet
+	listMaxKeys        int32
+	disableMultiDelete atomic.Bool
 }
 
 func NewAwsSDKv2(
@@ -191,6 +196,7 @@ func NewAwsSDKv2(
 }
 
 var _ ObjectStorage = new(AwsSDKv2)
+var _ ParallelMultipartWriter = new(AwsSDKv2)
 
 func (a *AwsSDKv2) List(
 	ctx context.Context,
@@ -423,6 +429,17 @@ func (a *AwsSDKv2) Write(
 		}
 
 	} else {
+		if _, ok := r.(io.Seeker); !ok {
+			// Large non-seekable readers are incompatible with the raw PutObject path
+			// on some S3-compatible backends (for example OBS behind non-TLS or custom
+			// payload-hash behavior). Fall back to multipart upload with concurrency=1
+			// so callers do not need parallel-mode=1 just to avoid the 64MB raw PUT path.
+			return a.WriteMultipartParallel(ctx, key, r, sizeHint, &ParallelMultipartOption{
+				PartSize:    defaultParallelMultipartPartSize,
+				Concurrency: 1,
+				Expire:      expire,
+			})
+		}
 		_, err = a.putObject(
 			ctx,
 			&s3.PutObjectInput{
@@ -442,6 +459,269 @@ func (a *AwsSDKv2) Write(
 	}
 
 	return
+}
+
+func (a *AwsSDKv2) SupportsParallelMultipart() bool {
+	return true
+}
+
+func (a *AwsSDKv2) WriteMultipartParallel(
+	ctx context.Context,
+	key string,
+	r io.Reader,
+	sizeHint *int64,
+	opt *ParallelMultipartOption,
+) (err error) {
+	defer wrapSizeMismatchErr(&err)
+
+	options := normalizeParallelOption(opt)
+	if sizeHint != nil && *sizeHint < minMultipartPartSize {
+		return a.Write(ctx, key, r, sizeHint, options.Expire)
+	}
+	if sizeHint != nil {
+		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
+		if expectedParts > maxMultipartParts {
+			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	bufPool := sync.Pool{
+		New: func() any {
+			buf := make([]byte, options.PartSize)
+			return &buf
+		},
+	}
+
+	readChunk := func() (bufPtr *[]byte, buf []byte, n int, err error) {
+		bufPtr = bufPool.Get().(*[]byte)
+		raw := *bufPtr
+		n, err = io.ReadFull(r, raw)
+		switch {
+		case errors.Is(err, io.EOF):
+			bufPool.Put(bufPtr)
+			return nil, nil, 0, io.EOF
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			err = io.EOF
+			return bufPtr, raw, n, err
+		case err != nil:
+			bufPool.Put(bufPtr)
+			return nil, nil, 0, err
+		default:
+			return bufPtr, raw, n, nil
+		}
+	}
+
+	firstBufPtr, firstBuf, firstN, err := readChunk()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if firstN == 0 && errors.Is(err, io.EOF) {
+		return nil
+	}
+	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
+		data := make([]byte, firstN)
+		copy(data, firstBuf[:firstN])
+		bufPool.Put(firstBufPtr)
+		size := int64(firstN)
+		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
+	}
+
+	output, createErr := DoWithRetry("create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+		return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket:  ptrTo(a.bucket),
+			Key:     ptrTo(key),
+			Expires: options.Expire,
+		})
+	}, maxRetryAttemps, IsRetryableError)
+	if createErr != nil {
+		bufPool.Put(firstBufPtr)
+		return createErr
+	}
+
+	defer func() {
+		if err != nil {
+			_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   ptrTo(a.bucket),
+				Key:      ptrTo(key),
+				UploadId: output.UploadId,
+			})
+			err = errors.Join(err, abortErr)
+		}
+	}()
+
+	type partJob struct {
+		num    int32
+		buf    []byte
+		bufPtr *[]byte
+		n      int
+	}
+
+	var (
+		partNum   int32
+		parts     []types.CompletedPart
+		partsLock sync.Mutex
+		wg        sync.WaitGroup
+		errOnce   sync.Once
+		firstErr  error
+	)
+
+	setErr := func(e error) {
+		if e == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = e
+			cancel()
+		})
+	}
+
+	jobCh := make(chan partJob, options.Concurrency*2)
+
+	startWorker := func() {
+		wg.Add(1)
+		// Use plain goroutines instead of the global parallelUploadPool to avoid
+		// pool-starvation deadlock: when many concurrent WriteMultipartParallel calls
+		// (e.g. LOAD DATA with 15+ parallel scopes) all compete for a tiny global pool
+		// (capacity = NumCPU), every caller blocks on pool.Submit() waiting for workers
+		// that are themselves held by other callers — classic circular wait.
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				if ctx.Err() != nil {
+					if job.bufPtr != nil {
+						bufPool.Put(job.bufPtr)
+					}
+					continue
+				}
+				uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+					return a.client.UploadPart(ctx, &s3.UploadPartInput{
+						Bucket:     ptrTo(a.bucket),
+						Key:        ptrTo(key),
+						PartNumber: &job.num,
+						UploadId:   output.UploadId,
+						Body:       bytes.NewReader(job.buf[:job.n]),
+					})
+				}, maxRetryAttemps, IsRetryableError)
+				if uploadErr != nil {
+					setErr(uploadErr)
+					if job.bufPtr != nil {
+						bufPool.Put(job.bufPtr)
+					}
+					continue
+				}
+				if job.bufPtr != nil {
+					bufPool.Put(job.bufPtr)
+				}
+				partsLock.Lock()
+				parts = append(parts, types.CompletedPart{
+					ETag:       uploadOutput.ETag,
+					PartNumber: ptrTo(job.num),
+				})
+				partsLock.Unlock()
+			}
+		}()
+	}
+
+	for i := 0; i < options.Concurrency; i++ {
+		startWorker()
+	}
+
+	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			if bufPtr != nil {
+				bufPool.Put(bufPtr)
+			}
+			return false
+		}
+		job := partJob{
+			num:    partNum,
+			buf:    buf,
+			bufPtr: bufPtr,
+			n:      n,
+		}
+		select {
+		case jobCh <- job:
+			return true
+		case <-ctx.Done():
+			if bufPtr != nil {
+				bufPool.Put(bufPtr)
+			}
+			setErr(ctx.Err())
+			return false
+		}
+	}
+
+	if !sendJob(firstBufPtr, firstBuf, firstN) {
+		close(jobCh)
+		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
+		return ctx.Err()
+	}
+
+	for {
+		nextBufPtr, nextBuf, nextN, readErr := readChunk()
+		if errors.Is(readErr, io.EOF) && nextN == 0 {
+			break
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			setErr(readErr)
+			if nextBufPtr != nil {
+				bufPool.Put(nextBufPtr)
+			}
+			break
+		}
+		if nextN == 0 {
+			if nextBufPtr != nil {
+				bufPool.Put(nextBufPtr)
+			}
+			break
+		}
+		if !sendJob(nextBufPtr, nextBuf, nextN) {
+			break
+		}
+		if readErr != nil && errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+
+	close(jobCh)
+	wg.Wait()
+
+	if firstErr != nil {
+		err = firstErr
+		return err
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	if len(parts) != int(partNum) {
+		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
+	}
+
+	sort.Slice(parts, func(i, j int) bool {
+		return *parts[i].PartNumber < *parts[j].PartNumber
+	})
+
+	_, err = DoWithRetry("complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+		return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+			Bucket:          ptrTo(a.bucket),
+			Key:             ptrTo(key),
+			UploadId:        output.UploadId,
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+		})
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (a *AwsSDKv2) Read(
@@ -547,6 +827,9 @@ func (a *AwsSDKv2) deleteSingle(ctx context.Context, key string) error {
 func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
 	ctx, span := trace.Start(ctx, "AwsSDKv2.deleteMultiObj")
 	defer span.End()
+	if a.disableMultiDelete.Load() {
+		return a.deleteMultiObjOneByOne(ctx, objs)
+	}
 	output, err := a.deleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(a.bucket),
 		Delete: &types.Delete{
@@ -557,6 +840,17 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	})
 	// delete api failed
 	if err != nil {
+		if isS3APIErrorCode(err, "MalformedXML") {
+			a.disableMultiDelete.Store(true)
+			logutil.Warn(
+				"s3 delete objects returned MalformedXML, disabling multi-delete and falling back to single deletes",
+				zap.String("fs", a.name),
+				zap.String("bucket", a.bucket),
+				zap.Int("count", len(objs)),
+				zap.Error(err),
+			)
+			return a.deleteMultiObjOneByOne(ctx, objs)
+		}
 		return err
 	}
 	// delete api success, but with delete file failed.
@@ -571,6 +865,27 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	}
 	if message.Len() > 0 {
 		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
+	}
+	return nil
+}
+
+func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {
+	message := strings.Builder{}
+	for _, obj := range objs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if obj.Key == nil {
+			return moerr.NewInternalErrorNoCtx("S3 delete fallback got nil key")
+		}
+
+		if err := a.deleteSingle(ctx, *obj.Key); err != nil {
+			message.WriteString(fmt.Sprintf("%s: %v;", *obj.Key, err))
+		}
+	}
+	if message.Len() > 0 {
+		return moerr.NewInternalErrorNoCtxf("S3 delete fallback failed: %s", message.String())
 	}
 	return nil
 }
@@ -698,6 +1013,11 @@ func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsIn
 		maxRetryAttemps,
 		IsRetryableError,
 	)
+}
+
+func isS3APIErrorCode(err error, code string) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == code
 }
 
 func (a *AwsSDKv2) mapError(err error, path string) error {

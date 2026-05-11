@@ -1,40 +1,40 @@
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 begin;
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'create table xx');
 add_fault_point(runOnce_fail, :::, echo, 0, create table xx)
-true
+1
 create table xx (a int);
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'drop table xx');
 add_fault_point(runOnce_fail, :::, echo, 0, drop table xx)
-true
+1
 drop table xx;
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 create table bb (a int);
 insert into bb values (1);
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table bb');
 add_fault_point(runOnce_fail, :::, echo, 0, alter table bb)
-true
+1
 alter table bb rename to xx;
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 show tables;
 Tables_in_ddl_retry
 xx
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table xx');
 add_fault_point(runOnce_fail, :::, echo, 0, alter table xx)
-true
+1
 alter table xx add primary key (a);
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 select * from xx;
 a
 1
@@ -63,18 +63,18 @@ insert into foreign02 values(2,2,2);
 begin;
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'insert into foreign01');
 add_fault_point(runOnce_fail, :::, echo, 0, insert into foreign01)
-true
+1
 insert into foreign01 values(3,'anykind',3,3);
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 select add_fault_point('runOnce_fail', ':::', 'echo', 0, 'alter table foreign01');
 add_fault_point(runOnce_fail, :::, echo, 0, alter table foreign01)
-true
+1
 alter table foreign01 drop column col2;
 select remove_fault_point('runOnce_fail');
 remove_fault_point(runOnce_fail)
-true
+1
 select * from foreign01;
 col1    col3    col4
 3    3    3
@@ -95,4 +95,4 @@ drop table foreign02;
 drop table foreign01;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1

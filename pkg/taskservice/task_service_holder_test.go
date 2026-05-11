@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
@@ -103,21 +105,81 @@ func TestRefreshTaskStorageCanRefresh(t *testing.T) {
 	}()
 
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	s.refresh(ctx, "s2")
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	address = "s2"
 	s.refresh(ctx, "s1")
 	s.mu.RLock()
-	assert.Equal(t, stores["s2"], s.mu.store)
+	assert.Same(t, stores["s2"], s.mu.store)
 	assert.Equal(t, "s2", s.mu.lastAddress)
+	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageSkipStaleRefreshKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.TODO()
+
+	current := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	next := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{stores: map[string]TaskStorage{
+			"s1": current,
+			"s2": next,
+		}},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	s.refresh(ctx, "s2")
+
+	require.False(t, current.closed)
+	s.mu.RLock()
+	assert.Same(t, current, s.mu.store)
+	assert.Equal(t, "s1", s.mu.lastAddress)
+	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageCreateFailureKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.TODO()
+
+	current := &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{
+			stores: map[string]TaskStorage{
+				"s1": current,
+			},
+			errs: map[string]error{
+				"s2": assert.AnError,
+			},
+		},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	address = "s2"
+	s.refresh(ctx, "s1")
+
+	require.False(t, current.closed)
+	s.mu.RLock()
+	assert.Same(t, current, s.mu.store)
+	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 }
 
@@ -173,10 +235,140 @@ func Test_refreshAddCdcTask(t *testing.T) {
 	_ = storage.Close()
 }
 
+func TestNewTaskServiceHolderDefault(t *testing.T) {
+	h := NewTaskServiceHolder(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "127.0.0.1:3306", nil },
+	)
+	require.NotNil(t, h)
+}
+
+func TestRefreshTaskStoragePingHeartbeatAndUpdateCdc(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store := NewMemTaskStorage()
+	stores := map[string]TaskStorage{
+		"s1": store,
+	}
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		&testStorageFactory{stores: stores},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	require.NoError(t, s.PingContext(ctx))
+
+	dt := newTestDaemonTask(1, "dt-1")
+	dt.TaskStatus = task.TaskStatus_Running
+	_, err := s.AddDaemonTask(ctx, dt)
+	require.NoError(t, err)
+
+	dt.LastHeartbeat = time.Now()
+	affected, err := s.HeartbeatDaemonTask(ctx, []task.DaemonTask{dt})
+	require.NoError(t, err)
+	require.Equal(t, 1, affected)
+
+	affected, err = s.UpdateCDCTask(ctx, task.TaskStatus_Canceled, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+
+	affected, lastAddress, err := s.UpdateCdcTaskSub(ctx, task.TaskStatus_Canceled, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, affected)
+	require.Equal(t, "s1", lastAddress)
+}
+
+func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "", assert.AnError },
+		&testStorageFactory{stores: map[string]TaskStorage{}},
+	).(*refreshableTaskStorage)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	_, err := s.AddAsyncTask(ctx, newTestAsyncTask("a1"))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateAsyncTask(ctx, []task.AsyncTask{newTestAsyncTask("a2")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.DeleteAsyncTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QueryAsyncTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddCronTask(ctx, newTestCronTask("c1", "* * * * * *"))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QueryCronTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateCronTask(ctx, task.CronTask{}, task.AsyncTask{})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddDaemonTask(ctx, newTestDaemonTask(1, "d1"))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d2")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.DeleteDaemonTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QueryDaemonTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.HeartbeatDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d3")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTask(ctx, []SQLTask{newTestSQLTask("task-2", 1)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.DeleteSQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTaskRun(ctx, []SQLTaskRun{newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTaskRun(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.CompleteSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.TriggerSQLTask(ctx, newTestSQLTask("task-1", 1), newTestAsyncTask("task-1:1"))
+	require.ErrorIs(t, err, ErrNotReady)
+}
+
+func TestMySQLBasedTaskStorageFactoryCreate(t *testing.T) {
+	factory := newMySQLBasedTaskStorageFactory("root", "111", "mo_task")
+	store, err := factory.Create("127.0.0.1:3306")
+	require.NoError(t, err)
+	require.NotNil(t, store)
+	require.NoError(t, store.Close())
+}
+
 type testStorageFactory struct {
 	stores map[string]TaskStorage
+	errs   map[string]error
 }
 
 func (f *testStorageFactory) Create(address string) (TaskStorage, error) {
+	if err, ok := f.errs[address]; ok {
+		return nil, err
+	}
 	return f.stores[address], nil
+}
+
+type trackedTaskStorage struct {
+	TaskStorage
+	closed bool
+}
+
+func (s *trackedTaskStorage) Close() error {
+	s.closed = true
+	return s.TaskStorage.Close()
 }

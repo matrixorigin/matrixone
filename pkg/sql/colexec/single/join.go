@@ -113,6 +113,9 @@ func (singleJoin *SingleJoin) Call(proc *process.Process) (vm.CallResult, error)
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
+				for i := range ctr.rbat.Vecs {
+					ctr.rbat.Vecs[i].ResetWithSameType()
+				}
 			}
 			for i, rp := range singleJoin.Result {
 				if rp.Rel == 0 {
@@ -157,8 +160,7 @@ func (singleJoin *SingleJoin) build(analyzer process.Analyzer, proc *process.Pro
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *SingleJoin, result *vm.CallResult) error {
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
-			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.rbat.Vecs[i].SetLength(bat.RowCount())
+			vector.SetConstNull(ctr.rbat.Vecs[i], bat.RowCount(), nil)
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())

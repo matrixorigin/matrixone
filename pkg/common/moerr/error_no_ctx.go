@@ -17,6 +17,8 @@ package moerr
 import (
 	"encoding/hex"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 func NewInfoNoCtx(msg string) *Error {
@@ -314,8 +316,12 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx(msg string) *Error {
-	return newError(Context(), ErrTxnStale, msg)
+func NewTxnStaleNoCtxf(
+	format string, args ...any,
+) *Error {
+	msg := fmt.Sprintf(format, args...)
+	ctx := errutil.ContextWithNoReport(Context(), true)
+	return newError(ctx, ErrTxnStale, msg)
 }
 
 func NewRetryForCNRollingRestart() *Error {

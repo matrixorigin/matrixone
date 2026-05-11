@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func init() {
@@ -68,6 +69,10 @@ const (
 	BetweenAccCloneTable
 )
 
+type ToAccountOpt struct {
+	AccountName Identifier
+}
+
 type CloneTable struct {
 	statementImpl
 
@@ -78,8 +83,8 @@ type CloneTable struct {
 	IsRestoreByTS bool
 	FromAccount   uint32
 
-	ToAccountName Identifier
-	ToAccountId   uint32
+	ToAccountOpt *ToAccountOpt
+	ToAccountId  uint32
 
 	Sql      string
 	StmtType CloneStmtType
@@ -124,10 +129,10 @@ func (node *CloneTable) reset() {
 
 type CloneDatabase struct {
 	statementImpl
-	SrcDatabase   Identifier
-	DstDatabase   Identifier
-	AtTsExpr      *AtTimeStamp
-	ToAccountName Identifier
+	SrcDatabase  Identifier
+	DstDatabase  Identifier
+	AtTsExpr     *AtTimeStamp
+	ToAccountOpt *ToAccountOpt
 }
 
 func (node *CloneDatabase) Free() {
@@ -165,10 +170,15 @@ func DecideCloneStmtType(
 	dstDbName string,
 	toAccount uint32,
 	srcAccount uint32,
+	subMeta *plan2.SubscriptionMeta,
 ) (cloneType CloneStmtType) {
 
 	if stmt.StmtType != NoClone {
 		return stmt.StmtType
+	}
+
+	if subMeta != nil {
+		srcAccount = uint32(subMeta.AccountId)
 	}
 
 	var (

@@ -1,0 +1,173 @@
+drop database if exists test_summary;
+create database test_summary;
+use test_summary;
+create table c1(a int primary key, b int);
+insert into c1 values (1, 10), (2, 20);
+drop snapshot if exists c1_sp0;
+create snapshot c1_sp0 for table test_summary c1;
+insert into c1 values (3, 30), (4, 40);
+drop snapshot if exists c1_sp1;
+create snapshot c1_sp1 for table test_summary c1;
+data branch diff c1{snapshot="c1_sp1"} against c1{snapshot="c1_sp0"} output summary;
+metric	c1{snapshot = 'c1_sp1'}	c1{snapshot = 'c1_sp0'}
+INSERTED	2	0
+DELETED	0	0
+UPDATED	0	0
+data branch diff c1{snapshot="c1_sp1"} against c1{snapshot="c1_sp0"} output count;
+COUNT(*)
+2
+data branch diff c1{snapshot="c1_sp1"} against c1{snapshot="c1_sp0"};
+diff c1 against c1	flag	a	b
+c1	INSERT	3	30
+c1	INSERT	4	40
+data branch diff c1{snapshot="c1_sp0"} against c1{snapshot="c1_sp1"} output summary;
+metric	c1{snapshot = 'c1_sp0'}	c1{snapshot = 'c1_sp1'}
+INSERTED	0	2
+DELETED	0	0
+UPDATED	0	0
+data branch diff c1{snapshot="c1_sp0"} against c1{snapshot="c1_sp1"} output count;
+COUNT(*)
+2
+drop snapshot c1_sp0;
+drop snapshot c1_sp1;
+drop table c1;
+create table c2(a int primary key, b int);
+insert into c2 values (1, 10), (2, 20), (3, 30);
+drop snapshot if exists c2_sp0;
+create snapshot c2_sp0 for table test_summary c2;
+update c2 set b = 200 where a = 2;
+delete from c2 where a = 3;
+insert into c2 values (4, 40);
+drop snapshot if exists c2_sp1;
+create snapshot c2_sp1 for table test_summary c2;
+data branch diff c2{snapshot="c2_sp1"} against c2{snapshot="c2_sp0"} output summary;
+metric	c2{snapshot = 'c2_sp1'}	c2{snapshot = 'c2_sp0'}
+INSERTED	1	0
+DELETED	1	0
+UPDATED	1	0
+data branch diff c2{snapshot="c2_sp1"} against c2{snapshot="c2_sp0"} output count;
+COUNT(*)
+3
+data branch diff c2{snapshot="c2_sp1"} against c2{snapshot="c2_sp0"};
+diff c2 against c2	flag	a	b
+c2	UPDATE	2	200
+c2	DELETE	3	30
+c2	INSERT	4	40
+drop snapshot c2_sp0;
+drop snapshot c2_sp1;
+drop table c2;
+create table c3_base(a int primary key, b int);
+insert into c3_base values (1, 1), (2, 2), (3, 3);
+drop snapshot if exists c3_sp0;
+create snapshot c3_sp0 for table test_summary c3_base;
+data branch create table c3_tar from c3_base{snapshot="c3_sp0"};
+update c3_tar set b = b + 100 where a = 1;
+delete from c3_tar where a = 2;
+insert into c3_tar values (4, 4);
+data branch diff c3_tar against c3_base{snapshot="c3_sp0"} output summary;
+metric	c3_tar	c3_base{snapshot = 'c3_sp0'}
+INSERTED	1	0
+DELETED	1	0
+UPDATED	1	0
+data branch diff c3_tar against c3_base{snapshot="c3_sp0"} output count;
+COUNT(*)
+3
+data branch diff c3_tar against c3_base{snapshot="c3_sp0"};
+diff c3_tar against c3_base	flag	a	b
+c3_tar	UPDATE	1	101
+c3_tar	DELETE	2	2
+c3_tar	INSERT	4	4
+data branch diff c3_base{snapshot="c3_sp0"} against c3_tar output summary;
+metric	c3_base{snapshot = 'c3_sp0'}	c3_tar
+INSERTED	0	1
+DELETED	0	1
+UPDATED	0	1
+data branch diff c3_base{snapshot="c3_sp0"} against c3_tar output count;
+COUNT(*)
+3
+drop snapshot c3_sp0;
+drop table c3_base;
+drop table c3_tar;
+create table c4_base(a int, b int);
+insert into c4_base values (1, 10), (2, 20), (3, 30);
+drop snapshot if exists c4_sp0;
+create snapshot c4_sp0 for table test_summary c4_base;
+data branch create table c4_tar from c4_base{snapshot="c4_sp0"};
+update c4_tar set b = b + 100 where a = 1;
+delete from c4_tar where a = 2;
+insert into c4_tar values (5, 50);
+data branch diff c4_tar against c4_base{snapshot="c4_sp0"} output summary;
+metric	c4_tar	c4_base{snapshot = 'c4_sp0'}
+INSERTED	1	0
+DELETED	1	0
+UPDATED	1	0
+data branch diff c4_tar against c4_base{snapshot="c4_sp0"} output count;
+COUNT(*)
+3
+data branch diff c4_tar against c4_base{snapshot="c4_sp0"};
+diff c4_tar against c4_base	flag	a	b
+c4_tar	UPDATE	1	110
+c4_tar	DELETE	2	20
+c4_tar	INSERT	5	50
+drop snapshot c4_sp0;
+drop table c4_base;
+drop table c4_tar;
+create table c5_seed(a int primary key, b int);
+insert into c5_seed values (1, 10), (2, 20), (3, 30), (4, 40);
+drop snapshot if exists c5_sp0;
+create snapshot c5_sp0 for table test_summary c5_seed;
+data branch create table c5_left from c5_seed{snapshot="c5_sp0"};
+data branch create table c5_right from c5_seed{snapshot="c5_sp0"};
+update c5_left set b = b + 100 where a in (1, 2);
+delete from c5_left where a = 4;
+insert into c5_left values (5, 50);
+update c5_right set b = b + 200 where a in (2, 3);
+delete from c5_right where a = 1;
+insert into c5_right values (6, 60);
+data branch diff c5_left against c5_right output summary;
+metric	c5_left	c5_right
+INSERTED	1	1
+DELETED	1	1
+UPDATED	2	2
+data branch diff c5_left against c5_right output count;
+COUNT(*)
+8
+data branch diff c5_left against c5_right;
+diff c5_left against c5_right	flag	a	b
+c5_left	UPDATE	1	110
+c5_right	DELETE	1	10
+c5_left	UPDATE	2	120
+c5_right	UPDATE	2	220
+c5_right	UPDATE	3	230
+c5_left	DELETE	4	40
+c5_left	INSERT	5	50
+c5_right	INSERT	6	60
+data branch diff c5_right against c5_left output summary;
+metric	c5_right	c5_left
+INSERTED	1	1
+DELETED	1	1
+UPDATED	2	2
+data branch diff c5_right against c5_left output count;
+COUNT(*)
+8
+drop snapshot c5_sp0;
+drop table c5_seed;
+drop table c5_left;
+drop table c5_right;
+create table c6(a int primary key, b int);
+insert into c6 values (1, 1), (2, 2);
+drop snapshot if exists c6_sp0;
+create snapshot c6_sp0 for table test_summary c6;
+update c6 set b = b + 10 where a = 1;
+insert into c6 values (3, 3);
+data branch diff c6 against c6{snapshot="c6_sp0"} output count;
+COUNT(*)
+2
+data branch diff c6 against c6{snapshot="c6_sp0"} output summary;
+metric	c6	c6{snapshot = 'c6_sp0'}
+INSERTED	1	0
+DELETED	0	0
+UPDATED	1	0
+drop snapshot c6_sp0;
+drop table c6;
+drop database test_summary;

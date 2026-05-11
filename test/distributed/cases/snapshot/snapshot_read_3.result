@@ -16,7 +16,7 @@ Table    Create Table
 test_snapshot_read    CREATE TABLE `test_snapshot_read` (\n  `a` int DEFAULT NULL\n)
 show create table test_snapshot_read_view;
 View    Create View    character_set_client    collation_connection
-test_snapshot_read_view    create view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
+test_snapshot_read_view    create SQL SECURITY DEFINER view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
 drop table test_snapshot_read;
 drop view test_snapshot_read_view;
 select count(*) from snapshot_read.test_snapshot_read{snapshot = 'snapshot_01'};
@@ -37,7 +37,7 @@ Table    Create Table
 test_snapshot_read    CREATE TABLE `test_snapshot_read` (\n  `a` int DEFAULT NULL\n)
 show create table test_snapshot_read_view {snapshot = 'snapshot_01'};
 View    Create View    character_set_client    collation_connection
-test_snapshot_read_view    create view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
+test_snapshot_read_view    create SQL SECURITY DEFINER view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
 create database if not exists snapshot_read;
@@ -58,7 +58,7 @@ Table    Create Table
 test_snapshot_read    CREATE TABLE `test_snapshot_read` (\n  `a` int DEFAULT NULL\n)
 show create table test_snapshot_read_view;
 View    Create View    character_set_client    collation_connection
-test_snapshot_read_view    create view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
+test_snapshot_read_view    create SQL SECURITY DEFINER view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
 show databases like 'snapshot_read';
 Database
 snapshot_read
@@ -82,7 +82,7 @@ Table    Create Table
 test_snapshot_read    CREATE TABLE `test_snapshot_read` (\n  `a` int DEFAULT NULL\n)
 show create table test_snapshot_read_view {snapshot = 'snapshot_01'};
 View    Create View    character_set_client    collation_connection
-test_snapshot_read_view    create view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
+test_snapshot_read_view    create SQL SECURITY DEFINER view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
 show databases like 'snapshot_read';
 Database
 snapshot_read
@@ -96,7 +96,7 @@ Table    Create Table
 test_snapshot_read    CREATE TABLE `test_snapshot_read` (\n  `a` int DEFAULT NULL\n)
 show create table snapshot_read.test_snapshot_read_view {snapshot = 'snapshot_01'};
 View    Create View    character_set_client    collation_connection
-test_snapshot_read_view    create view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
+test_snapshot_read_view    create SQL SECURITY DEFINER view test_snapshot_read_view as select * from test_snapshot_read;    utf8mb4    utf8mb4_general_ci
 show databases like 'snapshot_read' {snapshot = 'snapshot_01'};
 Database
 snapshot_read

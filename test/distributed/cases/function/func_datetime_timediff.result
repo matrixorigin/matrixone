@@ -1,83 +1,83 @@
 select timediff(cast('22:22:22' as time), cast('11:11:11' as time));
-timediff(cast(22:22:22 as time(26)), cast(11:11:11 as time(26)))
+timediff(cast(22:22:22 as time), cast(11:11:11 as time))
 11:11:11
 select timediff(cast('22:22:22' as time), cast('-11:11:11' as time));
-timediff(cast(22:22:22 as time(26)), cast(-11:11:11 as time(26)))
+timediff(cast(22:22:22 as time), cast(-11:11:11 as time))
 33:33:33
 select timediff(cast('-22:22:22' as time), cast('11:11:11' as time));
-timediff(cast(-22:22:22 as time(26)), cast(11:11:11 as time(26)))
+timediff(cast(-22:22:22 as time), cast(11:11:11 as time))
 -33:33:33
 select timediff(cast('-22:22:22' as time), cast('-11:11:11' as time));
-timediff(cast(-22:22:22 as time(26)), cast(-11:11:11 as time(26)))
+timediff(cast(-22:22:22 as time), cast(-11:11:11 as time))
 -11:11:11
 select timediff(cast('11:11:11' as time) , cast('22:22:22' as time));
-timediff(cast(11:11:11 as time(26)), cast(22:22:22 as time(26)))
+timediff(cast(11:11:11 as time), cast(22:22:22 as time))
 -11:11:11
 select timediff(cast('11:11:11' as time) , cast('-22:22:22' as time));
-timediff(cast(11:11:11 as time(26)), cast(-22:22:22 as time(26)))
+timediff(cast(11:11:11 as time), cast(-22:22:22 as time))
 33:33:33
 select timediff(cast('-11:11:11' as time) , cast('22:22:22' as time));
-timediff(cast(-11:11:11 as time(26)), cast(22:22:22 as time(26)))
+timediff(cast(-11:11:11 as time), cast(22:22:22 as time))
 -33:33:33
 select timediff(cast('-11:11:11' as time) , cast('-22:22:22' as time));
-timediff(cast(-11:11:11 as time(26)), cast(-22:22:22 as time(26)))
+timediff(cast(-11:11:11 as time), cast(-22:22:22 as time))
 11:11:11
 select timediff(cast('-838:59:59' as time) , cast('838:59:59' as time));
-timediff(cast(-838:59:59 as time(26)), cast(838:59:59 as time(26)))
+timediff(cast(-838:59:59 as time), cast(838:59:59 as time))
 -1677:59:58
 select timediff(cast('838:59:59' as time) , cast('-838:59:59' as time));
-timediff(cast(838:59:59 as time(26)), cast(-838:59:59 as time(26)))
+timediff(cast(838:59:59 as time), cast(-838:59:59 as time))
 1677:59:58
 select timediff(cast('838:59:59' as time) , cast('838:59:59' as time));
-timediff(cast(838:59:59 as time(26)), cast(838:59:59 as time(26)))
+timediff(cast(838:59:59 as time), cast(838:59:59 as time))
 00:00:00
 select timediff(cast('22:22:22' as time), null);
-timediff(cast(22:22:22 as time(26)), null)
+timediff(cast(22:22:22 as time), null)
 null
 select timediff(null, cast('11:11:11' as time));
-timediff(null, cast(11:11:11 as time(26)))
+timediff(null, cast(11:11:11 as time))
 null
 select timediff(null, null);
 timediff(null, null)
 null
 select timediff(CAST('2017-08-08 22:22:22' as datetime), CAST('2000-01-02 11:00:00' as datetime));
-timediff(cast(2017-08-08 22:22:22 as datetime(26)), cast(2000-01-02 11:00:00 as datetime(26)))
+timediff(cast(2017-08-08 22:22:22 as datetime), cast(2000-01-02 11:00:00 as datetime))
 154283:22:22
 select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-12 11:11:11' as datetime));
-timediff(cast(2012-12-12 22:22:22 as datetime(26)), cast(2012-12-12 11:11:11 as datetime(26)))
+timediff(cast(2012-12-12 22:22:22 as datetime), cast(2012-12-12 11:11:11 as datetime))
 11:11:11
 select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-timediff(cast(2012-12-12 22:22:22 as datetime(26)), cast(2012-12-12 22:22:22 as datetime(26)))
+timediff(cast(2012-12-12 22:22:22 as datetime), cast(2012-12-12 22:22:22 as datetime))
 00:00:00
 select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2000-12-12 11:11:11' as datetime));
-timediff(cast(2012-12-12 22:22:22 as datetime(26)), cast(2000-12-12 11:11:11 as datetime(26)))
+timediff(cast(2012-12-12 22:22:22 as datetime), cast(2000-12-12 11:11:11 as datetime))
 105203:11:11
 select timediff(CAST('2000-12-12 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-timediff(cast(2000-12-12 11:11:11 as datetime(26)), cast(2012-12-12 22:22:22 as datetime(26)))
+timediff(cast(2000-12-12 11:11:11 as datetime), cast(2012-12-12 22:22:22 as datetime))
 -105203:11:11
 select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-10-10 11:11:11' as datetime));
-timediff(cast(2012-12-12 22:22:22 as datetime(26)), cast(2012-10-10 11:11:11 as datetime(26)))
+timediff(cast(2012-12-12 22:22:22 as datetime), cast(2012-10-10 11:11:11 as datetime))
 1523:11:11
 select timediff(CAST('2012-10-10 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-timediff(cast(2012-10-10 11:11:11 as datetime(26)), cast(2012-12-12 22:22:22 as datetime(26)))
+timediff(cast(2012-10-10 11:11:11 as datetime), cast(2012-12-12 22:22:22 as datetime))
 -1523:11:11
 select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-10 11:11:11' as datetime));
-timediff(cast(2012-12-12 22:22:22 as datetime(26)), cast(2012-12-10 11:11:11 as datetime(26)))
+timediff(cast(2012-12-12 22:22:22 as datetime), cast(2012-12-10 11:11:11 as datetime))
 59:11:11
 select timediff(CAST('2012-12-10 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-timediff(cast(2012-12-10 11:11:11 as datetime(26)), cast(2012-12-12 22:22:22 as datetime(26)))
+timediff(cast(2012-12-10 11:11:11 as datetime), cast(2012-12-12 22:22:22 as datetime))
 -59:11:11
 select timediff(CAST('2012-12-10 11:11:11' as datetime), CAST('2012-12-10 11:11:11' as datetime));
-timediff(cast(2012-12-10 11:11:11 as datetime(26)), cast(2012-12-10 11:11:11 as datetime(26)))
+timediff(cast(2012-12-10 11:11:11 as datetime), cast(2012-12-10 11:11:11 as datetime))
 00:00:00
 SELECT TIMEDIFF(CAST('2012-12-12 11:11:11' AS DATETIME), NULL);
-timediff(cast(2012-12-12 11:11:11 as datetime(26)), null)
+TIMEDIFF(cast(2012-12-12 11:11:11 as datetime), null)
 null
 SELECT TIMEDIFF(NULL, CAST('2012-12-12 11:11:11' AS DATETIME));
-timediff(null, cast(2012-12-12 11:11:11 as datetime(26)))
+TIMEDIFF(null, cast(2012-12-12 11:11:11 as datetime))
 null
 SELECT TIMEDIFF(NULL, NULL);
-timediff(null, null)
+TIMEDIFF(null, null)
 null
 select timediff(CAST('2017-08-08 22:22:22' as datetime), cast('11:11:11' as time));
 invalid input: timediff function have invalid input args type
@@ -95,7 +95,7 @@ insert into t1 values(5, '838:59:59');
 insert into t1 values(6, '-838:59:59');
 insert into t1 values(7, '00:00:00');
 select a, timediff(cast('22:22:22' as time), b) from t1;
-a    timediff(cast(22:22:22 as time(26)), b)
+a      timediff(cast(22:22:22 as time), b)
 1    00:00:00
 2    11:11:11
 3    44:44:44
@@ -104,7 +104,7 @@ a    timediff(cast(22:22:22 as time(26)), b)
 6    861:22:21
 7    22:22:22
 select a, timediff(b, cast('22:22:22' as time)) from t1;
-a    timediff(b, cast(22:22:22 as time(26)))
+a      timediff(b, cast(22:22:22 as time))
 1    00:00:00
 2    -11:11:11
 3    -44:44:44
@@ -121,14 +121,14 @@ insert into t2 values(3, '2012-12-14 11:11:11');
 insert into t2 values(4, '2012-12-20 11:11:11');
 insert into t2 values(2, '2012-10-10 11:11:11');
 select a, timediff(cast('2012-12-12 22:22:21' as datetime), b) from t2;
-a    timediff(cast(2012-12-12 22:22:21 as datetime(26)), b)
+a      timediff(cast(2012-12-12 22:22:21 as datetime), b)
 1    -1:00:01
 2    59:11:10
 3    -36:48:50
 4    -180:48:50
 2    1523:11:10
 select a, timediff(b, cast('2012-12-12 22:22:21' as datetime)) from t2;
-a    timediff(b, cast(2012-12-12 22:22:21 as datetime(26)))
+a      timediff(b, cast(2012-12-12 22:22:21 as datetime))
 1    01:00:01
 2    -59:11:10
 3    36:48:50

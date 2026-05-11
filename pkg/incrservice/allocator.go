@@ -93,13 +93,15 @@ func (a *allocator) allocate(
 			}
 			close(c)
 		})
-	if err2.Load() != nil && err2.Load().(error) != nil {
-		err = err2.Load().(error)
-	}
 	if err != nil {
 		return 0, 0, timestamp.Timestamp{}, err
 	}
 	<-c
+	if v := err2.Load(); v != nil {
+		if e, ok := v.(error); ok && e != nil {
+			return 0, 0, timestamp.Timestamp{}, e
+		}
+	}
 	return from.Load(), to.Load(), lastAllocateAt, err
 }
 
@@ -115,6 +117,7 @@ func (a *allocator) asyncAllocate(
 		return err
 	}
 	a.c <- action{
+		ctx:           ctx,
 		txnOp:         txnOp,
 		accountID:     accountId,
 		actionType:    allocType,
@@ -143,6 +146,7 @@ func (a *allocator) updateMinValue(
 		close(c)
 	}
 	a.c <- action{
+		ctx:         ctx,
 		txnOp:       txnOp,
 		accountID:   accountId,
 		actionType:  updateType,
@@ -172,7 +176,11 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doAllocate(act action) {
-	ctx := defines.AttachAccountId(context.Background(), act.accountID)
+	baseCtx := act.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx := defines.AttachAccountId(baseCtx, act.accountID)
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultAllocateTimeout, moerr.CauseDoAllocate)
 	defer cancel()
 
@@ -197,7 +205,11 @@ func (a *allocator) doAllocate(act action) {
 }
 
 func (a *allocator) doUpdate(act action) {
-	ctx := defines.AttachAccountId(context.Background(), act.accountID)
+	baseCtx := act.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx := defines.AttachAccountId(baseCtx, act.accountID)
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseDoUpdate)
 	defer cancel()
 
@@ -230,6 +242,7 @@ var (
 )
 
 type action struct {
+	ctx           context.Context
 	txnOp         client.TxnOperator
 	accountID     uint32
 	actionType    int

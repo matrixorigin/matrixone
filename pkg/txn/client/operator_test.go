@@ -564,7 +564,9 @@ func TestCannotCommitRunningSQLTxn(t *testing.T) {
 				}
 			}()
 
-			tc.EnterRunSql()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
 			_ = tc.Commit(ctx)
 		},
 	)
@@ -584,7 +586,9 @@ func TestCannotRollbackRunningSQLTxn(t *testing.T) {
 				}
 			}()
 
-			tc.EnterRunSql()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
 			_ = tc.Rollback(ctx)
 		},
 	)
@@ -701,4 +705,100 @@ func TestCommitSendErrorSetsCommitTSWorkaround(t *testing.T) {
 		commitTS := tc.mu.txn.CommitTS.PhysicalTime
 		assert.InDelta(t, start+10000000000, commitTS, 1e9, "CommitTS should be set to now+10s on send error")
 	})
+}
+
+func TestCancelAndWaitRunningSQL(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			c := make(chan struct{})
+			sqlCancelCtx, sqlCancel := context.WithCancel(context.Background())
+			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "test sql")
+
+			go func() {
+				defer close(c)
+				defer tc.ExitRunSqlWithToken(token)
+				<-sqlCancelCtx.Done()
+			}()
+
+			err := tc.CancelAndWaitRunningSQL(ctx, 0)
+			require.NoError(t, err)
+			<-c
+		},
+	)
+}
+
+func TestCancelAndWaitRunningSQL_WithKeepToken(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			sqlCancelCtx1, sqlCancel1 := context.WithCancel(context.Background())
+			token1 := tc.EnterRunSqlWithTokenAndSQL(sqlCancel1, "test sql 1")
+
+			sqlCancelCtx2, sqlCancel2 := context.WithCancel(context.Background())
+			token2 := tc.EnterRunSqlWithTokenAndSQL(sqlCancel2, "test sql 2")
+
+			c1 := make(chan struct{})
+			go func() {
+				defer close(c1)
+				defer tc.ExitRunSqlWithToken(token1)
+				<-sqlCancelCtx1.Done()
+			}()
+
+			c2 := make(chan struct{})
+			go func() {
+				defer close(c2)
+				defer tc.ExitRunSqlWithToken(token2)
+				select {
+				case <-sqlCancelCtx2.Done():
+				case <-ctx.Done():
+				}
+			}()
+
+			err := tc.CancelAndWaitRunningSQL(ctx, token2)
+			require.NoError(t, err)
+
+			<-c1
+			sqlCancel2()
+			<-c2
+		},
+	)
+}
+
+func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
+	old := runningSQLWaitTimeout
+	runningSQLWaitTimeout = 10 * time.Millisecond
+	defer func() {
+		runningSQLWaitTimeout = old
+	}()
+
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			_, sqlCancel := context.WithCancel(context.Background())
+			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "test sql")
+			defer tc.ExitRunSqlWithToken(token)
+
+			err := tc.CancelAndWaitRunningSQL(ctx, 0)
+			require.NoError(t, err)
+		},
+	)
 }

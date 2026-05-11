@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,31 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
+
+	pkCheckPos := -1
+	pkCheckReady := false
+	if typ == INSERT || typ == DELETE {
+		// resolvePKCheckPosForWrite may reach Engine.Database, which can craft an
+		// internal SQL on the current txn and reenter txn.Lock via
+		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
+		pkCheckPos, err = txn.resolvePKCheckPosForWrite(
+			typ,
+			accountId,
+			databaseName,
+			tableName,
+			tableId,
+			bat,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if typ == INSERT && pkCheckPos >= 0 {
+			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
+			pkCheckPos++
+		}
+		pkCheckReady = true
+	}
+
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert
@@ -219,6 +245,8 @@ func (txn *Transaction) WriteBatch(
 		databaseName: databaseName,
 		tnStore:      tnStore,
 		note:         note,
+		pkCheckPos:   pkCheckPos,
+		pkCheckReady: pkCheckReady,
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
@@ -364,11 +392,42 @@ func (txn *Transaction) checkDup() error {
 	defer func() {
 		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	//table id is global unique
+	// Legacy fallback metadata path for entries that do not carry write-time PK info.
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
 	insertPks := make(map[uint64]map[any]bool)
 	delPks := make(map[uint64]map[any]bool)
+
+	legacyPKIndex := func(e Entry) (int, error) {
+		if idx, ok := pkIndex[e.tableId]; ok {
+			return idx, nil
+		}
+		if _, ok := tablesDef[e.tableId]; !ok {
+			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			if err != nil {
+				return -1, err
+			}
+			tableDefCtx := context.Background()
+			if txn.proc != nil && txn.proc.Ctx != nil {
+				tableDefCtx = txn.proc.Ctx
+			}
+			tablesDef[e.tableId] = tbl.GetTableDef(tableDefCtx)
+		}
+		tableDef := tablesDef[e.tableId]
+		pkIndex[e.tableId] = -1
+		if tableDef != nil && tableDef.Pkey != nil {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.Pkey.PkeyColName {
+					if colDef.Name != catalog.FakePrimaryKeyColName &&
+						colDef.Name != catalog.CPrimaryKeyColName {
+						pkIndex[e.tableId] = idx
+					}
+					break
+				}
+			}
+		}
+		return pkIndex[e.tableId], nil
+	}
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -390,32 +449,47 @@ func (txn *Transaction) checkDup() error {
 		if txn.tableOps.existAndDeleted(tableKey) {
 			continue
 		}
-		//build pk index for tables.
-		if _, ok := tablesDef[e.tableId]; !ok {
-			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+		if e.typ == INSERT {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := insertPks[e.tableId]; !ok {
+							insertPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							insertPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
+			bat := e.bat
+			index, err := legacyPKIndex(e)
 			if err != nil {
 				return err
 			}
-			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
-		}
-		tableDef := tablesDef[e.tableId]
-		if _, ok := pkIndex[e.tableId]; !ok {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.Pkey.PkeyColName {
-					if colDef.Name == catalog.FakePrimaryKeyColName ||
-						colDef.Name == catalog.CPrimaryKeyColName {
-						pkIndex[e.tableId] = -1
-					} else {
-						pkIndex[e.tableId] = idx
-					}
-					break
-				}
-			}
-		}
-
-		if e.typ == INSERT {
-			bat := e.bat
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			if index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					bat2 := batch.NewWithSize(len(bat.Vecs) - 1)
 					bat2.SetAttributes(bat.Attrs[1:])
@@ -431,13 +505,14 @@ func (txn *Transaction) checkDup() error {
 					bat.Vecs[index],
 					0,
 					bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
@@ -445,12 +520,50 @@ func (txn *Transaction) checkDup() error {
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := delPks[e.tableId]; !ok {
+							delPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							delPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			index, err := legacyPKIndex(e)
+			if err != nil {
+				return err
+			}
+			if index != -1 {
 				if _, ok := delPks[e.tableId]; !ok {
 					delPks[e.tableId] = make(map[any]bool)
 				}
@@ -459,13 +572,14 @@ func (txn *Transaction) checkDup() error {
 					e.bat.Vecs[1],
 					0,
 					e.bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 				}
 			}
@@ -886,13 +1000,21 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
+	var txnOp client.TxnOperator
+	if txn.proc != nil {
+		txnOp = txn.proc.GetTxnOperator()
+	}
+	if txnOp == nil {
+		txnOp = txn.op
+	}
+
 	ctx := context.WithValue(
 		context.Background(),
 		defines.TenantIDKey{},
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.GetTxnOperator())
+	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -901,6 +1023,72 @@ func (txn *Transaction) getTable(
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func (txn *Transaction) resolvePKCheckPosForWrite(
+	typ int,
+	accountId uint32,
+	databaseName, tableName string,
+	tableId uint64,
+	bat *batch.Batch,
+) (int, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return -1, nil
+	}
+	if typ != INSERT && typ != DELETE {
+		return -1, nil
+	}
+	if tableId == catalog.MO_TABLES_ID ||
+		tableId == catalog.MO_COLUMNS_ID ||
+		tableId == catalog.MO_DATABASE_ID {
+		return -1, nil
+	}
+	if txn.engine == nil {
+		return -1, nil
+	}
+
+	tbl, err := txn.getTable(accountId, databaseName, tableName)
+	if err != nil {
+		return -1, err
+	}
+	tableDefCtx := context.Background()
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		tableDefCtx = txn.proc.Ctx
+	}
+	tableDef := tbl.GetTableDef(tableDefCtx)
+	if tableDef == nil || tableDef.Pkey == nil {
+		return -1, nil
+	}
+
+	pkName := tableDef.Pkey.PkeyColName
+	if pkName == "" ||
+		pkName == catalog.FakePrimaryKeyColName ||
+		pkName == catalog.CPrimaryKeyColName {
+		return -1, nil
+	}
+
+	if typ == DELETE {
+		if len(bat.Vecs) < 2 {
+			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
+			return -1, nil
+		}
+		return 1, nil
+	}
+
+	for i, attr := range bat.Attrs {
+		if attr == pkName {
+			return i, nil
+		}
+	}
+	for i, attr := range bat.Attrs {
+		if strings.EqualFold(attr, pkName) {
+			return i, nil
+		}
+	}
+
+	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
+		pkName, databaseName, tableName, bat.Attrs)
+	return -1, nil
 }
 
 // vec contains block infos.
@@ -948,7 +1136,7 @@ func (txn *Transaction) WriteFileLocked(
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			colexec.RecordTxnUnCommitSegment(sid)
+			colexec.RecordTxnUnCommitSegment(txn.op.Txn().ID, tableId, sid)
 			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
 		}
 	}
@@ -974,6 +1162,8 @@ func (txn *Transaction) WriteFileLocked(
 		fileName:     fileName,
 		bat:          copied,
 		tnStore:      tnStore,
+		pkCheckPos:   -1,
+		pkCheckReady: true,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1052,7 +1242,7 @@ func (txn *Transaction) deleteBatch(
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
-		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID()) {
+		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -1845,11 +2035,7 @@ func (txn *Transaction) delTransaction() {
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
-	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnObjsSummary)+1)
-	for blkId := range txn.cnObjsSummary {
-		segmentnames = append(segmentnames, *blkId.Segment())
-	}
-	colexec.Get().DeleteTxnSegmentIds(segmentnames)
+	colexec.Get().DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true

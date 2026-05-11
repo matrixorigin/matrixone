@@ -1,0 +1,74 @@
+drop database if exists bvt_leftjoin_or;
+create database bvt_leftjoin_or;
+use bvt_leftjoin_or;
+
+drop table if exists orders;
+drop table if exists mapping;
+create table orders(
+    id int primary key,
+    space_id int,
+    status int
+);
+create table mapping(
+    id int primary key
+);
+
+insert into orders values
+    (1, 11, 1),
+    (2, 12, 1),
+    (3, 11, 2),
+    (4, 12, 2);
+insert into mapping values
+    (2),
+    (4);
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where r.id is not null or l.space_id = 11
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where r.id = 2 or l.space_id = 11
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where (r.id is not null or l.space_id = 11) and l.status = 1
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where r.id = 2 or l.space_id = 11 or 1 = 0
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where (r.id = 2 and l.status = 1) or l.space_id = 11
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where ((r.id is not null and l.status = 2) or l.space_id = 11) and l.id <> 2
+order by l.id;
+
+-- @bvt:issue
+select l.id, l.space_id, r.id
+from orders l
+left join mapping r on l.id = r.id
+where coalesce(r.id, 0) = 4 or l.space_id = 11
+order by l.id;
+
+drop database bvt_leftjoin_or;

@@ -117,6 +117,9 @@ func (leftJoin *LeftJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
+				for i := range ctr.rbat.Vecs {
+					ctr.rbat.Vecs[i].ResetWithSameType()
+				}
 				for i, rp := range leftJoin.Result {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
@@ -175,8 +178,7 @@ func (ctr *container) emptyProbe(ap *LeftJoin, proc *process.Process, result *vm
 				return err
 			}
 		} else {
-			ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-			ctr.rbat.Vecs[i].SetLength(ctr.inbat.RowCount())
+			vector.SetConstNull(ctr.rbat.Vecs[i], ctr.inbat.RowCount(), proc.Mp())
 		}
 	}
 	ctr.rbat.AddRowCount(ap.ctr.inbat.RowCount())

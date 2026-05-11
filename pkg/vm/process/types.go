@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -291,6 +292,7 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+	StmtSnapshotTS      timestamp.Timestamp
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
@@ -421,6 +423,14 @@ func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
 
 func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 	return proc.Base.CloneTxnOperator
+}
+
+func (proc *Process) SetStmtSnapshotTS(ts timestamp.Timestamp) {
+	proc.Base.StmtSnapshotTS = ts
+}
+
+func (proc *Process) GetStmtSnapshotTS() timestamp.Timestamp {
+	return proc.Base.StmtSnapshotTS
 }
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {

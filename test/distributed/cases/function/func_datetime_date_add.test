@@ -294,4 +294,5 @@ CREATE TABLE `t2` (
 );
 DROP TABLE t2;
 
-
+-- date_sub underflow should return NULL instead of surfacing an out-of-range error
+select date_sub(date('0001-01-01'), interval 1 day) is null q_date_sub_underflow;

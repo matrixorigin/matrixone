@@ -212,6 +212,14 @@ func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {
 	return mp.tcpConn
 }
 
+// Disconnect closes the underlying network connection to forcefully disconnect the client.
+func (mp *MysqlProtocolImpl) Disconnect() error {
+	if mp.tcpConn != nil {
+		return mp.tcpConn.Disconnect()
+	}
+	return nil
+}
+
 func (mp *MysqlProtocolImpl) Peer() string {
 	tcp := mp.GetTcpConnection()
 	if tcp == nil {

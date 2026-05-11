@@ -74,6 +74,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -96,6 +97,36 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	})
 
 	return &tableDef, nil
+}
+
+func getViewSecurityTypeFromContext(ctx CompilerContext) string {
+	securityType := ""
+	val, err := ctx.ResolveVariable("view_security_type", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			securityType = s
+		}
+	}
+	securityType = strings.TrimSpace(strings.ToUpper(securityType))
+	if securityType == "INVOKER" {
+		return "INVOKER"
+	}
+	return "DEFINER"
+}
+
+// overrideViewDefSecurityType replaces the SecurityType in the ViewDef's JSON data.
+func overrideViewDefSecurityType(tableDef *plan.TableDef, securityType string) {
+	if tableDef.ViewSql == nil || tableDef.ViewSql.View == "" {
+		return
+	}
+	var viewData ViewData
+	if err := json.Unmarshal([]byte(tableDef.ViewSql.View), &viewData); err != nil {
+		return
+	}
+	viewData.SecurityType = strings.ToUpper(securityType)
+	if data, err := json.Marshal(viewData); err == nil {
+		tableDef.ViewSql.View = string(data)
+	}
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -149,6 +180,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -383,6 +415,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// If the DDL explicitly specifies SQL SECURITY, override the session variable
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
 	}
 
 	createView.TableDef.Cols = tableDef.Cols
@@ -710,8 +747,8 @@ func buildCreateTable(
 		var err error
 		oldTable := stmt.LikeTableName
 		newTable := stmt.Table
-		tblName := formatStr(string(oldTable.ObjectName))
-		dbName := formatStr(string(oldTable.SchemaName))
+		tblName := formatIdent(string(oldTable.ObjectName))
+		dbName := formatIdent(string(oldTable.SchemaName))
 
 		var snapshot *Snapshot
 		snapshot = ctx.GetSnapshot()
@@ -973,7 +1010,7 @@ func buildCreateTable(
 			Stats:       nil,
 			ObjRef:      nil,
 			TableDef:    createTable.TableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
 		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
@@ -1271,14 +1308,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
 
-		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
+		// INSERT INTO new_table SELECT default_val1, default_val2, ..., * FROM (SELECT clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(fmt.Sprintf("INSERT INTO `%s`.`%s` SELECT ",
+			createTable.Database, createTable.TableDef.Name))
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
 		for i := range cols {
-			// insert default values if col[i] only in create clause
+			// INSERT default values if col[i] only in create clause
 			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
 				if !firstCol {
 					insertSqlBuilder.WriteString(", ")
@@ -1290,13 +1328,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if !firstCol {
 			insertSqlBuilder.WriteString(", ")
 		}
-		// add all cols from select clause
+		// add all cols from SELECT clause
 		insertSqlBuilder.WriteString("*")
 
-		// from
+		// FROM
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" FROM (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
@@ -1564,6 +1602,86 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	return nil
+}
+
+func restoreIntervalSyntaxForCTAS(sql string) string {
+	var out strings.Builder
+	for i := 0; i < len(sql); {
+		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		expr, unit, next, ok := parseIntervalCall(sql, i)
+		if !ok || !isIntervalUnitToken(unit) {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		out.WriteString("interval ")
+		out.WriteString(strings.TrimSpace(expr))
+		out.WriteByte(' ')
+		out.WriteString(strings.TrimSpace(unit))
+		i = next
+	}
+	return out.String()
+}
+
+func parseIntervalCall(sql string, start int) (expr string, unit string, next int, ok bool) {
+	const prefix = "interval("
+	pos := start + len(prefix)
+	depth := 1
+	comma := -1
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	for pos < len(sql) {
+		ch := sql[pos]
+		switch ch {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		case '(':
+			if !inSingleQuote && !inDoubleQuote {
+				depth++
+			}
+		case ')':
+			if !inSingleQuote && !inDoubleQuote {
+				depth--
+				if depth == 0 {
+					if comma == -1 {
+						return "", "", 0, false
+					}
+					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+				}
+			}
+		case ',':
+			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+				comma = pos
+			}
+		}
+		pos++
+	}
+	return "", "", 0, false
+}
+
+func isIntervalUnitToken(unit string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(unit), "`'\"")) {
+	case "microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond",
+		"hour_second", "hour_minute", "day_microsecond", "day_second", "day_minute",
+		"day_hour", "year_month":
+		return true
+	default:
+		return false
+	}
 }
 
 func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
@@ -3024,122 +3142,50 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 }
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
+	if len(stmt.Names) == 1 {
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &Plan{
+			Plan: &plan.Plan_Ddl{
+				Ddl: &plan.DataDefinition{
+					DdlType: plan.DataDefinition_DROP_TABLE,
+					Definition: &plan.DataDefinition_DropTable{
+						DropTable: dropTable,
+					},
+				},
+			},
+		}, nil
+	}
+
 	dropTable := &plan.DropTable{
 		IfExists: stmt.IfExists,
+		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
-	if len(stmt.Names) != 1 {
-		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "drop multiple (%d) tables in one statement", len(stmt.Names))
-	}
-
-	dropTable.Database = string(stmt.Names[0].SchemaName)
-
-	// If the database name is empty, attempt to get default database name
-	if dropTable.Database == "" {
-		dropTable.Database = ctx.DefaultDatabase()
-	}
-
-	// If the final database name is still empty, return an error
-	if dropTable.Database == "" {
-		return nil, moerr.NewNoDB(ctx.GetContext())
-	}
-
-	dropTable.Table = string(stmt.Names[0].ObjectName)
-
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if tableDef == nil {
-		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+	dropTargetTblIds := make(map[uint64]struct{}, len(stmt.Names))
+	for _, name := range stmt.Names {
+		dbName := string(name.SchemaName)
+		if dbName == "" {
+			dbName = ctx.DefaultDatabase()
 		}
-	} else {
-		if obj.PubInfo != nil {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
+		if dbName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
-
-		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		_, tableDef, err := ctx.Resolve(dbName, string(name.ObjectName), nil)
 		if err != nil {
 			return nil, err
 		}
-		if enabled && len(tableDef.RefChildTbls) > 0 {
-			//if all children tables are self reference, we can drop the table
-			if !HasFkSelfReferOnly(tableDef) {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
-			}
+		if tableDef != nil {
+			dropTargetTblIds[tableDef.TblId] = struct{}{}
 		}
-
-		isView := (tableDef.ViewSql != nil)
-		dropTable.IsView = isView
-
-		if isView && !dropTable.IfExists {
-			// drop table v0, v0 is view
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
-		} else if isView {
-			// drop table if exists v0, v0 is view
-			dropTable.Table = ""
-		}
-
-		// Can not use drop table to drop sequence.
-		if tableDef.TableType == catalog.SystemSequenceRel && !dropTable.IfExists {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
-		} else if tableDef.TableType == catalog.SystemSequenceRel {
-			// If exists, don't drop anything.
-			dropTable.Table = ""
-		}
-
-		dropTable.ClusterTable = &plan.ClusterTable{
-			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
-		}
-
-		//non-sys account can not drop the cluster table
-		accountId, err := ctx.GetAccountId()
+	}
+	for _, name := range stmt.Names {
+		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx, dropTargetTblIds)
 		if err != nil {
 			return nil, err
 		}
-		if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
-		}
-
-		ignore := false
-		val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
-		if val != nil {
-			ignore = val.(bool)
-		}
-
-		dropTable.TableId = tableDef.TblId
-		if tableDef.Fkeys != nil && !ignore {
-			for _, fk := range tableDef.Fkeys {
-				if fk.ForeignTbl == 0 {
-					continue
-				}
-				dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
-			}
-		}
-
-		// collect child tables that needs remove fk relationships
-		// with the table
-		if tableDef.RefChildTbls != nil && !ignore {
-			for _, childTbl := range tableDef.RefChildTbls {
-				if childTbl == 0 {
-					continue
-				}
-				dropTable.FkChildTblsReferToMe = append(dropTable.FkChildTblsReferToMe, childTbl)
-			}
-		}
-
-		dropTable.IndexTableNames = make([]string, 0)
-		if tableDef.Indexes != nil {
-			for _, indexdef := range tableDef.Indexes {
-				if indexdef.TableExist {
-					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
-				}
-			}
-		}
-
-		dropTable.TableDef = tableDef
-		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+		dropTable.Tables = append(dropTable.Tables, entry)
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -3151,6 +3197,140 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext, dropTargetTblIds map[uint64]struct{}) (*plan.DropTable, error) {
+	dropTable := &plan.DropTable{
+		IfExists: ifExists,
+	}
+
+	dropTable.Database = string(name.SchemaName)
+
+	// If the database name is empty, attempt to get default database name
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
+
+	// If the final database name is still empty, return an error
+	if dropTable.Database == "" {
+		return nil, moerr.NewNoDB(ctx.GetContext())
+	}
+
+	dropTable.Table = string(name.ObjectName)
+
+	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if tableDef == nil {
+		if !dropTable.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		return dropTable, nil
+	}
+
+	if obj.PubInfo != nil {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && len(tableDef.RefChildTbls) > 0 {
+		if !canDropTableWithTargets(tableDef, dropTargetTblIds) {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+		}
+	}
+
+	isView := (tableDef.ViewSql != nil)
+	dropTable.IsView = isView
+	if isView {
+		if !dropTable.IfExists {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		dropTable.Table = ""
+		dropTable.TableDef = nil
+		return dropTable, nil
+	}
+
+	if tableDef.TableType == catalog.SystemSequenceRel {
+		if !dropTable.IfExists {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "Should use 'drop sequence' to drop a sequence")
+		}
+		dropTable.Table = ""
+		dropTable.TableDef = nil
+		return dropTable, nil
+	}
+
+	dropTable.ClusterTable = &plan.ClusterTable{
+		IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+	}
+
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if dropTable.GetClusterTable().GetIsClusterTable() && accountId != catalog.System_Account {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
+	}
+
+	ignore := false
+	val := ctx.GetContext().Value(defines.IgnoreForeignKey{})
+	if val != nil {
+		ignore = val.(bool)
+	}
+
+	dropTable.TableId = tableDef.TblId
+	if tableDef.Fkeys != nil && !ignore {
+		for _, fk := range tableDef.Fkeys {
+			if fk.ForeignTbl == 0 {
+				continue
+			}
+			dropTable.ForeignTbl = append(dropTable.ForeignTbl, fk.ForeignTbl)
+		}
+	}
+
+	if tableDef.RefChildTbls != nil && !ignore {
+		for _, childTbl := range tableDef.RefChildTbls {
+			if childTbl == 0 {
+				continue
+			}
+			dropTable.FkChildTblsReferToMe = append(dropTable.FkChildTblsReferToMe, childTbl)
+		}
+	}
+
+	dropTable.IndexTableNames = make([]string, 0)
+	if tableDef.Indexes != nil {
+		for _, indexdef := range tableDef.Indexes {
+			if indexdef.TableExist {
+				dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexdef.IndexTableName)
+			}
+		}
+	}
+
+	dropTable.TableDef = tableDef
+	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	return dropTable, nil
+}
+
+func canDropTableWithTargets(tableDef *plan.TableDef, dropTargetTblIds map[uint64]struct{}) bool {
+	if HasFkSelfReferOnly(tableDef) {
+		return true
+	}
+	if len(dropTargetTblIds) == 0 {
+		return false
+	}
+	for _, childTblId := range tableDef.RefChildTbls {
+		if childTblId == 0 {
+			continue
+		}
+		if _, ok := dropTargetTblIds[childTblId]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
@@ -3489,6 +3669,21 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
 	if err != nil {
 		return nil, err
+	}
+
+	// SecurityType priority: AST explicit > old view inherited > default DEFINER for legacy views
+	if stmt.SecurityType != "" {
+		overrideViewDefSecurityType(tableDef, stmt.SecurityType)
+	} else if oldViewDef != nil && oldViewDef.ViewSql != nil {
+		var oldViewData ViewData
+		if e := json.Unmarshal([]byte(oldViewDef.ViewSql.View), &oldViewData); e == nil {
+			if oldViewData.SecurityType != "" {
+				overrideViewDefSecurityType(tableDef, oldViewData.SecurityType)
+			} else {
+				// Legacy views without security_type field are DEFINER by default
+				overrideViewDefSecurityType(tableDef, "DEFINER")
+			}
+		}
 	}
 
 	alterView.TableDef.Cols = tableDef.Cols

@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -373,7 +375,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 		TableDef:   &plan.TableDef{},
 		ExternScan: &plan.ExternScan{},
 	}
-	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	filePath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt", GetFilePath())
 	filePath = path.Clean("/" + filePath)
 	fileSize := []int64{int64(colexec.WriteS3Threshold) * 2}
 	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, true)
@@ -384,6 +386,12 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	fileSize = []int64{int64(colexec.WriteS3Threshold) * 3}
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{filePath}, fileSize, false)
 	require.NoError(t, err)
+
+	// Compressed files should not be split for parallel read.
+	gzPath := fmt.Sprintf("%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz", GetFilePath())
+	gzPath = path.Clean("/" + gzPath)
+	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{gzPath}, fileSize, false)
+	require.Error(t, err)
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
@@ -590,4 +598,355 @@ func TestScopeGetRelDataError(t *testing.T) {
 	// Test case: error when expanding ranges
 	err := s.getRelData(c, nil)
 	require.Error(t, err)
+}
+
+// mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
+type mockRelationForBloomFilter struct {
+	engine.Relation
+	capturedHint engine.FilterHint
+}
+
+func (m *mockRelationForBloomFilter) BuildReaders(
+	ctx context.Context,
+	proc any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int,
+	orderBy bool,
+	policy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint,
+) ([]engine.Reader, error) {
+	m.capturedHint = filterHint
+	return []engine.Reader{}, nil
+}
+
+type mockReaderForParallelOrderBy struct {
+	orderByCalls  int
+	orderBy       []*plan.OrderBySpec
+	blockTopCalls int
+	blockOrderBy  []*plan.OrderBySpec
+	blockLimit    uint64
+}
+
+func (m *mockReaderForParallelOrderBy) Close() error {
+	return nil
+}
+
+func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
+	return true, nil
+}
+
+func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
+	m.orderByCalls++
+	m.orderBy = orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
+	return m.orderBy
+}
+
+func (m *mockReaderForParallelOrderBy) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	m.blockTopCalls++
+	m.blockOrderBy = orderBy
+	m.blockLimit = limit
+}
+
+func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
+
+type mockRelationForParallelOrderBy struct {
+	engine.Relation
+	readers []engine.Reader
+}
+
+func (m *mockRelationForParallelOrderBy) BuildReaders(
+	context.Context,
+	any,
+	*plan.Expr,
+	engine.RelData,
+	int,
+	int,
+	bool,
+	engine.TombstoneApplyPolicy,
+	engine.FilterHint,
+) ([]engine.Reader, error) {
+	return m.readers, nil
+}
+
+func TestBuildReadersBloomFilterHint(t *testing.T) {
+	t.Run("BloomFilter set when node is IVFFLAT Entries and context has bloom filter", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr: nil,
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Equal(t, expectedBloomFilter, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when node is nil", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel:                mockRel,
+				node:               nil, // node is nil
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when TableDef is nil", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: nil, // TableDef is nil
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, // different type
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context has no IvfBloomFilter", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		// No IvfBloomFilter in context
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context value is not []byte", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, "not a byte slice")
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context value is empty []byte", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, []byte{}) // empty byte slice
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+}
+
+func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
+
+	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	blockOrderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	reader1 := &mockReaderForParallelOrderBy{}
+	reader2 := &mockReaderForParallelOrderBy{}
+
+	scope.DataSource = &Source{
+		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
+		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+		FilterExpr:         nil,
+		OrderBy:            orderBy,
+		BlockOrderBy:       blockOrderBy,
+		BlockLimit:         16,
+		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+	}
+	scope.NodeInfo = engine.Node{Mcpu: 2}
+
+	mergeScope, err := buildScanParallelRun(scope, c)
+	require.NoError(t, err)
+	require.NotNil(t, mergeScope)
+	require.Len(t, mergeScope.PreScopes, 2)
+
+	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
+		require.Equal(t, 1, reader.orderByCalls)
+		require.Equal(t, orderBy, reader.orderBy)
+		require.Equal(t, 1, reader.blockTopCalls)
+		require.Equal(t, blockOrderBy, reader.blockOrderBy)
+		require.Equal(t, uint64(16), reader.blockLimit)
+	}
 }

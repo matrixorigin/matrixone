@@ -83,6 +83,161 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffOutputModes(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
+	require.NoError(t, err)
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.True(t, diffStmt.OutputOpt.Summary)
+	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
+	require.NoError(t, err)
+
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.False(t, diffStmt.OutputOpt.Summary)
+	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+}
+
+func TestDecimalPrecisionUpTo65(t *testing.T) {
+	_, err := ParseOne(context.TODO(), "create table t (a decimal(65,30), b numeric(39,0))", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.TODO(), "create table t (a decimal(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
+
+	_, err = ParseOne(context.TODO(), "create table t (a numeric(40,39))", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Display scale for decimal out of range (max = 30)")
+}
+
+func TestSpatialSubtypeColumnTypes(t *testing.T) {
+	tests := []string{
+		"POINT",
+		"LINESTRING",
+		"POLYGON",
+		"GEOMETRYCOLLECTION",
+		"MULTIPOINT",
+		"MULTILINESTRING",
+		"MULTIPOLYGON",
+	}
+
+	for _, subtype := range tests {
+		t.Run(subtype, func(t *testing.T) {
+			stmt, err := ParseOne(context.TODO(), "create table t (g "+subtype+")", 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			col, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+			colType, ok := col.Type.(*tree.T)
+			require.True(t, ok)
+			require.Equal(t, subtype, colType.InternalType.FamilyString)
+		})
+	}
+}
+
+func getFuncExprsFromSelect(t *testing.T, sql string) []*tree.FuncExpr {
+	t.Helper()
+
+	stmt, err := ParseOne(context.TODO(), sql, 1)
+	require.NoError(t, err)
+
+	sel, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+
+	clause, ok := sel.Select.(*tree.SelectClause)
+	require.True(t, ok)
+
+	funcs := make([]*tree.FuncExpr, len(clause.Exprs))
+	for i, selectExpr := range clause.Exprs {
+		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
+		require.Truef(t, ok, "expr %d is %T", i, selectExpr.Expr)
+		funcs[i] = fn
+	}
+	return funcs
+}
+
+func TestCurrentTimeParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select curtime(3), current_time(6)")
+	require.Len(t, funcs, 2)
+	require.Equal(t, "curtime", funcs[0].FuncName.Origin())
+	require.Equal(t, "3", tree.String(funcs[0].Exprs[0], dialect.MYSQL))
+	require.Equal(t, "current_time", funcs[1].FuncName.Origin())
+	require.Equal(t, "6", tree.String(funcs[1].Exprs[0], dialect.MYSQL))
+}
+
+func TestTimestampAddParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select timestampadd(day, 2, '2024-01-01')")
+	require.Len(t, funcs, 1)
+	require.Equal(t, "timestampadd", funcs[0].FuncName.Origin())
+	require.Equal(t, []string{"day", "2", "2024-01-01"}, []string{
+		tree.String(funcs[0].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[1], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[2], dialect.MYSQL),
+	})
+}
+
+func TestGetFormatParses(t *testing.T) {
+	funcs := getFuncExprsFromSelect(t, "select get_format(date, 'USA'), get_format(timestamp, 'JIS')")
+	require.Len(t, funcs, 2)
+	require.Equal(t, "get_format", funcs[0].FuncName.Origin())
+	require.Equal(t, []string{"DATE", "USA"}, []string{
+		tree.String(funcs[0].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[0].Exprs[1], dialect.MYSQL),
+	})
+	require.Equal(t, "get_format", funcs[1].FuncName.Origin())
+	require.Equal(t, []string{"TIMESTAMP", "JIS"}, []string{
+		tree.String(funcs[1].Exprs[0], dialect.MYSQL),
+		tree.String(funcs[1].Exprs[1], dialect.MYSQL),
+	})
+}
+
 var (
 	partitionSQL = struct {
 		input  string
@@ -216,7 +371,7 @@ var (
 		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
-		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
+		output: "select sum(a) over (partition by a range between INTERVAL 1 day preceding and INTERVAL 2 day following) from t1",
 	}, {
 		input:  "select rank() over(partition by a range between 1 preceding and current row) from t1",
 		output: "select rank() over (partition by a range between 1 preceding and current row) from t1",
@@ -609,13 +764,13 @@ var (
 			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
 		}, {
 			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL -100000 year)",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
-			output: "select 2007-01-01 + interval(a, day) from t1",
+			output: "select 2007-01-01 + INTERVAL a day from t1",
 		}, {
 			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
 			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
@@ -676,13 +831,13 @@ var (
 			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 		}, {
 			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "insert into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
 		}, {
 			input:  "SELECT sum(a) as 'hello' from t1;",
 			output: "select sum(a) as hello from t1",
@@ -691,7 +846,7 @@ var (
 			output: "select stream from t1",
 		}, {
 			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
+			output: "select DATE_ADD(2017-06-15, INTERVAL -10 month)",
 		}, {
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
@@ -706,13 +861,13 @@ var (
 			output: "select cast(19999999999999999999 as signed)",
 		}, {
 			input:  "select date_sub(now(), interval 1 day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_sub(now(), interval '1' day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_add(now(), interval '1' day) from t1;",
-			output: "select date_add(now(), interval(1, day)) from t1",
+			output: "select date_add(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "SELECT md.datname as `Database` FROM TT md",
 			output: "select md.datname as Database from tt as md",
@@ -736,6 +891,12 @@ var (
 		}, {
 			input: "alter view v_today (today) as select current_day from t",
 		}, {
+			input:  "ALTER SQL SECURITY INVOKER VIEW v AS SELECT * FROM t",
+			output: "alter sql security invoker view v as select * from t",
+		}, {
+			input:  "ALTER SQL SECURITY DEFINER VIEW v AS SELECT * FROM t",
+			output: "alter sql security definer view v as select * from t",
+		}, {
 			input: "explain (analyze true,verbose false) select * from emp",
 		}, {
 			input: "select quarter from ontime limit 1",
@@ -758,7 +919,7 @@ var (
 			output: "select extract(year, l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {
@@ -1179,7 +1340,7 @@ var (
 			input: "select sum(distinct s) from tbl where 1",
 		}, {
 			input:  "select u.a, interval 1 second from t",
-			output: "select u.a, interval(1, second) from t",
+			output: "select u.a, INTERVAL 1 second from t",
 		}, {
 			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c) in (select * from t)",
@@ -1560,6 +1721,15 @@ var (
 			input:  "create role 'admin', 'developer'",
 			output: "create role admin, developer",
 		}, {
+			input:  "alter role old_role rename to new_role",
+			output: "alter role old_role rename to new_role",
+		}, {
+			input:  "alter role if exists old_role rename to new_role",
+			output: "alter role if exists old_role rename to new_role",
+		}, {
+			input:  "alter role 'old_role' rename to 'new_role'",
+			output: "alter role old_role rename to new_role",
+		}, {
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
@@ -1920,6 +2090,21 @@ var (
 		}, {
 			input: "drop role role1",
 		}, {
+			input: "alter role role1 rename to role2",
+		}, {
+			input: "alter role if exists role1 rename to role2",
+		}, {
+			input:  "alter role 'role1' rename to 'role2'",
+			output: "alter role role1 rename to role2",
+		}, {
+			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
+			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
+		}, {
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
+		}, {
+			input: "show rules on role role_name",
+		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
 			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
@@ -1969,6 +2154,18 @@ var (
 		}, {
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select a->'$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select a->>'$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
+		}, {
+			input:  `select 1 + a->'$.b' from t`,
+			output: `select 1 + json_extract(a, $.b) from t`,
+		}, {
+			input:  `select 2 * a->>'$.b' from t`,
+			output: `select 2 * json_unquote(json_extract(a, $.b)) from t`,
 		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
@@ -2933,10 +3130,19 @@ var (
 			output: "alter table t1 alter CONSTRAINT not enforce",
 		}, {
 			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
+			output: "create sql security definer view t2 as select * from t1",
 		}, {
 			input:  "create SQL SECURITY INVOKER VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
+			output: "create sql security invoker view t2 as select * from t1",
+		}, {
+			input:  "create or replace SQL SECURITY INVOKER VIEW t2 as select * from t1",
+			output: "create or replace sql security invoker view t2 as select * from t1",
+		}, {
+			input:  "create or replace SQL SECURITY DEFINER VIEW t2 as select * from t1",
+			output: "create or replace sql security definer view t2 as select * from t1",
+		}, {
+			input:  "create or replace VIEW t2 as select * from t1",
+			output: "create or replace view t2 as select * from t1",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
 			output: "create view t2 as select * from t1",
@@ -2985,13 +3191,13 @@ var (
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'} backuptype incremental backupts xxxxx-xxxxx`,
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
-			output: "create view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
+			output: "create sql security definer view pga0010 as select distinct a.FACDIV as FACDIV, a.BLDCD as BLDCD, a.PRDCD as PRDCD, a.PRDNAM as PRDNAM, a.PRDLNG as PRDLNG, a.PRDWID as PRDWID, a.PRDGAG as PRDGAG, a.AREA as AREA, a.GLZTYP as GLZTYP, a.TECTYP as TECTYP, a.PRDCATE as PRDCATE, a.PRCCD as PRCCD, a.PRCDSC as PRCDSC, a.GLSSTR as GLSSTR, a.REMARK as REMARK, a.USEYN as USEYN, a.ISMES as ISMES from (select N as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCDFATHER as BLDCD, substring_index(skim.bga0010.PRDCD, -, 1) as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = Y) and (skim.bga0010.USEYN = Y) and (not (substring_index(skim.bga0010.PRDCD, -, 1) in (select skim.bga0010.PRDCD from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y)))))) union all select skim.bga0010.ISMES as ISMES, skim.bga0010.USEYN as USEYN, skim.bga0010.FACDIV as FACDIV, skim.bga0010.BLDCD as BLDCD, skim.bga0010.PRDCD as PRDCD, skim.bga0010.PRDNAM as PRDNAM, skim.bga0010.PRDLNG as PRDLNG, skim.bga0010.PRDWID as PRDWID, skim.bga0010.PRDGAG as PRDGAG, skim.bga0010.AREA as AREA, skim.bga0010.GLZTYP as GLZTYP, skim.bga0010.TECTYP as TECTYP, skim.bga0010.PRDCATE as PRDCATE, skim.bga0010.MATCST as MATCST, skim.bga0010.PRCCD as PRCCD, skim.bga0010.PRCDSC as PRCDSC, skim.bga0010.GLSSTR as GLSSTR, skim.bga0010.REMARK as REMARK from skim.bga0010 where ((skim.bga0010.ISMES = N) and (skim.bga0010.USEYN = Y))) as a order by a.BLDCD",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
-			output: "create view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
+			output: "create sql security definer view sale_employee as select ct.ENTID as ORGANIZATION_ID, cu.SYSUSERID as SALE_EMPLOYEE_ID, cu.SYSUSERID as EMPLOYEE_ID, cu.ACTIVED as ISUSEABLE, cu.CREATOR as CREATED_BY, cu.CREATETIME as CREATION_DATE, cu.UPDATOR as LAST_UPDATED_BY, cu.UPDATETIME as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.ISSALEEMPLOYEE = 2)",
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
-			output: "create view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
+			output: "create sql security definer view xab0100 as (select a.SYSUSERID as sysuserid, a.USERID as userid, a.USERNAME as usernm, a.PWDHASH as userpwd, a.USERTYPE as usertype, a.EMPID as empid, a.EMAIL as email, a.TELO as telo, a.TELH as telh, a.MOBIL as mobil, (case a.ACTIVED when 1 then N when 2 then Y else Y end) as useyn, a.ENABLEPWD as enablepwd, a.ENABLEMMSG as enablemmsg, a.FEECENTER as feecenter, left(concat(ifnull(c.ORGID, ), |), (char_length(concat(ifnull(c.ORGID, ), |)) - 1)) as orgid, left(concat(ifnull(c.ORGNAME, ), |), (char_length(concat(ifnull(c.ORGNAME, ), |)) - 1)) as orgname, ifnull(a.ISPLANNER, ) as isplanner, ifnull(a.ISWHEMPLOYEE, ) as iswhemployee, ifnull(a.ISBUYER, ) as isbuyer, ifnull(a.ISQCEMPLOYEE, ) as isqceemployee, ifnull(a.ISSALEEMPLOYEE, ) as issaleemployee, a.SEX as sex, ifnull(c.ENTID, 3) as ORGANIZATION_ID, ifnull(a.NOTICEUSER, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.SYSUSERID = b.SYSUSERID)) left join kaf_cpcorg as c on ((b.ORGID = c.ORGID)) order by a.SYSUSERID, a.USERID, a.USERNAME, a.USERPASS, a.USERTYPE, a.EMPID, a.EMAIL, a.TELO, a.TELH, a.MOBIL, a.ACTIVED, a.ENABLEPWD, a.ENABLEMMSG, a.FEECENTER, a.ISPLANNER, a.ISWHEMPLOYEE, a.ISBUYER, a.ISQCEMPLOYEE, a.ISSALEEMPLOYEE, a.SEX, c.ENTID)",
 		},
 		{
 			input:  "CREATE TABLE `ecbase_push_log` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',`create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间') ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='推送记录表'/*!50500 PARTITION BY RANGE  COLUMNS(create_time)(PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,PARTITION p20240117 VALUES LESS THAN ('2024-01-17 00:00:00') ENGINE = InnoDB,PARTITION p20240118 VALUES LESS THAN ('2024-01-18 00:00:00') ENGINE = InnoDB,PARTITION p20240119 VALUES LESS THAN ('2024-01-19 00:00:00') ENGINE = InnoDB,PARTITION p20240120 VALUES LESS THAN ('2024-01-20 00:00:00') ENGINE = InnoDB,PARTITION p20240121 VALUES LESS THAN ('2024-01-21 00:00:00') ENGINE = InnoDB,PARTITION p20240122 VALUES LESS THAN ('2024-01-22 00:00:00') ENGINE = InnoDB,PARTITION p20240123 VALUES LESS THAN ('2024-01-23 00:00:00') ENGINE = InnoDB,PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;",
@@ -3338,6 +3544,111 @@ func TestSQLStringFmt(t *testing.T) {
 	}
 }
 
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create table task (task int, id int)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Equal(t, "task", string(createStmt.Table.ObjectName))
+	require.Len(t, createStmt.Defs, 2)
+}
+
+func TestTaskStatementsStillParse(t *testing.T) {
+	cases := []struct {
+		sql      string
+		expected any
+	}{
+		{sql: "create task parser_task as begin select 1; end", expected: &tree.CreateSQLTask{}},
+		{sql: "alter task parser_task suspend", expected: &tree.AlterSQLTask{}},
+		{sql: "drop task parser_task", expected: &tree.DropSQLTask{}},
+		{sql: "execute task parser_task", expected: &tree.ExecuteSQLTask{}},
+		{sql: "show task runs for parser_task limit 1", expected: &tree.ShowSQLTaskRuns{}},
+	}
+
+	for _, tc := range cases {
+		stmt, err := ParseOne(context.TODO(), tc.sql, 1)
+		require.NoError(t, err, tc.sql)
+		require.IsType(t, tc.expected, stmt, tc.sql)
+	}
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(offline_start), max(offline_end))")
+	require.Contains(t, formatted, "timestampdiff(minute, s.session_start, wo.dtm_date_created)")
+	require.Contains(t, formatted, "timestampdiff(hour, s.session_start, wo.dtm_date_created)")
+}
+
 var (
 	multiSQL = []struct {
 		input  string
@@ -3495,6 +3806,134 @@ func TestFaultTolerance(t *testing.T) {
 		if err == nil {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
+		}
+	}
+}
+
+func TestLimitByRank(t *testing.T) {
+	ctx := context.TODO()
+	testCases := []struct {
+		input   string
+		output  string // expected output from tree.String
+		checkFn func(*testing.T, tree.Statement)
+	}{
+		{
+			input:  "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			output: "select a, b, c from t limit 20 by rank with option 'fudge_factor=3.0', 'nprobe=10'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "3.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.RankOption.Option["nprobe"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=2.5', 'mode=pre'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "2.5", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=1.0', 'mode=post'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "1.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			output: "select * from t limit 10 offset 5 by rank with option 'nprobe=20'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "20", selectStmt.RankOption.Option["nprobe"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			output: "select * from t limit 10 offset 5 by rank with option 'fudge_factor=4.0'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "4.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			ast, err := ParseOne(ctx, tc.input, 1)
+			require.NoError(t, err, "Failed to parse: %s", tc.input)
+			if tc.checkFn != nil {
+				tc.checkFn(t, ast)
+			}
+			// Test tree.String conversion
+			if tc.output != "" {
+				out := tree.String(ast, dialect.MYSQL)
+				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
+			}
+		})
+	}
+}
+
+func TestViewSecurityType(t *testing.T) {
+	cases := []struct {
+		input        string
+		securityType string
+		output       string
+	}{
+		{"CREATE SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER", "create sql security definer view v as select 1"},
+		{"CREATE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "create sql security invoker view v as select 1"},
+		{"CREATE OR REPLACE SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "create or replace sql security invoker view v as select 1"},
+		{"CREATE VIEW v AS SELECT 1", "", "create view v as select 1"},
+		{"ALTER SQL SECURITY INVOKER VIEW v AS SELECT 1", "INVOKER", "alter sql security invoker view v as select 1"},
+		{"ALTER SQL SECURITY DEFINER VIEW v AS SELECT 1", "DEFINER", "alter sql security definer view v as select 1"},
+		{"ALTER VIEW v AS SELECT 1", "", "alter view v as select 1"},
+	}
+	for _, c := range cases {
+		stmts, err := ParseOne(context.TODO(), c.input, 1)
+		if err != nil {
+			t.Fatalf("parse %q failed: %v", c.input, err)
+		}
+		switch s := stmts.(type) {
+		case *tree.CreateView:
+			if s.SecurityType != c.securityType {
+				t.Errorf("CreateView %q: SecurityType = %q, want %q", c.input, s.SecurityType, c.securityType)
+			}
+		case *tree.AlterView:
+			if s.SecurityType != c.securityType {
+				t.Errorf("AlterView %q: SecurityType = %q, want %q", c.input, s.SecurityType, c.securityType)
+			}
+		default:
+			t.Fatalf("unexpected stmt type %T for %q", stmts, c.input)
+		}
+
+		if out := tree.String(stmts, dialect.MYSQL); out != c.output {
+			t.Errorf("tree.String(%q) = %q, want %q", c.input, out, c.output)
 		}
 	}
 }

@@ -167,24 +167,24 @@ CREATE TABLE t_double(id double(30,1));
 INSERT INTO t_double VALUES (1.19),(1.11), (2);
 SELECT id, id >= 1.1 FROM t_double;
 id    id >= 1.1
-1.2    true
-1.1    true
-2.0    true
+1.2    1
+1.1    1
+2.0    1
 SELECT id, 1.1 <= id FROM t_double;
 id    1.1 <= id
-1.2    true
-1.1    true
-2.0    true
+1.2    1
+1.1    1
+2.0    1
 SELECT id, id = 1.1 FROM t_double;
 id    id = 1.1
-1.2    false
-1.1    true
-2.0    false
+1.2    0
+1.1    1
+2.0    0
 SELECT id, 1.1 = id FROM t_double;
 id    1.1 = id
-1.2    false
-1.1    true
-2.0    false
+1.2    0
+1.1    1
+2.0    0
 SELECT * from t_double WHERE id = 1.1;
 id
 1.1

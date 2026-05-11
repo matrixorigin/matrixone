@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 set global enable_privilege_cache = off;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -46,17 +45,17 @@ drop publication if exists pub01;
 create publication pub01 database test01 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *        2025-07-18 22:50:56    null    
+pub01    test01    *    *        2025-11-28 19:12:12    null    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2025-07-18 22:50:56    null    null    0
+pub01    sys    test01    *        2025-11-28 19:12:12    null    null    0
 drop database if exists sub01;
 create database sub01 from sys publication pub01;
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-19 05:50:56.137018    account    acc01        
+sp01    2025-11-28 11:12:12.205142999    account    acc01        
 use sub01;
 show tables;
 Tables_in_sub01
@@ -80,7 +79,7 @@ pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time
 restore account acc01 from snapshot sp01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2025-07-18 22:50:56    sub01    2025-07-18 22:50:56    0
+pub01    sys    test01    *        2025-11-28 19:12:12    sub01    2025-11-28 19:12:12    0
 show databases;
 Database
 information_schema
@@ -96,10 +95,10 @@ use test01;
 drop table aff01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *    acc01    2025-07-18 22:50:56    null    
+pub01    test01    *    *    acc01    2025-11-28 19:12:12    null    
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub01    sys    test01    *        2025-07-18 22:50:56    sub01    2025-07-18 22:50:56    0
+pub01    sys    test01    *        2025-11-28 19:12:12    sub01    2025-11-28 19:12:12    0
 show databases;
 Database
 information_schema
@@ -153,20 +152,20 @@ drop publication if exists pub02;
 create publication pub02 database test02 table rs02 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    test02    rs02    acc01        2025-07-18 22:50:56    null    
+pub02    test02    rs02    acc01        2025-11-28 19:12:13    null    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2025-07-18 22:50:56    null    null    0
+pub02    sys    test02    rs02        2025-11-28 19:12:13    null    null    0
 drop database if exists sub02;
 create database sub02 from sys publication pub02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    test02    rs02        2025-07-18 22:50:56    sub02    2025-07-18 22:50:56    0
+pub02    sys    test02    rs02        2025-11-28 19:12:13    sub02    2025-11-28 19:12:13    0
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp02    2025-07-19 05:50:57.044724    account    acc01        
+sp02    2025-11-28 11:12:13.045094999    account    acc01        
 drop database sub02;
 drop publication pub02;
 show subscriptions;
@@ -210,7 +209,7 @@ drop publication if exists pub03;
 create publication pub03 database test03 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    test03    *    acc01        2025-07-18 22:50:58    null    
+pub03    test03    *    acc01        2025-11-28 19:12:13    null    
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub03;
@@ -276,12 +275,12 @@ drop publication if exists pub04;
 create publication pub04 database test04 account sys comment 'pub to sys account';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub04    test04    *    sys        2025-07-18 22:50:58    null    pub to sys account
+pub04    test04    *    sys        2025-11-28 19:12:14    null    pub to sys account
 drop database if exists sub05;
 create database sub05 from acc01 publication pub04;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2025-07-18 22:50:58    sub05    2025-07-18 22:50:58    0
+pub04    acc01    test04    *    pub to sys account    2025-11-28 19:12:14    sub05    2025-11-28 19:12:14    0
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 drop database sub05;
@@ -316,7 +315,7 @@ count(*)
 1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub04    acc01    test04    *    pub to sys account    2025-07-18 22:50:58    sub05    2025-07-18 22:50:58    0
+pub04    acc01    test04    *    pub to sys account    2025-11-28 19:12:14    sub05    2025-11-28 19:12:14    0
 drop database sub05;
 drop snapshot sp05;
 drop publication pub04;
@@ -341,25 +340,25 @@ drop publication if exists pub06;
 create publication pub06 database test06 account acc02 comment 'acc01 pub to acc02';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    *    acc02        2025-07-18 22:50:58    null    acc01 pub to acc02
+pub06    test06    *    acc02        2025-11-28 19:12:14    null    acc01 pub to acc02
 drop database if exists sub06;
 create database sub06 from acc01 publication pub06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    test06    *    acc01 pub to acc02    2025-07-18 22:50:58    sub06    2025-07-18 22:50:58    0
+pub06    acc01    test06    *    acc01 pub to acc02    2025-11-28 19:12:14    sub06    2025-11-28 19:12:14    0
 restore account acc01 from snapshot sp06;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    acc01    null    null    null    null    sub06    2025-07-18 22:50:58    2
+pub06    acc01    null    null    null    null    sub06    2025-11-28 19:12:14    2
 use sub06;
 internal error: there is no publication pub06
 drop publication if exists pub06;
 create publication pub06 database test06 table table01 account acc02 comment 'acc01 pub to acc02';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    test06    table01    acc02    acc02    2025-07-18 22:50:59    null    acc01 pub to acc02
+pub06    test06    table01    acc02    acc02    2025-11-28 19:12:14    null    acc01 pub to acc02
 show databases;
 Database
 information_schema
@@ -420,17 +419,17 @@ drop database if exists sub06;
 create database sub06 from sys publication pub06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    test07    *        2025-07-18 22:50:59    sub06    2025-07-18 22:50:59    0
+pub06    sys    test07    *        2025-11-28 19:12:14    sub06    2025-11-28 19:12:14    0
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
 alter publication pub06 account acc02 database test07;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2025-07-18 22:50:59    1
+pub06    sys    null    null    null    null    sub06    2025-11-28 19:12:14    1
 restore account sys from snapshot sp06;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub06    sys    null    null    null    null    sub06    2025-07-18 22:50:59    2
+pub06    sys    null    null    null    null    sub06    2025-11-28 19:12:14    2
 drop database sub06;
 drop publication pub06;
 internal error: publication 'pub06' does not exist
@@ -479,11 +478,11 @@ system_metrics
 test01
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub10    sys    null    null    null    null    sub01    2025-07-18 22:50:59    2
+pub10    sys    null    null    null    null    sub01    2025-11-28 19:12:15    2
 drop database sub01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub11    sys    null    null    null    null    sub02    2025-07-18 22:50:59    2
+pub11    sys    null    null    null    null    sub02    2025-11-28 19:12:15    2
 drop database sub02;
 drop publication pub10;
 internal error: publication 'pub10' does not exist
@@ -502,26 +501,26 @@ drop publication if exists pub_full01;
 create publication pub_full01 database pub_fulltext_table account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub_full01    pub_fulltext_table    *    acc01        2025-07-18 22:50:59    null    
+pub_full01    pub_fulltext_table    *    acc01        2025-11-28 19:12:15    null    
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub_pull01;
 create database sub_pull01 from sys publication pub_full01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full01    sys    pub_fulltext_table    *        2025-07-18 22:50:59    sub_pull01    2025-07-18 22:50:59    0
+pub_full01    sys    pub_fulltext_table    *        2025-11-28 19:12:15    sub_pull01    2025-11-28 19:12:15    0
 drop snapshot if exists sp_pub01;
 create snapshot sp_pub01 for account;
 drop publication pub_full01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
+pub_full01    sys    null    null    null    null    sub_pull01    2025-11-28 19:12:15    2
 restore account sys database pub_fulltext_table from snapshot sp_pub01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
+pub_full01    sys    null    null    null    null    sub_pull01    2025-11-28 19:12:15    2
 use sub_pull01;
 internal error: there is no publication pub_full01
 select * from src;
@@ -543,15 +542,15 @@ drop database if exists fulltext_sub02;
 create database fulltext_sub02 from sys publication pub_full02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full02    sys    restore_fulltext_table    *        2025-07-18 22:51:00    fulltext_sub02    2025-07-18 22:51:00    0
-pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
+pub_full01    sys    null    null    null    null    sub_pull01    2025-11-28 19:12:15    2
+pub_full02    sys    restore_fulltext_table    *        2025-11-28 19:12:15    fulltext_sub02    2025-11-28 19:12:15    0
 drop snapshot if exists sp_full02;
 create snapshot sp_full02 for account acc01;
 drop publication pub_full02;
 drop database fulltext_sub02;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
+pub_full01    sys    null    null    null    null    sub_pull01    2025-11-28 19:12:15    2
 restore account acc01 from snapshot sp_full02;
 show databases;
 Database

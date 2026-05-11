@@ -15,6 +15,8 @@
 package elkans
 
 import (
+	"context"
+	"math/rand/v2"
 	"reflect"
 	"testing"
 
@@ -161,6 +163,8 @@ func Test_ClusterError(t *testing.T) {
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -169,7 +173,7 @@ func Test_ClusterError(t *testing.T) {
 			elkan, ok := clusterer.(*ElkanClusterer[float64])
 			require.True(t, ok)
 			elkan.distFn = FakeDistance[float64]
-			_, err := clusterer.Cluster()
+			_, err := clusterer.Cluster(ctx)
 			require.NotNil(t, err)
 		})
 	}
@@ -229,6 +233,7 @@ func Test_InitBoundsError(t *testing.T) {
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -236,10 +241,10 @@ func Test_InitBoundsError(t *testing.T) {
 				tt.fields.distType, tt.fields.initType, false, 0)
 			elkan, ok := clusterer.(*ElkanClusterer[float64])
 			require.True(t, ok)
-			_, err := clusterer.Cluster()
+			_, err := clusterer.Cluster(ctx)
 			require.Nil(t, err)
 			elkan.distFn = FakeDistance[float64]
-			err = elkan.initBounds()
+			err = elkan.initBounds(ctx)
 			require.NotNil(t, err)
 		})
 	}
@@ -299,6 +304,7 @@ func Test_ComputeCentroidDistancesError(t *testing.T) {
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -306,10 +312,10 @@ func Test_ComputeCentroidDistancesError(t *testing.T) {
 				tt.fields.distType, tt.fields.initType, false, 0)
 			elkan, ok := clusterer.(*ElkanClusterer[float64])
 			require.True(t, ok)
-			_, err := clusterer.Cluster()
+			_, err := clusterer.Cluster(ctx)
 			require.Nil(t, err)
 			elkan.distFn = FakeDistance[float64]
-			err = elkan.computeCentroidDistances()
+			err = elkan.computeCentroidDistances(ctx)
 			require.NotNil(t, err)
 		})
 	}
@@ -369,6 +375,7 @@ func Test_SSEError(t *testing.T) {
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -376,7 +383,7 @@ func Test_SSEError(t *testing.T) {
 				tt.fields.distType, tt.fields.initType, false, 0)
 			elkan, ok := clusterer.(*ElkanClusterer[float64])
 			require.True(t, ok)
-			_, err := clusterer.Cluster()
+			_, err := clusterer.Cluster(ctx)
 			require.Nil(t, err)
 			elkan.distFn = FakeDistance[float64]
 			_, err = elkan.SSE()
@@ -429,22 +436,20 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				//{0.15915269938161652, 0.31830539876323305, 0.5757527355814478, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666}
-				//{0.8077006350571528, 0.26637173227965466, 0.3230802540228611, 0.4038503175285764},  // approx {10, 3.333333333333333, 4, 5}
 				{10, 3.333333333333333, 4, 5},
 				{1, 2, 3.6666666666666665, 4.666666666666666},
 			},
-			//wantSSE: 0.0657884123589134,
 			wantSSE: 12,
 			wantErr: false,
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
-			_got, err := clusterer.Cluster()
+			_got, err := clusterer.Cluster(ctx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -542,6 +547,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -555,7 +561,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 			}
 			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
 				ekm.centroids = tt.state.centroids
-				ekm.initBounds()
+				ekm.initBounds(ctx)
 				if !reflect.DeepEqual(ekm.assignments, tt.want.assignment) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
 				}
@@ -631,6 +637,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -642,7 +649,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 			}
 			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
 				ekm.centroids = tt.state.centroids
-				ekm.computeCentroidDistances()
+				ekm.computeCentroidDistances(ctx)
 
 				// NOTE: here we are not considering the vectors in the vectorList. Hence we don't need to worry about
 				// the normalization impact. Here we are only testing the working of computeCentroidDistances() function.
@@ -715,6 +722,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -730,7 +738,15 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of recalculateCentroids() function.
 
-				got := ekm.recalculateCentroids()
+				rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
+
+				newCentroids := make([][]float64, ekm.clusterCnt)
+				for i := range newCentroids {
+					newCentroids[i] = make([]float64, len(ekm.vectorList[0]))
+				}
+				membersCount := make([]int64, ekm.clusterCnt)
+
+				got := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
 				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
 					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
 				}
@@ -854,6 +870,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -869,7 +886,8 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				ekm.updateBounds(tt.state.newCentroids)
+				centroidShiftDist := make([]float64, ekm.clusterCnt)
+				ekm.updateBounds(ctx, tt.state.newCentroids, centroidShiftDist)
 
 				for i := 0; i < len(tt.want.vectorMetas); i++ {
 					if !assertx.InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {
@@ -1004,6 +1022,7 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
@@ -1020,7 +1039,8 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				err := ekm.updateBounds(tt.state.newCentroids)
+				centroidShiftDist := make([]float64, ekm.clusterCnt)
+				err := ekm.updateBounds(ctx, tt.state.newCentroids, centroidShiftDist)
 				require.NotNil(t, err)
 			} else if !ok {
 				t.Errorf("km not of type ElkanClusterer")
@@ -1028,4 +1048,12 @@ func TestElkanClusterer_updateBounds_Error(t *testing.T) {
 
 		})
 	}
+}
+
+func Test_checkCentroidDimension(t *testing.T) {
+	c := [][]float32{{1, 2, 3}, {2, 3, 4}}
+	err := checkCentroidDimension(c, 2)
+	require.Error(t, err)
+	err = checkCentroidDimension(c, 3)
+	require.NoError(t, err)
 }

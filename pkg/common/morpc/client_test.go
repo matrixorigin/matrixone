@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateBackendLocked(t *testing.T) {
@@ -63,6 +64,34 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
+}
+
+// TestGetBackendLockedDoesNotCreateWhenAvailable ensures maybeCreateLocked is only called when no available backend was found (b == nil).
+func TestGetBackendLockedDoesNotCreateWhenAvailable(t *testing.T) {
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(2),
+		WithClientEnableAutoCreateBackend())
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	c.mu.Lock()
+	c.mu.backends["b1"] = []Backend{&testBackend{id: 0, busy: false, activeTime: time.Now()}}
+	c.mu.ops["b1"] = &op{}
+	c.mu.Unlock()
+
+	for i := 0; i < 10; i++ {
+		c.mu.Lock()
+		b, err := c.getBackendLocked("b1", false)
+		n := len(c.mu.backends["b1"])
+		c.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, b, "iteration %d", i)
+		require.Equal(t, 1, n, "getBackendLocked must not call maybeCreateLocked when b != nil; iteration %d had %d backends", i, n)
+	}
 }
 
 func TestGetBackend(t *testing.T) {
@@ -225,64 +254,59 @@ func TestCloseIdleBackends(t *testing.T) {
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
 		WithClientCreateTaskChanSize(1),
 		WithClientEnableAutoCreateBackend())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
-	b.(*testBackend).busy = true
+	// First backend with lock so getBackendLocked does not select it (b==nil) and createBackend creates second.
+	_, err = c.getBackend("b1", true)
+	require.NoError(t, err)
+	require.NotNil(t, c.mu.backends["b1"])
+	require.Equal(t, 1, len(c.mu.backends["b1"]))
 
+	// Second backend: getBackendLocked returns nil (only backend is locked), getBackend calls createBackend.
 	_, err = c.getBackend("b1", false)
-	assert.NoError(t, err)
-	for {
-		c.mu.Lock()
-		v := len(c.mu.backends["b1"])
-		c.mu.Unlock()
-		if v == 2 {
-			break
-		}
-		time.Sleep(time.Millisecond * 10)
-	}
+	require.NoError(t, err)
+	c.mu.Lock()
+	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
+	idleBackend := c.mu.backends["b1"][0]
+	activeBackend := c.mu.backends["b1"][1]
+	c.mu.Unlock()
 
-	b, err = c.getBackend("b1", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
-
-	b2, err := c.getBackend("b1", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b2)
-	assert.NotEqual(t, b, b2)
+	idleBackend.Unlock()
+	tb := idleBackend.(*testBackend)
+	tb.Lock()
+	tb.activeTime = time.Time{}
+	tb.Unlock()
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
 		defer cancel()
-		st, err := b2.NewStream(false)
+		st, err := activeBackend.NewStream(false)
 		assert.NoError(t, err)
-		for {
-			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+		for i := 0; i < 50; i++ {
+			_ = st.Send(ctx, newTestMessage(1))
 			time.Sleep(time.Millisecond * 10)
 		}
 	}()
 
-	for {
+	// gcIdleTask runs every maxIdleDuration (100ms); wait for idle backend to be closed (deadline 5s).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
 		c.mu.Unlock()
 		if v == 1 {
-			tb := b.(*testBackend)
 			tb.RLock()
 			closed := tb.closed
 			tb.RUnlock()
 			if closed {
-				tb2 := b2.(*testBackend)
-				tb2.RLock()
-				assert.False(t, tb2.closed)
-				tb2.RUnlock()
-
+				ab := activeBackend.(*testBackend)
+				ab.RLock()
+				assert.False(t, ab.closed)
+				ab.RUnlock()
 				c.mu.Lock()
 				assert.Equal(t, 1, len(c.mu.backends["b1"]))
 				c.mu.Unlock()
@@ -291,6 +315,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond * 10)
 	}
+	t.Fatal("idle backend was not closed by GC within 5s")
 }
 
 func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {

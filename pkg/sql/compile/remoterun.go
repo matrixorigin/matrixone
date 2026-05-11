@@ -19,10 +19,12 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -220,6 +222,18 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 			RecvMsgList:            s.DataSource.RecvMsgList,
+			BlockOrderBy:           s.DataSource.BlockOrderBy,
+			BlockLimit:             s.DataSource.BlockLimit,
+		}
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.BloomFilter) > 0 {
+				p.DataSource.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					p.DataSource.BloomFilter = bf
+				}
+			}
 		}
 	}
 	// PreScope
@@ -333,6 +347,9 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
 			RecvMsgList:        dsc.RecvMsgList,
+			BlockOrderBy:       dsc.BlockOrderBy,
+			BlockLimit:         dsc.BlockLimit,
+			BloomFilter:        dsc.BloomFilter,
 		}
 	}
 	//var relData engine.RelData
@@ -813,6 +830,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
+			TargetTableId:          t.TargetTableID,
+			InitialSnapshotTs:      t.InitialSnapshotTS,
+			TargetTableRef:         t.TargetTableRef,
 		}
 	case *rightdedupjoin.RightDedupJoin:
 		relList, colList := getRelColList(t.Result)
@@ -1352,6 +1372,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.TargetTableID = t.TargetTableId
+		arg.InitialSnapshotTS = t.InitialSnapshotTs
+		arg.TargetTableRef = t.TargetTableRef
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()

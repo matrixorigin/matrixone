@@ -32,6 +32,10 @@ type container struct {
 	canFreeVecIdx     map[int]bool //auto incr & expand constant vecotr.need free
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
+	// tblId is a local copy of TableDef.TblId, refreshed by
+	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
+	// shared *plan.TableDef that other operators may read concurrently.
+	tblId uint64
 }
 type PreInsert struct {
 	ctr container
@@ -41,6 +45,9 @@ type PreInsert struct {
 	IsNewUpdate bool
 	SchemaName  string
 	TableDef    *plan.TableDef
+	// autoIncrementTableID is operator-local mutable state. Keep shared plan
+	// metadata in TableDef read-only so parallel operators do not race on TblId.
+	autoIncrementTableID uint64
 	// letter case: origin
 	Attrs []string
 

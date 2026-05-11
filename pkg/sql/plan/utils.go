@@ -249,19 +249,49 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 }
 
 func containsTag(expr *plan.Expr, tag int32) bool {
-	var ret bool
+	if expr == nil {
+		return false
+	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsTag(arg, tag)
+			if containsTag(arg, tag) {
+				return true
+			}
 		}
-
+	case *plan.Expr_W:
+		if containsTag(exprImpl.W.WindowFunc, tag) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if containsTag(arg, tag) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if containsTag(order.Expr, tag) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if containsTag(arg, tag) {
+				return true
+			}
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub == nil {
+			return false
+		}
+		return containsTag(exprImpl.Sub.Child, tag)
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
+	case *plan.Expr_Corr:
+		return exprImpl.Corr.RelPos == tag
 	}
 
-	return ret
+	return false
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
@@ -353,6 +383,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
+//
+// Conjuncts are compared via a structural fingerprint (exprStructuralHash +
+// exprStructuralEqual) rather than proto serialization. For deeply nested
+// IN/OR trees the old Marshal path walked every expression twice (ProtoSize
+// + writeTo) per lookup and dominated CPU; hashing traverses once with no
+// allocation and collisions are rare enough that Equal rarely runs.
 func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -367,11 +403,24 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
 		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
 
-		condMap := make(map[string]int)
+		// Bucket right conjuncts by structural hash. Each bucket stores the
+		// original expr + the per-bucket side state, so the left scan can
+		// collision-check with exprStructuralEqual against the few conds
+		// sharing a hash (normally 1).
+		type rightEntry struct {
+			cond *plan.Expr
+			side int
+		}
+		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
+		rightEntries := make([]*rightEntry, len(rightConds))
 
 		relPos := int32(-1)
-		for _, cond := range rightConds {
-			condMap[cond.String()] = JoinSideRight
+		for i, cond := range rightConds {
+			h := exprStructuralHash(cond)
+			entry := &rightEntry{cond: cond, side: JoinSideRight}
+			rightEntries[i] = entry
+			rightBuckets[h] = append(rightBuckets[h], entry)
+
 			args := cond.GetF().GetArgs()
 			if len(args) != 2 {
 				continue
@@ -391,19 +440,28 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
 
 		for _, cond := range leftConds {
-			exprStr := cond.String()
-
-			if condMap[exprStr] == JoinSideRight {
+			h := exprStructuralHash(cond)
+			bucket := rightBuckets[h]
+			var matched *rightEntry
+			for _, entry := range bucket {
+				if entry.side != JoinSideRight {
+					continue
+				}
+				if exprStructuralEqual(entry.cond, cond) {
+					matched = entry
+					break
+				}
+			}
+			if matched != nil {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = JoinSideBoth
+				matched.side = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
-		for _, cond := range rightConds {
-			if condMap[cond.String()] == JoinSideRight {
+		for i, cond := range rightConds {
+			if rightEntries[i].side == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}
@@ -655,44 +713,63 @@ func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType typ
 	return
 }
 
-// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
-// and only 1 colRef is allowd in the filter
+// extractColRefInFilter extracts a unique column reference from an expression.
+// Used for predicate deduction, where filters must contain only one column reference.
+//
+// This function implements unified logic for extracting column references:
+//   - For column expressions: returns the column reference directly
+//   - For function expressions:
+//   - The first argument MUST contain a column reference (otherwise returns nil)
+//   - All other arguments must satisfy one of the following:
+//     1. Not contain any column references (i.e., literals/constants), OR
+//     2. Contain the same column reference as the first argument
+//
+// This unified approach works for all function types:
+//   - Comparison operators (=, >, <, >=, <=, between, in, etc.):
+//   - col = 1 → returns col (literal is allowed)
+//   - col = trim(col) → returns col (same column in function is allowed)
+//   - col = col2 → returns nil (different column is rejected)
+//   - func(col) > 2 → returns col (nested function calls are supported recursively)
+//   - Logical operators (and, or, etc.):
+//   - and(col, col) → returns col (same column in all args)
+//   - and(col, col2) → returns nil (different columns are rejected)
+//   - and(col, 1) → returns col (literal is allowed, though may be semantically invalid)
+//   - Cast functions:
+//   - cast(col, type) → returns col (type argument is literal)
+//
+// Returns the column reference if the expression contains exactly one unique column reference,
+// nil otherwise.
 func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "prefix_between", "in", "prefix_in", "cast":
-			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
-				return extractColRefInFilter(exprImpl.F.Args[0])
-			case *plan.Expr_F:
-				switch e.F.Func.ObjName {
-				case "cast", "serial", "date_sub":
-					return extractColRefInFilter(exprImpl.F.Args[0])
-				}
-				return nil
-			default:
-				return nil
-			}
-		default:
-			var col *ColRef
-			for _, arg := range exprImpl.F.Args {
-				c := extractColRefInFilter(arg)
-				if c == nil {
-					return nil
-				}
-				if col != nil {
-					if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
-						return nil
-					}
-				} else {
-					col = c
-				}
-			}
-			return col
-		}
 	case *plan.Expr_Col:
 		return exprImpl.Col
+	case *plan.Expr_F:
+		args := exprImpl.F.Args
+		if len(args) == 0 {
+			return nil
+		}
+
+		// Extract column reference from the first argument
+		col := extractColRefInFilter(args[0])
+		if col == nil {
+			return nil
+		}
+
+		// Verify all remaining arguments either:
+		// 1. Don't contain any column references (literals/constants), OR
+		// 2. Contain the same column reference as the first argument
+		for i := 1; i < len(args); i++ {
+			otherCol := extractColRefInFilter(args[i])
+			if otherCol != nil {
+				// If this argument has a column reference, it must match the first argument's column
+				if col.RelPos != otherCol.RelPos || col.ColPos != otherCol.ColPos {
+					return nil
+				}
+			}
+			// If otherCol is nil, the argument is a literal/constant (no column reference), which is acceptable
+		}
+
+		return col
 	}
 	return nil
 }
@@ -1414,7 +1491,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),

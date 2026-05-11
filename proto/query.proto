@@ -101,6 +101,7 @@ enum CmdMethod {
   CtlMoTableStats = 33;
   WorkspaceThreshold = 34;
   MinTimestamp = 35;
+  CtlPrefetchOnSubscribed = 36;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -240,6 +241,7 @@ message Request {
   FaultInjectRequest FaultInjectRequest = 35;
   CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdRequest WorkspaceThresholdRequest = 37;
+  CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -304,6 +306,7 @@ message Response {
   CtlMoTableStatsResponse CtlMoTableStatsResponse = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
   MinTimestampResponse MinTimestampResponse = 38;
+  CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -338,6 +341,14 @@ message CtlReaderRequest {
 }
 
 message CtlReaderResponse {
+  string Resp = 1;
+}
+
+message CtlPrefetchOnSubscribedRequest {
+  repeated string Patterns = 1;
+}
+
+message CtlPrefetchOnSubscribedResponse {
   string Resp = 1;
 }
 

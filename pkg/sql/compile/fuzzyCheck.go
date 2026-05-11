@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 /*
@@ -50,6 +51,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f.tbl = tblName
 	f.db = dbName
 	f.attr = n.TableDef.Pkey.PkeyColName
+	f.displayAttr = n.TableDef.Pkey.PkeyColName
 
 	for _, c := range n.TableDef.Cols {
 		if c.Name == n.TableDef.Pkey.PkeyColName {
@@ -62,6 +64,17 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
 		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+		// displayAttr was initialized above to the internal composite PK
+		// column (__mo_cpkey_col) which must never leak to users. Build
+		// a human-readable "(col1,col2,...)" using the declared member
+		// names so DuplicateEntry errors show the user-visible key.
+		names := make([]string, 0, len(n.TableDef.Pkey.Names))
+		for _, name := range n.TableDef.Pkey.Names {
+			names = append(names, catalog.ResolveAlias(name))
+		}
+		if len(names) > 0 {
+			f.displayAttr = "(" + strings.Join(names, ",") + ")"
+		}
 	}
 
 	// for the case like create unique index for existed table,
@@ -70,6 +83,14 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
 	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
 		f.onlyInsertHidden = true
+		// displayAttr was initialized above to the hidden table's PK column
+		// name (__mo_index_idx_col for single-column UNIQUE, __mo_cpkey_col
+		// for composite). Errors reported from firstlyCheck /
+		// backgroundSQLCheck use f.displayAttr directly and do not pass
+		// through RewriteHiddenIndexDupEntry, so leaving the internal name
+		// here leaks it to the user. Replace with a neutral placeholder; we
+		// do not have the user-declared unique-index name at this point.
+		f.displayAttr = "unique index"
 	}
 
 	if n.Fuzzymessage != nil {
@@ -77,8 +98,25 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 			f.isCompound = true
 			f.tbl = n.Fuzzymessage.ParentTableName
 			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
+			// Build a composite display key like "(col1,col2)" — the plan
+			// message does not carry the user-declared index name, so mirror
+			// what bind_insert.go emits as DedupColName for compound uniques.
+			names := make([]string, 0, len(n.Fuzzymessage.ParentUniqueCols))
+			for _, c := range n.Fuzzymessage.ParentUniqueCols {
+				if c == nil {
+					continue
+				}
+				names = append(names, catalog.ResolveAlias(c.Name))
+			}
+			if len(names) > 0 {
+				f.displayAttr = "(" + strings.Join(names, ",") + ")"
+			}
 		} else {
 			f.col = n.Fuzzymessage.ParentUniqueCols[0]
+			// attr is the hidden __mo_index_idx_col used to run the background
+			// dedup SQL against the hidden table; displayAttr is the original
+			// user-facing column used when reporting the duplicate entry.
+			f.displayAttr = n.Fuzzymessage.ParentUniqueCols[0].Name
 		}
 	}
 
@@ -98,6 +136,7 @@ func (f *fuzzyCheck) clear() {
 	f.db = ""
 	f.tbl = ""
 	f.attr = ""
+	f.displayAttr = ""
 	f.condition = ""
 	f.isCompound = false
 	f.onlyInsertHidden = false
@@ -244,9 +283,9 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 		if cnt > 1 {
 			ds, e := strconv.Unquote(k)
 			if e != nil {
-				return moerr.NewDuplicateEntry(ctx, k, f.attr)
+				return moerr.NewDuplicateEntry(ctx, k, f.displayAttr)
 			} else {
-				return moerr.NewDuplicateEntry(ctx, ds, f.attr)
+				return moerr.NewDuplicateEntry(ctx, ds, f.displayAttr)
 			}
 		}
 	}
@@ -317,7 +356,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
-	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(duplicateCheckSql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.debugLogFor19288(err, duplicateCheckSql)
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
@@ -336,9 +375,9 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 				} else {
 					ds, e := strconv.Unquote(dupKey[0])
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.displayAttr)
 					} else {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.displayAttr)
 					}
 				}
 			} else {
@@ -353,7 +392,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 							scales[i] = 0
 						}
 					}
-					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.attr)
+					err = moerr.NewDuplicateEntry(c.proc.Ctx, t.ErrString(scales), f.displayAttr)
 				}
 			}
 		}

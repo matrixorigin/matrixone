@@ -75,6 +75,15 @@ type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
+const ViewSnapshotKeySuffix = "@ts="
+
+func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
+	if !IsSnapshotValid(snapshot) || snapshot.TS == nil {
+		return viewKey
+	}
+	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
@@ -161,20 +170,23 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
+	SecurityType    string `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode    []*BindContext
-	nameByColRef map[[2]int32]string
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
+	protectedScans       map[int32]int
+	projectSpecialGuards map[int32]*specialIndexGuard
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextTag    int32
-	nextMsgTag int32
+	nextBindTag int32
+	nextMsgTag  int32
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
@@ -188,6 +200,10 @@ type QueryBuilder struct {
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	optimizerHints *OptimizerHints
+
+	// optimizationHistory records key optimization steps for debugging remap errors
+	// Only records when optimizations actually change the plan structure
+	optimizationHistory []string
 }
 
 type OptimizerHints struct {
@@ -323,8 +339,12 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
-	//view in binding or already bound
+	// view in binding or already bound
 	boundViews map[[2]string]*tree.CreateView
+	// viewChain tracks view lineage for the current bind context.
+	viewChain []string
+	// directView tracks the outermost view referenced by the user.
+	directView string
 
 	// lower is sys var lower_case_table_names
 	lower int64

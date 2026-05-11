@@ -23,6 +23,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -30,11 +31,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
+
+type mockStatsKeyRouter struct {
+	target string
+}
+
+func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
+func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
+
+type mockStatsQueryClient struct {
+	response    *querypb.Response
+	sendStarted chan struct{}
+	allowReturn chan struct{}
+}
+
+func (m *mockStatsQueryClient) ServiceID() string {
+	return "mock-stats-query-client"
+}
+
+func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
+	close(m.sendStarted)
+	<-m.allowReturn
+	return m.response, nil
+}
+
+func (m *mockStatsQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
+	return &querypb.Request{CmdMethod: method}
+}
+
+func (m *mockStatsQueryClient) Release(*querypb.Response) {}
+
+func (m *mockStatsQueryClient) Close() error {
+	return nil
+}
 
 func runTest(
 	t *testing.T,
@@ -125,7 +162,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    1001,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, 1001)
+			ps := logtailreplay.NewPartitionState("", true, 1001, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
@@ -145,7 +182,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
@@ -165,7 +202,7 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.True(t, updated)
 		}, WithApproxObjectNumUpdater(func() int64 {
@@ -265,4 +302,376 @@ func TestQueueWatcher(t *testing.T) {
 		assert.Equal(t, 2, len(list))
 	})
 
+}
+
+// TestGetMinMaxValueByFloat64_Decimal tests decimal64 and decimal128 conversion
+// especially for negative values which use two's complement representation
+func TestGetMinMaxValueByFloat64_Decimal(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	t.Run("decimal64 positive", func(t *testing.T) {
+		// Test positive value: 123.45 with scale=2
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(123.45, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 123.45, result, 0.01)
+	})
+
+	t.Run("decimal64 negative", func(t *testing.T) {
+		// Test negative value: -123.45 with scale=2
+		// This is the key test case - negative values use two's complement
+		// and would be incorrectly converted to huge positive numbers before the fix
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(-123.45, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		// Before fix: this would be ~18446744073709539271 (two's complement as positive)
+		// After fix: correctly returns -123.45
+		assert.InDelta(t, -123.45, result, 0.01)
+		assert.Less(t, result, 0.0, "negative value should be less than 0")
+	})
+
+	t.Run("decimal64 different scales", func(t *testing.T) {
+		testCases := []struct {
+			name  string
+			scale int32
+			value float64
+		}{
+			{"scale_0", 0, -100.0},
+			{"scale_2", 2, -99.99},
+			{"scale_4", 4, -1234.5678},
+			{"scale_6", 6, -0.123456},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				typ := types.New(types.T_decimal64, 18, tc.scale)
+				value, err := types.Decimal64FromFloat64(tc.value, 18, tc.scale)
+				assert.NoError(t, err)
+				buf := types.EncodeDecimal64(&value)
+
+				result := getMinMaxValueByFloat64(typ, buf)
+				assert.InDelta(t, tc.value, result, 0.01)
+			})
+		}
+	})
+
+	t.Run("decimal128 positive", func(t *testing.T) {
+		// Test positive large value with scale=4
+		scale := int32(4)
+		typ := types.New(types.T_decimal128, 20, scale)
+		value, err := types.Decimal128FromFloat64(1234567890.1234, 20, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal128(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 1234567890.1234, result, 0.01)
+	})
+
+	t.Run("decimal128 negative", func(t *testing.T) {
+		// Test negative large value with scale=4
+		scale := int32(4)
+		typ := types.New(types.T_decimal128, 20, scale)
+		value, err := types.Decimal128FromFloat64(-9876543210.5678, 20, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal128(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		// Key assertion: negative value should be correctly converted
+		assert.InDelta(t, -9876543210.5678, result, 0.01)
+		assert.Less(t, result, 0.0, "negative value should be less than 0")
+	})
+
+	t.Run("decimal64 zero", func(t *testing.T) {
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(0.0, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 0.0, result, 0.01)
+	})
+
+	t.Run("decimal64 min_max_range", func(t *testing.T) {
+		// Test that min < max relationship is preserved
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+
+		minValue, err := types.Decimal64FromFloat64(-999.99, 10, scale)
+		assert.NoError(t, err)
+		minBuf := types.EncodeDecimal64(&minValue)
+
+		maxValue, err := types.Decimal64FromFloat64(999.99, 10, scale)
+		assert.NoError(t, err)
+		maxBuf := types.EncodeDecimal64(&maxValue)
+
+		minResult := getMinMaxValueByFloat64(typ, minBuf)
+		maxResult := getMinMaxValueByFloat64(typ, maxBuf)
+
+		// Critical assertion: min should be less than max
+		// Before fix: minResult would be a huge positive number > maxResult
+		assert.Less(t, minResult, maxResult, "min should be less than max")
+		assert.InDelta(t, -999.99, minResult, 0.01)
+		assert.InDelta(t, 999.99, maxResult, 0.01)
+	})
+}
+
+func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]SubTableStatus)
+		}
+		e.pClient.subscribed.m[tblID] = SubTableStatus{
+			DBID:       dbID,
+			SubState:   Subscribed,
+			LatestTime: time.Now(),
+		}
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		oldHook := gs.beforeSubscribeTable
+		enterSubscribe := make(chan struct{})
+		gs.beforeSubscribeTable = func(statsinfo.StatsInfoKey) {
+			close(enterSubscribe)
+		}
+		defer func() {
+			gs.beforeSubscribeTable = oldHook
+		}()
+
+		e.pClient.subscribed.mutex.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				e.pClient.subscribed.mutex.Unlock()
+			}
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		getDone := make(chan struct{})
+		go func() {
+			defer close(getDone)
+			_ = gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-enterSubscribe:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not reach subscribe path")
+		}
+
+		muAcquired := make(chan struct{})
+		go func() {
+			gs.mu.Lock()
+			gs.mu.Unlock()
+			close(muAcquired)
+		}()
+
+		ok := assert.Eventually(t, func() bool {
+			select {
+			case <-muAcquired:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond)
+		if !ok {
+			t.Fatal("GlobalStats.Get holds gs.mu while waiting on subscribed.mutex")
+		}
+
+		locked = false
+		e.pClient.subscribed.mutex.Unlock()
+
+		select {
+		case <-getDone:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
+		}
+	})
+}
+
+func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]SubTableStatus)
+		}
+		e.pClient.subscribed.m[tblID] = SubTableStatus{
+			DBID:       dbID,
+			SubState:   Subscribed,
+			LatestTime: time.Now(),
+		}
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		objStats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(objStats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(objStats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(objStats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *objStats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		qc := &mockStatsQueryClient{
+			response: &querypb.Response{
+				GetStatsInfoResponse: &querypb.GetStatsInfoResponse{StatsInfo: remoteInfo},
+			},
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		oldHook := gs.beforeCacheRemoteInfo
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+			gs.beforeCacheRemoteInfo = oldHook
+		}()
+
+		beforeCacheReached := make(chan struct{})
+		allowCache := make(chan struct{})
+		gs.beforeCacheRemoteInfo = func(statsinfo.StatsInfoKey) {
+			close(beforeCacheReached)
+			<-allowCache
+		}
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		resultCh := make(chan *statsinfo.StatsInfo, 1)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not request remote stats")
+		}
+
+		close(qc.allowReturn)
+
+		select {
+		case <-beforeCacheReached:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not reach remote cache write point")
+		}
+
+		e.pClient.subscribed.setTableUnsubscribe(dbID, tblID)
+		close(allowCache)
+
+		select {
+		case info := <-resultCh:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after unsubscribe")
+		}
+
+		gs.mu.Lock()
+		_, ok := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		assert.False(t, ok)
+	})
+}
+
+func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		_ = ctx
+		gs := e.globalStats
+		const dbID uint64 = 101
+		const tblID uint64 = 10002
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]SubTableStatus)
+		}
+		e.pClient.subscribed.m[tblID] = SubTableStatus{
+			DBID:       dbID,
+			SubState:   Subscribed,
+			LatestTime: time.Now(),
+		}
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 7
+
+		waiterLocked := make(chan struct{})
+		waiterDone := make(chan struct{})
+
+		gs.mu.Lock()
+		go func() {
+			gs.mu.Lock()
+			close(waiterLocked)
+			gs.mu.cond.Wait()
+			gs.mu.Unlock()
+			close(waiterDone)
+		}()
+		gs.mu.Unlock()
+
+		select {
+		case <-waiterLocked:
+		case <-time.After(time.Second):
+			t.Fatal("waiter did not reach cond.Wait path")
+		}
+
+		cached := gs.cacheRemoteInfoIfSubscribed(key, remoteInfo)
+		require.Equal(t, remoteInfo, cached)
+
+		select {
+		case <-waiterDone:
+		case <-time.After(time.Second):
+			t.Fatal("cacheRemoteInfoIfSubscribed did not wake cond waiter")
+		}
+	})
 }

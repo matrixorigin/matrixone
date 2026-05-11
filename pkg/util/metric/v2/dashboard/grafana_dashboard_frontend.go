@@ -36,8 +36,7 @@ func (c *DashboardCreator) initFrontendDashboard() error {
 			c.initFrontendCreateAccount(),
 			c.initFrontendPubSubDuration(),
 			c.initFrontendSQLLength(),
-			c.initFrontendCdc(),
-			c.initFrontendCdcDuration(),
+			// Note: CDC metrics moved to CDC dashboard
 		)...)
 	if err != nil {
 		return err
@@ -215,77 +214,4 @@ func (c *DashboardCreator) initFrontendSQLLength() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initFrontendCdc() dashboard.Option {
-	return dashboard.Row(
-		"Cdc Overview",
-
-		c.withMultiGraph(
-			"Record Count",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_record_count", `type="read"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_record_count", `type="sink"`) + `[$interval]))`,
-			},
-			[]string{
-				"read",
-				"sink",
-			}),
-
-		c.withMultiGraph(
-			"Error Count",
-			3,
-			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_error_count", `type="mysql-conn"`) + `[$interval]))`,
-				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_error_count", `type="mysql-sink"`) + `[$interval]))`,
-			},
-			[]string{
-				"mysql-conn",
-				"mysql-sink",
-			}),
-
-		c.withMultiGraph(
-			"Processing Record Count",
-			3,
-			[]string{
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="total"`) + `)`,
-			},
-			[]string{
-				"total",
-			}),
-
-		c.withMultiGraph(
-			"Memory",
-			3,
-			[]string{
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="hold-changes"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="mpool-inuse"`) + `)`,
-			},
-			[]string{
-				"hold-changes",
-				"mpool-inuse",
-			}),
-	)
-}
-
-func (c *DashboardCreator) initFrontendCdcDuration() dashboard.Option {
-	return dashboard.Row(
-		"Cdc Duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="append"`),
-				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="sink"`),
-				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="send-sql"`),
-			},
-			[]string{
-				"read",
-				"append",
-				"sink",
-				"send-sql",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
-	)
-}
+// Note: CDC metrics have been moved to CDC dashboard (initCDCDashboard)

@@ -250,7 +250,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
             AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
 	}
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
 		return colInfo, err
 	}
@@ -292,7 +292,7 @@ var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schem
 		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
 	}
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
 		return false, "", err
 	}
@@ -330,7 +330,7 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
                                   AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
 	}
 
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
 		return false, err
 	}

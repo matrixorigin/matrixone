@@ -1,0 +1,59 @@
+service-type = "CN"
+data-dir = "./etc/launch-minio-local/mo-data"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+[[fileservice]]
+backend = "DISK"
+data-dir = "./etc/launch-minio-local/mo-data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "SHARED"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://127.0.0.1:9000"
+key-prefix = "server/data"
+key-id = "minio"
+key-secret = "minio123"
+
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "3GB"
+disk-path = "etc/launch-minio-local/mo-data/file-service-cache"
+disk-min-evict-interval = "7m"
+disk-evict-target = 0.8
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://127.0.0.1:9000"
+key-prefix = "server/etl"
+key-id = "minio"
+key-secret = "minio123"
+
+[hakeeper-client]
+service-addresses = ["127.0.0.1:32001"]
+
+[cn]
+uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+port-base = 18000
+
+[cn.Engine]
+type = "distributed-tae"
+
+[cn.frontend]
+port = 6001
+
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

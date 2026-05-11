@@ -79,6 +79,7 @@ func getNodeHostConfig(cfg Config, fs fileservice.FileService) config.NodeHostCo
 	logdbFactory := (config.LogDBFactory)(nil)
 	logdbFactory = tan.Factory
 	logdb.MaxLogFileSize = cfg.LogDBMaxLogFileSize
+	logdb.DisablePrealloc = cfg.LogDBDisablePrealloc
 	if cfg.UseTeeLogDB {
 		logutil.Warn("using tee based logdb backed by pebble and tan, for testing purposes only")
 		logdbFactory = tee.TanPebbleLogDBFactory

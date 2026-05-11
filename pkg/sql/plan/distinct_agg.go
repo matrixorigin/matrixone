@@ -47,8 +47,8 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 		oldGroupBy := node.GroupBy
 		toCount := aggFunc.Args[0]
 
-		newGroupTag := builder.genNewTag()
-		newAggregateTag := builder.genNewTag()
+		newGroupTag := builder.genNewBindTag()
+		newAggregateTag := builder.genNewBindTag()
 		aggNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{node.Children[0]},

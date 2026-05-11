@@ -356,16 +356,16 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_char, types.T_varchar, types.T_json,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-			if pk.IsConst() {
-				for i := 0; i < pk.Length(); i++ {
-					v := pk.UnsafeGetStringAt(i)
+			if vec.IsConst() {
+				for i := 0; i < vec.Length(); i++ {
+					v := vec.UnsafeGetStringAt(i)
 					if mp[v] {
 						sels = append(sels, int64(i))
 					}
 				}
 			} else {
-				vs := vector.MustFixedColNoTypeCheck[types.Varlena](pk)
-				area := pk.GetArea()
+				vs := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+				area := vec.GetArea()
 				for i := 0; i < len(vs); i++ {
 					v := vs[i].UnsafeGetString(area)
 					if mp[v] {
@@ -655,7 +655,12 @@ func stringifyMap(req any, f func(any, any) string) string {
 	return buf.String()
 }
 
-func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+func execReadSql(
+	ctx context.Context,
+	op client.TxnOperator,
+	sql string,
+	disableLog bool,
+) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)

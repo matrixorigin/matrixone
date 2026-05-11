@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -79,7 +80,38 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime())
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		if scale < 0 {
+			scale = 0
+		} else if scale > 6 {
+			scale = 6
+		}
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		logutil.Warn("missing timezone in session info")
+		loc = time.Local
+	}
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
+	resultValue := ts.ToDatetime(loc).ToTime(scale)
+
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -98,7 +130,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano()).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -260,7 +292,7 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		}
 
 		// get enum values
-		enums := strings.Split(enumStr, ",")
+		enums, _ := types.DecodeEnumValues(enumStr)
 		enumVal := ""
 		for i, e := range enums {
 			enumVal += fmt.Sprintf("'%s'", e)
@@ -623,7 +655,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 	exec := v.(executor.SQLExecutor)
 
 	deleteTable := func(tbl *table.Table, dateStr string) error {
-		sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
+		sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < %q",
 			tbl.Database, tbl.Table, tbl.TimestampColumn.Name, dateStr)
 		opts := executor.Options{}.WithDatabase(tbl.Database).
 			WithTxn(proc.GetTxnOperator()).
@@ -644,7 +676,7 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 		opts := executor.Options{}.WithDatabase(tbl.Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone)
 		// fixme: hours should > 24 * time.Hour
-		runPruneSql := fmt.Sprintf(`select mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
+		runPruneSql := fmt.Sprintf(`SELECT mo_ctl('dn', 'inspect', 'objprune -t %s.%s -d %s -f')`, tbl.Database, tbl.Table, hours)
 		res, err := exec.Exec(proc.Ctx, runPruneSql, opts)
 		if err != nil {
 			return "", err
@@ -1869,10 +1901,58 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 
 }
 
+// getConstInt64 checks if the parameter is a constant int64 value and returns it.
+func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
+	sv := p.GetSourceVector()
+	if sv.IsConst() && !sv.IsConstNull() {
+		v, _ := p.GetValue(0)
+		return v, true
+	}
+	return 0, false
+}
+
 func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
+
+	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
+	if p2.WithAnyNullValue() {
+		// fall through to slow path
+	} else if constIdx, isConst := getConstInt64(p2); isConst {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null := p1.GetStrValue(i)
+			if null {
+				var nilVal T
+				if err := result.Append(nilVal, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			el, schema, err := types.UnpackNthElement(v1, int(constIdx))
+			if err != nil {
+				return err
+			}
+
+			if schema == types.T_any {
+				var nilVal T
+				if err = result.Append(nilVal, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if value, ok := el.(T); ok {
+				if err := result.Append(value, false); err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+			}
+		}
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
@@ -1917,6 +1997,43 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+
+	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
+	if p2.WithAnyNullValue() {
+		// fall through to slow path
+	} else if constIdx, isConst := getConstInt64(p2); isConst {
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null := p1.GetStrValue(i)
+			if null {
+				if err := result.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			el, schema, err := types.UnpackNthElement(v1, int(constIdx))
+			if err != nil {
+				return err
+			}
+
+			if schema == types.T_any {
+				if err = result.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if value, ok := el.([]byte); ok {
+				if err := result.AppendBytes(value, false); err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalError(proc.Ctx, "provided type did not match the expected type")
+			}
+		}
+		return nil
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null := p1.GetStrValue(i)
 		v2, null2 := p2.GetValue(i)

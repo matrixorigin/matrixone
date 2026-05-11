@@ -68,7 +68,7 @@ func TestLockAddedThatShouldFail(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		events := newWaiterEvents(1, nil, nil, nil, getLogger(""))
+		events := newWaiterEvents(1, nil, nil, time.Second, nil, getLogger(""))
 		defer events.close()
 
 		id := []byte("t1")

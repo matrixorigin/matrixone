@@ -126,7 +126,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	idxTableDef *TableDef, idxObjRef *ObjectRef, scanSnapshot *Snapshot, colDefs []*plan.ColDef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
-	idxScanTag := builder.genNewTag()
+	idxScanTag := builder.genNewBindTag()
 	args := filterExp.GetF().Args
 
 	var filterList *plan.Expr

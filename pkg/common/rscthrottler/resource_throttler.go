@@ -363,3 +363,19 @@ func AcquirePolicyForCNFlushS3(
 
 	return defaultAcquirePolicy(throttler, ask)
 }
+
+func AcquirePolicyForDataBranch(
+	throttler *memThrottler,
+	ask int64,
+) (int64, bool) {
+
+	total := int64(throttler.actualTotalMemory.Load())
+	if total > 0 && throttler.limitRate > 0 {
+		used := throttler.rss.Load() + ask
+		if float64(used) > float64(total)*throttler.limitRate {
+			return 0, false
+		}
+	}
+
+	return defaultAcquirePolicy(throttler, ask)
+}

@@ -12,5 +12,5 @@ on:
 jobs:
   wework-robot:
     name: WeWork Robot
-    uses: matrixorigin/CI/.github/workflows/robot.yaml@main
+    uses: matrixorigin/CI/.github/workflows/robot.yaml@release/3.0-dev
     secrets: inherit

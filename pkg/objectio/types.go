@@ -20,9 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -42,13 +42,14 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
-type ReadFilterSearchFuncType func(*vector.Vector) []int64
+type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 
 func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
@@ -64,11 +65,13 @@ func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFunc
 }
 
 type BlockReadTopOp struct {
-	Typ    types.T
-	Metric metric.MetricType
-	ColPos int32
-	NumVec []byte
-	Limit  uint64
+	Typ          types.T
+	Metric       metric.MetricType
+	ColPos       int32
+	NumVec       []byte
+	Limit        uint64
+	OrderedLimit bool
+	Desc         bool
 }
 
 type WriteOptions struct {

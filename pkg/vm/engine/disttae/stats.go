@@ -166,6 +166,12 @@ type GlobalStats struct {
 	statsUpdater func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool
 	// for test only currently.
 	approxObjectNumUpdater func() int64
+
+	// beforeCacheRemoteInfo is for test only.
+	beforeCacheRemoteInfo func(pb.StatsInfoKey)
+
+	// beforeSubscribeTable is for test only.
+	beforeSubscribeTable func(pb.StatsInfoKey)
 }
 
 func NewGlobalStats(
@@ -234,20 +240,69 @@ func (gs *GlobalStats) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKe
 	return gs.triggerUpdate(wrapkey, false)
 }
 
-func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
+	key pb.StatsInfoKey,
+	remoteInfo *pb.StatsInfo,
+) *pb.StatsInfo {
+	if remoteInfo == nil {
+		return nil
+	}
+
+	gs.engine.pClient.subscribed.mutex.Lock()
+	defer gs.engine.pClient.subscribed.mutex.Unlock()
+
+	currentEnt, ok := gs.engine.pClient.subscribed.m[key.TableID]
+	if !ok || currentEnt.DBID != key.DatabaseID || currentEnt.SubState != Subscribed {
+		return nil
+	}
+
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
-
-	wrapkey := pb.StatsInfoKeyWithContext{
-		Ctx: ctx,
-		Key: key,
-	}
 
 	info, ok := gs.mu.statsInfoMap[key]
 	if ok && info != nil {
 		return info
 	}
 
+	gs.mu.statsInfoMap[key] = remoteInfo
+	if gs.mu.cond != nil {
+		gs.mu.cond.Broadcast()
+	}
+	return remoteInfo
+}
+
+func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	wrapkey := pb.StatsInfoKeyWithContext{
+		Ctx: ctx,
+		Key: key,
+	}
+
+	gs.mu.Lock()
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok && info != nil {
+		gs.mu.Unlock()
+		return info
+	}
+	gs.mu.Unlock()
+
+	// after checking first potential patched cache
+	// we check the approx to avoid taking a place in statInfo map
+	if gs.beforeSubscribeTable != nil {
+		gs.beforeSubscribeTable(key)
+	}
+	ps, err := gs.engine.pClient.toSubscribeTable(
+		ctx,
+		uint64(key.AccId),
+		key.TableID,
+		key.TableName,
+		key.DatabaseID,
+		key.DbName)
+
+	if err == nil && ps.ApproxDataObjectsNum() == 0 {
+		return nil
+	}
+
+	var remoteInfo *pb.StatsInfo
 	if _, ok = ctx.Value(perfcounter.CalcTableStatsKey{}).(bool); ok {
 		stats := statistic.StatsInfoFromContext(ctx)
 		start := time.Now()
@@ -266,13 +321,27 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", "", err, resp)
 			} else if resp.GetStatsInfoResponse != nil {
 				defer client.Release(resp)
-
-				info := resp.GetStatsInfoResponse.StatsInfo
-				// If we get stats info from remote node, update local stats info.
-				gs.mu.statsInfoMap[key] = info
-				return info
+				remoteInfo = resp.GetStatsInfoResponse.StatsInfo
 			}
 		}
+	}
+
+	if remoteInfo != nil {
+		if gs.beforeCacheRemoteInfo != nil {
+			gs.beforeCacheRemoteInfo(key)
+		}
+		if info = gs.cacheRemoteInfoIfSubscribed(key, remoteInfo); info != nil {
+			return info
+		}
+	}
+
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	// Recheck local cache after lock reacquired, another goroutine may have updated it.
+	info, ok = gs.mu.statsInfoMap[key]
+	if ok && info != nil {
+		return info
 	}
 
 	ok = false
@@ -505,6 +574,7 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	//We should handle this case in next PR if needed.
 	ps, err := gs.engine.pClient.toSubscribeTable(
 		wrapKey.Ctx,
+		uint64(wrapKey.Key.AccId),
 		wrapKey.Key.TableID,
 		wrapKey.Key.TableName,
 		wrapKey.Key.DatabaseID,
@@ -609,6 +679,14 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 		return float64(types.DecodeTimestamp(buf))
 	case types.T_datetime:
 		return float64(types.DecodeDatetime(buf))
+	case types.T_decimal64:
+		// Fix: Use Decimal64ToFloat64 to handle negative values correctly
+		dec := types.DecodeDecimal64(buf)
+		return types.Decimal64ToFloat64(dec, typ.Scale)
+	case types.T_decimal128:
+		// Fix: Use Decimal128ToFloat64 to handle negative values correctly
+		dec := types.DecodeDecimal128(buf)
+		return types.Decimal128ToFloat64(dec, typ.Scale)
 	//case types.T_char, types.T_varchar, types.T_text:
 	//return float64(plan2.ByteSliceToUint64(buf)), true
 	default:
@@ -663,7 +741,7 @@ func updateInfoFromZoneMap(
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
 							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
@@ -709,7 +787,7 @@ func updateInfoFromZoneMap(
 				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))

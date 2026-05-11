@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,7 +32,7 @@ func GetVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int
 		tblcfg.MetadataTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
-	res, err := runSql(proc, sql)
+	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return 0, err
 	}

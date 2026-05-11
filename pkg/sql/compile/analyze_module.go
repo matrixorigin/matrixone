@@ -164,6 +164,9 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
 		node.AnalyzeInfo.ScanBytes += op.OpStats.ScanBytes
+		node.AnalyzeInfo.ReadSize += op.OpStats.ReadSize
+		node.AnalyzeInfo.S3ReadSize += op.OpStats.S3ReadSize
+		node.AnalyzeInfo.DiskReadSize += op.OpStats.DiskReadSize
 		node.AnalyzeInfo.NetworkIO += op.OpStats.NetworkIO
 		node.AnalyzeInfo.InputBlocks += op.OpStats.InputBlocks
 

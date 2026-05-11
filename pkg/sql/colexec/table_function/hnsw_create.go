@@ -58,7 +58,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 
 	for _, s := range sqls {
-		res, err := hnsw_runSql(proc, s)
+		res, err := hnsw_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}

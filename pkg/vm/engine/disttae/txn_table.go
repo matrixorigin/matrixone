@@ -723,11 +723,11 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 2000000 {
+		if traceFilterExprInterval.Add(step) >= 10000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 100 {
+		if traceFilterExprInterval2.Add(slowStep) >= 500 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
@@ -741,7 +741,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			tbl.enableLogFilterExpr.Load() ||
 			cost > 5*time.Second {
 			logutil.Info(
-				"TXN-FILTER-RANGE-LOG",
+				"txn.table.ranges.log",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(
 					rangesParam.BlockFilters, plan2.FormatOption{
@@ -1006,8 +1006,6 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))
@@ -1853,7 +1851,7 @@ func extractPStateFromRelData(
 		logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
 			zap.String("db", tbl.db.databaseName),
 			zap.String("table", tbl.tableName),
-			zap.String("sql", sql),
+			zap.String("sql", commonUtil.Abbreviate(sql, 500)),
 			zap.String("relDataType", fmt.Sprintf("%T", relData)),
 			zap.String("relDataContent", relData.String()),
 			zap.String("stack", string(debug.Stack())))
@@ -2015,15 +2013,14 @@ func (tbl *txnTable) BuildShardingReaders(
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (ps *logtailreplay.PartitionState, err error) {
-
-	defer func() {
-		if tbl.tableId == catalog.MO_COLUMNS_ID {
-			logutil.Info("open partition state for mo_columns",
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("desc", ps.Desc(true)),
-				zap.String("pointer", fmt.Sprintf("%p", ps)))
-		}
-	}()
+	// defer func() {
+	// 	if tbl.tableId == catalog.MO_COLUMNS_ID {
+	// 		logutil.Info("open partition state for mo_columns",
+	// 			zap.String("txn", tbl.db.op.Txn().DebugString()),
+	// 			zap.String("desc", ps.Desc(true)),
+	// 			zap.String("pointer", fmt.Sprintf("%p", ps)))
+	// 	}
+	// }()
 
 	var (
 		eng          = tbl.eng.(*Engine)
@@ -2040,6 +2037,8 @@ func (tbl *txnTable) getPartitionState(
 	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
 		//return an empty partition state.
 		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
+			ctx,
+			uint64(tbl.accountId),
 			tbl.db.databaseId,
 			tbl.tableId).Snapshot()
 		return
@@ -2048,6 +2047,7 @@ func (tbl *txnTable) getPartitionState(
 	// Subscribe a latest partition state
 	if ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
+		uint64(tbl.accountId),
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
@@ -2106,10 +2106,10 @@ func (tbl *txnTable) getPartitionState(
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
 		start, end = ps.GetDuration()
-		msg = "Txn-Table-GetSSPS-Succeed"
+		msg = "table.get.snapshot.state.succeed"
 	} else {
 		logger = logutil.Error
-		msg = "Txn-Table-GetSSPS-Failed"
+		msg = "table.get.snapshot.state.failed"
 	}
 
 	logger(
@@ -2247,13 +2247,20 @@ func (tbl *txnTable) PKPersistedBetween(
 	filter, err := readutil.ConstructBlockPKFilter(
 		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
 		basePKFilter,
+		nil,
 	)
 	if err != nil {
 		return false, err
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		return LinearSearchOffsetByValFactory(keys)
+		inner := LinearSearchOffsetByValFactory(keys)
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+			return inner(&cacheVectors[0])
+		}
 	}
 
 	cacheVectors := containers.NewVectors(1)
@@ -2284,17 +2291,66 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(&cacheVectors[0])
+		sels := searchFunc(cacheVectors)
 		release()
 		if len(sels) > 0 {
 			return true, nil
 		}
 	}
 	if checkTombstone {
-		return p.HasTombstoneChanged(from, to), nil
-	} else {
+		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+		pkType := plan2.ExprType2Type(&pkDef.Typ)
+		return tombstonePKExistsInRange(ctx, p, from, keys, pkType, fs)
+	}
+	return false, nil
+}
+
+// tombstonePKExistsInRange checks whether any tombstone object created or deleted
+// after 'from' contains a PK that intersects with 'keys'.
+// If the total tombstone rows exceed the threshold, it conservatively returns true.
+func tombstonePKExistsInRange(
+	ctx context.Context,
+	p *logtailreplay.PartitionState,
+	from types.TS,
+	keys *vector.Vector,
+	pkType types.Type,
+	fs fileservice.FileService,
+) (bool, error) {
+	tombObjs := p.GetChangedTombstoneObjsBetween(from)
+	if len(tombObjs) == 0 {
 		return false, nil
 	}
+	const tombstoneRowsThreshold = 50000
+	var totalRows uint32
+	for i := range tombObjs {
+		totalRows += tombObjs[i].Rows()
+		if totalRows > tombstoneRowsThreshold {
+			return true, nil
+		}
+	}
+	searchKeys := LinearSearchOffsetByValFactory(keys)
+	for _, obj := range tombObjs {
+		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
+			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
+			isCNCreated := obj.GetCNCreated()
+			vecCount := 3
+			if isCNCreated {
+				vecCount = 2
+			}
+			tombVectors := containers.NewVectors(vecCount)
+			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
+			if err != nil {
+				return true, nil
+			}
+			pkVec := tombVectors[1]
+			hits := searchKeys(&pkVec)
+			release()
+			if len(hits) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
@@ -2327,16 +2383,27 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	keysVector *vector.Vector,
 	checkTombstone bool,
 ) (bool, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnPKMayBeChangedDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	v2.TxnPKMayBeChangedTotalCounter.Inc()
+
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
+	// Measure LazyLoadLatestCkp duration
+	lazyLoadStart := time.Now()
 	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
 		ctx,
+		uint64(tbl.accountId),
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName)
+	v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
 	if err != nil {
 		return false, err
 	}
@@ -2348,15 +2415,22 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	packer.Reset()
 
 	keys := readutil.EncodePrimaryKeyVector(keysVector, packer)
+	// Measure PKExistInMemBetween duration
+	memCheckStart := time.Now()
 	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
+	v2.TxnPKExistInMemDurationHistogram.Observe(time.Since(memCheckStart).Seconds())
+
 	if exist {
+		v2.TxnPKMayBeChangedMemHitCounter.Inc()
 		return true, nil
 	}
 	if !flushed {
+		v2.TxnPKMayBeChangedMemNotFlushedCounter.Inc()
 		return false, nil
 	}
 
 	//need check pk whether exist on S3 block.
+	v2.TxnPKMayBeChangedPersistedCounter.Inc()
 	return tbl.PKPersistedBetween(
 		snap,
 		from,

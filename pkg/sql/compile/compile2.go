@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,6 +38,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
+
+type runSQLCoordinator interface {
+	CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error
+}
+
+type runSQLCoordinatorWithSQL interface {
+	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
+}
 
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
@@ -64,7 +73,7 @@ func (c *Compile) Compile(
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(execTopContext, e)
 			c.proc.Error(execTopContext, "panic in compile",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		task.End()
@@ -257,6 +266,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
+			if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				err = plan2.RewriteHiddenIndexDupEntry(c.pn, err)
+			}
 			if c.proc.GetTxnOperator().Txn().IsRCIsolation() &&
 				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 				orphan, e := c.proc.Base.LockService.IsOrphanTxn(
@@ -297,8 +309,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
-	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
-		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	if c.uid != "mo_logger" &&
+		strings.Contains(strings.ToLower(c.sql), "insert") &&
+		(strings.Contains(c.sql, "{MO_TS =") ||
+			strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger(c.proc.GetService()).Info(
+			"insert into with snapshot",
+			zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+			zap.Uint64("affectRows", queryResult.AffectRows),
+		)
 	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
@@ -317,6 +336,21 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if coordinator, ok := txnOp.(runSQLCoordinatorWithSQL); ok {
+			sqlText := c.originSQL
+			if sqlText == "" {
+				sqlText = c.sql
+			}
+			if err := coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText); err != nil {
+				return nil, err
+			}
+		} else if coordinator, ok := txnOp.(runSQLCoordinator); ok {
+			if err := coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
@@ -337,7 +371,9 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	// improved to refresh expression in the future.
 
 	var e error
+	stmtSnapshotTS := c.proc.GetStmtSnapshotTS()
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.proc.SetStmtSnapshotTS(stmtSnapshotTS)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if e != nil {

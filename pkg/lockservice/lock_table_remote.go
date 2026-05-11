@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -120,8 +121,21 @@ func (l *remoteLockTable) lock(
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
+	originalErr := err
 	if e := l.handleError(err, true); e != nil {
 		err = e
+	} else {
+		// handleError returned nil, meaning bind changed and error was swallowed
+		// This is a critical issue: lock failed but error was swallowed, transaction may continue incorrectly
+		// Return ErrLockTableBindChanged to trigger retry in lockWithRetry
+		l.logger.Error("CRITICAL: lock failed but error swallowed due to bind change",
+			zap.String("txn-id", hex.EncodeToString(txn.txnID)),
+			zap.Uint64("table-id", l.bind.Table),
+			zap.String("original-error", originalErr.Error()),
+			zap.String("bind", l.bind.DebugString()),
+		)
+		// Return ErrLockTableBindChanged to trigger retry, preventing transaction from continuing without lock
+		err = moerr.NewLockTableBindChangedNoCtx()
 	}
 	cb(pb.Result{}, err)
 }

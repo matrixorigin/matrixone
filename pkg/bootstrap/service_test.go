@@ -192,12 +192,12 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) EnterRunSql() {
+func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) ExitRunSql() {
+func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
 	//TODO implement me
 	panic("implement me")
 }

@@ -268,7 +268,13 @@ func (s *service) Start() error {
 		return err
 	}
 
-	return s.server.Start()
+	if err = s.server.Start(); err != nil {
+		return err
+	}
+
+	s.task.runnerReady.Store(true)
+	s.startTaskRunner()
+	return nil
 }
 
 func (s *service) Close() error {
@@ -998,15 +1004,26 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	}
 	err := profile.ProfileRuntime(profileType, gzWriter, debug)
 	if err != nil {
-		logutil.Errorf("get profile of %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.save.runtime.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
 	err = gzWriter.Close()
 	if err != nil {
-		logutil.Errorf("close gzip write of %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.writer.close.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
-	logutil.Info("get profile done. save profiles ", zap.String("path", profilePath))
+	logutil.Info(
+		"profile.save.get.ok",
+		zap.String("path", profilePath),
+	)
 	writeVec := fileservice.IOVector{
 		FilePath: profilePath,
 		Entries: []fileservice.IOEntry{
@@ -1022,7 +1039,11 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	err = etlFS.Write(ctx, writeVec)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.save.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
 }

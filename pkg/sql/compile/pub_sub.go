@@ -45,8 +45,16 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 	}
 
 	// check existence
-	sql := fmt.Sprintf("select count(1) from mo_catalog.mo_subs where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d and sub_name is not null", subOption.From, subOption.Publication, accountId)
-	rs, err := c.runSqlWithResult(sql, sysAccountId)
+	sql := fmt.Sprintf(`
+		SELECT count(1)
+		FROM mo_catalog.mo_subs
+		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d AND sub_name is not null
+	`, subOption.From, subOption.Publication, accountId)
+	rs, err := c.runSqlWithResultAndOptions(
+		sql,
+		sysAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return err
 	}
@@ -61,8 +69,16 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 		return moerr.NewInternalErrorf(ctx, "publication %s can only be subscribed once", subOption.Publication)
 	}
 
-	sql = fmt.Sprintf("update mo_catalog.mo_subs set sub_name='%s', sub_time=now() where pub_account_name = '%s' and pub_name = '%s' and sub_account_id = %d", dbName, subOption.From, subOption.Publication, accountId)
-	return c.runSqlWithAccountId(sql, sysAccountId)
+	sql = fmt.Sprintf(`
+		UPDATE mo_catalog.mo_subs
+		SET sub_name='%s', sub_time=now()
+		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d
+	`, dbName, subOption.From, subOption.Publication, accountId)
+	return c.runSqlWithAccountIdAndOptions(
+		sql,
+		sysAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
 }
 
 func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
@@ -72,14 +88,25 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	}
 
 	// update SubStatusNormal records
-	sql := fmt.Sprintf("update mo_catalog.mo_subs set sub_name=null, sub_time=null where sub_account_id = %d and sub_name = '%s' and status = %d", accountId, dbName, pubsub.SubStatusNormal)
-	if err = c.runSqlWithAccountId(sql, sysAccountId); err != nil {
+	sql := fmt.Sprintf(`
+		UPDATE mo_catalog.mo_subs
+		SET sub_name=null, sub_time=null
+		WHERE sub_account_id = %d AND sub_name = '%s' AND status = %d
+	`, accountId, dbName, pubsub.SubStatusNormal)
+	if err = c.runSqlWithAccountIdAndOptions(
+		sql,
+		sysAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return err
 	}
 
 	// delete SubStatusDeleted && SubStatusNotAuthorized records
-	sql = fmt.Sprintf("delete from mo_catalog.mo_subs where sub_account_id = %d and sub_name = '%s' and status != %d", accountId, dbName, pubsub.SubStatusNormal)
-	return c.runSqlWithAccountId(sql, sysAccountId)
+	sql = fmt.Sprintf(`
+		DELETE FROM mo_catalog.mo_subs
+		WHERE sub_account_id = %d AND sub_name = '%s' AND status != %d
+	`, accountId, dbName, pubsub.SubStatusNormal)
+	return c.runSqlWithAccountIdAndOptions(sql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 }
 
 func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName string) error {
@@ -94,8 +121,16 @@ func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName str
 	}
 
 	accountName, err := func() (string, error) {
-		sql := fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id = %d", accountId)
-		rs, err := c.runSqlWithResult(sql, sysAccountId)
+		sql := fmt.Sprintf(`
+			SELECT account_name
+			FROM mo_catalog.mo_account
+			WHERE account_id = %d
+		`, accountId)
+		rs, err := c.runSqlWithResultAndOptions(
+			sql,
+			sysAccountId,
+			executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			return "", err
 		}
@@ -116,8 +151,16 @@ func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName str
 	}
 
 	// get pub
-	sql := fmt.Sprintf("select pub_name, table_list from mo_catalog.mo_pubs where account_id = %d and database_name = '%s'", accountId, dbName)
-	rs, err := c.runSqlWithResult(sql, sysAccountId)
+	sql := fmt.Sprintf(`
+		SELECT pub_name, table_list
+		FROM mo_catalog.mo_pubs
+		WHERE account_id = %d AND database_name = '%s'
+	`, accountId, dbName)
+	rs, err := c.runSqlWithResultAndOptions(
+		sql,
+		sysAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return err
 	}
@@ -138,14 +181,30 @@ func updatePubTableList(ctx context.Context, c *Compile, dbName, dropTblName str
 
 		newTableListStr := pubsub.RemoveTable(tableListStr, dropTblName)
 		// update pub
-		sql = fmt.Sprintf("update mo_catalog.mo_pubs set table_list='%s' where account_id = %d and pub_name = '%s'", newTableListStr, accountId, pubName)
-		if err = c.runSqlWithAccountId(sql, sysAccountId); err != nil {
+		sql = fmt.Sprintf(`
+			UPDATE mo_catalog.mo_pubs
+			SET table_list='%s'
+			WHERE account_id = %d AND pub_name = '%s'
+		`, newTableListStr, accountId, pubName)
+		if err = c.runSqlWithAccountIdAndOptions(
+			sql,
+			sysAccountId,
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 
 		// update sub
-		sql = fmt.Sprintf("update mo_catalog.mo_subs set pub_tables='%s' where pub_account_name = '%s' and pub_name = '%s'", newTableListStr, accountName, pubName)
-		if err = c.runSqlWithAccountId(sql, sysAccountId); err != nil {
+		sql = fmt.Sprintf(`
+			UPDATE mo_catalog.mo_subs
+			SET pub_tables='%s'
+			WHERE pub_account_name = '%s' AND pub_name = '%s'
+		`, newTableListStr, accountName, pubName)
+		if err = c.runSqlWithAccountIdAndOptions(
+			sql,
+			sysAccountId,
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	}

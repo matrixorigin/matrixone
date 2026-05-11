@@ -17,9 +17,10 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -193,6 +195,28 @@ func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	}
 }
 
+func WithPrefetchOnSubscribed(th []string) EngineOptions {
+	return func(e *Engine) {
+		var (
+			err error
+		)
+
+		for i := range th {
+			r, err2 := regexp.Compile(th[i])
+			if err2 != nil {
+				err = errors.Join(err, err2)
+				continue
+			}
+			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
+		}
+
+		logutil.Info("Set-Prefetch-On-Subscribed-By-TOML",
+			zap.Strings("patterns", th),
+			zap.Error(err),
+		)
+	}
+}
+
 func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	return func(e *Engine) {
 		e.config.ieFactory = f
@@ -233,6 +257,7 @@ type Engine struct {
 
 		memThrottler rscthrottler.RSCThrottler
 
+		prefetchOnSubscribed           []*regexp.Regexp
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
@@ -273,6 +298,13 @@ type Engine struct {
 	skipConsume bool
 
 	cloneTxnCache *CloneTxnCache
+}
+
+func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
+	if overridden, regs := engine.GetPrefetchOnSubscribed(); overridden {
+		return regs
+	}
+	return e.config.prefetchOnSubscribed
 }
 
 func (e *Engine) SetService(svr string) {
@@ -372,7 +404,6 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	syncCommittedTSCount uint64
 	pkCount              int
 
 	adjustCount int
@@ -462,9 +493,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:        map[types.Objectid]Summary{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cnObjsSummary:   map[types.Objectid]Summary{},
+		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -850,17 +880,20 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Info(
-			"RollbackLastStatement",
-			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-			zap.Int("before", beforeEntries),
-			zap.Int("after", afterEntries),
-		)
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"RollbackLastStatement",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Int("before", beforeEntries),
+				zap.Int("after", afterEntries),
+			)
+		})
 	}()
 	txn.Lock()
 	defer txn.Unlock()
@@ -942,19 +975,11 @@ func (txn *Transaction) advanceSnapshot(
 	return nil
 }
 
-// For RC isolation, update the snapshot TS of transaction for each statement.
-// only 2 cases need to reset snapshot
-// 1. cn sync latest commit ts from mo_ctl
-// 2. not first sql
+// For RC isolation, update the snapshot TS for every statement execution.
+// RC should observe the latest committed schema/data at statement start,
+// including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
-	needResetSnapshot := false
-	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
-	if newTimes > txn.syncCommittedTSCount {
-		txn.syncCommittedTSCount = newTimes
-		needResetSnapshot = true
-	}
-
-	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
+	if !commit {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
 
@@ -982,6 +1007,11 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+
+	// pkCheckPos is the primary-key vector position in bat at write time.
+	// -1 means no PK duplicate check is needed for this entry.
+	pkCheckPos   int
+	pkCheckReady bool
 }
 
 func (e *Entry) String() string {

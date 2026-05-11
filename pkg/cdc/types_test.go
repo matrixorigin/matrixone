@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -201,6 +202,27 @@ func Test_atomicBatchRowIter(t *testing.T) {
 
 	assert.False(t, iter.Next())
 	iter.Close()
+}
+
+func TestAtomicBatch_RowCountDeduplicates(t *testing.T) {
+	bat := NewAtomicBatch(testutil.TestUtilMp)
+	ts := types.BuildTS(10, 2)
+
+	createBatch := func(pk int32) *batch.Batch {
+		b := batch.New([]string{"pk", "ts"})
+		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil)
+		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil)
+		return b
+	}
+
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0)
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0) // duplicate pk+ts
+	bat.Append(types.NewPacker(), createBatch(43), 1, 0) // unique pk
+
+	assert.Equal(t, 2, bat.RowCount())
+	assert.Equal(t, 3, bat.TotalRows())
+	assert.Equal(t, 1, bat.DuplicateRows())
+	assert.Equal(t, 2, bat.Rows.Len())
 }
 
 func TestDbTableInfo_String(t *testing.T) {
@@ -687,6 +709,65 @@ func TestUriInfo_String(t *testing.T) {
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})
 	}
+}
+
+func TestDecoderOutput_Close(t *testing.T) {
+	mp, err := mpool.NewMPool("test_decoder_output_close", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("NilReceiver", func(t *testing.T) {
+		var d *DecoderOutput
+		assert.NotPanics(t, func() { d.Close() })
+	})
+
+	t.Run("EmptyOutput", func(t *testing.T) {
+		d := &DecoderOutput{}
+		assert.NotPanics(t, func() { d.Close() })
+	})
+
+	t.Run("WithCheckpointBat", func(t *testing.T) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.NewInt32Vector(3, types.T_int32.ToType(), mp, false, []int32{1, 2, 3})
+		bat.SetRowCount(3)
+		d := &DecoderOutput{
+			checkpointBat: bat,
+			mp:            mp,
+		}
+		d.Close()
+		assert.Nil(t, d.checkpointBat)
+		assert.Nil(t, d.mp)
+	})
+
+	t.Run("WithCheckpointBatNoMp", func(t *testing.T) {
+		bat := &batch.Batch{Vecs: make([]*vector.Vector, 0)}
+		d := &DecoderOutput{
+			checkpointBat: bat,
+			mp:            nil,
+		}
+		d.Close()
+		assert.Nil(t, d.checkpointBat)
+	})
+
+	t.Run("WithAtomicBatches", func(t *testing.T) {
+		insertBatch := NewAtomicBatch(mp)
+		deleteBatch := NewAtomicBatch(mp)
+		d := &DecoderOutput{
+			insertAtmBatch: insertBatch,
+			deleteAtmBatch: deleteBatch,
+		}
+		d.Close()
+		assert.Nil(t, d.insertAtmBatch)
+		assert.Nil(t, d.deleteAtmBatch)
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		d := &DecoderOutput{
+			insertAtmBatch: NewAtomicBatch(mp),
+		}
+		d.Close()
+		assert.NotPanics(t, func() { d.Close() })
+	})
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

@@ -1,0 +1,155 @@
+-- Reproduce Top/UnionBatch panic on IVFFLAT entries scan (mixed persisted + in-memory).
+-- Expected (buggy build): query panics with stack containing
+--   top.(*container).processBatch -> vector.(*Vector).UnionBatch
+
+DROP TABLE IF EXISTS t_ivfflat_entries_panic;
+CREATE TABLE t_ivfflat_entries_panic (
+    id BIGINT PRIMARY KEY,
+    embedding vecf32(4) DEFAULT NULL,
+    payload INT
+);
+
+CREATE INDEX idx_vec USING ivfflat ON t_ivfflat_entries_panic(embedding) lists=2 op_type 'vector_l2_ops';
+
+-- Baseline rows.
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 0, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 1000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 1500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 2000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 2500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 3000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 3500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 4000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 4500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 5000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 5500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 6000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 6500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 7000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 7500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 8000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 8500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 9000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 9500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 10000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 10500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 11000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 11500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 12000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 12500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 13000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 13500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 14000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 14500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 15000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 15500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 16000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 16500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 17000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 17500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 18000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 18500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 19000, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 19500, '[0.1,0.2,0.3,0.4]', 1 FROM generate_series(1, 500) g;
+
+-- Force baseline to persisted.
+-- @ignore:0
+SELECT mo_ctl('dn','flush', concat(database(), '.t_ivfflat_entries_panic')) AS flush_res;
+-- @ignore:0
+SELECT mo_ctl('dn','checkpoint','') AS checkpoint_res;
+
+-- Add in-memory delta after checkpoint.
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 20000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 20500, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 21000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 21500, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 22000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 22500, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 23000, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+INSERT INTO t_ivfflat_entries_panic
+SELECT result + 23500, '[0.5,0.5,0.5,0.5]', 2 FROM generate_series(1, 500) g;
+
+-- Locate hidden ivfflat entries table.
+SET @tid = (
+    SELECT rel_id
+    FROM mo_catalog.mo_tables
+    WHERE relname = 't_ivfflat_entries_panic'
+      AND reldatabase = database()
+    LIMIT 1
+);
+
+SET @entries = (
+    SELECT index_table_name
+    FROM mo_catalog.mo_indexes
+    WHERE table_id = @tid
+      AND name = 'idx_vec'
+      AND algo = 'ivfflat'
+      AND algo_table_type = 'entries'
+    LIMIT 1
+);
+
+-- Direct entries query with large LIMIT to reproduce panic.
+-- Keep this query shape aligned with vector_search_panic_entries_stable.py.
+SET @q = CONCAT(
+    'SELECT COUNT(*) AS cnt FROM (',
+    'SELECT __mo_index_pri_col, ',
+    'L2_DISTANCE(__mo_index_centroid_fk_entry, ''[0.5,0.5,0.5,0.5]'') AS vec_dist ',
+    'FROM `', @entries, '` ',
+    'ORDER BY vec_dist ',
+    'LIMIT 20000',
+    ') t'
+);
+
+PREPARE s1 FROM @q;
+EXECUTE s1;
+DEALLOCATE PREPARE s1;
+
+DROP TABLE IF EXISTS t_ivfflat_entries_panic;

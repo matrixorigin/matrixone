@@ -229,7 +229,7 @@ func (b *bufferHolder) loopAggr() {
 		return
 	}
 	counter := v2.GetTraceMOLoggerAggrCounter(b.name)
-	logutil.Info("handle-aggr-start")
+	logutil.Info("logger.aggr.start")
 mainL:
 	for {
 		select {
@@ -245,9 +245,8 @@ mainL:
 			recordCnt += len(results)
 			if time.Since(lastPrintTime) > printInterval {
 				logutil.Info(
-					"handle-aggr",
-					zap.Int("records", recordCnt),
-					zap.Time("end", end),
+					"logger.aggr.handle.count",
+					zap.Int("count", recordCnt),
 				)
 				recordCnt = 0
 				lastPrintTime = time.Now()
@@ -256,14 +255,14 @@ mainL:
 
 		case <-b.bgCtx.Done():
 			// trigger by b.bgCancel
-			logger.Info("handle-aggr-bgctx-done")
+			logger.Info("logger.aggr.bgctx.done")
 			break mainL
 		case <-b.ctx.Done():
-			logutil.Info("handle-aggr-ctx-done")
+			logutil.Info("logger.aggr.ctx.done")
 			break mainL
 		}
 	}
-	logutil.Info("handle-aggr-exit")
+	logutil.Info("logger.aggr.exit")
 }
 
 var _ generateReq = (*bufferGenerateReq)(nil)

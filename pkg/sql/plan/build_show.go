@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +36,24 @@ const MO_CATALOG_DB_NAME = "mo_catalog"
 const MO_DEFUALT_HOSTNAME = "localhost"
 const INFORMATION_SCHEMA = "information_schema"
 const SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
+
+// escapeForDoubleQuotedLiteral prepares s for embedding inside a
+// double-quoted MySQL string literal (`"..."`). Both backslashes and
+// double quotes are escaped so every byte survives the outer scanner
+// pass verbatim. Order matters: backslashes must be doubled first,
+// otherwise the `\"` inserted for each `"` would be re-escaped and
+// produce a spurious extra backslash on round-trip.
+//
+// Used by SHOW CREATE {TABLE,VIEW} which wrap the generated DDL text
+// inside a SELECT ... AS projection so the result set columns can be
+// streamed back to the client; the DDL already carries literal
+// backslashes (formatStrLit, column-comment path) that must not be
+// re-interpreted by the scanner.
+func escapeForDoubleQuotedLiteral(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
+}
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
@@ -74,9 +91,9 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
-	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
-	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
+	sqlStr = fmt.Sprintf(sqlStr, escapeForDoubleQuotedLiteral(name), escapeForDoubleQuotedLiteral(createSql))
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
@@ -138,18 +155,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
-	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
+	sql = fmt.Sprintf(sql, escapeForDoubleQuotedLiteral(tblName), escapeForDoubleQuotedLiteral(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -192,12 +199,155 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	}
 
 	// FixMe  We need a better escape function
-	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
-	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
+	stmtStr := viewData.Stmt
+	// MySQL always shows SQL SECURITY in SHOW CREATE VIEW output.
+	// Legacy views may not have persisted security_type, so default to DEFINER.
+	securityType := strings.TrimSpace(strings.ToUpper(viewData.SecurityType))
+	if securityType == "" {
+		securityType = "DEFINER"
+	}
+	upper := strings.ToUpper(stmtStr)
+	viewIdx := findViewKeyword(upper)
+	if viewIdx > 0 {
+		header := upper[:viewIdx]
+		if !hasSQLSecurityClause(header) {
+			stmtStr = stmtStr[:viewIdx] + "SQL SECURITY " + securityType + " " + stmtStr[viewIdx:]
+		}
+	}
+	sqlStr = fmt.Sprintf(sqlStr, escapeForDoubleQuotedLiteral(tblName), escapeForDoubleQuotedLiteral(stmtStr))
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// findViewKeyword finds the position of the VIEW keyword in an uppercased SQL string.
+// It skips comments and quoted segments so VIEW inside them is ignored.
+// Returns -1 if not found.
+func findViewKeyword(upper string) int {
+	viewIdx := -1
+	scanSQLTokens(upper, func(token string, start int) bool {
+		if token == "VIEW" {
+			viewIdx = start
+			return false
+		}
+		return true
+	})
+	return viewIdx
+}
+
+func hasSQLSecurityClause(upper string) bool {
+	lastTokenWasSQL := false
+	hasClause := false
+	scanSQLTokens(upper, func(token string, _ int) bool {
+		if lastTokenWasSQL && token == "SECURITY" {
+			hasClause = true
+			return false
+		}
+		lastTokenWasSQL = token == "SQL"
+		return true
+	})
+	return hasClause
+}
+
+func scanSQLTokens(s string, yield func(token string, start int) bool) {
+	inVersionedComment := false
+	for i := 0; i < len(s); {
+		if inVersionedComment && i+1 < len(s) && s[i] == '*' && s[i+1] == '/' {
+			inVersionedComment = false
+			i += 2
+			continue
+		}
+
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+			continue
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				if i+2 < len(s) && s[i+2] == '!' {
+					inVersionedComment = true
+					i += 3
+					for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+						i++
+					}
+					continue
+				}
+				i = skipBlockComment(s, i+2)
+				continue
+			}
+		case '-':
+			if startsDashComment(s, i) {
+				i = skipLineComment(s, i+2)
+				continue
+			}
+		case '#':
+			i = skipLineComment(s, i+1)
+			continue
+		case '\'', '"', '`':
+			i = skipQuotedSegment(s, i, s[i])
+			continue
+		}
+
+		if isSQLIdentChar(s[i]) {
+			begin := i
+			for i < len(s) && isSQLIdentChar(s[i]) {
+				i++
+			}
+			if !yield(s[begin:i], begin) {
+				return
+			}
+			continue
+		}
+		i++
+	}
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '*' && i+1 < len(s) && s[i+1] == '/' {
+			return i + 2
+		}
+	}
+	return len(s)
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start; i < len(s); i++ {
+		if s[i] == '\n' || s[i] == '\r' {
+			return i
+		}
+	}
+	return len(s)
+}
+
+func skipQuotedSegment(s string, start int, quote byte) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote {
+			i++
+			continue
+		}
+		return i + 1
+	}
+	return len(s)
+}
+
+func startsDashComment(s string, idx int) bool {
+	return idx+1 < len(s) && s[idx+1] == '-' &&
+		(idx+2 == len(s) || s[idx+2] == ' ' || s[idx+2] == '\t' || s[idx+2] == '\n' || s[idx+2] == '\r')
+}
+
+func isSQLIdentChar(ch byte) bool {
+	return ch == '_' ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9')
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
@@ -231,7 +381,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
+	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s WHERE (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -256,7 +406,7 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
 
-	sql := fmt.Sprintf("select %s.mo_tables.relname as `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) as 'Data Type' from %s.mo_tables left join %s.mo_columns on %s.mo_tables.rel_id = %s.mo_columns.att_relname_id where %s.mo_tables.relkind = '%s' and %s.mo_tables.reldatabase = '%s' and %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
+	sql := fmt.Sprintf("SELECT %s.mo_tables.relname AS `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) AS 'Data Type' FROM %s.mo_tables LEFT JOIN %s.mo_columns ON %s.mo_tables.rel_id = %s.mo_columns.att_relname_id WHERE %s.mo_tables.relkind = '%s' AND %s.mo_tables.reldatabase = '%s' AND %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
 		MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, MO_CATALOG_DB_NAME, dbName, MO_CATALOG_DB_NAME, Sequence_cols_name[0])
 
 	if stmt.Where != nil {
@@ -1071,7 +1221,7 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where account_id = %d and pub_name='%s';", accountId, stmt.Name)
+	sql := fmt.Sprintf("SELECT pub_name AS Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || CASE table_list WHEN '*' THEN '' ELSE ' TABLE ' || table_list END || ' ACCOUNT ' || account_list AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
 	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -1079,10 +1229,10 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
+	defer newStmt.Free()
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 

@@ -374,6 +374,9 @@ message DedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  uint64 target_table_id = 17;
+  timestamp.Timestamp initial_snapshot_ts = 18 [(gogoproto.nullable) = false];
+  plan.ObjectRef target_table_ref = 19;
 }
 
 message RightDedupJoin {
@@ -593,6 +596,9 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
+  repeated plan.OrderBySpec block_order_by = 14;
+  uint64 block_limit = 15;
+  bytes bloom_filter = 16;
 }
 
 message NodeInfo {
@@ -696,7 +702,7 @@ message UuidToRegIdx {
   string from_addr = 3;
 }
 
-message Apply{
+message Apply {
   int32 apply_type = 1;
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;

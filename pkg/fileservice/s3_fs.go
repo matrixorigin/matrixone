@@ -52,6 +52,8 @@ type S3FS struct {
 	perfCounterSets []*perfcounter.CounterSet
 
 	ioMerger *IOMerger
+
+	parallelMode ParallelMode
 }
 
 // key mapping scheme:
@@ -76,6 +78,7 @@ func NewS3FS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
+		parallelMode:    args.ParallelMode,
 	}
 
 	var err error
@@ -452,8 +455,30 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		expire = &vector.ExpireAt
 	}
 	key := s.pathToKey(path.File)
-	if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
-		return 0, err
+	enableParallel := false
+	switch s.parallelMode {
+	case ParallelForce:
+		enableParallel = true
+	case ParallelAuto:
+		if size == nil || *size >= minMultipartPartSize {
+			enableParallel = true
+		}
+	}
+
+	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
+		enableParallel {
+		opt := &ParallelMultipartOption{
+			PartSize:    defaultParallelMultipartPartSize,
+			Concurrency: runtime.NumCPU(),
+			Expire:      expire,
+		}
+		if err := pmw.WriteMultipartParallel(ctx, key, reader, size, opt); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
+			return 0, err
+		}
 	}
 
 	// write to disk cache
@@ -550,11 +575,29 @@ read_disk_cache:
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_disk_cache_Caches_begin)
+		// Record which entries are not done before reading from disk cache
+		undoneBefore := make(map[int]bool)
+		for i, entry := range vector.Entries {
+			undoneBefore[i] = !entry.done
+		}
 		err := readCache(ctx, s.diskCache, vector)
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		// Count bytes actually read from disk cache (entries that became done and from disk cache)
+		var actualDiskReadBytes int64
+		for i, entry := range vector.Entries {
+			if undoneBefore[i] && entry.done && entry.fromCache == s.diskCache {
+				actualDiskReadBytes += entry.Size
+			}
+		}
+		// Record disk read size
+		if actualDiskReadBytes > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
+			})
 		}
 		if vector.allDone() {
 			return nil
@@ -615,8 +658,21 @@ read_disk_cache:
 		}
 	}
 
+	// Count bytes that will be read from S3 (entries that are not done yet)
+	var s3ReadBytes int64
+	for _, entry := range vector.Entries {
+		if !entry.done {
+			s3ReadBytes += entry.Size
+		}
+	}
 	if err := s.read(ctx, vector); err != nil {
 		return err
+	}
+	// Record S3 read size (all bytes read from S3)
+	if s3ReadBytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.S3ReadSize.Add(s3ReadBytes)
+		})
 	}
 
 	return nil
