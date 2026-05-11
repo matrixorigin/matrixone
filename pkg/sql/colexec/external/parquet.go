@@ -17,8 +17,10 @@ package external
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"math/big"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
@@ -499,6 +502,94 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
+	case types.T_decimal64:
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			precision := int32(dt.Width)
+			scale := int32(dt.Scale)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal64, error) {
+						return parseStringToDecimal64(util.UnsafeBytesToString(data), precision, scale)
+					},
+					types.Decimal64(0),
+				)
+			}
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				if dict := page.Dictionary(); dict != nil {
+					dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
+					if err != nil {
+						return err
+					}
+					indices := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal64 {
+						return dictValues[int(idx)]
+					})
+				}
+				values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+				if err != nil {
+					return err
+				}
+				return copyPageToVec(mp, page, proc, vec, values)
+			}
+		}
+	case types.T_decimal128:
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			precision := int32(dt.Width)
+			scale := int32(dt.Scale)
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal128, error) {
+						return parseStringToDecimal128(util.UnsafeBytesToString(data), precision, scale)
+					},
+					types.Decimal128{},
+				)
+			}
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				if dict := page.Dictionary(); dict != nil {
+					dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
+					if err != nil {
+						return err
+					}
+					indices := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal128 {
+						return dictValues[int(idx)]
+					})
+				}
+				values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+				if err != nil {
+					return err
+				}
+				return copyPageToVec(mp, page, proc, vec, values)
+			}
+		}
+	case types.T_decimal256:
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			kind := st.Kind()
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictValues, err := decodeDecimal256Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal256 {
+					return dictValues[int(idx)]
+				})
+			}
+			values, err := decodeDecimal256Values(proc.Ctx, kind, data)
+			if err != nil {
+				return err
+			}
+			return copyPageToVec(mp, page, proc, vec, values)
+		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
@@ -567,6 +658,173 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	}
 	if mp.mapper != nil {
 		return mp
+	}
+	return nil
+}
+
+type nullCheckInfo struct {
+	noNulls            bool
+	levels             []byte
+	maxDefinitionLevel byte
+	actualNonNulls     int64
+}
+
+func (nc nullCheckInfo) isNull(index int) bool {
+	if nc.noNulls {
+		return false
+	}
+	return nc.levels[index] != nc.maxDefinitionLevel
+}
+
+func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
+	numRows := int(page.NumRows())
+	if !mp.srcNull || page.NumNulls() == 0 {
+		return nullCheckInfo{
+			noNulls:        true,
+			actualNonNulls: int64(numRows),
+		}, nil
+	}
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+	}
+
+	levels := page.DefinitionLevels()
+	if len(levels) != numRows {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: definition levels length %d != numRows %d", len(levels), numRows)
+	}
+
+	var actualNonNulls int64
+	for _, level := range levels {
+		if level == mp.maxDefinitionLevel {
+			actualNonNulls++
+		}
+	}
+	expectedNonNulls := int64(numRows) - page.NumNulls()
+	if actualNonNulls != expectedNonNulls {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() indicates %d non-nulls, but definition levels show %d",
+			expectedNonNulls, actualNonNulls)
+	}
+
+	return nullCheckInfo{
+		levels:             levels,
+		maxDefinitionLevel: mp.maxDefinitionLevel,
+		actualNonNulls:     actualNonNulls,
+	}, nil
+}
+
+func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNonNulls int64) error {
+	var actualCount int64
+	if loader.size != 0 {
+		if loader.size <= 0 {
+			return moerr.NewInvalidInputf(ctx, "malformed page: invalid fixed length %d", loader.size)
+		}
+		if len(loader.buf)%loader.size != 0 {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: buffer length %d is not divisible by element size %d",
+				len(loader.buf), loader.size)
+		}
+		actualCount = int64(len(loader.buf) / loader.size)
+	} else if len(loader.offsets) > 0 {
+		actualCount = int64(len(loader.offsets) - 1)
+	}
+
+	if actualCount != expectedNonNulls {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: expected %d non-null values, but data contains %d",
+			expectedNonNulls, actualCount)
+	}
+	return nil
+}
+
+func validateDictionaryIndicesCount(ctx context.Context, indices []int32, expectedNonNulls int64) error {
+	if int64(len(indices)) != expectedNonNulls {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: expected %d dictionary indices, but got %d",
+			expectedNonNulls, len(indices))
+	}
+	return nil
+}
+
+func wrapParseError(ctx context.Context, row int, parseErr error) error {
+	if parseErr == nil {
+		return nil
+	}
+	var moErr *moerr.Error
+	if errors.As(parseErr, &moErr) {
+		return parseErr
+	}
+	return moerr.NewInternalErrorf(ctx, "row %d: %v", row, parseErr)
+}
+
+func processStringToFixed[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	parseFunc func(data []byte) (T, error),
+	zeroVal T,
+) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, int(dict.Len()), indices); err != nil {
+			return err
+		}
+	}
+
+	length := vec.Length()
+	if err := vec.PreExtend(numRows+length, proc.Mp()); err != nil {
+		return err
+	}
+	vec.SetLength(numRows + length)
+	ret := vector.MustFixedColWithTypeCheck[T](vec)
+
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			nulls.Add(vec.GetNulls(), uint64(i+length))
+			ret[i+length] = zeroVal
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		val, parseErr := parseFunc(bytes.TrimSpace(data))
+		if parseErr != nil {
+			return wrapParseError(ctx, i, parseErr)
+		}
+		ret[i+length] = val
 	}
 	return nil
 }
@@ -665,6 +923,309 @@ func copyDictPageToVec[T any](
 		return err
 	}
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
+var (
+	maxInt64Big  = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
+	minInt64Big  = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+	maxInt128Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	minInt128Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
+	maxInt256Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1))
+	minInt256Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+)
+
+func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal64, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal64, len(src))
+		for i, v := range src {
+			dst[i] = types.Decimal64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal64, len(src))
+		for i, v := range src {
+			dst[i] = types.Decimal64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal64, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal64(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal64", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal64 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal64, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal64(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal64", kind)
+	}
+}
+
+func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal128, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal128, len(src))
+		for i, v := range src {
+			dst[i] = decimal128FromInt64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal128, len(src))
+		for i, v := range src {
+			dst[i] = decimal128FromInt64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal128, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal128(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal128", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal128 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal128, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal128(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal128", kind)
+	}
+}
+
+func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal256, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal256, len(src))
+		for i, v := range src {
+			dst[i] = decimal256FromInt64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal256, len(src))
+		for i, v := range src {
+			dst[i] = decimal256FromInt64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal256, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal256(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal256", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal256 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal256, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal256(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal256", kind)
+	}
+}
+
+func isDecimalLogicalType(lt *format.LogicalType) bool {
+	return lt != nil && lt.Decimal != nil
+}
+
+func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt64Big) < 0 || bi.Cmp(maxInt64Big) > 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "decimal64 overflow for value %x", b)
+	}
+	return types.Decimal64(bi.Int64()), nil
+}
+
+func decimalBytesToDecimal128(ctx context.Context, b []byte) (types.Decimal128, error) {
+	if len(b) == 0 {
+		return types.Decimal128{}, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt128Big) < 0 || bi.Cmp(maxInt128Big) > 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputf(ctx, "decimal128 overflow for value %x", b)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, bi, 16)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	return types.Decimal128{
+		B0_63:   binary.BigEndian.Uint64(buf[8:]),
+		B64_127: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func decimalBytesToDecimal256(ctx context.Context, b []byte) (types.Decimal256, error) {
+	if len(b) == 0 {
+		return types.Decimal256{}, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt256Big) < 0 || bi.Cmp(maxInt256Big) > 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputf(ctx, "decimal256 overflow for value %x", b)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, bi, 32)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	return types.Decimal256{
+		B0_63:    binary.BigEndian.Uint64(buf[24:]),
+		B64_127:  binary.BigEndian.Uint64(buf[16:24]),
+		B128_191: binary.BigEndian.Uint64(buf[8:16]),
+		B192_255: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func decimal128FromInt64(v int64) types.Decimal128 {
+	var hi uint64
+	if v < 0 {
+		hi = ^uint64(0)
+	}
+	return types.Decimal128{
+		B0_63:   uint64(v),
+		B64_127: hi,
+	}
+}
+
+func decimal256FromInt64(v int64) types.Decimal256 {
+	var hi uint64
+	if v < 0 {
+		hi = ^uint64(0)
+	}
+	return types.Decimal256{
+		B0_63:    uint64(v),
+		B64_127:  hi,
+		B128_191: hi,
+		B192_255: hi,
+	}
+}
+
+func decimalBytesToBigInt(b []byte) *big.Int {
+	if len(b) == 0 {
+		return big.NewInt(0)
+	}
+	bi := new(big.Int).SetBytes(b)
+	if b[0]&0x80 != 0 {
+		mod := new(big.Int).Lsh(big.NewInt(1), uint(len(b))*8)
+		bi.Sub(bi, mod)
+	}
+	return bi
+}
+
+func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]byte, error) {
+	buf := make([]byte, size)
+	if bi.Sign() >= 0 {
+		tmp := bi.Bytes()
+		if len(tmp) > size {
+			return nil, moerr.NewInvalidInputf(ctx, "value does not fit in %d bytes", size)
+		}
+		copy(buf[size-len(tmp):], tmp)
+		return buf, nil
+	}
+
+	mod := new(big.Int).Lsh(big.NewInt(1), uint(size*8))
+	tmp := new(big.Int).Add(bi, mod)
+	if tmp.Sign() <= 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "negative value out of range for %d bytes", size)
+	}
+	tbytes := tmp.Bytes()
+	if len(tbytes) > size {
+		return nil, moerr.NewInvalidInputf(ctx, "value does not fit in %d bytes", size)
+	}
+	copy(buf[size-len(tbytes):], tbytes)
+	return buf, nil
+}
+
+func parseStringToDecimal64(s string, precision, scale int32) (types.Decimal64, error) {
+	if s == "" {
+		return 0, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal64(normalizeDecimalString(s), precision, scale)
+}
+
+func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128, error) {
+	if s == "" {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal128(normalizeDecimalString(s), precision, scale)
+}
+
+func normalizeDecimalString(s string) string {
+	s = strings.ReplaceAll(s, "E", "e")
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+	return s
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {

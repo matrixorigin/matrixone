@@ -3040,23 +3040,23 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	buildScopeAttached := false
 	for i := range rs {
 		if isSameCN(rs[i].NodeInfo.Addr, buildScopes[0].NodeInfo.Addr) {
 			rs[i].PreScopes = append(rs[i].PreScopes, buildScopes[0])
+			buildScopeAttached = true
 			break
 		}
 	}
+	if !buildScopeAttached {
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+	}
 
 	buildOpScopes := make([]*Scope, 0, len(c.cnList))
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs)
 
-	if len(rs) > len(c.cnList) { // probe side is shuffle scopes
-		for i := range c.cnList {
-			var tmp []*Scope
-			for j := range rs {
-				if isSameCN(c.cnList[i].Addr, rs[j].NodeInfo.Addr) {
-					tmp = append(tmp, rs[j])
-				}
-			}
+	if len(rs) > len(c.cnList) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+		for _, tmp := range probeScopeGroups {
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -3099,6 +3099,50 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	buildScopes[0].setRootOperator(dispatchArg)
 	return rs
+}
+
+func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope) [][]*Scope {
+	groups := make([][]*Scope, 0, len(rs))
+	used := make([]bool, len(rs))
+
+	for _, cn := range c.cnList {
+		var group []*Scope
+		for i := range rs {
+			if !used[i] && isSameCN(cn.Addr, rs[i].NodeInfo.Addr) {
+				group = append(group, rs[i])
+				used[i] = true
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+
+	for i := range rs {
+		if used[i] {
+			continue
+		}
+		group := []*Scope{rs[i]}
+		used[i] = true
+		for j := i + 1; j < len(rs); j++ {
+			if !used[j] && isSameCN(rs[i].NodeInfo.Addr, rs[j].NodeInfo.Addr) {
+				group = append(group, rs[j])
+				used[j] = true
+			}
+		}
+		groups = append(groups, group)
+	}
+
+	return groups
+}
+
+func hasMultiScopeGroup(groups [][]*Scope) bool {
+	for _, group := range groups {
+		if len(group) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
