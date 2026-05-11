@@ -562,7 +562,7 @@ func fillOutputBatchBySelectedRows(
 		if outputColPos == phyAddrColumnPos {
 			continue
 		}
-		if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
+		if orderByLimit != nil && !orderByLimit.OrderedLimit && loadedColumnPos == int(orderByLimit.ColPos) {
 			loadedColumnPos++
 			continue
 		}
@@ -579,7 +579,7 @@ func fillOutputBatchBySelectedRows(
 		loadedColumnPos++
 	}
 
-	if orderByLimit != nil {
+	if orderByLimit != nil && !orderByLimit.OrderedLimit {
 		if len(outputBat.Vecs) == len(columns) {
 			distVec := vector.NewVec(types.T_float64.ToType())
 			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
@@ -643,7 +643,7 @@ func BlockDataReadInner(
 		var dists []float64
 
 		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
 			if err != nil {
 				return err
 			}
@@ -688,13 +688,18 @@ func BlockDataReadInner(
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
+	if shouldFallbackOrderedLimitToFullBlockRead(orderByLimit, info) {
+		// Ordered-limit pushdown can only prune sorted blocks. Fall back to the
+		// normal UnionBatch+Shrink path on unsorted blocks to avoid building
+		// full row-index slices that do not eliminate any rows.
+		orderByLimit = nil
+	}
+
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
-		topInputRows := buildTopInputRows(int(info.MetaLocation().Rows()), deleteMask)
-
 		var dists []float64
-		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, topInputRows, orderByLimit, phyAddrColumnPos, cacheVectors)
+		selectRows, dists, err = handleOrderByLimitOnLiveRows(ctx, orderByLimit, info, phyAddrColumnPos, deleteMask, cacheVectors)
 		if err != nil {
 			return err
 		}
@@ -744,9 +749,9 @@ func BlockDataReadInner(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil if deleteMask is empty.
+// present in the deleteMask. Returns nil when there is nothing to filter.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
-	if deleteMask.IsEmpty() {
+	if length <= 0 || deleteMask.IsEmpty() {
 		return nil
 	}
 	capHint := length - deleteMask.Count()
@@ -1021,9 +1026,21 @@ func handleOrderByLimitOnSelectRows(
 	ctx context.Context,
 	selectRows []int64,
 	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
 	phyAddrColumnPos int,
 	cacheVectors containers.Vectors,
 ) ([]int64, []float64, error) {
+	if orderByLimit.OrderedLimit {
+		if info == nil || !info.IsSorted() || uint64(len(selectRows)) <= orderByLimit.Limit {
+			return selectRows, nil, nil
+		}
+		limit := int(orderByLimit.Limit)
+		if orderByLimit.Desc {
+			return selectRows[len(selectRows)-limit:], nil, nil
+		}
+		return selectRows[:limit], nil, nil
+	}
+
 	vecColPos := orderByLimit.ColPos
 	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
 		vecColPos--
@@ -1031,4 +1048,101 @@ func handleOrderByLimitOnSelectRows(
 	vecCol := &cacheVectors[vecColPos]
 
 	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func handleOrderByLimitOnLiveRows(
+	ctx context.Context,
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+	phyAddrColumnPos int,
+	deleteMask objectio.Bitmap,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	if orderByLimit.OrderedLimit {
+		rowCount := 0
+		if int(vecColPos) < len(cacheVectors) {
+			rowCount = cacheVectors[vecColPos].Length()
+		} else if info != nil {
+			rowCount = int(info.MetaLocation().Rows())
+		}
+		return buildOrderedLiveRows(rowCount, deleteMask, orderByLimit, info != nil && info.IsSorted()), nil, nil
+	}
+
+	vecCol := &cacheVectors[vecColPos]
+	selectRows := buildTopInputRows(vecCol.Length(), deleteMask)
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func shouldFallbackOrderedLimitToFullBlockRead(
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+) bool {
+	return orderByLimit != nil && orderByLimit.OrderedLimit && (info == nil || !info.IsSorted())
+}
+
+func buildOrderedLiveRows(
+	rowCount int,
+	deleteMask objectio.Bitmap,
+	orderByLimit *objectio.IndexReaderTopOp,
+	isSorted bool,
+) []int64 {
+	if rowCount <= 0 {
+		return nil
+	}
+	if !isSorted {
+		if deleteMask.IsEmpty() {
+			return buildContiguousRows(0, rowCount)
+		}
+		return buildTopInputRows(rowCount, deleteMask)
+	}
+	limit := rowCount
+	if orderByLimit.Limit > 0 && orderByLimit.Limit < uint64(rowCount) {
+		limit = int(orderByLimit.Limit)
+	}
+	if orderByLimit.Desc {
+		return buildOrderedLiveRowsDesc(rowCount, deleteMask, limit)
+	}
+	return buildOrderedLiveRowsAsc(rowCount, deleteMask, limit)
+}
+
+func buildOrderedLiveRowsAsc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(0, limit)
+	}
+	rows := make([]int64, 0, limit)
+	for i := 0; i < rowCount && len(rows) < limit; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
+}
+
+func buildOrderedLiveRowsDesc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(rowCount-limit, rowCount)
+	}
+	rows := make([]int64, 0, limit)
+	for i := rowCount - 1; i >= 0 && len(rows) < limit; i-- {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	slices.Reverse(rows)
+	return rows
+}
+
+func buildContiguousRows(start, end int) []int64 {
+	if end <= start {
+		return nil
+	}
+	rows := make([]int64, end-start)
+	for i := range rows {
+		rows[i] = int64(start + i)
+	}
+	return rows
 }
