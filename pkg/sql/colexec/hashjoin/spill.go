@@ -544,7 +544,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	// simultaneously. BuildHashmap allocates a hash table proportional to row count
 	// which, across 64 operators, causes a memory spike. Re-spill if system memory
 	// is already high to prevent the thundering-herd OOM.
-	if bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
+	if ctr.spillThreshold > 0 && bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
 		used := int64(system.MemoryUsed())
 		total := int64(system.MemoryTotal())
 		if used > total*2/3 || mpool.GlobalStats().NumCurrBytes.Load() > mpool.GlobalCap()*2/3 {
