@@ -55,8 +55,8 @@ func (fs *failWriteFS) StatFile(ctx context.Context, filePath string) (*fileserv
 	return nil, nil
 }
 func (fs *failWriteFS) PrefetchFile(ctx context.Context, filePath string) error { return nil }
-func (fs *failWriteFS) Cost() *fileservice.CostAttr                            { return nil }
-func (fs *failWriteFS) Close(ctx context.Context)                              {}
+func (fs *failWriteFS) Cost() *fileservice.CostAttr                             { return nil }
+func (fs *failWriteFS) Close(ctx context.Context)                               {}
 
 func makeTestPages(n int) ([]*TransferHashPage, fileservice.IOVector) {
 	sid := objectio.NewSegmentid()
