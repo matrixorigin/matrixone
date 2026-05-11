@@ -164,15 +164,16 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	ExternType  int32
-	JsonData    string
-	FileService fileservice.FileService
-	NullMap     map[string]([]string)
-	S3Param     *S3Parameter
-	Ctx         context.Context
-	Local       bool
-	Parallel    bool
-	Strict      bool
+	ExternType            int32
+	JsonData              string
+	FileService           fileservice.FileService
+	NullMap               map[string]([]string)
+	S3Param               *S3Parameter
+	Ctx                   context.Context
+	Local                 bool
+	Parallel              bool
+	ParallelLoadRequested bool
+	Strict                bool
 }
 
 type S3Parameter struct {

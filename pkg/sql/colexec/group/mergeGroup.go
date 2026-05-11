@@ -28,6 +28,9 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
+	if mergeGroup.ctr.mp != nil {
+		mergeGroup.ctr.free()
+	}
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false

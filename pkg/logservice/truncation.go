@@ -66,6 +66,19 @@ func (s shardSnapshotInfo) forwardSnapshot(shardID uint64, index uint64) {
 	}
 }
 
+// setSnapshotIndex overwrites the recorded snapshotIndex unconditionally.
+// Unlike forwardSnapshot, this accessor can move the value *down*, which
+// is needed after the truncation loop's escape valves delete exported
+// snapshots from snapshotMgr. Leaving snapshotIndex pointing at a deleted
+// item's index would cause shouldDoExport to suppress a re-export on a
+// quiescent shard and wedge the loop. See issue #24315.
+func (s shardSnapshotInfo) setSnapshotIndex(shardID uint64, index uint64) {
+	if _, ok := s[shardID]; !ok {
+		s.init(shardID)
+	}
+	s[shardID].snapshotIndex = index
+}
+
 func (s shardSnapshotInfo) getTruncatedLsn(shardID uint64) uint64 {
 	if _, ok := s[shardID]; !ok {
 		s.init(shardID)
@@ -191,16 +204,28 @@ func (l *store) shouldProcess(shardID uint64, lsn uint64) bool {
 // managed by snapshotManager.
 // This check avoid doing the truncation at the same lsn.
 func (l *store) shouldDoImport(
-	ctx context.Context, shardID uint64, lsn uint64, dir string,
+	ctx context.Context, shardID uint64, lsnInSM uint64, lsn uint64, dir string,
 ) bool {
 	if len(dir) == 0 {
+		// Normal path: no exported snapshot with index <= lsnInSM yet.
+		// Happens every tick until TN advances TruncatedLsn past the
+		// oldest exported snapshot. DEBUG to avoid log spam.
+		l.runtime.Logger().Debug("skip import snapshot: no eligible exported snapshot",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("lsnInSM", lsnInSM),
+		)
 		return false
 	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseProcessTruncationReadState)
 	defer cancel()
 	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
 	if err != nil {
-		l.runtime.Logger().Error("read state from HAKeeper failed", zap.Error(err))
+		l.runtime.Logger().Error("read state from HAKeeper failed",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("lsnInSM", lsnInSM),
+			zap.Uint64("evalImportLsn", lsn),
+			zap.Error(err),
+		)
 		return false
 	}
 	tnStore := v.(*pb.CheckerState).TNState
@@ -212,6 +237,7 @@ func (l *store) shouldDoImport(
 			l.runtime.Logger().Warn("cannot import snapshot, as the replayed "+
 				"LSN is lower than the requested LSN",
 				zap.Uint64("shardID", shardID),
+				zap.Uint64("lsnInSM", lsnInSM),
 				zap.String("tn uuid", id),
 				zap.Uint64("replayed LSN", ss.ReplayedLsn),
 				zap.Uint64("requested LSN", lsn),
@@ -219,7 +245,19 @@ func (l *store) shouldDoImport(
 			return false
 		}
 	}
-	return lsn > l.shardSnapshotInfo.getTruncatedLsn(shardID)
+	if lsn <= l.shardSnapshotInfo.getTruncatedLsn(shardID) {
+		// Normal path: EvalImportSnapshot picked the same snapshot that
+		// was already imported on a previous tick. DEBUG to avoid log
+		// spam while waiting for TN to advance.
+		l.runtime.Logger().Debug("skip import snapshot: lsn not greater than last truncated",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("lsnInSM", lsnInSM),
+			zap.Uint64("evalImportLsn", lsn),
+			zap.Uint64("lastTruncatedLsn", l.shardSnapshotInfo.getTruncatedLsn(shardID)),
+		)
+		return false
+	}
+	return true
 }
 
 // shouldDoExport checks whether current applied index is greater than
@@ -227,13 +265,85 @@ func (l *store) shouldDoImport(
 // index does not advance, do not do export.
 func (l *store) shouldDoExport(ctx context.Context, shardID uint64, replicaID uint64) bool {
 	if l.snapshotMgr.Count(shardID, replicaID) >= l.cfg.MaxExportedSnapshot {
+		// Normal path: the gap between two successful imports naturally
+		// fills the quota. DEBUG to avoid log spam; processShardTruncateLog
+		// already emits an INFO when the escape valve actually drains the
+		// quota, which is the interesting event.
+		l.runtime.Logger().Debug("skip export snapshot: exported snapshot quota is full",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("replicaID", replicaID),
+			zap.Int("count", l.snapshotMgr.Count(shardID, replicaID)),
+			zap.Int("max", l.cfg.MaxExportedSnapshot),
+		)
 		return false
 	}
 	v, err := l.read(ctx, shardID, indexQuery{})
 	if err != nil {
+		l.runtime.Logger().Warn("skip export snapshot: failed to read applied index",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("replicaID", replicaID),
+			zap.Error(err),
+		)
 		return false
 	}
-	return v.(uint64) > l.shardSnapshotInfo.getSnapshotIndex(shardID)
+	if v.(uint64) <= l.shardSnapshotInfo.getSnapshotIndex(shardID) {
+		// applied index has not advanced since last export; no new content to export.
+		return false
+	}
+	return true
+}
+
+// dropNewestOnTimeout is the escape valve used when getTruncatedLsn keeps
+// timing out and the exported-snapshot quota is already full. Without a
+// valid lsnInSM a regular purge cannot run, which would leave the loop
+// wedged indefinitely (no quota -> no export -> no import -> no WAL
+// compaction, while the WAL grows at shard write rate).
+//
+// We drop the *newest* tracked item rather than the oldest. Dropping
+// the oldest would preferentially remove exactly the item a future
+// import would consume (once SyncRead recovers, EvalImportSnapshot
+// returns the largest item.index <= lsnInSM, which tends to be among
+// the older items). Dropping the newest preserves older, more likely
+// importable items at the cost of wasting the most recently exported
+// (and therefore most speculative) one.
+//
+// When the manager holds only a single item we refuse to drop: that
+// item is the sole importable candidate, and losing it would trade a
+// recoverable stall for a state where no import is possible until TN
+// / TruncatedLsn catches up to whatever the next fresh export lands at.
+// Under MaxExportedSnapshot=1 the escape valve is therefore a no-op
+// and the WAL will grow until SyncRead recovers. See issue #24315.
+func (l *store) dropNewestOnTimeout(shardID uint64, replicaID uint64) {
+	before := l.snapshotMgr.Count(shardID, replicaID)
+	if before <= 1 {
+		// Preserve the sole importable candidate. See function comment.
+		return
+	}
+	droppedIdx, err := l.snapshotMgr.DropNewest(shardID, replicaID)
+	if err != nil {
+		l.runtime.Logger().Error("drop newest exported snapshot failed",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("replicaID", replicaID),
+			zap.Error(err))
+		return
+	}
+	if droppedIdx == 0 {
+		return
+	}
+	// Realign shardSnapshotInfo.snapshotIndex with whatever item is now
+	// newest. Without this, shouldDoExport may suppress the next export
+	// on a quiescent shard because applied index has not advanced past
+	// the stale high-water mark pointing at the snapshot we just
+	// deleted. See issue #24315.
+	l.shardSnapshotInfo.setSnapshotIndex(shardID,
+		l.snapshotMgr.NewestIndex(shardID, replicaID))
+	l.runtime.Logger().Info("dropped newest exported snapshot to unblock truncation",
+		zap.Uint64("shardID", shardID),
+		zap.Uint64("replicaID", replicaID),
+		zap.Uint64("droppedIndex", droppedIdx),
+		zap.Int("before", before),
+		zap.Int("after", l.snapshotMgr.Count(shardID, replicaID)),
+	)
 }
 
 func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) error {
@@ -261,6 +371,19 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 				zap.Uint64("shard ID", shardID), zap.Error(err))
 			return err
 		}
+		// Timeout on SyncRead is the single largest silent failure mode of
+		// this loop. Make it observable, and if the exported-snapshot quota
+		// is already full, free one slot by dropping the oldest item so
+		// the loop can make forward progress on subsequent ticks instead
+		// of wedging permanently. See issue #24315.
+		l.runtime.Logger().Warn("get truncated lsn timed out, tick skipped",
+			zap.Uint64("shardID", shardID), zap.Error(err))
+		if rid := l.getReplicaID(shardID); rid > 0 {
+			replicaID := uint64(rid)
+			if l.snapshotMgr.Count(shardID, replicaID) >= l.cfg.MaxExportedSnapshot {
+				l.dropNewestOnTimeout(shardID, replicaID)
+			}
+		}
 		return nil
 	}
 
@@ -270,7 +393,7 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 
 	replicaID := uint64(l.getReplicaID(shardID))
 	dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
-	if l.shouldDoImport(ctx, shardID, lsn, dir) {
+	if l.shouldDoImport(ctx, shardID, lsnInSM, lsn, dir) {
 		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {
 			l.runtime.Logger().Error("do truncate log failed",
 				zap.Uint64("shard ID", shardID),
@@ -282,6 +405,19 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 		}
 		return nil
 	}
+
+	// Note on non-timeout-path escape valves: an earlier iteration tried
+	// to free quota slots here by calling snapshotMgr.Remove(..., lsnInSM)
+	// whenever shouldDoImport declined. That was never safe: the <= lsnInSM
+	// items are exactly the importable candidates, and deleting them
+	// would leave a quiescent shard with no import possible until fresh
+	// traffic arrived. A truncatedLsn-based variant is theoretically
+	// safe but unreachable in practice -- importSnapshot itself already
+	// removes every item <= the imported lsn as its last step, so there
+	// is no obsolete residue for a post-hoc purge to clean up.
+	//
+	// The quota-full / no-import stall is therefore handled exclusively
+	// by the timeout-path DropNewest escape valve above. See #24315.
 
 	if l.shouldDoExport(ctx, shardID, replicaID) {
 		if err := l.exportSnapshot(ctx, shardID, replicaID); err != nil {

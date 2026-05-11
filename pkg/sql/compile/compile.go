@@ -1729,6 +1729,8 @@ func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternPara
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	loadEmptyNumericAsZero := param.ExternType == int32(plan.ExternType_LOAD) &&
+		(param.Parallel || param.ParallelLoadRequested)
 	param.Parallel = false
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1744,6 +1746,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 		parallelLoad = false
 	}
 	extern.Es.ParallelLoad = parallelLoad
+	extern.Es.LoadEmptyNumericAsZero = loadEmptyNumericAsZero
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false

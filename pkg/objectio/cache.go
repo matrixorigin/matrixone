@@ -76,6 +76,16 @@ type mataCacheKey [cacheKeyLen]byte
 var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
 
+// metaLoadGroup deduplicates concurrent loads for the same cache key,
+// preventing cache stampede when many goroutines miss the same entry simultaneously.
+var metaLoadGroup sync.Map // mataCacheKey -> *loadCall
+
+type loadCall struct {
+	done chan struct{}
+	val  []byte
+	err  error
+}
+
 func metaCacheSize() int64 {
 	// Use system.MemoryTotal() which is cgroup-aware in containers,
 	// instead of gopsutil VirtualMemory() which may report host memory.
@@ -172,11 +182,13 @@ func LoadObjectMetaByExtent(
 			zap.String("name", name.String()),
 			zap.String("extent", extent.String()))
 	}
-	if v, err = ReadExtent(ctx, name.UnsafeString(), extent, policy, fs, constructorFactory); err != nil {
+	v, err = dedupLoad(ctx, key, func() ([]byte, error) {
+		return ReadExtent(ctx, name.UnsafeString(), extent, policy, fs, constructorFactory)
+	})
+	if err != nil {
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -214,12 +226,36 @@ func LoadBFWithMeta(
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
+	bf, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
+	})
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
+}
+
+// dedupLoad ensures that for a given cache key, only one goroutine performs
+// the actual I/O load. Other concurrent callers for the same key wait and
+// share the result. This prevents cache stampede under high concurrency.
+func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
+	call := &loadCall{done: make(chan struct{})}
+	if actual, loaded := metaLoadGroup.LoadOrStore(key, call); loaded {
+		existing := actual.(*loadCall)
+		select {
+		case <-existing.done:
+			return existing.val, existing.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	defer metaLoadGroup.Delete(key)
+	call.val, call.err = load()
+	if call.err == nil {
+		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
+	}
+	close(call.done)
+	return call.val, call.err
 }
 
 func FastLoadObjectMeta(
