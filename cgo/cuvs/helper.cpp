@@ -23,6 +23,13 @@
 #include <thread>
 #include <raft/util/cudart_utils.hpp>
 
+// F16C / AVX intrinsics for the host fp32→fp16 cast. Available on Haswell+
+// (Intel) and Excavator+ / Zen+ (AMD). The Makefile passes -march=native via
+// -Xcompiler so these are unconditionally enabled on the build host's ISA.
+#if defined(__F16C__) && defined(__AVX__)
+#include <immintrin.h>
+#endif
+
 namespace matrixone {
 
 void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view) {
@@ -143,7 +150,7 @@ void convert_f32_to_f16_on_device(const raft::resources& res, const float* src, 
 
 void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, float* dst, uint64_t total_elements) {
     if (!src || !dst || total_elements == 0) return;
-    
+
     auto stream = raft::resource::get_cuda_stream(res);
     uint64_t n_pairs = total_elements / 2;
     if (n_pairs > 0) {
@@ -151,10 +158,34 @@ void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, f
         uint32_t blocks = (n_pairs + threads_per_block - 1) / threads_per_block;
         f16_to_f32_vectorized_kernel<<<blocks, threads_per_block, 0, stream>>>((const half2*)src, (float2*)dst, n_pairs);
     }
-    
+
     if (total_elements % 2 != 0) {
         f16_to_f32_tail_kernel<<<1, 1, 0, stream>>>(src, dst, total_elements - 1);
     }
+}
+
+void cast_float_to_half_host(const float* __restrict__ src,
+                             half* __restrict__ dst, size_t n) {
+    if (!src || !dst || n == 0) return;
+#if defined(__F16C__) && defined(__AVX__)
+    // F16C does IEEE round-to-nearest-even — bit-identical to the device-side
+    // raft::copy cast (mdspan_copy_kernel<__half>), so recall is preserved.
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 v  = _mm256_loadu_ps(src + i);
+        __m128i h = _mm256_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), h);
+    }
+    // Tail (≤ 7 elements): scalar __float2half_rn — same IEEE
+    // round-to-nearest-even rounding mode as the F16C SIMD path above.
+    for (; i < n; ++i) {
+        dst[i] = __float2half_rn(src[i]);
+    }
+#else
+    for (size_t i = 0; i < n; ++i) {
+        dst[i] = __float2half_rn(src[i]);
+    }
+#endif
 }
 
 } // namespace matrixone

@@ -99,10 +99,18 @@ func (m *memThrottler) pinnedRate() float64 {
 }
 
 func (m *memThrottler) Refresh() {
+	m.refresh(false)
+}
+
+func (m *memThrottler) ForceRefresh() {
+	m.refresh(true)
+}
+
+func (m *memThrottler) refresh(force bool) {
 	last := m.lastRefresh.Load()
 	now := time.Now().UnixNano()
 
-	if time.Duration(now-last) <= refreshMaxInterval {
+	if !force && time.Duration(now-last) <= refreshMaxInterval {
 		return
 	}
 
@@ -344,7 +352,6 @@ func AcquirePolicyForCNFlushS3(
 	throttler *memThrottler,
 	ask int64,
 ) (int64, bool) {
-
 	rate := throttler.pinnedRate()
 
 	if rate >= 0.80 {
@@ -358,10 +365,37 @@ func AcquirePolicyForCNFlushS3(
 		if ask >= mpool.MB*10 {
 			return 0, false
 		}
-		return defaultAcquirePolicy(throttler, ask)
+		return acquireWithinRSSLimit(throttler, ask)
 	}
 
-	return defaultAcquirePolicy(throttler, ask)
+	return acquireWithinRSSLimit(throttler, ask)
+}
+
+func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
+	for {
+		avail := throttler.Available()
+		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
+			return avail, false
+		}
+
+		currReserved := throttler.reserved.Load()
+		if currReserved < 0 {
+			currReserved = 0
+		}
+
+		total := int64(throttler.actualTotalMemory.Load())
+		if total > 0 && throttler.limitRate > 0 {
+			used := throttler.rss.Load() + currReserved + ask
+			if float64(used) > float64(total)*throttler.limitRate {
+				return 0, false
+			}
+		}
+
+		newReserved := currReserved + ask
+		if throttler.reserved.CompareAndSwap(currReserved, newReserved) {
+			return avail - ask, true
+		}
+	}
 }
 
 func AcquirePolicyForDataBranch(

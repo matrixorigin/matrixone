@@ -162,7 +162,7 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 }
 
 // TestGpuBruteForceFilter exercises the new SetFilterColumns / AddFilterChunk /
-// SearchFloat32WithFilterAsync path. We build a 100-row index with a single
+// SearchFloatWithFilterAsync path. We build a 100-row index with a single
 // int64 INCLUDE column "tier" (values 0..99); ask for the nearest neighbor
 // among rows where tier > 50. The expected behavior: the prefilter mask drops
 // rows 0..50 inside the brute-force kernel, so even a query closest to row 0
@@ -214,9 +214,9 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	// Query closest to row 0; without filter NN would be pkid 1000 (row 0).
 	queries := []float32{0.0, 0.0}
 	predsJSON := `[{"col":0,"op":">","val":50}]`
-	jobID, err := idx.SearchFloat32WithFilterAsync(queries, 1, dimension, 1, predsJSON)
+	jobID, err := idx.SearchFloatWithFilterAsync(queries, 1, dimension, 1, predsJSON)
 	if err != nil {
-		t.Fatalf("SearchFloat32WithFilterAsync: %v", err)
+		t.Fatalf("SearchFloatWithFilterAsync: %v", err)
 	}
 	neighbors, _, err := idx.SearchWait(jobID, 1, 1)
 	if err != nil {
@@ -231,9 +231,9 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	}
 
 	// Sanity: empty preds JSON falls through to unfiltered NN (pkid 1000).
-	jobID2, err := idx.SearchFloat32WithFilterAsync(queries, 1, dimension, 1, "")
+	jobID2, err := idx.SearchFloatWithFilterAsync(queries, 1, dimension, 1, "")
 	if err != nil {
-		t.Fatalf("SearchFloat32WithFilterAsync (no preds): %v", err)
+		t.Fatalf("SearchFloatWithFilterAsync (no preds): %v", err)
 	}
 	neighbors2, _, err := idx.SearchWait(jobID2, 1, 1)
 	if err != nil {

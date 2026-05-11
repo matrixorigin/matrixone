@@ -668,6 +668,12 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 			expr = condImpl.F.Args[1]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
+				//the nullable column ref is not primary key.
+				//can not use the hashOnPk.
+				//it assume build hashamp on right side.
+				if !expr.Typ.NotNullable {
+					return nil
+				}
 				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}
 		}
@@ -1140,6 +1146,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
+	builder.rewriteInDomainNotInFilters(rootID)
 	builder.mergeFiltersOnCompositeKey(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)

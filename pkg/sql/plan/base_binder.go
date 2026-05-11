@@ -2440,8 +2440,12 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// Only date_add(..., null) (without INTERVAL) should return syntax error
@@ -2651,8 +2655,12 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// NULL values will be handled at execution time (null1 || null2 check)

@@ -1245,6 +1245,19 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
+			case "prefix_in_range":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lb := []byte(args[1].GetLit().GetSval())
+				ub := []byte(args[2].GetLit().GetSval())
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
+				return zms[expr.AuxId]
+
 			case "prefix_in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {

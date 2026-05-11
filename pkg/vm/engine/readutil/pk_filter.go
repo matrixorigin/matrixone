@@ -373,6 +373,19 @@ func buildBlockPKSearchFuncs(
 		sortedSearchFunc = vector.CollectOffsetsByPrefixBetweenFactory(basePKFilter.LB, basePKFilter.UB)
 		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixBetweenFactory(basePKFilter.LB, basePKFilter.UB)
 
+	case PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
+		var hint uint8
+		switch basePKFilter.Op {
+		case PrefixRangeLeftOpen:
+			hint = 1
+		case PrefixRangeRightOpen:
+			hint = 2
+		case PrefixRangeBothOpen:
+			hint = 3
+		}
+		sortedSearchFunc = vector.CollectOffsetsByPrefixInRangeFactory(basePKFilter.LB, basePKFilter.UB, hint)
+		unSortedSearchFunc = vector.LinearCollectOffsetsByPrefixInRangeFactory(basePKFilter.LB, basePKFilter.UB, hint)
+
 	case function.IN:
 		vec := basePKFilter.Vec
 
@@ -574,10 +587,8 @@ func buildBlockPKSearchFuncs(
 		}
 
 	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
-		var hint int
+		var hint uint8
 		switch basePKFilter.Op {
-		case function.BETWEEN:
-			hint = 0
 		case RangeLeftOpen:
 			hint = 1
 		case RangeRightOpen:

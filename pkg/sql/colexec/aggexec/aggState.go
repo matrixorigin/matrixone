@@ -28,12 +28,17 @@ import (
 )
 
 const (
-	AggBatchSize     = 8192
-	kAggArgArenaSize = 512 * 1024
-	kAggArgPrefixSz  = 2
-	kAggArgOrdinalSz = 4
-	magicNumber      = uint64(0xdeadbeefbeefdead)
+	AggBatchSize      = 8192
+	aggBatchSizeShift = 13 // log2(AggBatchSize)
+	aggBatchSizeMask  = AggBatchSize - 1
+	kAggArgArenaSize  = 512 * 1024
+	kAggArgPrefixSz   = 2
+	kAggArgOrdinalSz  = 4
+	magicNumber       = uint64(0xdeadbeefbeefdead)
 )
+
+var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
+var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
 
 type MarshalerUnmarshaler interface {
 	MarshalBinary() ([]byte, error)
@@ -288,10 +293,18 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		if info.makeMarshalerUnmarshaler != nil {
 			for i := range flags {
 				if flags[i] != 0 {
-					if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
-						return err
+					if ag.mobs[i] == nil {
+						if err := types.WriteSizeBytes(nil, buf); err != nil {
+							return err
+						}
 					} else {
-						types.WriteSizeBytes(bs, buf)
+						if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
+							return err
+						} else {
+							if err := types.WriteSizeBytes(bs, buf); err != nil {
+								return err
+							}
+						}
 					}
 				}
 			}
@@ -324,11 +337,26 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 			}
 		}
 		if info.makeMarshalerUnmarshaler != nil {
-			for _, entry := range ag.mobs {
-				if bs, err := entry.MarshalBinary(); err != nil {
-					return err
+			for _, entry := range ag.mobs[:ag.length] {
+				/*
+					for gap between groups like:
+					group 0 , group 1(gap), group 2.
+
+					group 0 and group 2 have data.
+					group 1 does not have data. there is no marshal for group 1.
+				*/
+				if entry == nil {
+					if err := types.WriteSizeBytes(nil, buf); err != nil {
+						return err
+					}
 				} else {
-					types.WriteSizeBytes(bs, buf)
+					if bs, err := entry.MarshalBinary(); err != nil {
+						return err
+					} else {
+						if err := types.WriteSizeBytes(bs, buf); err != nil {
+							return err
+						}
+					}
 				}
 			}
 		}
@@ -369,14 +397,15 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		}
 		if info.makeMarshalerUnmarshaler != nil {
 			for i := range cnt {
-				if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
-					return 0, err
-				}
 				sz, err := types.ReadInt32(reader)
 				if err != nil {
 					return 0, err
 				}
 				if sz > 0 {
+					//only need marshal for size > 0.
+					if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
+						return 0, err
+					}
 					lr := io.LimitReader(reader, int64(sz))
 					if err := ag.mobs[i].UnmarshalFromReader(lr); err != nil {
 						return 0, err
@@ -613,9 +642,11 @@ func (ae *aggExec) GetOptResult() SplitResult {
 }
 
 func (ae *aggExec) getXY(u uint64) (int, uint16) {
-	x := u / AggBatchSize
-	y := u % AggBatchSize
-	return int(x), uint16(y)
+	return int(u >> aggBatchSizeShift), uint16(u & aggBatchSizeMask)
+}
+
+func chunkArr[T any](v *vector.Vector) *[AggBatchSize]T {
+	return (*[AggBatchSize]T)(vector.MustFixedColAsSlice[T](v, AggBatchSize))
 }
 
 func (ae *aggExec) GetNumChunks() int {
@@ -632,13 +663,19 @@ func (ae *aggExec) GetNumGroups() int {
 
 func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
-		// special grow 1
 		ae.state = make([]aggState, 1)
 		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo, true); err != nil {
 			panic(err)
 		}
-
 		ae.state[0].grow(ae.mp, 1, true)
+		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		for _, vec := range ae.state[0].vecs {
+			if vec != nil && vec.Capacity() < AggBatchSize {
+				if err := vec.PreExtend(AggBatchSize, ae.mp); err != nil {
+					panic(err)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -758,6 +795,14 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 		ae.state = make([]aggState, 1)
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
+		}
+		// Ensure vecs have AggBatchSize capacity so chunkArr is safe.
+		for _, vec := range ae.state[0].vecs {
+			if vec != nil && vec.Capacity() < AggBatchSize {
+				if err := vec.PreExtend(AggBatchSize, mp); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}

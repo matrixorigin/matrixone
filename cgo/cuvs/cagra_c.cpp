@@ -729,6 +729,27 @@ gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, c
     return result;
 }
 
+uint64_t gpu_cagra_search_float_with_filter_async(gpu_cagra_c index_c, const float* queries_data,
+                                                   uint64_t num_queries, uint32_t query_dimension,
+                                                   uint32_t limit, cagra_search_params_t sp,
+                                                   const char* preds_json, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        std::string preds = preds_json ? preds_json : "";
+        switch (any->qtype) {
+            case Quantization_F32:   return static_cast<gpu_cagra_t<float>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            case Quantization_F16:   return static_cast<gpu_cagra_t<half>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            case Quantization_INT8:  return static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            case Quantization_UINT8: return static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds);
+            default: return 0;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_search_float_with_filter_async", e.what());
+        return 0;
+    }
+}
+
 } // extern "C"
 
 namespace matrixone {

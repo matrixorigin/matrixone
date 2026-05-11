@@ -1214,3 +1214,42 @@ func (gi *GpuIvfPq[T]) SearchFloatWithFilter(queries []float32, numQueries uint6
 
 	return SearchResultIvfPq{Neighbors: neighbors, Distances: distances}, nil
 }
+
+// SearchFloatWithFilterAsync submits a filtered float32 K-NN search and
+// returns a job_id; collect the result with SearchWait. Mirrors
+// SearchFloat32AsyncWithParams + the predicate-eval semantics of
+// SearchFloatWithFilter. Used by MultiGpuIvfPq to dispatch per-shard
+// filtered searches in parallel.
+func (gi *GpuIvfPq[T]) SearchFloatWithFilterAsync(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {
+	if gi.cIvfPq == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+
+	jobID := C.gpu_ivf_pq_search_float_with_filter_async(
+		gi.cIvfPq,
+		(*C.float)(unsafe.Pointer(&queries[0])),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		cPreds,
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+
+	return uint64(jobID), nil
+}

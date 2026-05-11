@@ -21,6 +21,16 @@
 #include "helper.h"
 #include "cuvs_types.h"
 
+#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/mr/pool_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
+#include <rmm/cuda_device.hpp>
+#include <rmm/device_uvector.hpp>
+#include <raft/core/resource/cuda_stream.hpp>
+#include <raft/core/device_mdspan.hpp>
+#include <cuda_fp16.h>
+#include <cstdint>
+
 #include <any>
 #include <atomic>
 #include <condition_variable>
@@ -32,7 +42,6 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
-#include <map>
 #include <unordered_map>
 #include <chrono>
 #include <iomanip>
@@ -41,6 +50,73 @@
 #include <iostream>
 
 namespace matrixone {
+
+// Process-wide RMM pool memory resources, one per device, lazy-initialized the
+// first time a worker thread runs on that device. Without this, every
+// raft::device_resources() falls back to cuda_memory_resource, which calls raw
+// cudaMalloc/cudaFree per allocation — a global driver lock that dominates
+// search wall time when ~18 device_uvectors are allocated/freed per query.
+// The pool services thousands of allocations from a small number of up-front
+// cudaMallocs and is lock-light on the hot path.
+//
+// Pool storage is intentionally never torn down: shared_ptrs in `keepalives_`
+// hold the pool alive for process lifetime, so we cannot free into a destroyed
+// pool from a `device_uvector` whose lifetime crosses cuvs_worker_t teardown.
+// On process exit the OS reclaims everything.
+inline void ensure_rmm_pool_for_device(int device_id) {
+    constexpr int kMaxDevices = 16;
+    static std::once_flag flags[kMaxDevices];
+    static std::mutex keepalive_mu;
+    static std::vector<std::shared_ptr<void>> keepalives;
+    if (device_id < 0 || device_id >= kMaxDevices) return;
+    std::call_once(flags[device_id], [device_id] {
+        try {
+            cudaSetDevice(device_id);
+            auto base = std::make_shared<rmm::mr::cuda_memory_resource>();
+            // Initial pool = 10% of free GPU memory; max = unbounded — pool
+            // grows by allocating more from the upstream as needed.
+            // Kept small so a subsequent huge-index load (e.g. an IVF-PQ or
+            // CAGRA index needing ≥¾ VRAM in a single allocation) can still
+            // claim a contiguous upstream slab: the pool's initial reservation
+            // is not relocatable, so an allocation larger than the pool must
+            // be satisfied by a fresh upstream cudaMalloc, which only succeeds
+            // if (1 − initial_pct) of VRAM is still free.
+            auto pool = std::make_shared<
+                rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
+                    base.get(),
+                    rmm::percent_of_free_device_memory(10));
+            rmm::mr::set_per_device_resource(rmm::cuda_device_id{device_id}, pool.get());
+            std::lock_guard<std::mutex> lk(keepalive_mu);
+            keepalives.push_back(pool);   // pool outlives every device_uvector
+            keepalives.push_back(base);   // base outlives the pool
+        } catch (const std::exception& e) {
+            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
+                      << " failed to install pool MR: " << e.what()
+                      << " — falling back to cuda_memory_resource" << std::endl;
+        } catch (...) {
+            std::cerr << "[ensure_rmm_pool_for_device] device=" << device_id
+                      << " failed with unknown error — falling back to cuda_memory_resource"
+                      << std::endl;
+        }
+    });
+}
+
+// Process-static raw cuda_memory_resource that bypasses the per-device pool.
+// Use this for transient huge allocations whose lifetime is "load → build/extend
+// → drop" (e.g. the training-vector device matrix in build_internal). Routing
+// these through the pool would pin the pool's high-water mark at training-set
+// size forever — pool memory is never released to the driver — eating the
+// upstream headroom that big single allocations need (see ensure_rmm_pool_for_device
+// comment). With this MR, the device_uvector dtor returns memory straight to the
+// driver, keeping the pool small and the upstream free pool large.
+//
+// Per-allocation override: rmm::device_uvector captures the MR at construction
+// and frees back to it. No global state changes, so concurrent search threads
+// on the same device keep using the per-device pool MR via raft handles.
+inline rmm::mr::cuda_memory_resource* raw_device_mr() {
+    static rmm::mr::cuda_memory_resource mr;
+    return &mr;
+}
 
 // =============================================================================
 // cuvs_worker_t — Developer Guide
@@ -109,7 +185,6 @@ namespace matrixone {
 //   4. wait(id).get() — block until work completes, retrieve result or rethrow.
 //   5. stop():
 //      - Sets stopping_ = true (blocks new external submit* calls immediately).
-//      - Flushes all pending batches while threads are still running.
 //      - Waits (via condition variable) for all in-flight tasks to complete.
 //      - Sets running_ = false, stops queues, joins all threads.
 //      - Fulfills any pending placeholder futures with a "Worker stopped" error.
@@ -126,18 +201,24 @@ namespace matrixone {
 //   - sync():     calls raft::resource::sync_stream(); with force_all_ranks=true
 //                 also syncs all other ranks (used by build completion).
 //
-// BATCHING (submit_batched)
-// -------------------------
-// Optional path for aggregating multiple concurrent float-query search requests
-// into a single cuVS call to improve GPU utilization.
-//   - Enabled by set_batch_window(window_us > 0) on the index; 0 = disabled.
-//   - submit_batched(key, req, exec_fn): groups requests under a key (per-index
-//     string), flushes when >= 16 requests accumulate or after window_us delay.
-//   - exec_fn receives the batched requests and a vector of per-request setters
-//     (callbacks to resolve individual futures).
-//   - The batch is flushed either eagerly (>= 16 reqs) or via a scheduled task
-//     that sleeps window_us µs to allow more requests to arrive.
-//   - For SHARDED mode, the batch flush task is sent to the main thread.
+// DEQUEUE-TIME BATCHING
+// ---------------------
+// Optional path for fusing multiple concurrent search requests into a single
+// cuVS call to improve GPU utilization.  Batching happens *inside* the worker
+// loop (run_device_loop), not at submit time:
+//   - Enabled by set_batch_window(window_us > 0) on the index; 0 = disabled
+//     (the default — every task then runs standalone, byte-identical behavior).
+//   - submit_batchable(batch_key, req, nq, bexec) enqueues an ordinary task
+//     tagged with a batch_key (a process-unique id for "this index + variant +
+//     limit"; see gpu_index_base_t::batch_key_for) and a fused-search runner.
+//   - When the worker pops a batchable task it drains all already-queued tasks
+//     with the same key (zero wait), then waits up to a total batch_window_us
+//     budget for stragglers (caps: kMaxBatchCount, kMaxBatchQueries), then runs
+//     them as ONE fused search via bexec, fulfilling each request's result.
+//   - bexec(handle, reqs, setters): gets the per-request payloads and a vector
+//     of per-request setters (each writes one result/exception into results_store_).
+//   - A non-matching head task is left in the queue and becomes the first task
+//     of the next group, preserving FIFO between batch groups.
 //
 // DISTRIBUTION MODE USAGE BY INDEX TYPES
 // ----------------------------------------
@@ -165,8 +246,8 @@ namespace matrixone {
 // - cuvs_task_result_store_t: 64-shard lock-striped; each shard has its own
 //   mutex so high-concurrency wait/store calls rarely contend.
 // - next_device_idx_: atomic uint32_t, incremented without lock for round-robin.
-// - batch_mutex_: guards the batches_ map (per-key batch_t allocation only).
-//   per-batch batch_t::mu guards the request list and scheduled flag.
+// - Dequeue-time batch grouping happens entirely on the worker thread inside
+//   run_device_loop; no extra shared state / mutex is needed for it.
 //
 // =============================================================================
 
@@ -231,6 +312,38 @@ public:
     bool try_pop(T& item) {
         std::unique_lock<std::mutex> lock(mu_);
         if (queue_.empty()) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cond_can_push_.notify_one();
+        return true;
+    }
+
+    // Non-blocking pop, but only if the head satisfies `pred`. A non-matching
+    // (or empty) head is left untouched and false is returned. Used by the
+    // worker to drain already-queued same-batch-key tasks with zero wait.
+    template <class Pred>
+    bool try_pop_if(Pred&& pred, T& item) {
+        std::unique_lock<std::mutex> lock(mu_);
+        if (queue_.empty()) return false;
+        if (!pred(static_cast<const T&>(queue_.front()))) return false;
+        item = std::move(queue_.front());
+        queue_.pop();
+        cond_can_push_.notify_one();
+        return true;
+    }
+
+    // Blocking pop with timeout, but only if the head satisfies `pred`. If the
+    // head does not match (different batch key), it is left in the queue and
+    // false is returned immediately — this is what preserves FIFO between batch
+    // groups: the non-matching task becomes the first task of the next group.
+    template <class Pred>
+    bool pop_wait_if(Pred&& pred, T& item, std::chrono::microseconds timeout) {
+        std::unique_lock<std::mutex> lock(mu_);
+        if (!cond_can_pop_.wait_for(lock, timeout, [this]() { return stopped_ || !queue_.empty(); })) {
+            return false;  // timed out, still empty
+        }
+        if (queue_.empty()) return false;                                 // stopped / spurious
+        if (!pred(static_cast<const T&>(queue_.front()))) return false;   // different key: leave it
         item = std::move(queue_.front());
         queue_.pop();
         cond_can_push_.notify_one();
@@ -392,17 +505,35 @@ private:
 
 /**
  * @brief Wrapper around raft::resources to provide a consistent interface for workers.
+ *
+ * Owns per-thread reusable buffers (pinned host scratch for the fp32→fp16
+ * query path). One handle is created per worker thread and lives for the
+ * thread's lifetime, so these buffers grow once and are reused across
+ * thousands of searches.
  */
 class raft_handle_wrapper_t {
 public:
-    raft_handle_wrapper_t(int device_id, int rank = 0, 
-                         distribution_mode_t mode = DistributionMode_SINGLE_GPU) 
+    raft_handle_wrapper_t(int device_id, int rank = 0,
+                         distribution_mode_t mode = DistributionMode_SINGLE_GPU)
         : device_id_(device_id), rank_(rank), mode_(mode) {
         if (device_id >= 0) {
             res_ = std::make_shared<raft::resources>();
         } else {
             // CPU Context
             res_ = nullptr;
+        }
+    }
+
+    ~raft_handle_wrapper_t() {
+        if (host_half_buf_) {
+            // cudaFreeHost requires a live CUDA context on this device.
+            // The worker thread bound to this handle has already called
+            // cudaSetDevice(device_id_) once during start(); reset it here
+            // because handle dtor may run on the joining thread which may
+            // have switched device contexts since.
+            if (device_id_ >= 0) cudaSetDevice(device_id_);
+            cudaFreeHost(host_half_buf_);
+            host_half_buf_ = nullptr;
         }
     }
 
@@ -423,12 +554,130 @@ public:
     void set_index_ptr(std::any ptr) { index_ptr_ = ptr; }
     std::any get_index_ptr() const { return index_ptr_; }
 
+    /**
+     * @brief Grow-only pinned-host scratch buffer for fp16 query staging.
+     *
+     * Returns a pointer to at least `n` halves of pinned (page-locked) host
+     * memory. Pinned memory makes the subsequent H2D copy ~2× faster on the
+     * wire than pageable memory. The buffer is per-thread (one
+     * raft_handle_wrapper_t per worker thread), so no synchronization is
+     * needed on access.
+     */
+    half* ensure_host_half_buf(size_t n) {
+        if (n <= host_half_capacity_) return host_half_buf_;
+        if (host_half_buf_) {
+            cudaFreeHost(host_half_buf_);
+            host_half_buf_ = nullptr;
+            host_half_capacity_ = 0;
+        }
+        cudaError_t err = cudaMallocHost(reinterpret_cast<void**>(&host_half_buf_), n * sizeof(half));
+        if (err != cudaSuccess) {
+            host_half_buf_ = nullptr;
+            host_half_capacity_ = 0;
+            throw std::runtime_error(std::string("cudaMallocHost failed for host_half_buf: ") +
+                                     cudaGetErrorString(err));
+        }
+        host_half_capacity_ = n;
+        return host_half_buf_;
+    }
+
+    // ------------------------------------------------------------------
+    // Grow-only device-side workspace buffers
+    //
+    // These hold the per-search query / neighbor / distance staging memory
+    // that used to be allocated via raft::make_device_matrix on every call.
+    // With Step A's RMM pool the underlying cost is small but non-zero;
+    // reusing the same uvector eliminates the pool free-list traffic
+    // entirely on the hot path.
+    //
+    // Each accessor is grow-only — once the buffer reaches the largest n
+    // seen on this thread, subsequent calls return without resizing. All
+    // resizes are stream-ordered on the handle's CUDA stream, so they
+    // serialize correctly with searches issued on the same handle.
+    //
+    // Lifetime: these uvectors are destroyed in the handle's dtor. The RMM
+    // pool installed in start() is process-lifetime, so the deallocations
+    // always release into a live pool — no ordering hazard at shutdown.
+    //
+    // Thread-safety: one handle per worker thread; no synchronization
+    // needed on access. Dequeue-time batching aggregates queries from
+    // multiple callers into one search, but the fused search runs on the
+    // worker thread holding the handle, so concurrent access is impossible
+    // by construction.
+    // ------------------------------------------------------------------
+
+    rmm::device_uvector<float>& q_dev_buf_float(size_t n) {
+        return ensure_uvec_(q_buf_f_, n);
+    }
+    rmm::device_uvector<__half>& q_dev_buf_half(size_t n) {
+        return ensure_uvec_(q_buf_h_, n);
+    }
+    rmm::device_uvector<int8_t>& q_dev_buf_int8(size_t n) {
+        return ensure_uvec_(q_buf_i8_, n);
+    }
+    rmm::device_uvector<uint8_t>& q_dev_buf_uint8(size_t n) {
+        return ensure_uvec_(q_buf_u8_, n);
+    }
+    rmm::device_uvector<int64_t>& neighbors_buf(size_t n) {
+        return ensure_uvec_(neigh_buf_, n);
+    }
+    rmm::device_uvector<float>& distances_buf(size_t n) {
+        return ensure_uvec_(dist_buf_, n);
+    }
+    rmm::device_uvector<uint32_t>& cagra_neighbors_buf(size_t n) {
+        return ensure_uvec_(cagra_neigh_buf_, n);
+    }
+
+    /**
+     * @brief Templated dispatch to the per-type query workspace buffer.
+     *
+     * Used in templated search bodies (ivf_pq / ivf_flat / cagra) to fetch
+     * the right grow-only uvector for `T` without an `if constexpr` chain
+     * at every call site.
+     */
+    template <typename U>
+    rmm::device_uvector<U>& q_dev_buf(size_t n) {
+        if constexpr (std::is_same_v<U, float>)        return q_dev_buf_float(n);
+        else if constexpr (std::is_same_v<U, __half>)  return q_dev_buf_half(n);
+        else if constexpr (std::is_same_v<U, int8_t>)  return q_dev_buf_int8(n);
+        else if constexpr (std::is_same_v<U, uint8_t>) return q_dev_buf_uint8(n);
+        else static_assert(sizeof(U) == 0, "q_dev_buf: unsupported query element type");
+    }
+
 private:
+    template <typename U>
+    rmm::device_uvector<U>& ensure_uvec_(std::unique_ptr<rmm::device_uvector<U>>& slot, size_t n) {
+        auto stream = raft::resource::get_cuda_stream(*res_);
+        if (!slot) {
+            slot = std::make_unique<rmm::device_uvector<U>>(n, stream);
+            return *slot;
+        }
+        if (slot->size() < n) {
+            slot->resize(n, stream);
+        }
+        return *slot;
+    }
+
     int device_id_;
     int rank_;
     std::shared_ptr<raft::resources> res_;
     distribution_mode_t mode_;
     std::any index_ptr_;
+
+    // Pinned-host fp16 staging buffer for the fp32-input → fp16-index search
+    // path. Sized to (max num_queries × dimension) seen so far on this thread.
+    half*  host_half_buf_      = nullptr;
+    size_t host_half_capacity_ = 0;
+
+    // Grow-only device workspace buffers (allocated on the handle's stream
+    // out of the RMM pool installed by ensure_rmm_pool_for_device).
+    std::unique_ptr<rmm::device_uvector<float>>    q_buf_f_;
+    std::unique_ptr<rmm::device_uvector<__half>>   q_buf_h_;
+    std::unique_ptr<rmm::device_uvector<int8_t>>   q_buf_i8_;
+    std::unique_ptr<rmm::device_uvector<uint8_t>>  q_buf_u8_;
+    std::unique_ptr<rmm::device_uvector<int64_t>>  neigh_buf_;
+    std::unique_ptr<rmm::device_uvector<float>>    dist_buf_;
+    std::unique_ptr<rmm::device_uvector<uint32_t>> cagra_neigh_buf_;
 };
 
 class cuvs_worker_t {
@@ -436,10 +685,25 @@ public:
     using raft_handle = raft_handle_wrapper_t;
     using task_fn_t = std::function<std::any(raft_handle&)>;
 
+    // Fused-search runner for a batch group: given the worker handle, the
+    // per-request payloads (each carrying that request's queries), and one
+    // setter per request (which writes its individual result/exception into
+    // results_store_), run a single fused search and resolve every setter.
+    using batch_exec_fn_t = std::function<void(raft_handle& /*handle*/,
+                                               const std::vector<std::any>& /*reqs*/,
+                                               const std::vector<std::function<void(std::any)>>& /*setters*/)>;
+
     struct cuvs_task_t {
-        uint64_t id;
-        task_fn_t fn;
-        bool fire_and_forget = false;  // skip results_store_ — used for internal flush tasks
+        uint64_t id = 0;
+        task_fn_t fn{};                  // empty for batchable tasks
+        bool fire_and_forget = false;    // skip results_store_ — used for internal tasks
+        // ---- batchable-task fields (meaningful only when batch_key != 0) ----
+        uint64_t batch_key = 0;          // 0 = non-batchable (ordinary task: run fn)
+        uint64_t batch_nq  = 0;          // this request's query count (for kMaxBatchQueries)
+        std::any  breq{};                // per-request payload (the per-index search_req_t)
+        batch_exec_fn_t bexec{};         // fused-search runner
+        // (default member initializers above keep {id, std::move(fn)} aggregate
+        //  inits warning-free under -Wmissing-field-initializers)
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
@@ -465,7 +729,13 @@ public:
         // Start Main Thread (only for main_tasks_)
         main_thread_ = std::thread([this, init_fn, stop_fn] {
             int device_id = devices_.empty() ? -1 : devices_[0];
-            if (device_id >= 0) cudaSetDevice(device_id);
+            if (device_id >= 0) {
+                cudaSetDevice(device_id);
+                // Install the per-device RMM pool BEFORE constructing
+                // raft_handle so any rmm::device_uvector created via the
+                // handle's allocator pulls from the pool from the start.
+                matrixone::ensure_rmm_pool_for_device(device_id);
+            }
             raft_handle handle(device_id, 0, mode_);
             if (init_fn) init_fn(handle);
             this->run_main_loop(handle, stop_fn);
@@ -482,10 +752,13 @@ public:
 
             device_threads_.emplace_back([this, device_id, device_idx, rank, init_fn, stop_fn] {
                 cudaSetDevice(device_id);
-                
+                // Same as the main thread: install the RMM pool BEFORE the
+                // handle so all device-side allocations route through it.
+                matrixone::ensure_rmm_pool_for_device(device_id);
+
                 // Each thread in the pool gets its own raft::resources (so separate CUDA streams)
                 raft_handle handle(device_id, rank, mode_);
-                
+
 		// only main thread will run init_fn and stop_fn
                 this->run_device_loop(handle, nullptr, device_idx);
             });
@@ -496,39 +769,12 @@ public:
         bool was_stopping = stopping_.exchange(true);
         if (was_stopping) return;  // already stopping or stopped
 
-        // 1. Flush all pending batches while threads are still running.
-        //    stopping_ = true blocks new external submit* calls; running_ is still
-        //    true here so flush_batch's internal submissions go through normally.
-        {
-            std::vector<std::string> keys;
-            {
-                std::lock_guard<std::mutex> lock(batch_mutex_);
-                for (auto const& [key, b] : batches_) keys.push_back(key);
-            }
-            for (auto const& key : keys) {
-                this->flush_batch(key);
-            }
-
-            // Cancel anything that still hasn't been flushed (race safety)
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            auto err = std::make_exception_ptr(std::runtime_error("Worker stopped (batch cancelled)"));
-            for (auto& [key, batch] : batches_) {
-                std::lock_guard<std::mutex> b_lock(batch->mu);
-                if (!batch->flushed) {
-                    batch->flushed = true;
-                    for (auto& setter : batch->setters) {
-                        try { setter(err); } catch (...) {}
-                    }
-                    batch->setters.clear();
-                }
-            }
-            batches_.clear();
-        }
-
-        // 2. Wait for all in-flight tasks (including flush tasks) to complete
+        // 1. Wait for all in-flight tasks to complete. stopping_ = true already
+        //    blocks new external submit* calls; queued batchable tasks still run
+        //    (and are fused normally) on the worker threads.
         this->sync();
 
-        // 3. Now block all further submissions and drain the thread queues
+        // 2. Now block all further submissions and drain the thread queues
         running_.store(false);
         for (auto& q : device_queues_) q->stop();
         main_tasks_.stop();
@@ -539,7 +785,9 @@ public:
         }
         device_threads_.clear();
 
-        // 4. Drain physical queues (defensive; should be empty after sync)
+        // 3. Drain physical queues (defensive; should be empty after sync).
+        //    Each task — ordinary or batchable — counts as exactly one
+        //    in-flight unit (submit_batchable does one ++), so one -- per task.
         cuvs_task_t task;
         while (main_tasks_.try_pop(task)) {
             in_flight_tasks_--;
@@ -667,119 +915,116 @@ public:
     uint32_t nthread() const { return nthread_; }
 
     void set_batch_window(int64_t window_us) {
-        // Sync and flush before changing mode
-        this->sync();
-        std::vector<std::string> keys;
-        {
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            for (auto const& [key, b] : batches_) keys.push_back(key);
-        }
-        for (auto const& key : keys) {
-            this->flush_batch(key);
-        }
+        // Drain in-flight work first so no batch group is mid-straggler-wait
+        // when the budget changes, then flip it. 0 disables dequeue-time
+        // batching entirely (every task runs standalone).
         this->sync();
         batch_window_us_ = window_us;
     }
     int64_t batch_window() const { return batch_window_us_; }
     void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
 
-    template <typename ResT, typename ReqT>
-    std::shared_future<ResT> submit_batched(const std::string& key, ReqT req, 
-                                     std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn) {
-        bool should_flush_now = false;
-        bool should_schedule = false;
-        std::shared_future<ResT> future;
-        
-        while (true) {
-            std::shared_ptr<batch_t> batch;
-            {
-                std::lock_guard<std::mutex> lock(batch_mutex_);
-                if (!running_ || stopping_) throw std::runtime_error("Worker not running");
+    // Stats: number of fused batch groups executed, and total requests fused
+    // across all groups. (reqs - groups) > 0 iff fusion actually happened.
+    uint64_t batched_groups_total() const { return batched_groups_total_.load(std::memory_order_relaxed); }
+    uint64_t batched_reqs_total()   const { return batched_reqs_total_.load(std::memory_order_relaxed); }
 
-                auto& b = batches_[key];
-                if (!b) {
-                    b = std::make_shared<batch_t>();
-                    b->scheduled = false;
-                    b->flushed = false;
-                }
-                b->exec_fn = exec_fn;
-                batch = b;
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(batch->mu);
-                if (batch->flushed) continue; // Race: retry with new batch
-
-                if (!batch->scheduled) {
-                    batch->scheduled = true;
-                    should_schedule = true;
-                }
-
-                auto promise = std::make_shared<std::promise<ResT>>();
-                future = promise->get_future().share();
-                batch->reqs.push_back(req);
-
-                auto fulfilled = std::make_shared<std::atomic<bool>>(false);
-                batch->setters.push_back([promise, fulfilled](std::any res) {
-                    if (fulfilled->exchange(true)) return;
-                    try {
-                        if (res.type() == typeid(std::exception_ptr)) {
-                            promise->set_exception(std::any_cast<std::exception_ptr>(res));
-                        } else {
-                            promise->set_value(std::any_cast<ResT>(res));
-                        }
-                    } catch (const std::future_error& e) {
-                    } catch (...) {
-                        try { promise->set_exception(std::current_exception()); } catch (...) {}
-                    }
-                });
-                if (batch->reqs.size() >= 16) {
-                    should_flush_now = true;
-                }
-            }
-
-            if (should_flush_now) {
-                this->flush_batch(key);
-            } else if (should_schedule) {
-                try {
-                    this->submit_fire_and_forget([this, key](raft_handle&) -> std::any {
-                        std::this_thread::sleep_for(std::chrono::microseconds(batch_window_us_));
-                        this->flush_batch(key);
-                        return std::any();
-                    });
-                } catch (...) {
-                    this->flush_batch(key);
-                }
-            }
-            break;
+    // Submit a batchable search task. batch_key (must be non-zero) identifies a
+    // fusable group ("this index + variant + limit"; see batch_key_for); breq is
+    // the per-request payload; batch_nq is its query-row count (used to cap a
+    // fused batch at kMaxBatchQueries); bexec is the fused-search runner.
+    // Returns a job id resolvable via wait(id). When batch_window() == 0 the
+    // task still runs (standalone) — bexec is just invoked with a 1-element group.
+    uint64_t submit_batchable(uint64_t batch_key, std::any breq, uint64_t batch_nq, batch_exec_fn_t bexec) {
+        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
+        if (devices_.empty())       throw std::runtime_error("No devices configured");
+        if (batch_key == 0)         throw std::runtime_error("submit_batchable: batch_key must be non-zero");
+        in_flight_tasks_++;
+        uint64_t id = results_store_.get_next_job_id();
+        try {
+            uint32_t d_idx = next_device_idx_++ % devices_.size();
+            cuvs_task_t t;
+            t.id = id;
+            t.batch_key = batch_key;
+            t.batch_nq  = batch_nq;
+            t.breq      = std::move(breq);
+            t.bexec     = std::move(bexec);
+            device_queues_[d_idx]->push(std::move(t));
+        } catch (...) {
+            in_flight_tasks_--;
+            results_store_.discard(id);
+            throw;
         }
-
-        return future;
+        return id;
     }
 
 private:
-    struct batch_t {
-        std::vector<std::any> reqs;
-        std::vector<std::function<void(std::any)>> setters;
-        std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
-        bool scheduled;
-        bool flushed;
-        std::mutex mu;
-
-        ~batch_t() {
-            if (!setters.empty()) {
-                auto err = std::make_exception_ptr(std::runtime_error("Batch destroyed (broken promise)"));
-                for (auto& s : setters) {
-                    try { s(err); } catch (...) {}
-                }
-            }
-        }
-    };
+    // Caps on a single fused batch group (dequeue-time batching).
+    static constexpr size_t   kMaxBatchCount   = 64;     // max tasks fused into one search
+    static constexpr uint64_t kMaxBatchQueries = 4096;   // max total query rows in one fused search
 
     void run_device_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn, uint32_t d_idx) {
+        auto& q = *device_queues_[d_idx];
         cuvs_task_t task;
-        while (device_queues_[d_idx]->pop(task)) {
-            execute_task(task, handle);
+        // Reused across iterations: clear() keeps capacity, so the kMaxBatchCount
+        // backing store is allocated exactly once per worker thread (not per
+        // batchable search). Moved-from cuvs_task_t slots from the previous batch
+        // are destroyed by the clear() at the top of the next batchable iteration.
+        std::vector<cuvs_task_t> group;
+        group.reserve(kMaxBatchCount);
+        while (q.pop(task)) {
+            if (task.batch_key == 0) { execute_task(task, handle); continue; }
+
+            group.clear();
+            group.push_back(std::move(task));
+
+            // Only gather stragglers when batching is enabled. When the window
+            // is 0 we still go through execute_batch (with a 1-element group) —
+            // a batchable task can only reach here via a set_batch_window(0)
+            // race, and execute_batch is the only path that knows how to run a
+            // batchable task (its fn is empty; bexec is the runner).
+            if (batch_window_us_ != 0) {
+                const uint64_t key = group[0].batch_key;
+                uint64_t nq = group[0].batch_nq;
+                auto same_key = [key](const cuvs_task_t& t) noexcept { return t.batch_key == key; };
+
+                // (a) zero-wait drain of everything already queued under this key
+                while (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
+                    cuvs_task_t t;
+                    if (!q.try_pop_if(same_key, t)) break;
+                    nq += t.batch_nq;
+                    group.push_back(std::move(t));
+                }
+                // (b) straggler wait — ONE total budget (not reset per iteration),
+                // so the first request's worst-case extra latency is exactly
+                // batch_window_us_.
+                if (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
+                    auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(batch_window_us_);
+                    while (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
+                        auto now = std::chrono::steady_clock::now();
+                        if (now >= deadline) break;
+                        cuvs_task_t t;
+                        if (!q.pop_wait_if(same_key, t,
+                                std::chrono::duration_cast<std::chrono::microseconds>(deadline - now))) break;
+                        nq += t.batch_nq;
+                        group.push_back(std::move(t));
+                    }
+                }
+            }
+            // execute_batch is effectively noexcept (bexec's exceptions are
+            // caught inside it, and execute_batch's own backstops resolve every
+            // group id before any exception unwinds). Catch defensively anyway
+            // so a setup-phase bad_alloc can't escape the worker thread fn and
+            // std::terminate the process — the in-flight count and result store
+            // are already consistent by the time we get here.
+            try {
+                execute_batch(group, handle);
+            } catch (const std::exception& e) {
+                std::cout << "[ERROR " << get_timestamp() << "] run_device_loop: execute_batch escaped: "
+                          << e.what() << std::endl;
+            } catch (...) {
+                std::cout << "[ERROR " << get_timestamp() << "] run_device_loop: execute_batch escaped (unknown)" << std::endl;
+            }
         }
         if (stop_fn) stop_fn(handle);
     }
@@ -823,111 +1068,99 @@ private:
         }
     }
 
-    void flush_batch(const std::string& key) {
-        std::shared_ptr<batch_t> batch;
-        std::function<void(raft_handle&, const std::vector<std::any>&, const std::vector<std::function<void(std::any)>>&)> exec_fn;
-        {
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            auto it = batches_.find(key);
-            if (it == batches_.end()) return;
-            batch = it->second;
-            exec_fn = batch->exec_fn;
-        }
+    // Run a group of batchable tasks as ONE fused search, then resolve each
+    // request's result into results_store_. The fused-search runner is the
+    // first arrival's bexec (it closed over that request's search params; per
+    // the carried-over precondition, params are constant per (index, variant,
+    // limit) — so any group member's bexec would do). Each task — whether part
+    // of a multi-element group or run standalone — counts as exactly one
+    // in-flight unit, matching submit_batchable's single ++.
+    void execute_batch(std::vector<cuvs_task_t>& group, raft_handle& handle) {
+        struct flight_guard_n {
+            std::atomic<int64_t>& counter;
+            std::condition_variable& cv;
+            std::mutex& mu;
+            int64_t n;
+            ~flight_guard_n() {
+                if ((counter -= n) == 0) {
+                    std::lock_guard<std::mutex> lk(mu);
+                    cv.notify_all();
+                }
+            }
+        } guard{in_flight_tasks_, sync_cv_, sync_mu_, (int64_t)group.size()};
+
+        // Early backstop: covers the *setup* phase (building per-request setters,
+        // copying bexec). If anything there throws — e.g. bad_alloc from a
+        // std::function ctor or make_shared — every group member still gets a
+        // result stored before the exception unwinds, so no wait(id) hangs. No
+        // setter has fired yet at this point (setters only fire inside bexec),
+        // so this never overwrites a real result. Disarmed just before bexec.
+        struct early_backstop_t {
+            cuvs_task_result_store_t* store;
+            const std::vector<cuvs_task_t>* group;
+            bool armed = true;
+            ~early_backstop_t() {
+                if (!armed) return;
+                try {
+                    auto e = std::make_exception_ptr(std::runtime_error("Batch setup failed"));
+                    for (const auto& t : *group) {
+                        try { cuvs_task_result_t r; r.error = e; store->store(t.id, std::move(r)); } catch (...) {}
+                    }
+                } catch (...) {}
+            }
+        } eb{&results_store_, &group};
 
         std::vector<std::any> reqs;
+        reqs.reserve(group.size());
         std::vector<std::function<void(std::any)>> setters;
-        {
-            std::lock_guard<std::mutex> lock(batch->mu);
-            if (batch->flushed || batch->reqs.empty()) {
-                batch->scheduled = false;
-                return;
-            }
-            batch->flushed = true;
-            reqs = std::move(batch->reqs);
-            setters = std::move(batch->setters);
-            batch->scheduled = false;
+        setters.reserve(group.size());
+        for (auto& t : group) {
+            reqs.push_back(std::move(t.breq));
+            const uint64_t id = t.id;
+            auto fulfilled = std::make_shared<std::atomic<bool>>(false);
+            setters.push_back([this, id, fulfilled](std::any res) {
+                if (fulfilled->exchange(true)) return;
+                cuvs_task_result_t s;
+                if (res.type() == typeid(std::exception_ptr)) s.error  = std::any_cast<std::exception_ptr>(res);
+                else                                          s.result = std::move(res);
+                results_store_.store(id, std::move(s));
+            });
         }
+        auto bexec = group[0].bexec;
+        const uint64_t key = group[0].batch_key;
 
-        {
-            std::lock_guard<std::mutex> lock(batch_mutex_);
-            if (batches_.count(key) > 0 && batches_[key] == batch) {
-                batches_.erase(key);
-            }
-        }
-
+        // Late backstop: if bexec returns without resolving every setter (a buggy
+        // exec_fn), the leftovers get an error. Setters are idempotent, so a
+        // partial run (some resolved by bexec, some not) is handled cleanly.
         struct setters_guard_t {
-            std::vector<std::function<void(std::any)>> setters;
+            std::vector<std::function<void(std::any)>>* setters;
             bool fulfilled = false;
             ~setters_guard_t() {
-                if (!fulfilled) {
-                    auto err = std::make_exception_ptr(std::runtime_error("Batch task cancelled"));
-                    for (auto& setter : setters) {
-                        try { setter(err); } catch (...) {}
-                    }
+                if (!fulfilled && setters) {
+                    auto e = std::make_exception_ptr(std::runtime_error("Batch task cancelled"));
+                    for (auto& s : *setters) { try { s(std::any(e)); } catch (...) {} }
                 }
             }
-        };
-        auto guard = std::make_shared<setters_guard_t>();
-        guard->setters = std::move(setters);
+        } sg{&setters};
 
-        auto task_fn = [reqs = std::move(reqs), guard, exec_fn, key](raft_handle& handle) -> std::any {
-            try {
-                exec_fn(handle, reqs, guard->setters);
-            } catch (const std::exception& e) {
-                std::ostringstream oss;
-                oss << "[ERROR " << get_timestamp() << "] Worker batch exec_fn error key=" << key << ": " << e.what();
-                fprintf(stderr, "%s\n", oss.str().c_str());
-                auto err = std::current_exception();
-                for (auto& setter : guard->setters) {
-                    try { setter(err); } catch (...) {}
-                }
-            } catch (...) {
-                std::ostringstream oss;
-                oss << "[ERROR " << get_timestamp() << "] Worker batch exec_fn unknown error key=" << key;
-                fprintf(stderr, "%s\n", oss.str().c_str());
-                auto err = std::current_exception();
-                for (auto& setter : guard->setters) {
-                    try { setter(err); } catch (...) {}
-                }
-            }
-            guard->fulfilled = true;
-            return std::any();
-        };
+        eb.armed = false;  // committed: the setters / late backstop now own resolution.
 
         try {
-            if (mode_ == DistributionMode_SHARDED) {
-                this->submit_fire_and_forget_main(task_fn);
-            } else {
-                this->submit_fire_and_forget(task_fn);
-            }
+            bexec(handle, reqs, setters);
+        } catch (const std::exception& e) {
+            std::cout << "[ERROR " << get_timestamp() << "] execute_batch error key=" << key
+                      << " count=" << group.size() << " rank=" << handle.get_rank() << ": " << e.what() << std::endl;
+            auto err = std::current_exception();
+            for (auto& s : setters) { try { s(std::any(err)); } catch (...) {} }
         } catch (...) {
+            std::cout << "[ERROR " << get_timestamp() << "] execute_batch unknown error key=" << key
+                      << " count=" << group.size() << " rank=" << handle.get_rank() << std::endl;
+            auto err = std::current_exception();
+            for (auto& s : setters) { try { s(std::any(err)); } catch (...) {} }
         }
-    }
-
-    // Internal helpers for fire-and-forget tasks (flush tasks, scheduled batches).
-    // These bypass the results_store_ entirely — no id is allocated, no result stored.
-    void submit_fire_and_forget(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
-        if (devices_.empty()) throw std::runtime_error("No devices configured");
-        in_flight_tasks_++;
-        try {
-            uint32_t d_idx = next_device_idx_++ % devices_.size();
-            device_queues_[d_idx]->push({0, std::move(fn), /*fire_and_forget=*/true});
-        } catch (...) {
-            in_flight_tasks_--;
-            throw;
-        }
-    }
-
-    void submit_fire_and_forget_main(task_fn_t fn) {
-        if (!running_) throw std::runtime_error("Worker is not running");
-        in_flight_tasks_++;
-        try {
-            main_tasks_.push({0, std::move(fn), /*fire_and_forget=*/true});
-        } catch (...) {
-            in_flight_tasks_--;
-            throw;
-        }
+        sg.fulfilled = true;
+        batched_groups_total_.fetch_add(1, std::memory_order_relaxed);
+        batched_reqs_total_.fetch_add(group.size(), std::memory_order_relaxed);
     }
 
     uint32_t nthread_;
@@ -949,8 +1182,9 @@ private:
 
     cuvs_task_result_store_t results_store_;
 
-    std::mutex batch_mutex_;
-    std::map<std::string, std::shared_ptr<batch_t>> batches_;
+    // Dequeue-time batching stats (relaxed; informational / test assertions).
+    std::atomic<uint64_t> batched_groups_total_{0};
+    std::atomic<uint64_t> batched_reqs_total_{0};
 };
 
 } // namespace matrixone

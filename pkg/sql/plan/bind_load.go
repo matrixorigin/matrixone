@@ -145,6 +145,7 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ParallelLoadRequested = stmt.Param.Parallel
 
 	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false

@@ -174,6 +174,14 @@ gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, c
                                                            uint32_t limit, cagra_search_params_t search_params,
                                                            const char* preds_json, void* errmsg);
 
+// Async variant of gpu_cagra_search_float_with_filter. Returns a job_id that
+// is collected with the existing gpu_cagra_search_wait. Lets multi-index
+// callers fan out filtered searches across shards in parallel.
+uint64_t gpu_cagra_search_float_with_filter_async(gpu_cagra_c index_c, const float* queries_data,
+                                                   uint64_t num_queries, uint32_t query_dimension,
+                                                   uint32_t limit, cagra_search_params_t search_params,
+                                                   const char* preds_json, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif
