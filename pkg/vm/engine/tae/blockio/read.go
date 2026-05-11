@@ -688,6 +688,13 @@ func BlockDataReadInner(
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
+	if shouldFallbackOrderedLimitToFullBlockRead(orderByLimit, info) {
+		// Ordered-limit pushdown can only prune sorted blocks. Fall back to the
+		// normal UnionBatch+Shrink path on unsorted blocks to avoid building
+		// full row-index slices that do not eliminate any rows.
+		orderByLimit = nil
+	}
+
 	// No pre-filter rows, but vector TopN pushdown is requested:
 	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
 	if orderByLimit != nil {
@@ -742,9 +749,9 @@ func BlockDataReadInner(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil if deleteMask is empty.
+// present in the deleteMask. Returns nil when there is nothing to filter.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
-	if deleteMask.IsEmpty() {
+	if length <= 0 || deleteMask.IsEmpty() {
 		return nil
 	}
 	capHint := length - deleteMask.Count()
@@ -1066,25 +1073,15 @@ func handleOrderByLimitOnLiveRows(
 	}
 
 	vecCol := &cacheVectors[vecColPos]
-	selectRows := buildLiveRows(vecCol.Length(), deleteMask)
+	selectRows := buildTopInputRows(vecCol.Length(), deleteMask)
 	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
 }
 
-func buildLiveRows(rowCount int, deleteMask objectio.Bitmap) []int64 {
-	if rowCount <= 0 || deleteMask.IsEmpty() {
-		return nil
-	}
-	capHint := rowCount - deleteMask.Count()
-	if capHint < 0 {
-		capHint = 0
-	}
-	rows := make([]int64, 0, capHint)
-	for i := 0; i < rowCount; i++ {
-		if !deleteMask.Contains(uint64(i)) {
-			rows = append(rows, int64(i))
-		}
-	}
-	return rows
+func shouldFallbackOrderedLimitToFullBlockRead(
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+) bool {
+	return orderByLimit != nil && orderByLimit.OrderedLimit && (info == nil || !info.IsSorted())
 }
 
 func buildOrderedLiveRows(
@@ -1100,7 +1097,7 @@ func buildOrderedLiveRows(
 		if deleteMask.IsEmpty() {
 			return buildContiguousRows(0, rowCount)
 		}
-		return buildLiveRows(rowCount, deleteMask)
+		return buildTopInputRows(rowCount, deleteMask)
 	}
 	limit := rowCount
 	if orderByLimit.Limit > 0 && orderByLimit.Limit < uint64(rowCount) {

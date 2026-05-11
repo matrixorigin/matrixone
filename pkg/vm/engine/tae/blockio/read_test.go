@@ -356,9 +356,31 @@ func TestBuildTopInputRows(t *testing.T) {
 		defer mask.Release()
 		mask.Add(0)
 		rows := buildTopInputRows(0, mask)
-		require.NotNil(t, rows)
-		require.Equal(t, 0, len(rows))
+		require.Nil(t, rows)
 	})
+}
+
+func TestShouldFallbackOrderedLimitToFullBlockRead(t *testing.T) {
+	sortedInfo := &objectio.BlockInfo{ObjectFlags: objectio.ObjectFlag_Sorted}
+	unsortedInfo := &objectio.BlockInfo{}
+
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(nil, sortedInfo))
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2},
+		unsortedInfo,
+	))
+	require.False(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		sortedInfo,
+	))
+	require.True(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		unsortedInfo,
+	))
+	require.True(t, shouldFallbackOrderedLimitToFullBlockRead(
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		nil,
+	))
 }
 
 func TestReadBlockDataFiltersNonAppendableByCommitTS(t *testing.T) {

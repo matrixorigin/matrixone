@@ -739,7 +739,9 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Expr: scanHiddenKeyExpr,
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
-	applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
+	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil {
+		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
+	}
 
 	if !hasTopValueMessage(ctx.sortNode) {
 		msgHeader := plan.MsgHeader{

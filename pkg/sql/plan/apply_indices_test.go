@@ -731,6 +731,51 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForOffsetOrRank(t *testing.T
 	}
 }
 
+func TestApplyIndicesForProjectSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*planpb.Node)
+	}{
+		{
+			name: "offset",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.Offset = &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_uint64)},
+					Expr: &planpb.Expr_Lit{
+						Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 3}},
+					},
+				}
+			},
+		},
+		{
+			name: "rank",
+			setup: func(sortNode *planpb.Node) {
+				sortNode.RankOption = &planpb.RankOption{}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+				t,
+				2,
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+				planpb.OrderBySpec_DESC,
+			)
+			sortNode := builder.qry.Nodes[2]
+			tc.setup(sortNode)
+
+			_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+
+			scanNode := builder.qry.Nodes[0]
+			assert.Empty(t, sortNode.SendMsgList)
+			assert.Empty(t, scanNode.RecvMsgList)
+			assert.Empty(t, scanNode.OrderBy)
+			assert.Nil(t, scanNode.IndexReaderParam)
+		})
+	}
+}
+
 // Benchmark the function to ensure it's fast
 func BenchmarkCalculatePostFilterOverFetchFactor(b *testing.B) {
 	limits := []uint64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 10000}
