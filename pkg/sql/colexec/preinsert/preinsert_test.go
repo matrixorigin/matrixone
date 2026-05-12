@@ -232,6 +232,51 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	pre := &PreInsert{HasAutoCol: true}
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	require.True(t, shouldConvertZeroToNull(pre, proc))
+
+	pre.IsOldUpdate = true
+	require.False(t, shouldConvertZeroToNull(pre, proc))
+
+	pre.IsOldUpdate = false
+	pre.IsNewUpdate = true
+	require.False(t, shouldConvertZeroToNull(pre, proc))
+}
+
+func TestShouldTreatZeroAsAutoIncrFallback(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "nil resolver should preserve explicit 0 values used by bootstrap")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("boom")
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "resolve error should preserve explicit 0 values used by bootstrap")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return 123, nil
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "non-string sql_mode should preserve explicit 0 values used by bootstrap")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	require.True(t, shouldTreatZeroAsAutoIncr(proc))
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO", nil
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc))
+}
+
 func TestPreInsertIsUpdate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

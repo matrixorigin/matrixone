@@ -160,17 +160,21 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Cols))
 	h.mappers = make([]*columnMapper, len(param.Cols))
 	for _, attr := range param.Attrs {
-		def := param.Cols[attr.ColIndex]
+		colIdx := int(attr.ColIndex)
+		if colIdx < 0 || colIdx >= len(param.Cols) {
+			return moerr.NewInvalidInputf(param.Ctx, "column index %d out of range %d", attr.ColIndex, len(param.Cols))
+		}
+		def := param.Cols[colIdx]
 		if def.Hidden {
 			continue
 		}
 
 		if param.isHivePartitionCol(attr.ColName) {
-			h.partitionColIndices = append(h.partitionColIndices, int(attr.ColIndex))
+			h.partitionColIndices = append(h.partitionColIndices, colIdx)
 			continue
 		}
 		if catalog.ContainExternalHidenCol(attr.ColName) {
-			h.filepathColIndex = int(attr.ColIndex)
+			h.filepathColIndex = colIdx
 			continue
 		}
 
@@ -184,10 +188,9 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
 		if !col.Leaf() {
-			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr.ColName)
+			return moerr.NewNYI(param.Ctx, "parquet nested type")
 		}
 
-		h.cols[attr.ColIndex] = col
 		fn := h.getMapper(col, def.Typ)
 		if fn == nil {
 			st := col.Type().String()
@@ -204,7 +207,8 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			}
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
-		h.mappers[attr.ColIndex] = fn
+		h.cols[colIdx] = col
+		h.mappers[colIdx] = fn
 	}
 
 	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
@@ -257,6 +261,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_uint8:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
+					return uint8(dictValues[int(idx)])
+				})
+			}
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
+				return uint8(v)
+			})
+		}
 	case types.T_int8:
 		if st.Kind() != parquet.Int32 {
 			break
@@ -291,6 +313,24 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
 				return int16(v)
+			})
+		}
+	case types.T_uint16:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
+					return uint16(dictValues[int(idx)])
+				})
+			}
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
+				return uint16(v)
 			})
 		}
 	case types.T_int32:
@@ -400,13 +440,21 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", dateT)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				bs, _ := dictData.Data()
+				dictDates := types.DecodeSlice[int32](bs)
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indices, func(idx int32) types.Date {
+					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
+				})
+			}
 			bs, _ := data.Data()
-			ls := types.DecodeSlice[types.Date](bs)
-			return copyPageToVec(mp, page, proc, vec, ls)
+			ls := types.DecodeSlice[int32](bs)
+			return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
+				return types.DaysFromUnixEpochToDate(t)
+			})
 		}
 	case types.T_timestamp:
 		lt := st.LogicalType()
@@ -419,20 +467,54 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", tsT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case tsT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixNanoToTimestamp(v)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixNanoToTimestamp(v)
 				})
 			case tsT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixMicroToTimestamp(v)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixMicroToTimestamp(v)
 				})
 			case tsT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixMicroToTimestamp(v * 1000)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixMicroToTimestamp(v * 1000)
 				})
@@ -450,20 +532,54 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", dtT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case dtT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixNanoToTimestamp(v))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixNanoToTimestamp(v))
 				})
 			case dtT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixMicroToTimestamp(v))
 				})
 			case dtT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v * 1000))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixMicroToTimestamp(v * 1000))
 				})
@@ -482,19 +598,50 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", timeT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case timeT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Time, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Time(v / 1000)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
 					return types.Time(v / 1000)
 				})
 			case timeT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					bs, _ := dictData.Data()
+					dictTimes := types.DecodeSlice[types.Time](bs)
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
+						return dictTimes[int(idx)]
+					})
+				}
 				bs, _ := data.Data()
 				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
 			case timeT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int32()
+					converted := make([]types.Time, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Time(v) * 1000
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
 					return types.Time(v) * 1000
 				})
@@ -503,14 +650,14 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_decimal64:
-		lt := st.LogicalType()
-		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
-			precision := int32(dt.Width)
-			scale := int32(dt.Scale)
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (types.Decimal64, error) {
-						return parseStringToDecimal64(util.UnsafeBytesToString(data), precision, scale)
+						return parseStringToDecimal64(util.UnsafeBytesToString(data), dstWidth, dstScale)
 					},
 					types.Decimal64(0),
 				)
@@ -524,6 +671,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					if err != nil {
 						return err
 					}
+					if err := rescaleDecimal64Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
+						return err
+					}
 					indices := data.Int32()
 					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal64 {
 						return dictValues[int(idx)]
@@ -533,18 +683,21 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
+				if err := rescaleDecimal64Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+					return err
+				}
 				return copyPageToVec(mp, page, proc, vec, values)
 			}
 		}
 	case types.T_decimal128:
-		lt := st.LogicalType()
-		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
-			precision := int32(dt.Width)
-			scale := int32(dt.Scale)
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (types.Decimal128, error) {
-						return parseStringToDecimal128(util.UnsafeBytesToString(data), precision, scale)
+						return parseStringToDecimal128(util.UnsafeBytesToString(data), dstWidth, dstScale)
 					},
 					types.Decimal128{},
 				)
@@ -558,6 +711,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					if err != nil {
 						return err
 					}
+					if err := rescaleDecimal128Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
+						return err
+					}
 					indices := data.Int32()
 					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal128 {
 						return dictValues[int(idx)]
@@ -567,16 +723,36 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
+				if err := rescaleDecimal128Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+					return err
+				}
 				return copyPageToVec(mp, page, proc, vec, values)
 			}
 		}
 	case types.T_decimal256:
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal256, error) {
+						return parseStringToDecimal256(util.UnsafeBytesToString(data), dstWidth, dstScale)
+					},
+					types.Decimal256{},
+				)
+			}
+			break
+		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			kind := st.Kind()
 			data := page.Data()
 			if dict := page.Dictionary(); dict != nil {
 				dictValues, err := decodeDecimal256Values(proc.Ctx, kind, dict.Page().Data())
 				if err != nil {
+					return err
+				}
+				if err := rescaleDecimal256Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
 					return err
 				}
 				indices := data.Int32()
@@ -588,9 +764,12 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if err != nil {
 				return err
 			}
+			if err := rescaleDecimal256Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+				return err
+			}
 			return copyPageToVec(mp, page, proc, vec, values)
 		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -925,6 +1104,89 @@ func copyDictPageToVec[T any](
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
 }
 
+func parquetDecimalScale(st parquet.Type) int32 {
+	if lt := st.LogicalType(); lt != nil && lt.Decimal != nil {
+		return lt.Decimal.Scale
+	}
+	return 0
+}
+
+func rescaleDecimal64Values(ctx context.Context, values []types.Decimal64, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal64ToBigInt(scaled), dstWidth, "decimal64"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func rescaleDecimal128Values(ctx context.Context, values []types.Decimal128, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal128ToBigInt(scaled), dstWidth, "decimal128"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func rescaleDecimal256Values(ctx context.Context, values []types.Decimal256, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal256ToBigInt(scaled), dstWidth, "decimal256"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func checkDecimalPrecision(ctx context.Context, value *big.Int, width int32, typ string) error {
+	if width <= 0 {
+		return nil
+	}
+	digits := int32(len(new(big.Int).Abs(value).String()))
+	if digits > width {
+		return moerr.NewInvalidInputf(ctx, "parquet %s value exceeds destination precision %d", typ, width)
+	}
+	return nil
+}
+
+func decimal64ToBigInt(v types.Decimal64) *big.Int {
+	return big.NewInt(int64(v))
+}
+
+func decimal128ToBigInt(v types.Decimal128) *big.Int {
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[0:8], v.B64_127)
+	binary.BigEndian.PutUint64(buf[8:16], v.B0_63)
+	return decimalBytesToBigInt(buf[:])
+}
+
+func decimal256ToBigInt(v types.Decimal256) *big.Int {
+	var buf [32]byte
+	binary.BigEndian.PutUint64(buf[0:8], v.B192_255)
+	binary.BigEndian.PutUint64(buf[8:16], v.B128_191)
+	binary.BigEndian.PutUint64(buf[16:24], v.B64_127)
+	binary.BigEndian.PutUint64(buf[24:32], v.B0_63)
+	return decimalBytesToBigInt(buf[:])
+}
+
 var (
 	maxInt64Big  = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
 	minInt64Big  = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
@@ -1218,6 +1480,13 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
 	}
 	return types.ParseDecimal128(normalizeDecimalString(s), precision, scale)
+}
+
+func parseStringToDecimal256(s string, precision, scale int32) (types.Decimal256, error) {
+	if s == "" {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal256(normalizeDecimalString(s), precision, scale)
 }
 
 func normalizeDecimalString(s string) string {

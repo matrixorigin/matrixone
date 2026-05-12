@@ -578,6 +578,7 @@ func NewSession(
 		timestampMap: map[TS]time.Time{},
 		statsCache:   plan2.NewStatsCache(),
 	}
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
