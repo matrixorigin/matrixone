@@ -170,12 +170,19 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 		return err
 	}
 	now := time.Now()
-	if writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector); writeErr != nil {
+	writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
+	if writeErr != nil {
 		logutil.Warnf("[FlushTableTail] persist transfer page failed (page count %d), keeping in-memory pages: %v",
 			len(pages), writeErr)
 	}
 	for _, page := range pages {
-		page.SetBornTS(now)
+		if writeErr != nil {
+			// Extend bornTS so in-memory hashmap survives the full diskTTL
+			// window instead of being evicted after the short ttl (5s).
+			page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
+		} else {
+			page.SetBornTS(now)
+		}
 		entry.rt.TransferTable.AddPage(page)
 	}
 	duration += time.Since(start)

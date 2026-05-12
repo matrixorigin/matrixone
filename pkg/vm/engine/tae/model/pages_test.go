@@ -176,3 +176,54 @@ func TestWriteTransferPage_FileAlreadyExistsOnFirstAttempt(t *testing.T) {
 		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
 	}
 }
+
+func TestWriteTransferPage_ContextCancellation(t *testing.T) {
+	// If context is cancelled mid-retry, WriteTransferPage should return
+	// immediately instead of sleeping.
+	fs := &failWriteFS{maxFails: 10}
+	pages, ioVector := makeTestPages(2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	err := WriteTransferPage(ctx, fs, pages, ioVector)
+
+	require.Error(t, err)
+	// Should exit after first failed attempt + seeing ctx.Done(),
+	// NOT exhaust all retries.
+	assert.Less(t, fs.failCount.Load(), int32(transferPageWriteMaxRetry))
+	for _, page := range pages {
+		assert.Empty(t, page.path.Name, "path should not be set on cancellation")
+	}
+}
+
+func TestTransferPage_TransferWithNoPath(t *testing.T) {
+	// When write fails, path.Name is empty. Transfer() should return ok=false
+	// without panicking, even after hashmap is cleared.
+	sid := objectio.NewSegmentid()
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
+	id := &common.ID{BlockID: *objectio.NewBlockid(sid, 0, 0)}
+	page := &TransferHashPage{
+		id:      id,
+		ttl:     ttl,
+		diskTTL: diskTTL,
+		objects: createdObjs,
+	}
+	now := time.Now()
+	page.bornTS.Store(&now)
+
+	m := make(api.TransferMap)
+	m[uint32(0)] = api.TransferDestPos{BlkIdx: 0, RowIdx: 42}
+	page.hashmap.Store(&m)
+
+	// Transfer works while hashmap is present
+	_, ok := page.Transfer(0)
+	assert.True(t, ok)
+
+	// Simulate TTL clearing the hashmap (as happens after ttl elapses)
+	page.hashmap.Store(nil)
+
+	// With no path set, loadTable returns nil — Transfer returns ok=false
+	_, ok = page.Transfer(0)
+	assert.False(t, ok)
+}
