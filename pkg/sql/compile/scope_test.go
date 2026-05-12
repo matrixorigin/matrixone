@@ -513,6 +513,78 @@ func TestCompileExternScanHiveFileFanout(t *testing.T) {
 	require.Equal(t, len(fileList), totalFiles)
 }
 
+func TestCompileBuildSideForBroadcastJoinSkipsEmptyCN(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	node := &plan.Node{
+		Stats: &plan.Stats{
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	buildScope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	buildScope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	rs := []*Scope{
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+	}
+	for _, scope := range rs {
+		scope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	}
+
+	out := testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
+
+	require.Same(t, rs[0], out[0])
+	require.Len(t, rs[0].PreScopes, 2)
+	require.Empty(t, rs[1].PreScopes)
+	require.Empty(t, rs[2].PreScopes)
+	require.Same(t, buildScope, rs[0].PreScopes[0])
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	require.NoError(t, checkScopeWithExpectedList(buildScope, []vm.OpType{vm.TableScan, vm.Dispatch}))
+	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, dispatchOp.LocalRegs, 1)
+	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	node := &plan.Node{
+		Stats: &plan.Stats{
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	buildScope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	buildScope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	rs := []*Scope{
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+	}
+	for _, scope := range rs {
+		scope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	}
+
+	testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
+
+	require.Len(t, rs[0].PreScopes, 2)
+	require.Empty(t, rs[1].PreScopes)
+	require.Same(t, buildScope, rs[0].PreScopes[0])
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, dispatchOp.LocalRegs, 1)
+	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
 	simpleFakeArgument := func(id vm.OpType) vm.Operator {
 		switch id {
