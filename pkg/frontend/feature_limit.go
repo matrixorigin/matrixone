@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -105,9 +106,14 @@ func featureLimitChecker(
 	}
 
 	if featureCode == featureCodeSnapshot {
+		// Exclude branch-managed rows from the per-account snapshot
+		// quota — those are internal protection entries inserted by
+		// `DATA BRANCH CREATE` and must not count against user quota
+		// (design §7.3 / review PR#24313 blocking issue #2).
 		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
+			"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
 			catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accName, featureScope,
+			databranchutils.BranchSnapshotKind,
 		)
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
