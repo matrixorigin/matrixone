@@ -589,6 +589,13 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 		}
 	}
 
+	if isGeometryPlanType(&targetType) {
+		expr, err = funcCastForGeometryType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {

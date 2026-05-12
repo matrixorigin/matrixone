@@ -135,6 +135,11 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					if err != nil {
 						return err
 					}
+				} else if col != nil && isGeometryPlanType(&col.Typ) {
+					lastNode.ProjectList[pos], err = funcCastForGeometryType(builder.GetContext(), posExpr, col.Typ)
+					if err != nil {
+						return err
+					}
 				} else {
 					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
@@ -155,6 +160,11 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 
 				if col != nil && col.Typ.Id == int32(types.T_enum) {
 					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					if err != nil {
+						return err
+					}
+				} else if col != nil && isGeometryPlanType(&col.Typ) {
+					lastNode.ProjectList[pos], err = funcCastForGeometryType(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}

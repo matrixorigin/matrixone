@@ -1129,6 +1129,11 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 			if err != nil {
 				return 0, nil, nil, err
 			}
+		} else if isGeometryPlanType(&tableDef.Cols[colIdx].Typ) {
+			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return 0, nil, nil, err
+			}
 		} else {
 			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
@@ -1387,6 +1392,11 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 					if col.Typ.Id == int32(types.T_enum) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return 0, err
+						}
+					} else if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return 0, err
 						}
