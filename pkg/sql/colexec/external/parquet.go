@@ -17,9 +17,13 @@ package external
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"math/big"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
@@ -41,6 +46,9 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 	if param.parqh == nil {
 		var err error
+		if err = param.refreshPartitionValues(); err != nil {
+			return err
+		}
 		param.parqh, err = newParquetHandler(param)
 		if err != nil {
 			return err
@@ -57,14 +65,31 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
 	}
 
-	return param.parqh.getData(bat, param, proc)
+	h := param.parqh
+	if err := h.getData(bat, param, proc); err != nil {
+		return err
+	}
+	if bat.RowCount() > 0 && (h.filepathColIndex >= 0 || len(h.partitionColIndices) > 0) {
+		if err := h.fillVirtualColumns(bat, param, proc); err != nil {
+			return err
+		}
+	}
+	if h.rowCountOnly && h.file != nil && h.offset >= h.file.NumRows() {
+		param.parqh = nil
+		param.Fileparam.FileFin++
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+	}
+	return nil
 }
 
 var maxParquetBatchCnt int64 = 1000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
-		batchCnt: maxParquetBatchCnt,
+		batchCnt:         maxParquetBatchCnt,
+		filepathColIndex: -1,
 	}
 	err := h.openFile(param)
 	if err != nil {
@@ -102,24 +127,70 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
+// findColumnIgnoreCase finds a column in the Parquet schema with case-insensitive matching.
+func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
+	root := h.file.Root()
+	nameLower := strings.ToLower(name)
+
+	var exactMatch *parquet.Column
+	var caseInsensitiveMatches []*parquet.Column
+	for _, col := range root.Columns() {
+		if col.Name() == name {
+			exactMatch = col
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		} else if strings.ToLower(col.Name()) == nameLower {
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		}
+	}
+	if len(caseInsensitiveMatches) > 1 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"ambiguous column name %s: multiple columns match case-insensitively (%s and %s)",
+			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
+	}
+	if exactMatch != nil {
+		return exactMatch, nil
+	}
+	if len(caseInsensitiveMatches) == 1 {
+		return caseInsensitiveMatches[0], nil
+	}
+	return nil, nil
+}
+
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
-	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.mappers = make([]*columnMapper, len(param.Attrs))
+	h.cols = make([]*parquet.Column, len(param.Cols))
+	h.mappers = make([]*columnMapper, len(param.Cols))
 	for _, attr := range param.Attrs {
-		def := param.Cols[attr.ColIndex]
+		colIdx := int(attr.ColIndex)
+		if colIdx < 0 || colIdx >= len(param.Cols) {
+			return moerr.NewInvalidInputf(param.Ctx, "column index %d out of range %d", attr.ColIndex, len(param.Cols))
+		}
+		def := param.Cols[colIdx]
 		if def.Hidden {
 			continue
 		}
 
-		col := h.file.Root().Column(attr.ColName)
+		if param.isHivePartitionCol(attr.ColName) {
+			h.partitionColIndices = append(h.partitionColIndices, colIdx)
+			continue
+		}
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			h.filepathColIndex = colIdx
+			continue
+		}
+
+		h.hasPhysicalCol = true
+
+		col, err := h.findColumnIgnoreCase(param.Ctx, attr.ColName)
+		if err != nil {
+			return err
+		}
 		if col == nil {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
 		if !col.Leaf() {
-			return moerr.NewNYIf(param.Ctx, "load group type column %s", attr.ColName)
+			return moerr.NewNYI(param.Ctx, "parquet nested type")
 		}
 
-		h.cols[attr.ColIndex] = col
 		fn := h.getMapper(col, def.Typ)
 		if fn == nil {
 			st := col.Type().String()
@@ -136,7 +207,12 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			}
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
-		h.mappers[attr.ColIndex] = fn
+		h.cols[colIdx] = col
+		h.mappers[colIdx] = fn
+	}
+
+	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
+		h.rowCountOnly = true
 	}
 
 	return nil
@@ -185,15 +261,38 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_uint8:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
+					return uint8(dictValues[int(idx)])
+				})
+			}
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
+				return uint8(v)
+			})
+		}
 	case types.T_int8:
 		if st.Kind() != parquet.Int32 {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
+					return int8(dictValues[int(idx)])
+				})
+			}
 			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
 				return int8(v)
 			})
@@ -203,12 +302,35 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
+					return int16(dictValues[int(idx)])
+				})
+			}
 			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
 				return int16(v)
+			})
+		}
+	case types.T_uint16:
+		if st.Kind() != parquet.Int32 {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
+					return uint16(dictValues[int(idx)])
+				})
+			}
+			return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
+				return uint16(v)
 			})
 		}
 	case types.T_int32:
@@ -216,10 +338,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Int32())
 		}
 	case types.T_int64:
@@ -227,10 +354,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Int64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Int64())
 		}
 	case types.T_uint32:
@@ -238,10 +370,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint32()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Uint32())
 		}
 	case types.T_uint64:
@@ -249,10 +386,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Uint64()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Uint64())
 		}
 	case types.T_float32:
@@ -260,10 +402,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Float()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Float())
 		}
 	case types.T_float64:
@@ -271,10 +418,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				dictValues := dictData.Double()
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+					return dictValues[int(idx)]
+				})
+			}
 			return copyPageToVec(mp, page, proc, vec, data.Double())
 		}
 	case types.T_date:
@@ -288,13 +440,21 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", dateT)
-			}
 			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictData := dict.Page().Data()
+				bs, _ := dictData.Data()
+				dictDates := types.DecodeSlice[int32](bs)
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indices, func(idx int32) types.Date {
+					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
+				})
+			}
 			bs, _ := data.Data()
-			ls := types.DecodeSlice[types.Date](bs)
-			return copyPageToVec(mp, page, proc, vec, ls)
+			ls := types.DecodeSlice[int32](bs)
+			return copyPageToVecMap(mp, page, proc, vec, ls, func(t int32) types.Date {
+				return types.DaysFromUnixEpochToDate(t)
+			})
 		}
 	case types.T_timestamp:
 		lt := st.LogicalType()
@@ -307,20 +467,54 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", tsT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case tsT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixNanoToTimestamp(v)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixNanoToTimestamp(v)
 				})
 			case tsT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixMicroToTimestamp(v)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixMicroToTimestamp(v)
 				})
 			case tsT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Timestamp, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.UnixMicroToTimestamp(v * 1000)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
 					return types.UnixMicroToTimestamp(v * 1000)
 				})
@@ -338,20 +532,54 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed page, type %s", dtT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case dtT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixNanoToTimestamp(v))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixNanoToTimestamp(v))
 				})
 			case dtT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixMicroToTimestamp(v))
 				})
 			case dtT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Datetime, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v * 1000))
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
 					return types.Datetime(types.UnixMicroToTimestamp(v * 1000))
 				})
@@ -370,19 +598,50 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", timeT)
-			}
 			data := page.Data()
+			dict := page.Dictionary()
 			switch {
 			case timeT.Unit.Nanos != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int64()
+					converted := make([]types.Time, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Time(v / 1000)
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Time {
 					return types.Time(v / 1000)
 				})
 			case timeT.Unit.Micros != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					bs, _ := dictData.Data()
+					dictTimes := types.DecodeSlice[types.Time](bs)
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
+						return dictTimes[int(idx)]
+					})
+				}
 				bs, _ := data.Data()
 				return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
 			case timeT.Unit.Millis != nil:
+				if dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int32()
+					converted := make([]types.Time, len(dictValues))
+					for i, v := range dictValues {
+						converted[i] = types.Time(v) * 1000
+					}
+					indexes := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
+						return converted[int(idx)]
+					})
+				}
 				return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) types.Time {
 					return types.Time(v) * 1000
 				})
@@ -390,7 +649,127 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return moerr.NewInternalError(proc.Ctx, "unknown unit")
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_decimal64:
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal64, error) {
+						return parseStringToDecimal64(util.UnsafeBytesToString(data), dstWidth, dstScale)
+					},
+					types.Decimal64(0),
+				)
+			}
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				if dict := page.Dictionary(); dict != nil {
+					dictValues, err := decodeDecimal64Values(proc.Ctx, kind, dict.Page().Data())
+					if err != nil {
+						return err
+					}
+					if err := rescaleDecimal64Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
+						return err
+					}
+					indices := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal64 {
+						return dictValues[int(idx)]
+					})
+				}
+				values, err := decodeDecimal64Values(proc.Ctx, kind, data)
+				if err != nil {
+					return err
+				}
+				if err := rescaleDecimal64Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+					return err
+				}
+				return copyPageToVec(mp, page, proc, vec, values)
+			}
+		}
+	case types.T_decimal128:
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal128, error) {
+						return parseStringToDecimal128(util.UnsafeBytesToString(data), dstWidth, dstScale)
+					},
+					types.Decimal128{},
+				)
+			}
+		} else {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				kind := st.Kind()
+				data := page.Data()
+				if dict := page.Dictionary(); dict != nil {
+					dictValues, err := decodeDecimal128Values(proc.Ctx, kind, dict.Page().Data())
+					if err != nil {
+						return err
+					}
+					if err := rescaleDecimal128Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
+						return err
+					}
+					indices := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal128 {
+						return dictValues[int(idx)]
+					})
+				}
+				values, err := decodeDecimal128Values(proc.Ctx, kind, data)
+				if err != nil {
+					return err
+				}
+				if err := rescaleDecimal128Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+					return err
+				}
+				return copyPageToVec(mp, page, proc, vec, values)
+			}
+		}
+	case types.T_decimal256:
+		srcScale := parquetDecimalScale(st)
+		dstScale := dt.Scale
+		dstWidth := dt.Width
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
+					func(data []byte) (types.Decimal256, error) {
+						return parseStringToDecimal256(util.UnsafeBytesToString(data), dstWidth, dstScale)
+					},
+					types.Decimal256{},
+				)
+			}
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			kind := st.Kind()
+			data := page.Data()
+			if dict := page.Dictionary(); dict != nil {
+				dictValues, err := decodeDecimal256Values(proc.Ctx, kind, dict.Page().Data())
+				if err != nil {
+					return err
+				}
+				if err := rescaleDecimal256Values(proc.Ctx, dictValues, srcScale, dstScale, dstWidth); err != nil {
+					return err
+				}
+				indices := data.Int32()
+				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) types.Decimal256 {
+					return dictValues[int(idx)]
+				})
+			}
+			values, err := decodeDecimal256Values(proc.Ctx, kind, data)
+			if err != nil {
+				return err
+			}
+			if err := rescaleDecimal256Values(proc.Ctx, values, srcScale, dstScale, dstWidth); err != nil {
+				return err
+			}
+			return copyPageToVec(mp, page, proc, vec, values)
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -458,6 +837,173 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	}
 	if mp.mapper != nil {
 		return mp
+	}
+	return nil
+}
+
+type nullCheckInfo struct {
+	noNulls            bool
+	levels             []byte
+	maxDefinitionLevel byte
+	actualNonNulls     int64
+}
+
+func (nc nullCheckInfo) isNull(index int) bool {
+	if nc.noNulls {
+		return false
+	}
+	return nc.levels[index] != nc.maxDefinitionLevel
+}
+
+func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
+	numRows := int(page.NumRows())
+	if !mp.srcNull || page.NumNulls() == 0 {
+		return nullCheckInfo{
+			noNulls:        true,
+			actualNonNulls: int64(numRows),
+		}, nil
+	}
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+	}
+
+	levels := page.DefinitionLevels()
+	if len(levels) != numRows {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: definition levels length %d != numRows %d", len(levels), numRows)
+	}
+
+	var actualNonNulls int64
+	for _, level := range levels {
+		if level == mp.maxDefinitionLevel {
+			actualNonNulls++
+		}
+	}
+	expectedNonNulls := int64(numRows) - page.NumNulls()
+	if actualNonNulls != expectedNonNulls {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() indicates %d non-nulls, but definition levels show %d",
+			expectedNonNulls, actualNonNulls)
+	}
+
+	return nullCheckInfo{
+		levels:             levels,
+		maxDefinitionLevel: mp.maxDefinitionLevel,
+		actualNonNulls:     actualNonNulls,
+	}, nil
+}
+
+func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNonNulls int64) error {
+	var actualCount int64
+	if loader.size != 0 {
+		if loader.size <= 0 {
+			return moerr.NewInvalidInputf(ctx, "malformed page: invalid fixed length %d", loader.size)
+		}
+		if len(loader.buf)%loader.size != 0 {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: buffer length %d is not divisible by element size %d",
+				len(loader.buf), loader.size)
+		}
+		actualCount = int64(len(loader.buf) / loader.size)
+	} else if len(loader.offsets) > 0 {
+		actualCount = int64(len(loader.offsets) - 1)
+	}
+
+	if actualCount != expectedNonNulls {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: expected %d non-null values, but data contains %d",
+			expectedNonNulls, actualCount)
+	}
+	return nil
+}
+
+func validateDictionaryIndicesCount(ctx context.Context, indices []int32, expectedNonNulls int64) error {
+	if int64(len(indices)) != expectedNonNulls {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: expected %d dictionary indices, but got %d",
+			expectedNonNulls, len(indices))
+	}
+	return nil
+}
+
+func wrapParseError(ctx context.Context, row int, parseErr error) error {
+	if parseErr == nil {
+		return nil
+	}
+	var moErr *moerr.Error
+	if errors.As(parseErr, &moErr) {
+		return parseErr
+	}
+	return moerr.NewInternalErrorf(ctx, "row %d: %v", row, parseErr)
+}
+
+func processStringToFixed[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	parseFunc func(data []byte) (T, error),
+	zeroVal T,
+) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, int(dict.Len()), indices); err != nil {
+			return err
+		}
+	}
+
+	length := vec.Length()
+	if err := vec.PreExtend(numRows+length, proc.Mp()); err != nil {
+		return err
+	}
+	vec.SetLength(numRows + length)
+	ret := vector.MustFixedColWithTypeCheck[T](vec)
+
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			nulls.Add(vec.GetNulls(), uint64(i+length))
+			ret[i+length] = zeroVal
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		val, parseErr := parseFunc(bytes.TrimSpace(data))
+		if parseErr != nil {
+			return wrapParseError(ctx, i, parseErr)
+		}
+		ret[i+length] = val
 	}
 	return nil
 }
@@ -534,10 +1080,434 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	return nil
 }
 
+func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) error {
+	for _, idx := range indexes {
+		if idx < 0 || int(idx) >= dictLen {
+			return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
+		}
+	}
+	return nil
+}
+
+func copyDictPageToVec[T any](
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	dictLen int,
+	indexes []int32,
+	convert func(idx int32) T,
+) error {
+	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
+		return err
+	}
+	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
+func parquetDecimalScale(st parquet.Type) int32 {
+	if lt := st.LogicalType(); lt != nil && lt.Decimal != nil {
+		return lt.Decimal.Scale
+	}
+	return 0
+}
+
+func rescaleDecimal64Values(ctx context.Context, values []types.Decimal64, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal64ToBigInt(scaled), dstWidth, "decimal64"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func rescaleDecimal128Values(ctx context.Context, values []types.Decimal128, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal128ToBigInt(scaled), dstWidth, "decimal128"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func rescaleDecimal256Values(ctx context.Context, values []types.Decimal256, srcScale, dstScale, dstWidth int32) error {
+	scaleDiff := dstScale - srcScale
+	for i, v := range values {
+		scaled, err := v.Scale(scaleDiff)
+		if err != nil {
+			return err
+		}
+		if err := checkDecimalPrecision(ctx, decimal256ToBigInt(scaled), dstWidth, "decimal256"); err != nil {
+			return err
+		}
+		values[i] = scaled
+	}
+	return nil
+}
+
+func checkDecimalPrecision(ctx context.Context, value *big.Int, width int32, typ string) error {
+	if width <= 0 {
+		return nil
+	}
+	digits := int32(len(new(big.Int).Abs(value).String()))
+	if digits > width {
+		return moerr.NewInvalidInputf(ctx, "parquet %s value exceeds destination precision %d", typ, width)
+	}
+	return nil
+}
+
+func decimal64ToBigInt(v types.Decimal64) *big.Int {
+	return big.NewInt(int64(v))
+}
+
+func decimal128ToBigInt(v types.Decimal128) *big.Int {
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[0:8], v.B64_127)
+	binary.BigEndian.PutUint64(buf[8:16], v.B0_63)
+	return decimalBytesToBigInt(buf[:])
+}
+
+func decimal256ToBigInt(v types.Decimal256) *big.Int {
+	var buf [32]byte
+	binary.BigEndian.PutUint64(buf[0:8], v.B192_255)
+	binary.BigEndian.PutUint64(buf[8:16], v.B128_191)
+	binary.BigEndian.PutUint64(buf[16:24], v.B64_127)
+	binary.BigEndian.PutUint64(buf[24:32], v.B0_63)
+	return decimalBytesToBigInt(buf[:])
+}
+
+var (
+	maxInt64Big  = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
+	minInt64Big  = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+	maxInt128Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	minInt128Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
+	maxInt256Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1))
+	minInt256Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+)
+
+func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal64, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal64, len(src))
+		for i, v := range src {
+			dst[i] = types.Decimal64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal64, len(src))
+		for i, v := range src {
+			dst[i] = types.Decimal64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal64, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal64(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal64", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal64 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal64, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal64(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal64", kind)
+	}
+}
+
+func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal128, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal128, len(src))
+		for i, v := range src {
+			dst[i] = decimal128FromInt64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal128, len(src))
+		for i, v := range src {
+			dst[i] = decimal128FromInt64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal128, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal128(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal128", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal128 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal128, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal128(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal128", kind)
+	}
+}
+
+func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal256, error) {
+	switch kind {
+	case parquet.Int32:
+		src := data.Int32()
+		dst := make([]types.Decimal256, len(src))
+		for i, v := range src {
+			dst[i] = decimal256FromInt64(int64(v))
+		}
+		return dst, nil
+	case parquet.Int64:
+		src := data.Int64()
+		dst := make([]types.Decimal256, len(src))
+		for i, v := range src {
+			dst[i] = decimal256FromInt64(v)
+		}
+		return dst, nil
+	case parquet.ByteArray:
+		buf, offsets := data.ByteArray()
+		if len(offsets) == 0 {
+			return nil, nil
+		}
+		dst := make([]types.Decimal256, len(offsets)-1)
+		for i := 0; i < len(dst); i++ {
+			dec, err := decimalBytesToDecimal256(ctx, buf[offsets[i]:offsets[i+1]])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	case parquet.FixedLenByteArray:
+		buf, size := data.FixedLenByteArray()
+		if size <= 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid fixed length %d for decimal256", size)
+		}
+		if len(buf)%size != 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "malformed fixed-len decimal256 data")
+		}
+		count := len(buf) / size
+		dst := make([]types.Decimal256, count)
+		for i := 0; i < count; i++ {
+			dec, err := decimalBytesToDecimal256(ctx, buf[i*size:(i+1)*size])
+			if err != nil {
+				return nil, err
+			}
+			dst[i] = dec
+		}
+		return dst, nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal256", kind)
+	}
+}
+
+func isDecimalLogicalType(lt *format.LogicalType) bool {
+	return lt != nil && lt.Decimal != nil
+}
+
+func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt64Big) < 0 || bi.Cmp(maxInt64Big) > 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "decimal64 overflow for value %x", b)
+	}
+	return types.Decimal64(bi.Int64()), nil
+}
+
+func decimalBytesToDecimal128(ctx context.Context, b []byte) (types.Decimal128, error) {
+	if len(b) == 0 {
+		return types.Decimal128{}, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt128Big) < 0 || bi.Cmp(maxInt128Big) > 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputf(ctx, "decimal128 overflow for value %x", b)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, bi, 16)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	return types.Decimal128{
+		B0_63:   binary.BigEndian.Uint64(buf[8:]),
+		B64_127: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func decimalBytesToDecimal256(ctx context.Context, b []byte) (types.Decimal256, error) {
+	if len(b) == 0 {
+		return types.Decimal256{}, nil
+	}
+	bi := decimalBytesToBigInt(b)
+	if bi.Cmp(minInt256Big) < 0 || bi.Cmp(maxInt256Big) > 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputf(ctx, "decimal256 overflow for value %x", b)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, bi, 32)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	return types.Decimal256{
+		B0_63:    binary.BigEndian.Uint64(buf[24:]),
+		B64_127:  binary.BigEndian.Uint64(buf[16:24]),
+		B128_191: binary.BigEndian.Uint64(buf[8:16]),
+		B192_255: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func decimal128FromInt64(v int64) types.Decimal128 {
+	var hi uint64
+	if v < 0 {
+		hi = ^uint64(0)
+	}
+	return types.Decimal128{
+		B0_63:   uint64(v),
+		B64_127: hi,
+	}
+}
+
+func decimal256FromInt64(v int64) types.Decimal256 {
+	var hi uint64
+	if v < 0 {
+		hi = ^uint64(0)
+	}
+	return types.Decimal256{
+		B0_63:    uint64(v),
+		B64_127:  hi,
+		B128_191: hi,
+		B192_255: hi,
+	}
+}
+
+func decimalBytesToBigInt(b []byte) *big.Int {
+	if len(b) == 0 {
+		return big.NewInt(0)
+	}
+	bi := new(big.Int).SetBytes(b)
+	if b[0]&0x80 != 0 {
+		mod := new(big.Int).Lsh(big.NewInt(1), uint(len(b))*8)
+		bi.Sub(bi, mod)
+	}
+	return bi
+}
+
+func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]byte, error) {
+	buf := make([]byte, size)
+	if bi.Sign() >= 0 {
+		tmp := bi.Bytes()
+		if len(tmp) > size {
+			return nil, moerr.NewInvalidInputf(ctx, "value does not fit in %d bytes", size)
+		}
+		copy(buf[size-len(tmp):], tmp)
+		return buf, nil
+	}
+
+	mod := new(big.Int).Lsh(big.NewInt(1), uint(size*8))
+	tmp := new(big.Int).Add(bi, mod)
+	if tmp.Sign() <= 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "negative value out of range for %d bytes", size)
+	}
+	tbytes := tmp.Bytes()
+	if len(tbytes) > size {
+		return nil, moerr.NewInvalidInputf(ctx, "value does not fit in %d bytes", size)
+	}
+	copy(buf[size-len(tbytes):], tbytes)
+	return buf, nil
+}
+
+func parseStringToDecimal64(s string, precision, scale int32) (types.Decimal64, error) {
+	if s == "" {
+		return 0, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal64(normalizeDecimalString(s), precision, scale)
+}
+
+func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128, error) {
+	if s == "" {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal128(normalizeDecimalString(s), precision, scale)
+}
+
+func parseStringToDecimal256(s string, precision, scale int32) (types.Decimal256, error) {
+	if s == "" {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtx("empty string cannot be converted to DECIMAL")
+	}
+	return types.ParseDecimal256(normalizeDecimalString(s), precision, scale)
+}
+
+func normalizeDecimalString(s string) string {
+	s = strings.ReplaceAll(s, "E", "e")
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+	return s
+}
+
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.rowCountOnly {
+		return h.getDataRowCountOnly(bat)
+	}
+
 	length := 0
 	finish := false
 	for colIdx, col := range h.cols {
+		if col == nil {
+			continue
+		}
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -597,6 +1567,30 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		h.offset += int64(length)
 	}
 
+	return nil
+}
+
+func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
+	batchLimit := int(h.batchCnt)
+	rowCount := 0
+
+	if h.rowCountRemaining > 0 {
+		rowCount = min(h.rowCountRemaining, batchLimit)
+		h.rowCountRemaining -= rowCount
+	} else {
+		rgs := h.file.RowGroups()
+		if h.currentRowGroup >= len(rgs) {
+			bat.SetRowCount(0)
+			return nil
+		}
+		total := int(rgs[h.currentRowGroup].NumRows())
+		h.currentRowGroup++
+		rowCount = min(total, batchLimit)
+		h.rowCountRemaining = total - rowCount
+	}
+
+	h.offset += int64(rowCount)
+	bat.SetRowCount(rowCount)
 	return nil
 }
 
