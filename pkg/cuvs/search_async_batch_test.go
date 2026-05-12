@@ -23,6 +23,7 @@ package cuvs
 // and verify each result matches the sync reference.
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -180,18 +181,26 @@ func TestGpuIvfFlatSearchFloat32AsyncBatched(t *testing.T) {
 	})
 }
 
+// TestGpuIvfPqSearchFloat32AsyncBatched checks that the async-batched float32
+// path (concurrent SearchFloat32Async → SearchWait, batch_window > 0) returns,
+// for each caller, exactly what a plain synchronous SearchFloat returns for the
+// same query — i.e. the fused-batch coalesce + per-caller demux is faithful.
+//
+// Uses a random (well-separated) dataset, not a collinear one: with the
+// pathological vec_i = (i,…,i) layout PQ produces large near-equidistant
+// "tie" clusters, and the rank-3..k ordering inside a tie cluster flips between
+// otherwise-equivalent kernel launches (ULP-level distance noise), which would
+// make an exact async-vs-sync comparison spuriously fail. With distinct random
+// distances the ordering is stable, so any async≠sync here is a real defect.
 func TestGpuIvfPqSearchFloat32AsyncBatched(t *testing.T) {
-	// IVF-PQ is lossy; for deterministic asserts use a higher dimension and
-	// a small enough index that the nearest neighbor stays exact under
-	// reasonable search params.
 	dimension := uint32(64)
 	nVectors := uint64(2000)
 	dataset := make([]float32, nVectors*uint64(dimension))
-	for i := uint64(0); i < nVectors; i++ {
-		base := i * uint64(dimension)
-		for d := uint32(0); d < dimension; d++ {
-			dataset[base+uint64(d)] = float32(i)
-		}
+	// Deterministic pseudo-random fill (SplitMix64-ish LCG), values in [0,1).
+	rng := uint64(0x9E3779B97F4A7C15)
+	for i := range dataset {
+		rng = rng*6364136223846793005 + 1442695040888963407
+		dataset[i] = float32(rng>>40) / float32(1<<24)
 	}
 
 	bp := DefaultIvfPqBuildParams()
@@ -209,39 +218,73 @@ func TestGpuIvfPqSearchFloat32AsyncBatched(t *testing.T) {
 	if err := index.Build(); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := index.SetBatchWindow(200); err != nil {
-		t.Fatalf("SetBatchWindow: %v", err)
-	}
 
 	sp := DefaultIvfPqSearchParams()
 	sp.NProbes = 16
 
-	// Limit=5 (not 1) for IVF-PQ: PQ quantization can shift the rank-1
-	// neighbor by ±1 even when the query lies exactly on a dataset point;
-	// require the true neighbor to appear within the top 5.
-	runConcurrentAsync(t, /*nGoroutines=*/ 16, /*nPerGoroutine=*/ 8, func(qid int) (int64, error) {
-		q := make([]float32, dimension)
-		for d := range q {
-			q[d] = float32(qid)
-		}
-		jobID, err := index.SearchFloat32AsyncWithParams(q, 1, dimension, 5, sp)
+	const nQueries = 128
+	const limit = uint32(5)
+	// Query qid is dataset row qid (so its own rank-1 neighbor is itself).
+	queryOf := func(qid int) []float32 {
+		base := qid * int(dimension)
+		return append([]float32(nil), dataset[base:base+int(dimension)]...)
+	}
+
+	// 1) Synchronous reference, batching off — deterministic for this index.
+	if err := index.SetBatchWindow(0); err != nil {
+		t.Fatalf("SetBatchWindow(0): %v", err)
+	}
+	want := make([][]int64, nQueries)
+	for qid := 0; qid < nQueries; qid++ {
+		res, err := index.SearchFloat(queryOf(qid), 1, dimension, limit, sp)
 		if err != nil {
-			return -1, err
+			t.Fatalf("SearchFloat reference qid=%d: %v", qid, err)
 		}
-		neighbors, _, err := index.SearchWait(jobID, 1, 5)
-		if err != nil {
-			return -1, err
-		}
-		want := int64(qid)
-		for _, n := range neighbors {
-			if n == want {
-				return want, nil
+		want[qid] = append([]int64(nil), res.Neighbors...)
+	}
+
+	// 2) Async + batching on, fire all queries concurrently.
+	if err := index.SetBatchWindow(200); err != nil {
+		t.Fatalf("SetBatchWindow(200): %v", err)
+	}
+	got := make([][]int64, nQueries)
+	var wg sync.WaitGroup
+	errCh := make(chan error, nQueries)
+	for qid := 0; qid < nQueries; qid++ {
+		wg.Add(1)
+		go func(qid int) {
+			defer wg.Done()
+			jobID, err := index.SearchFloat32AsyncWithParams(queryOf(qid), 1, dimension, limit, sp)
+			if err != nil {
+				errCh <- err
+				return
 			}
+			neighbors, _, err := index.SearchWait(jobID, 1, limit)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			got[qid] = neighbors
+		}(qid)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("async batched search failed: %v", err)
+	}
+
+	mismatches := 0
+	for qid := 0; qid < nQueries; qid++ {
+		if !reflect.DeepEqual(got[qid], want[qid]) {
+			if mismatches < 5 {
+				t.Errorf("qid=%d: async-batched=%v, sync reference=%v", qid, got[qid], want[qid])
+			}
+			mismatches++
 		}
-		// Surface the actual top-5 in the test failure for easier diagnosis.
-		t.Logf("qid=%d top-5=%v (true neighbor %d missing)", qid, neighbors, want)
-		return neighbors[0], nil
-	})
+	}
+	if mismatches > 0 {
+		t.Fatalf("%d/%d queries: async-batched result != sync result", mismatches, nQueries)
+	}
 }
 
 // TestGpuCagraAsyncBatchedMatchesSync sanity-checks that the async-batched

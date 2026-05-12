@@ -284,7 +284,7 @@ if _lib:
     _lib.gpu_ivf_pq_cap.restype = ctypes.c_uint64
     _lib.gpu_ivf_pq_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_info.restype = ctypes.c_char_p
-    _lib.gpu_ivf_pq_get_centers.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_get_centers.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p]
     _lib.gpu_ivf_pq_get_n_list.argtypes = [ctypes.c_void_p]
     _lib.gpu_ivf_pq_get_n_list.restype = ctypes.c_uint32
     _lib.gpu_ivf_pq_get_dim.argtypes = [ctypes.c_void_p]
@@ -889,7 +889,7 @@ class IvfPqIndex:
         dim = self.get_rot_dim() # Centers use rotated dimension
         centers = np.zeros((n_lists, dim), dtype=np.float32)
         errmsg = ctypes.c_char_p()
-        _lib.gpu_ivf_pq_get_centers(self.handle, centers.ctypes.data_as(ctypes.c_void_p), ctypes.byref(errmsg))
+        _lib.gpu_ivf_pq_get_centers(self.handle, centers.ctypes.data_as(ctypes.c_void_p), ctypes.c_uint64(centers.size), ctypes.byref(errmsg))
         _check_error(errmsg)
         return centers
 

@@ -915,7 +915,7 @@ func (gi *GpuIvfPq[T]) GetCenters() ([]T, error) {
 	dim := gi.GetRotDim()
 	centers := make([]T, nList*dim)
 	var errmsg *C.char
-	C.gpu_ivf_pq_get_centers(gi.cIvfPq, unsafe.Pointer(&centers[0]), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_get_centers(gi.cIvfPq, unsafe.Pointer(&centers[0]), C.uint64_t(len(centers)), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(centers)
 
 	if errmsg != nil {

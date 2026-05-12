@@ -1724,22 +1724,36 @@ public:
 
                 if (!local_index) return std::vector<T>{};
 
+                // cuVS stores cluster centers as (n_lists, dim_ext): the first
+                // rot_dim columns are the rotated center coords, then one column
+                // for the center's squared L2 norm, then SIMD padding. Callers
+                // (and the Go binding, which sizes its slice as n_lists*rot_dim)
+                // want only the rot_dim coords — returning the padded width here
+                // overruns the caller's buffer (see gpu_ivf_pq_get_centers).
                 auto centers_view = local_index->centers();
-                size_t n_centers = centers_view.extent(0);
-                size_t dim = centers_view.extent(1);
+                const size_t n_centers = centers_view.extent(0);
+                const size_t dim_ext   = centers_view.extent(1);
+                const size_t rot_dim   = static_cast<size_t>(local_index->rot_dim());
 
-                auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim);
+                auto centers_device_target = raft::make_device_matrix<T, int64_t>(*res, n_centers, dim_ext);
                 if constexpr (sizeof(T) == 1) {
                     if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-                    auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim);
+                    auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim_ext);
                     this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
                 } else {
                     raft::copy(*res, centers_device_target.view(), centers_view);
                 }
 
-                std::vector<T> host_centers(n_centers * dim);
-                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(host_centers.data(), n_centers, dim), centers_device_target.view());
+                std::vector<T> padded(n_centers * dim_ext);
+                raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(padded.data(), n_centers, dim_ext), centers_device_target.view());
                 raft::resource::sync_stream(*res);
+
+                if (rot_dim == dim_ext) return padded;  // no padding to strip
+                std::vector<T> host_centers(n_centers * rot_dim);
+                for (size_t i = 0; i < n_centers; ++i) {
+                    const T* src = padded.data() + i * dim_ext;
+                    std::copy(src, src + rot_dim, host_centers.data() + i * rot_dim);
+                }
                 return host_centers;
             }
         );
@@ -2026,8 +2040,26 @@ public:
     }
 
     uint32_t get_dim() const { return this->dimension; }
-    uint32_t get_rot_dim() const { return this->dimension; } 
-    uint32_t get_dim_ext() const { return this->dimension; } 
+
+    // rot_dim / dim_ext come from the built cuVS index, not from `dimension`:
+    // cuVS rounds rot_dim up to a multiple of pq_dim (so rot_dim >= dim), and
+    // dim_ext = rot_dim + 1 (squared-norm column) rounded up for SIMD. These
+    // sizes must match what get_centers() returns / the Go caller allocates.
+    // Falls back to `dimension` before the index is built.
+    const ivf_pq_index* any_local_index_() const {
+        if (index_) return index_.get();
+        if (!this->replicated_indices_.empty())
+            return std::static_pointer_cast<ivf_pq_index>(this->replicated_indices_.begin()->second).get();
+        return nullptr;
+    }
+    uint32_t get_rot_dim() const {
+        const auto* idx = any_local_index_();
+        return idx ? static_cast<uint32_t>(idx->rot_dim()) : this->dimension;
+    }
+    uint32_t get_dim_ext() const {
+        const auto* idx = any_local_index_();
+        return idx ? static_cast<uint32_t>(idx->dim_ext()) : this->dimension;
+    }
     uint32_t get_n_list() const { return this->build_params.n_lists; }
 };
 
