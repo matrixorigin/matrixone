@@ -624,35 +624,27 @@ char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
     }
 }
 
-void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, void* errmsg) {
+void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, uint64_t count, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    // Copy at most min(host_centers.size(), count) elements — never past the
+    // caller's buffer. (get_centers() now returns exactly n_lists*rot_dim, but
+    // keep the clamp so a future shape change can't overrun the Go heap.)
+    auto copy_clamped = [count](const auto& src, void* dst) {
+        using elem_t = typename std::decay_t<decltype(src)>::value_type;
+        uint64_t n = src.size() < count ? src.size() : count;
+        std::copy(src.begin(), src.begin() + n, static_cast<elem_t*>(dst));
+    };
     try {
         auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
         switch (any->qtype) {
-            case Quantization_F32: {
-                auto host_centers = static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_centers();
-                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<float*>(centers));
-                break;
-            }
-            case Quantization_F16: {
-                auto host_centers = static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_centers();
-                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<half*>(centers));
-                break;
-            }
-            case Quantization_INT8: {
-                auto host_centers = static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers();
-                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<int8_t*>(centers));
-                break;
-            }
-            case Quantization_UINT8: {
-                auto host_centers = static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers();
-                if (!host_centers.empty()) std::copy(host_centers.begin(), host_centers.end(), static_cast<uint8_t*>(centers));
-                break;
-            }
+            case Quantization_F32:   copy_clamped(static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->get_centers(),   centers); break;
+            case Quantization_F16:   copy_clamped(static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->get_centers(),    centers); break;
+            case Quantization_INT8:  copy_clamped(static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->get_centers(),  centers); break;
+            case Quantization_UINT8: copy_clamped(static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->get_centers(), centers); break;
             default: break;
         }
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_ivf_pq_get_centers", e.what());
     }
 }

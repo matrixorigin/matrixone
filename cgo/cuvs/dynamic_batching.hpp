@@ -158,29 +158,13 @@ public:
         cuvs::neighbors::dynamic_batching::search_params sp;
         sp.dispatch_timeout_ms = dispatch_timeout_ms;
         cuvs::neighbors::dynamic_batching::search(res, sp, *w, queries, neighbors, distances);
-        // ====================================================================
-        // WARNING — full-device sync; performance-killing workaround, not a real fix.
-        // --------------------------------------------------------------------
-        // cuVS dynamic_batching coalesces queries across threads and runs the
-        // gather → upstream search → scatter on its own internal CUDA streams; a
-        // batch may dispatch only after the dispatch_timeout window, possibly
-        // *after* this call returns. Empirically, syncing the caller's `res`
-        // (raft::resource::sync_stream, what the cuVS docs say is sufficient)
-        // does NOT reliably wait for that pipeline — non-dispatcher threads can
-        // read their `neighbors`/`distances` before the scatter lands, and the
-        // caller reuses `queries`/`neighbors`/`distances` (per-thread workspace)
-        // for its next task, corrupting in-flight batches (~1 in 128 searches in
-        // the AsyncBatched tests). cuVS exposes no handle to its queue streams,
-        // so the only way to wait for "all of cuVS's batch work" is a full
-        // device sync — which serializes the device per search and can make the
-        // batched path slower than the standalone one. Remove this once upstream
-        // fixes the synchronization (file a cuVS issue with the repro); until
-        // then, do not enable a batch window in latency/throughput-sensitive use.
-        // ====================================================================
-        cudaError_t cuerr = cudaDeviceSynchronize();
-        if (cuerr != cudaSuccess) {
-            throw std::runtime_error(std::string("dynamic_batching: cudaDeviceSynchronize: ") + cudaGetErrorString(cuerr));
-        }
+        // dynamic_batching runs the gather → upstream search → scatter on its
+        // own internal streams but, per the cuVS contract, makes the results on
+        // `res`'s stream available once that stream is drained. Sync it so the
+        // caller can read neighbors/distances and reuse its per-thread queries
+        // workspace safely. (This replaces an earlier full-device-sync
+        // workaround; re-evaluating whether the per-stream sync is sufficient.)
+        raft::resource::sync_stream(res);
     }
 
     // Drop all cached wrappers. Call before the upstream indices they reference

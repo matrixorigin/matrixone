@@ -56,7 +56,7 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
-.PHONY: all clean debug release test
+.PHONY: all clean debug asan release test
 
 all: libmocuvs.so
 
@@ -67,6 +67,26 @@ release: all
 debug: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O0 -g -lineinfo
 debug: LDFLAGS := $(filter-out -O3,$(LDFLAGS)) -g
 debug: all
+
+# AddressSanitizer build of the host (CPU) side of every cuvs .cpp/.hpp.
+# Catches an out-of-bounds host write (e.g. one that lands in Go's heap and
+# later crashes the Go GC / testing harness) at the instruction that does it.
+# Device (kernel) code is not instrumented — that's fine; ASan is for host
+# memory. -O1 (not -O0) keeps it bearable. Use this together with a libasan
+# loaded into the process (see below) or the __asan_* symbols won't resolve.
+#
+#   make -C cgo/cuvs asan
+#   make -C cgo            # relink libmo.so against the asan'd cuvs objects
+#                          # (shared libs allow undefined __asan_* — resolved at runtime)
+#
+# Then either build the Go test binary with `-asan` (which links libasan), or
+# run a normal build with libasan force-loaded first:
+#   LD_PRELOAD=$(gcc -print-file-name=libasan.so) \
+#   ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:disable_coredump=0 \
+#     ./cuvs.test -test.run TestIndexInfoComprehensive -test.count=50 -test.v
+asan: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O1 -g -lineinfo -Xcompiler "-fsanitize=address -fno-omit-frame-pointer"
+asan: LDFLAGS    := $(filter-out -O3,$(LDFLAGS)) -g -Xcompiler "-fsanitize=address"
+asan: all
 
 libmocuvs.so: $(OBJS)
 	$(NVCC) $(LDFLAGS) -shared -o $@ $^ $(LIBS)
