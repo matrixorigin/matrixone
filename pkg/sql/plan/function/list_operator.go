@@ -2139,6 +2139,16 @@ var supportedOperators = []FuncNew{
 					return operatorUnaryMinusDecimal128
 				},
 			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryMinusDecimal256
+				},
+			},
 		},
 	},
 

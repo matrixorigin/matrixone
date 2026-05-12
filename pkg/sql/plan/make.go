@@ -659,9 +659,44 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 	if !isSetPlanType(&targetType) {
 		return expr, nil
 	}
+	if expr.GetLit() == nil && isSetPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
+		expr.Typ = targetType
+		return expr, nil
+	}
 
 	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
+	if lit != nil && lit.Isnull {
+		return expr, nil
+	}
+	if lit == nil {
+		// Non-literal expression: wrap with the runtime cast function.
+		sourceExpr := expr
+		astArgs := []tree.Expr{
+			tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
+		}
+		args := make([]*Expr, len(astArgs)+1)
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		for idx, arg := range astArgs {
+			if idx == len(args)-1 {
+				continue
+			}
+			argExpr, err := binder.BindExpr(arg, 0, false)
+			if err != nil {
+				return nil, err
+			}
+			args[idx] = argExpr
+		}
+		args[len(args)-1] = sourceExpr
+		var err error
+		if types.T(sourceExpr.Typ.Id).IsInteger() {
+			expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastIndexValueToIndexFun, args)
+		} else {
+			expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastValueToIndexFun, args)
+		}
+		if err != nil {
+			return nil, err
+		}
+		expr.Typ = targetType
 		return expr, nil
 	}
 

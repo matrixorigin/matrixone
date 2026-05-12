@@ -97,3 +97,20 @@ func TestCompareGeneric(t *testing.T) {
 	assert.Equal(t, -1, Compare(blockId_1_1036[:], rowid_1_1291_1036[:], types.T_Rowid, 0, 0))
 	assert.Equal(t, 0, Compare(blockId_1_1291[:], rowid_1_1291_1036[:], types.T_Rowid, 0, 0))
 }
+
+func TestCompareYear(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	y1 := types.MoYear(2024)
+	y2 := types.MoYear(2025)
+
+	buf1 := types.EncodeMoYear(&y1)
+	buf2 := types.EncodeMoYear(&y2)
+
+	assert.Equal(t, 0, Compare(buf1, buf1, types.T_year, 0, 0))
+	assert.Equal(t, -1, Compare(buf1, buf2, types.T_year, 0, 0))
+	assert.Equal(t, 1, Compare(buf2, buf1, types.T_year, 0, 0))
+
+	assert.Equal(t, 0, CompareGeneric(y1, y1, types.T_year))
+	assert.Equal(t, -1, CompareGeneric(y1, y2, types.T_year))
+	assert.Equal(t, 1, CompareGeneric(y2, y1, types.T_year))
+}

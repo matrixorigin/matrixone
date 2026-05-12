@@ -208,18 +208,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if err != nil {
 					return 0, err
 				}
-				if col != nil && col.Typ.Id == int32(types.T_enum) {
-					selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
-					if err != nil {
-						return 0, err
+				if col != nil {
+					switch {
+					case isEnumPlanType(&col.Typ):
+						selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
+					case isSetPlanType(&col.Typ):
+						selectNode.ProjectList[colPos], err = funcCastForSetType(builder.GetContext(), updateExpr, col.Typ)
+					case isGeometryPlanType(&col.Typ):
+						selectNode.ProjectList[colPos], err = funcCastForGeometryType(builder.GetContext(), updateExpr, col.Typ)
+					default:
+						selectNode.ProjectList[colPos], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					}
-				} else if col != nil && isGeometryPlanType(&col.Typ) {
-					selectNode.ProjectList[colPos], err = funcCastForGeometryType(builder.GetContext(), updateExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else {
-					selectNode.ProjectList[colPos], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -236,16 +235,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					selectNode.ProjectList[oldPos] = newDefExpr
 				}
 
-				if col.Typ.Id == int32(types.T_enum) {
+				switch {
+				case isEnumPlanType(&col.Typ):
 					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else if isGeometryPlanType(&col.Typ) {
+				case isSetPlanType(&col.Typ):
+					selectNode.ProjectList[originPos], err = funcCastForSetType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
+				case isGeometryPlanType(&col.Typ):
 					selectNode.ProjectList[originPos], err = funcCastForGeometryType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
-					if err != nil {
-						return 0, err
-					}
+				}
+				if err != nil {
+					return 0, err
 				}
 			}
 		}
