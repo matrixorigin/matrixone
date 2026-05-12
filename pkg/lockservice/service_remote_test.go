@@ -61,6 +61,40 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
+	req := &pb.Request{
+		LockTable: pb.LockTable{
+			Group:       1,
+			Table:       2,
+			OriginTable: 3,
+			ServiceID:   "bind-service",
+			Version:     4,
+		},
+		Lock: pb.LockRequest{
+			TxnID:     []byte{0x01, 0x02},
+			ServiceID: "caller-service",
+			Rows:      [][]byte{{1}, {2}},
+		},
+	}
+	logFields := remoteLockResponseLogFields(req)
+
+	req.Reset()
+	fields := logFields()
+	values := make(map[string]any, len(fields))
+	for _, field := range fields {
+		if field.String != "" {
+			values[field.Key] = field.String
+			continue
+		}
+		values[field.Key] = field.Integer
+	}
+
+	require.Equal(t, "0102", values["txn"])
+	require.Equal(t, "1-2(3)-bind-service-4", values["bind"])
+	require.Equal(t, "caller-service", values["caller-service"])
+	require.Equal(t, int64(2), values["row-count"])
+}
+
 func TestLockResultWithNoConflictOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
