@@ -4389,86 +4389,86 @@ func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
 // Called synchronously by the plain `DROP TABLE` path after flipping
 // table_deleted=true for the affected tid.
 func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
-if len(deadTIDs) == 0 {
-return nil
-}
-// Fast path: the vast majority of DROP TABLE operations are on tables
-// that have nothing to do with data branch. Skip the `FOR UPDATE`
-// reclaim scan entirely unless at least one of the dead tids actually
-// participates in mo_branch_metadata (as a child row or as a parent
-// referenced by some child). This keeps DROP TABLE fast and, more
-// importantly, avoids lock-contention with unrelated drops that stack
-// up in `restore account` / `drop database` cascades.
-var idList strings.Builder
-for i, tid := range deadTIDs {
-if i > 0 {
-idList.WriteByte(',')
-}
-idList.WriteString(strconv.FormatUint(tid, 10))
-}
-probeSQL := fmt.Sprintf(
-"select 1 from %s.%s where table_id in (%s) or p_table_id in (%s) limit 1",
-catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-idList.String(), idList.String(),
-)
-probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
-if err != nil {
-return err
-}
-hasBranchRow := false
-probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
-if n > 0 {
-hasBranchRow = true
-}
-return true
-})
-probeRes.Close()
-if !hasBranchRow {
-return nil
-}
+	if len(deadTIDs) == 0 {
+		return nil
+	}
+	// Fast path: the vast majority of DROP TABLE operations are on tables
+	// that have nothing to do with data branch. Skip the `FOR UPDATE`
+	// reclaim scan entirely unless at least one of the dead tids actually
+	// participates in mo_branch_metadata (as a child row or as a parent
+	// referenced by some child). This keeps DROP TABLE fast and, more
+	// importantly, avoids lock-contention with unrelated drops that stack
+	// up in `restore account` / `drop database` cascades.
+	var idList strings.Builder
+	for i, tid := range deadTIDs {
+		if i > 0 {
+			idList.WriteByte(',')
+		}
+		idList.WriteString(strconv.FormatUint(tid, 10))
+	}
+	probeSQL := fmt.Sprintf(
+		"select 1 from %s.%s where table_id in (%s) or p_table_id in (%s) limit 1",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		idList.String(), idList.String(),
+	)
+	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	hasBranchRow := false
+	probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
+		if n > 0 {
+			hasBranchRow = true
+		}
+		return true
+	})
+	probeRes.Close()
+	if !hasBranchRow {
+		return nil
+	}
 
-loadDAG := func() (databranchutils.BranchReclaimDag, error) {
-// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
-// drops from the same parent would otherwise each miss the
-// other's table_deleted flip and both skip the ancestor
-// reclaim, leaking the parent snapshot. Only reached when the
-// fast-path probe above already confirmed the drop touches
-// mo_branch_metadata, so the lock scope is limited to real
-// branch drops.
-querySql := fmt.Sprintf(
-"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
-catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-)
-res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
-if err != nil {
-return databranchutils.BranchReclaimDag{}, err
-}
-defer res.Close()
-var rows []databranchutils.DataBranchMetadata
-res.ReadRows(func(n int, cols []*vector.Vector) bool {
-if n == 0 {
-return true
-}
-tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
-parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
-cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
-for i := 0; i < n; i++ {
-deleted := !cols[3].IsNull(uint64(i)) &&
-vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
-rows = append(rows, databranchutils.DataBranchMetadata{
-TableID:      tableIDs[i],
-CloneTS:      cloneTSs[i],
-PTableID:     parentIDs[i],
-TableDeleted: deleted,
-})
-}
-return true
-})
-return databranchutils.NewBranchReclaimDag(rows), nil
-}
-execDelete := func(snames []string) error {
-sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
-return c.runSqlWithSystemTenant(sql)
-}
-return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
+		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
+		// drops from the same parent would otherwise each miss the
+		// other's table_deleted flip and both skip the ancestor
+		// reclaim, leaking the parent snapshot. Only reached when the
+		// fast-path probe above already confirmed the drop touches
+		// mo_branch_metadata, so the lock scope is limited to real
+		// branch drops.
+		querySql := fmt.Sprintf(
+			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+		)
+		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+		if err != nil {
+			return databranchutils.BranchReclaimDag{}, err
+		}
+		defer res.Close()
+		var rows []databranchutils.DataBranchMetadata
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			if n == 0 {
+				return true
+			}
+			tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
+			for i := 0; i < n; i++ {
+				deleted := !cols[3].IsNull(uint64(i)) &&
+					vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+				rows = append(rows, databranchutils.DataBranchMetadata{
+					TableID:      tableIDs[i],
+					CloneTS:      cloneTSs[i],
+					PTableID:     parentIDs[i],
+					TableDeleted: deleted,
+				})
+			}
+			return true
+		})
+		return databranchutils.NewBranchReclaimDag(rows), nil
+	}
+	execDelete := func(snames []string) error {
+		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
+		return c.runSqlWithSystemTenant(sql)
+	}
+	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
 }
