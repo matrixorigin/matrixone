@@ -495,7 +495,12 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 		logutil.Warnf("[TransferPage] write transfer page error (attempt %d/%d), page count %d: %v",
 			attempt+1, transferPageWriteMaxRetry, len(pages), err)
 		if attempt < transferPageWriteMaxRetry-1 {
-			time.Sleep(transferPageWriteBaseWait << attempt)
+			select {
+			case <-ctx.Done():
+				ReleaseMarshalBufs(bufs)
+				return ctx.Err()
+			case <-time.After(transferPageWriteBaseWait << attempt):
+			}
 		}
 	}
 	ReleaseMarshalBufs(bufs)

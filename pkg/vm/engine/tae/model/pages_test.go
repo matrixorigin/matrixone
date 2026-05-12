@@ -174,3 +174,45 @@ func TestWriteTransferPage_FileAlreadyExistsOnFirstAttempt(t *testing.T) {
 		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
 	}
 }
+
+func TestWriteTransferPage_ContextCancellation(t *testing.T) {
+	fs := &failWriteFS{maxFails: 10}
+	pages, ioVector, bufs := makeTestPages(2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := WriteTransferPage(ctx, fs, pages, ioVector, bufs)
+
+	require.Error(t, err)
+	assert.Less(t, fs.failCount.Load(), int32(transferPageWriteMaxRetry))
+	for _, page := range pages {
+		assert.Empty(t, page.path.Name, "path should not be set on cancellation")
+	}
+}
+
+func TestTransferPage_TransferWithNoPath(t *testing.T) {
+	sid := objectio.NewSegmentid()
+	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
+	id := &common.ID{BlockID: *objectio.NewBlockid(sid, 0, 0)}
+	page := &TransferHashPage{
+		id:      id,
+		ttl:     ttl,
+		diskTTL: diskTTL,
+		objects: createdObjs,
+	}
+	now := time.Now()
+	page.bornTS.Store(&now)
+
+	m := make(api.TransferMap, 1)
+	m[0] = api.TransferDestPos{ObjIdx: 0, BlkIdx: 0, RowIdx: 42}
+	page.hashmap.Store(&m)
+
+	_, ok := page.Transfer(0)
+	assert.True(t, ok)
+
+	page.hashmap.Store(nil)
+
+	_, ok = page.Transfer(0)
+	assert.False(t, ok)
+}
