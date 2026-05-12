@@ -16,7 +16,9 @@ package external
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -28,6 +30,95 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParquetDecimalMappingRegression(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	decimalBytes := func(v int64) []byte {
+		b, err := bigIntToTwosComplementBytes(ctx, big.NewInt(v), 8)
+		require.NoError(t, err)
+		return b
+	}
+
+	values := []parquet.Value{
+		parquet.FixedLenByteArrayValue(decimalBytes(12345)).Level(0, 0, 0),
+		parquet.FixedLenByteArrayValue(decimalBytes(-6789)).Level(0, 0, 0),
+	}
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Decimal(2, 12, parquet.FixedLenByteArrayType(8)),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	page, err := col.Pages().ReadPage()
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	var h ParquetHandler
+	mp := h.getMapper(col, plan.Type{
+		Id:          int32(types.T_decimal64),
+		Width:       12,
+		Scale:       2,
+		NotNullable: true,
+	})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+
+	neg := int64(-6789)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+	require.Equal(t, []types.Decimal64{
+		types.Decimal64(int64(12345)),
+		types.Decimal64(neg),
+	}, got)
+}
+
+func TestParquetStringToDecimalMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	values := []parquet.Value{
+		parquet.ByteArrayValue([]byte(" +123.45 ")).Level(0, 0, 0),
+		parquet.ByteArrayValue([]byte("-6.70")).Level(0, 0, 0),
+	}
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.String(),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	page, err := col.Pages().ReadPage()
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	var h ParquetHandler
+	mp := h.getMapper(col, plan.Type{
+		Id:          int32(types.T_decimal64),
+		Width:       12,
+		Scale:       2,
+		NotNullable: true,
+	})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+
+	expected0, err := types.ParseDecimal64("123.45", 12, 2)
+	require.NoError(t, err)
+	expected1, err := types.ParseDecimal64("-6.70", 12, 2)
+	require.NoError(t, err)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+	require.Equal(t, []types.Decimal64{expected0, expected1}, got)
+}
 
 func Test_getMapper(t *testing.T) {
 	proc := testutil.NewProc(t)

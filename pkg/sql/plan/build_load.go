@@ -222,6 +222,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
+	// Note on Hive partitioned external tables: LOAD DATA into any external
+	// table (hive or not) is rejected by checkTableType inside getDmlTableInfo
+	// above, producing "cannot insert/update/delete from external table".
+	// No hive-specific intercept is needed here — and any probe added below
+	// would be unreachable dead code. See Phase 8 P8-audit-3 decision to keep
+	// the generic external-table error for consistency with all DML on externals.
+
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {

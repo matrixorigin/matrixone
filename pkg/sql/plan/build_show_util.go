@@ -516,7 +516,12 @@ func ConstructCreateTableSQL(
 		createStr += " INFILE{'FILEPATH'=''," +
 			"'COMPRESSION'=" + formatStrLit(param.CompressType) + "," +
 			"'FORMAT'=" + formatStrLit(param.Format) + "," +
-			"'JSONDATA'=" + formatStrLit(param.JsonData) + "}"
+			"'JSONDATA'=" + formatStrLit(param.JsonData)
+		if param.HivePartitioning {
+			createStr += ",'HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'=" +
+				formatStrLit(strings.Join(param.HivePartitionCols, ","))
+		}
+		createStr += "}"
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
