@@ -23,7 +23,6 @@ import (
 )
 
 // ParquetReader handles Parquet format files.
-// Phase 1: thin wrapper around existing ParquetHandler logic.
 type ParquetReader struct {
 	param *ExternalParam
 	h     *ParquetHandler
@@ -35,6 +34,9 @@ func NewParquetReader(param *ExternalParam, proc *process.Process) *ParquetReade
 
 func (r *ParquetReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
 	r.param = param
+	if err := param.refreshPartitionValues(); err != nil {
+		return false, err
+	}
 	r.h, err = newParquetHandler(param)
 	if err != nil {
 		return false, err
@@ -62,6 +64,17 @@ func (r *ParquetReader) ReadBatch(
 	err = r.h.getData(buf, r.param, proc)
 	if err != nil {
 		return false, err
+	}
+
+	// Virtual column fill is independent of rowCountOnly: both physical-col
+	// branches (getDataByPage / getDataByRow) and rowCountOnly need to stamp
+	// the hive partition values and __mo_filepath into their vectors whenever
+	// those columns are projected. rowCountOnly in prepare() only gates the
+	// getData dispatch (no mapper reads), not the virtual-column fill.
+	if buf.RowCount() > 0 && (r.h.filepathColIndex >= 0 || len(r.h.partitionColIndices) > 0) {
+		if err := r.h.fillVirtualColumns(buf, r.param, proc); err != nil {
+			return false, err
+		}
 	}
 
 	// Check if file is finished: getData sets offset and checks NumRows
