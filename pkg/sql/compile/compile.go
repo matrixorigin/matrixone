@@ -3493,6 +3493,17 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 		return inputSS
 	}
 
+	//fallback to non-shuffle group
+	if len(inputSS) != 1 || inputSS[0].NodeInfo.Mcpu <= 1 || inputSS[0].NodeInfo.Mcpu != int(node.Stats.Dop) {
+		if c.IsSingleScope(inputSS) {
+			return c.compileTPGroup(node, inputSS, nodes)
+		}
+
+		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		defer groupInfo.Release()
+		return c.compileMergeGroup(node, inputSS, nodes, groupInfo.AnyDistinctAgg())
+	}
+
 	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
