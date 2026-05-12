@@ -525,6 +525,10 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
 		return EncodeFixed(val.(Decimal128))
+	case T_decimal256:
+		return EncodeFixed(val.(Decimal256))
+	case T_year:
+		return EncodeFixed(val.(MoYear))
 	case T_date:
 		return EncodeFixed(val.(Date))
 	case T_time:

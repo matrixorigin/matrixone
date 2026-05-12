@@ -361,7 +361,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 // zm.min < k
 func (zm ZM) AnyLTByValue(k []byte) bool {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) < 0
@@ -374,7 +374,7 @@ func (zm ZM) AnyLTByValue(k []byte) bool {
 // zm.max > k
 func (zm ZM) AnyGTByValue(k []byte) bool {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) > 0
@@ -538,7 +538,7 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 // zm.max >= k
 func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
@@ -551,7 +551,7 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 // zm.min <= k
 func (zm ZM) AnyLEByValue(k []byte) bool {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0

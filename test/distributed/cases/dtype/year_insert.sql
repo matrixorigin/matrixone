@@ -3,12 +3,12 @@
 -- @desc: insert / select for YEAR columns
 -- @label:bvt
 --
--- Note: 3.0-dev's frontend renders YEAR as a DATE (`YYYY-01-01`) rather than
--- MySQL's bare `YYYY`, because pkg/defines/type.go lacks a MYSQL_TYPE_YEAR
--- branch in GetLength. The CAST(... AS UNSIGNED) assertions below lock down
--- the numeric semantics independently of that display quirk. When the YEAR
--- protocol metadata is fixed, update the expected `SELECT *` rendering in
--- the companion .result file.
+-- Note: mo-tester's JDBC driver renders YEAR as `YYYY-01-01` (java.sql.Date)
+-- rather than MySQL's bare `YYYY`. This is a client-side display artifact, not
+-- a server bug. The CAST(... AS UNSIGNED) assertions below lock down the
+-- numeric semantics independently of that rendering. If a future mo-tester
+-- version changes the YEAR display, update the `SELECT *` baseline in the
+-- companion .result file accordingly.
 
 DROP DATABASE IF EXISTS test_year;
 CREATE DATABASE test_year;
