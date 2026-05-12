@@ -2,11 +2,11 @@
 
 ## 结论
 
-这次 `mo-main-commit-95f75847d-20260510` TPCC 100W/1000 terminals 的 consistency failure，根因可以基本敲死：
+这次 `mo-main-commit-95f75847d-20260510` TPCC 100W/1000 terminals 的 consistency failure，可以定位为一个高置信根因，且最小修复点已经明确：
 
-> **三个 TP CN 在同一个故障窗口内发生 OOMKilled/restart，导致 CN lockservice endpoint 短暂不可达。重启期间 remote lock unlock/cleanup 失败，TN lock table allocator 随后把相关表的 lock table bind 更新到新 service version。已有事务仍携带旧 bind 继续执行或提交，虽然 TN 在 commit 阶段能拒绝一部分旧 bind 事务，但 CN 侧 remote lock、orphan cleanup、事务重试/回滚之间出现不一致窗口，破坏了 TPCC 关键行锁的串行化，最终同一 district 重复分配 `o_id`，并引发 warehouse/district ytd 不一致。**
+> **三个 TP CN 在同一个故障窗口内发生 OOMKilled/restart，导致 CN lockservice endpoint 短暂不可达。重启期间 remote lock unlock/cleanup 失败，TN lock table allocator 随后把相关表的 lock table bind 更新到新 service version。显式用户事务在 `ErrLockTableBindChanged` 场景下会被 SQL lock retry 逻辑透明重试，存在跨越旧/新 lock owner epoch 继续执行的串行化漏洞。该路径能够解释 TPCC 关键行锁失效、同一 district 重复分配 `o_id`，以及 warehouse/district ytd 不一致。**
 
-这不是 DN/TAE 静默写坏，也不是单纯客户端断连导致的校验误报。真正的数据一致性破坏发生在 CN OOM/restart 引起的 **lockservice remote bind 迁移窗口**。
+当前日志已排除 DN/TAE 存储层作为主因，也不支持“单纯客户端断连导致校验误报”的解释。现有证据已经闭合到 CN OOM/restart 引起的 **lockservice remote bind 迁移窗口**；若要达到完全取证闭环，还需要故障注入复现，或事务级日志证明某个具体业务事务在 bind 异常后继续写入并提交。
 
 ---
 
@@ -301,9 +301,9 @@ if len(invalidBinds) > 0 {
 
 DN 日志中 01:46:26 的 `error: lock table bind changed` 就是这个保护生效的证据。
 
-因此不能说 TN 完全没有发现旧 bind；问题在于：
+因此不能说 TN 完全没有发现旧 bind；高置信问题在于：
 
-> **在 CN OOM/restart 和 bind 切换期间，部分事务在 commit 前的执行阶段已经基于异常的 remote lock 状态继续推进，造成了业务层序列化破坏。**
+> **在 CN OOM/restart 和 bind 切换期间，显式用户事务遇到 `ErrLockTableBindChanged` 后可能被 lock retry 逻辑透明重试，跨越旧/新 lock owner epoch 继续推进，造成业务层序列化破坏。**
 
 ### 3. Duplicate 发生时间早于最终校验
 
@@ -318,7 +318,7 @@ DN 日志中 01:46:26 的 `error: lock table bind changed` 就是这个保护生
 
 ---
 
-## 四、真正的故障链路
+## 四、高置信故障链路
 
 可以把链路归纳为：
 
@@ -331,9 +331,10 @@ DN 日志中 01:46:26 的 `error: lock table bind changed` 就是这个保护生
   -> old lock table bind 上残留 remote lock/txn 状态
   -> CN 重启后以同 UUID + 新 timestamp 注册新 service version
   -> TN allocator 更新 bind
-  -> 部分事务携带旧 bind 继续执行/提交
-  -> commit 阶段部分事务被 ErrLockTableBindChanged 拒绝
-  -> 但执行阶段的行锁串行化窗口已经被破坏
+  -> 显式用户事务遇到 ErrLockTableBindChanged 后被 lock retry 透明重试
+  -> 部分事务可能跨越旧/新 lock owner epoch 继续执行
+  -> commit 阶段部分旧 bind 事务被 ErrLockTableBindChanged 拒绝
+  -> 但执行阶段已存在行锁串行化被破坏的窗口
   -> NewOrder 重复分配 d_next_o_id
   -> Payment/warehouse 相关锁也在后续 CN OOM 中受影响
   -> consistency check 失败
@@ -424,9 +425,9 @@ Duplicate entry '(35,8,3148)'
 
 ## 六、最终判断
 
-最终根因可以写成：
+最终根因建议写成：
 
-> **TPCC 高并发下三个 CN 发生 OOMKilled/restart，导致 CN lockservice remote owner 短暂丢失。旧 service version 上的 remote lock/unlock/orphan cleanup 与新 service version 的 lock table bind 生效之间存在不一致窗口。虽然 TN commit 阶段能够检测并拒绝部分旧 bind 事务，但 CN 执行阶段的锁状态已经出现错乱，导致 TPCC district/warehouse 行锁串行化失效，进而产生重复 `o_id` 和 ytd 不一致。**
+> **高置信根因：TPCC 高并发下三个 CN 发生 OOMKilled/restart，触发 lockservice remote owner bind 迁移。显式用户事务在 `ErrLockTableBindChanged` 场景下会被 SQL lock retry 逻辑透明重试，可能跨越旧/新 lock owner epoch 继续执行，破坏 TPCC district/warehouse 关键路径的锁串行化，进而产生重复 `o_id` 和 ytd 不一致。当前日志已排除 DN/TAE 存储层作为主因，并能闭合到 lockservice bind-change 路径；若要达到完全取证闭环，需要故障注入复现或事务级日志证明某个业务事务在 bind 异常后继续写入并提交。**
 
 其中：
 
