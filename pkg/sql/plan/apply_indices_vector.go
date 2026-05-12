@@ -114,11 +114,15 @@ func pickVectorLimit(sortNode, scanNode, projNode *plan.Node) (*plan.Expr, *plan
 }
 
 // buildVectorSortContextThroughJoin handles the case where the sort node's child
-// is a JOIN (from decorrelated subquery). Pattern:
+// is a SINGLE JOIN (from decorrelated scalar subquery). Pattern:
 //
-//	Project -> Sort -> [Project] -> Join(Scan_main, Scan_subquery)
+//	Project -> Sort -> [Project] -> Join(SINGLE, Scan_main, Scan_subquery)
 //
 // where l2_distance(main.vec_col, subquery.vec_col) is the order-by expression.
+// Only SINGLE join (scalar subquery producing exactly one row) is handled because:
+// - It guarantees the subquery side produces at most one vector value
+// - The join has no OnList conditions that would be lost during rewriting
+// - Multi-row INNER joins have different semantics that cannot be safely rewritten
 func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.Node) *vectorSortContext {
 	sortNode := builder.resolveSortNode(projNode, 1)
 	if sortNode == nil || len(sortNode.OrderBy) != 1 {
@@ -131,8 +135,11 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 		return nil
 	}
 
-	// Only handle SINGLE and INNER joins (from scalar subqueries)
-	if joinNode.JoinType != plan.Node_SINGLE && joinNode.JoinType != plan.Node_INNER {
+	// Only handle SINGLE joins (from decorrelated scalar subqueries).
+	// SINGLE join guarantees exactly one row from the subquery side and is
+	// the only type where we can safely replace the join with a FUNCTION_SCAN
+	// without losing join conditions or multi-row semantics.
+	if joinNode.JoinType != plan.Node_SINGLE {
 		return nil
 	}
 	if len(joinNode.Children) != 2 {
