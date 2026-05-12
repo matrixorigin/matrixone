@@ -582,7 +582,12 @@ func ConstructCreateTableSQL(
 			}
 		}
 		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
+		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'", param.CompressType, param.Format, param.JsonData)
+		if param.HivePartitioning {
+			createStr += fmt.Sprintf(",'HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='%s'",
+				strings.Join(param.HivePartitionCols, ","))
+		}
+		createStr += "}"
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
