@@ -431,9 +431,14 @@ const (
 
 	YEARWEEK = 354
 
+	// SET column cast functions
+	CAST_INDEX_TO_SET_VALUE       = 355
+	CAST_SET_VALUE_TO_INDEX       = 356
+	CAST_SET_INDEX_VALUE_TO_INDEX = 357
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 355
+	FUNCTION_END_NUMBER = 358
 )
 
 // functionIdRegister is what function we have registered already.
@@ -791,4 +796,9 @@ var functionIdRegister = map[string]int32{
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
 	"dayofweek":    DAYOFWEEK,
+
+	// SET cast functions
+	"cast_index_to_set_value":       CAST_INDEX_TO_SET_VALUE,
+	"cast_set_value_to_index":       CAST_SET_VALUE_TO_INDEX,
+	"cast_set_index_value_to_index": CAST_SET_INDEX_VALUE_TO_INDEX,
 }

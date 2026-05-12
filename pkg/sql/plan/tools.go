@@ -18,4 +18,8 @@ const (
 	moEnumCastIndexToValueFun      = "cast_index_to_value"
 	moEnumCastValueToIndexFun      = "cast_value_to_index"
 	moEnumCastIndexValueToIndexFun = "cast_index_value_to_index"
+
+	moSetCastIndexToValueFun      = "cast_index_to_set_value"
+	moSetCastValueToIndexFun      = "cast_set_value_to_index"
+	moSetCastIndexValueToIndexFun = "cast_set_index_value_to_index"
 )
