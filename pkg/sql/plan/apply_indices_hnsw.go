@@ -77,7 +77,14 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.joinNode != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(vecCtx.distFnExpr, partPos, vecCtx.scanNode.BindingTags[0])
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -162,6 +169,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			DeepCopyExpr(hnswCtx.vecLitArg),
 		},
 	}
+	// For join-through pattern, attach the subquery scan as child of FUNCTION_SCAN
+	if vecCtx.joinNode != nil {
+		tableFuncNode.Children = []int32{vecCtx.subqueryScanID}
+	}
+
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
 	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx)
@@ -322,4 +334,38 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	return vecColArg, vecLitArg, true
+}
+
+// getArgsFromDistFnForJoin is like getArgsFromDistFn but for the join-through pattern.
+// It identifies the indexed vector column (from scanNode) and accepts a non-constant
+// column reference as the other argument (from a joined subquery).
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(distFnExpr *plan.Function, partPos int32, scanTag int32) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return
+	}
+
+	// Identify which arg is the indexed column from scanNode
+	var vecColArg, vecValArg *plan.Expr
+	if col0 := distFnArgs[0].GetCol(); col0 != nil && col0.RelPos == scanTag && col0.ColPos == partPos {
+		vecColArg = distFnArgs[0]
+		vecValArg = distFnArgs[1]
+	} else if col1 := distFnArgs[1].GetCol(); col1 != nil && col1.RelPos == scanTag && col1.ColPos == partPos {
+		vecColArg = distFnArgs[1]
+		vecValArg = distFnArgs[0]
+	} else {
+		return
+	}
+
+	if vecColArg.GetCol() == nil {
+		return
+	}
+
+	// For join-through, vecValArg is a column reference from the subquery side — that's valid
+	vecValArg.Typ = vecColArg.Typ
+	return vecColArg, vecValArg, true
 }

@@ -92,7 +92,14 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.joinNode != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(vecCtx.distFnExpr, partPos, vecCtx.scanNode.BindingTags[0])
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -200,6 +207,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			DeepCopyExpr(ivfCtx.vecLitArg),
 		},
 	}
+	// For join-through pattern, attach the subquery scan as child of FUNCTION_SCAN
+	if vecCtx.joinNode != nil {
+		tableFuncNode.Children = []int32{vecCtx.subqueryScanID}
+	}
+
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
 	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivf_alias_0")}, ctx)
