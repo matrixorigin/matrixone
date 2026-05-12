@@ -213,6 +213,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					if err != nil {
 						return 0, err
 					}
+				} else if col != nil && isGeometryPlanType(&col.Typ) {
+					selectNode.ProjectList[colPos], err = funcCastForGeometryType(builder.GetContext(), updateExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
 				} else {
 					selectNode.ProjectList[colPos], err = forceCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
@@ -233,6 +238,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 				if col.Typ.Id == int32(types.T_enum) {
 					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				} else if isGeometryPlanType(&col.Typ) {
+					selectNode.ProjectList[originPos], err = funcCastForGeometryType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
 					if err != nil {
 						return 0, err
 					}

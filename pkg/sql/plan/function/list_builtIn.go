@@ -7172,6 +7172,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_geometry_to_subtype`
+	{
+		functionId: CAST_GEOMETRY_TO_SUBTYPE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_geometry},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastGeometryToSubtype
+				},
+			},
+		},
+	},
+
 	// function `mo_table_rows`
 	{
 		functionId: MO_TABLE_ROWS,

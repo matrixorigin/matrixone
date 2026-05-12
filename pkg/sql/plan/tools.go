@@ -18,4 +18,5 @@ const (
 	moEnumCastIndexToValueFun      = "cast_index_to_value"
 	moEnumCastValueToIndexFun      = "cast_value_to_index"
 	moEnumCastIndexValueToIndexFun = "cast_index_value_to_index"
+	moGeometryCastToSubtypeFun     = "cast_geometry_to_subtype"
 )
