@@ -447,50 +447,7 @@ func TestLockWithRetryDoesNotRetryBindChangedInBeginTxn(t *testing.T) {
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
-func TestLockWithRetryDoesNotRetryBindChangedInAutocommitTxn(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	lockSvc := mock_lock.NewMockLockService(ctrl)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-
-	oldWait := defaultWaitTimeOnRetryLock
-	defaultWaitTimeOnRetryLock = time.Millisecond
-	defer func() {
-		defaultWaitTimeOnRetryLock = oldWait
-	}()
-
-	ctx := context.Background()
-	expectedErr := moerr.NewLockTableBindChangedNoCtx()
-	opts := txnpb.TxnOptions{}.WithUserTxn()
-	opts.Autocommit = true
-
-	gomock.InOrder(
-		lockSvc.EXPECT().
-			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
-			Return(lock.Result{}, expectedErr),
-		txnOp.EXPECT().TxnOptions().Return(opts),
-	)
-
-	start := time.Now()
-	_, err := lockWithRetry(
-		ctx,
-		lockSvc,
-		1,
-		nil,
-		[]byte("txn1"),
-		lock.LockOptions{},
-		txnOp,
-		nil,
-		nil,
-		LockOptions{},
-		types.Type{},
-	)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
-	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
-}
-
-func TestLockWithRetryRetriesBindChangedInInternalTxn(t *testing.T) {
+func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -505,12 +462,14 @@ func TestLockWithRetryRetriesBindChangedInInternalTxn(t *testing.T) {
 
 	ctx := context.Background()
 	expected := lock.Result{HasConflict: true}
+	opts := txnpb.TxnOptions{}.WithUserTxn()
+	opts.Autocommit = true
 
 	gomock.InOrder(
 		lockSvc.EXPECT().
 			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
 			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
-		txnOp.EXPECT().TxnOptions().Return(txnpb.TxnOptions{}),
+		txnOp.EXPECT().TxnOptions().Return(opts),
 		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
 		lockSvc.EXPECT().
 			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
