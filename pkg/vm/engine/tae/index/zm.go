@@ -1168,6 +1168,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 
 		return lowerBound < len(col) && maxVal >= col[lowerBound]
 
+	case types.T_year:
+		col := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		minVal, maxVal := types.DecodeMoYear(zm.GetMinBuf()), types.DecodeMoYear(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+
+		return lowerBound < len(col) && maxVal >= col[lowerBound]
+
 	case types.T_enum:
 		col := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 		minVal, maxVal := types.DecodeEnum(zm.GetMinBuf()), types.DecodeEnum(zm.GetMaxBuf())
