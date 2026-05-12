@@ -169,9 +169,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
-			if err != nil {
-				return 0, err
+			if isGeometryPlanType(&colDef.Typ) {
+				updateExpr, err = funcCastForGeometryType(builder.GetContext(), updateExpr, colDef.Typ)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+				if err != nil {
+					return 0, err
+				}
 			}
 			updateExprs[colDef.Name] = updateExpr
 		}
@@ -184,6 +191,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 
+				if isGeometryPlanType(&col.Typ) {
+					newDefExpr, err = funcCastForGeometryType(builder.GetContext(), newDefExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				}
 				updateExprs[col.Name] = newDefExpr
 			}
 		}
@@ -1129,6 +1142,8 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, colTyp)
 		case isSetPlanType(&colTyp):
 			projExpr, err = funcCastForSetType(builder.GetContext(), projExpr, colTyp)
+		case isGeometryPlanType(&colTyp):
+			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, colTyp)
 		default:
 			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, colTyp)
 		}
@@ -1229,6 +1244,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
 				return 0, nil, nil, err
+			}
+
+			if isGeometryPlanType(&col.Typ) {
+				defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+				if err != nil {
+					return 0, nil, nil, err
+				}
 			}
 
 			if !col.Typ.AutoIncr {
@@ -1380,6 +1402,12 @@ func (builder *QueryBuilder) buildValueScan(
 					if err != nil {
 						return 0, err
 					}
+					if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return 0, err
+						}
+					}
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
 					if err != nil {
@@ -1390,6 +1418,8 @@ func (builder *QueryBuilder) buildValueScan(
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 					case isSetPlanType(&col.Typ):
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
+					case isGeometryPlanType(&col.Typ):
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 					}
 					if err != nil {
 						return 0, err

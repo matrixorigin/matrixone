@@ -3187,6 +3187,30 @@ func Test_strToUnsigned_Binary_NarrowOverflow(t *testing.T) {
 	}
 }
 
+func TestCastJsonToJson(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonTexts := []string{`{"a":1}`, `[1,true,{"b":"x"}]`, `null`}
+	src := testutil.MakeJsonVector(jsonTexts, nil)
+	dst := vector.NewVec(types.T_json.ToType())
+	result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(len(jsonTexts)))
+	require.NoError(t, NewCast([]*vector.Vector{src, dst}, result, proc, len(jsonTexts), nil))
+
+	got := result.GetResultVector()
+	require.Equal(t, len(jsonTexts), got.Length())
+	for i := range jsonTexts {
+		require.Equal(t, src.GetBytesAt(i), got.GetBytesAt(i))
+	}
+}
+
+func TestCastJsonToJsonOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_json))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
+	require.NoError(t, err)
+}
+
 func Test_arrayToArray_WidthCheck(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

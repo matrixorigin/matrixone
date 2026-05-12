@@ -635,3 +635,60 @@ func TestZMYearAnyIn(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(vec2, types.MoYear(1900), false, mp))
 	require.False(t, zm.AnyIn(vec2))
 }
+
+func TestZMYearSubVecIn(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(2000)
+	y2 := types.MoYear(2020)
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y2))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(1990), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2005), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2010), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2025), false, mp))
+	vec.InplaceSort()
+
+	lo, hi := zm.SubVecIn(vec)
+	require.Equal(t, 1, lo)
+	require.Equal(t, 3, hi)
+}
+
+func TestZMDecimal256Pruning(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	d, err := types.ParseDecimal256("99999.9999", 65, 4)
+	require.NoError(t, err)
+	UpdateZM(zm, types.EncodeDecimal256(&d))
+	require.False(t, zm.IsInited())
+
+	k := types.EncodeDecimal256(&d)
+
+	require.True(t, zm.Contains(d))
+	require.True(t, zm.ContainsKey(k))
+	require.True(t, zm.AnyLTByValue(k))
+	require.True(t, zm.AnyGTByValue(k))
+	require.True(t, zm.AnyGEByValue(k))
+	require.True(t, zm.AnyLEByValue(k))
+
+	zm2 := NewZM(types.T_decimal256, 4)
+	require.True(t, zm.FastIntersect(zm2))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 4))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, d, false, mp))
+	vec.InplaceSort()
+	require.True(t, zm.FastContainsAny(vec))
+
+	zm3 := NewZM(types.T_int32, 0)
+	zm3.Update(int32(1))
+	zm3.Update(int32(10))
+	require.True(t, zm.FastIntersect(zm3))
+	require.True(t, zm3.FastIntersect(zm))
+
+	zmInt := NewZM(types.T_int32, 0)
+	require.False(t, zmInt.FastIntersect(zm3))
+}

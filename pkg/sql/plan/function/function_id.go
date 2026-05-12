@@ -436,9 +436,11 @@ const (
 	CAST_SET_VALUE_TO_INDEX       = 356
 	CAST_SET_INDEX_VALUE_TO_INDEX = 357
 
+	CAST_GEOMETRY_TO_SUBTYPE = 358
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 358
+	FUNCTION_END_NUMBER = 359
 )
 
 // functionIdRegister is what function we have registered already.
@@ -751,6 +753,7 @@ var functionIdRegister = map[string]int32{
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
+	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
 	"to_upper":                       UPPER,
 	"upper":                          UPPER,
 	"ucase":                          UPPER,

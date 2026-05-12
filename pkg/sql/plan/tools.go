@@ -22,4 +22,6 @@ const (
 	moSetCastIndexToValueFun      = "cast_index_to_set_value"
 	moSetCastValueToIndexFun      = "cast_set_value_to_index"
 	moSetCastIndexValueToIndexFun = "cast_set_index_value_to_index"
+
+	moGeometryCastToSubtypeFun = "cast_geometry_to_subtype"
 )
