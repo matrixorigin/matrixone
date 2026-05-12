@@ -475,6 +475,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	// Reject DROP SNAPSHOT on rows that are managed by the data-branch
+	// protect-snapshot mechanism. On 3.0-dev mo_snapshots has no `kind`
+	// column, so the sname prefix is the sole discriminator (see
+	// databranchutils.BranchSnapshotSnamePrefix). The check uses the
+	// user-supplied name directly — no catalog lookup needed, and it
+	// happens before the privilege / existence / txn checks so a user
+	// cannot even open a txn targeting these rows.
+	if isBranchManagedSname(string(stmt.Name)) {
+		return moerr.NewInternalErrorf(ctx,
+			"snapshot %q is managed by data branch and cannot be dropped directly",
+			string(stmt.Name),
+		)
+	}
+
 	// check create stage priv
 	// only admin can drop snapshot for himself
 	err = doCheckRole(ctx, ses)
@@ -1608,6 +1622,21 @@ func getSnapshotRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*
 func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
 	if err := inputNameIsInvalid(ctx, snapshotName); err != nil {
 		return nil, err
+	}
+
+	// Branch-managed snapshots are implementation detail — every caller
+	// that resolves a snapshot by name (DROP, RESTORE, SELECT {snapshot=},
+	// SHOW RECOVERY WINDOW, etc.) must treat them as non-existent so the
+	// user-facing surface stays clean. 3.0-dev's mo_snapshots has no
+	// `kind` column, so the sname prefix is the sole discriminator (see
+	// databranchutils.BranchSnapshotSnamePrefix). Reject before the SQL
+	// round-trip: the prefix check is deterministic on the caller-supplied
+	// name, so no catalog read is needed to know the row is off-limits.
+	if isBranchManagedSname(snapshotName) {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"snapshot %q is managed by data branch and cannot be used from user commands",
+			snapshotName,
+		)
 	}
 
 	sql := fmt.Sprintf("%s where sname = '%s'", getSnapshotFormat, snapshotName)
