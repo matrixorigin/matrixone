@@ -452,3 +452,55 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept same int types")
 	}
 }
+
+func Test_CastSetFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// CastSetValueToIndex: "read,write" with members "read,write,execute" → 3
+	{
+		tc := tcTemp{
+			info: "cast_set_value_to_index('read,write,execute', 'read,write') -> 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"read,write", "execute", ""}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{3, 4, 0}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetIndexValueToIndex: validate bitmask 3 against "read,write,execute" → 3
+	{
+		tc := tcTemp{
+			info: "cast_set_index_value_to_index('read,write,execute', 3) -> 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 7, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{3, 7, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetIndexValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetIndexToValue: bitmask 3 → "read,write"
+	{
+		tc := tcTemp{
+			info: "cast_index_to_set_value('read,write,execute', 3) -> 'read,write'",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 4, 7}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"read,write", "execute", "read,write,execute"}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetIndexToValue)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
