@@ -170,9 +170,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
-			if err != nil {
-				return 0, err
+			if isGeometryPlanType(&colDef.Typ) {
+				updateExpr, err = funcCastForGeometryType(builder.GetContext(), updateExpr, colDef.Typ)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+				if err != nil {
+					return 0, err
+				}
 			}
 			updateExprs[colDef.Name] = updateExpr
 		}

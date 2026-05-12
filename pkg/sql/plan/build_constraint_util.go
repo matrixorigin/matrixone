@@ -714,9 +714,16 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
-					if err != nil {
-						return false, nil, nil, err
+					if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return false, nil, nil, err
+						}
+					} else {
+						defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return false, nil, nil, err
+						}
 					}
 					updateExprs[col.Name] = defExpr
 				}

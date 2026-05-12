@@ -573,6 +573,12 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 			return nil, err
 		}
 	}
+	if isGeometryPlanType(&targetType) {
+		expr, err = funcCastForGeometryType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -584,13 +590,6 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 
 	if targetType.Id == int32(types.T_enum) {
 		expr, err = funcCastForEnumType(ctx, expr, targetType)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if isGeometryPlanType(&targetType) {
-		expr, err = funcCastForGeometryType(ctx, expr, targetType)
 		if err != nil {
 			return nil, err
 		}
