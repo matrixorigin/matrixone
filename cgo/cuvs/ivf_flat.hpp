@@ -23,6 +23,7 @@
 #pragma once
 
 #include "index_base.hpp"
+#include "dynamic_batching.hpp"
 #include <iostream>
 #include <numeric>
 #include <shared_mutex>
@@ -108,10 +109,9 @@ namespace matrixone {
 // search_float() is the same but accepts float32 queries and converts on the fly
 // (via quantizer for 1-byte T, via half conversion for T=half, direct for T=float).
 //
-// search_batchable_typed() / search_batchable_float() are the optional
-// dequeue-time batching path: when worker->batch_window() > 0 they submit the
-// search via worker->submit_batchable so the worker can fuse concurrent
-// same-(index,variant,limit) requests into one cuVS call (see cuvs_worker.hpp).
+// search_batchable_typed() / search_batchable_float() just submit the search to
+// the worker; request-level batching, when enabled (batch_window() > 0),
+// happens inside search_internal via cuVS dynamic_batching (see dynamic_batching.hpp).
 //
 // Soft-delete filtering (if deleted_count_ > 0):
 //   - Non-SHARDED: sync_device_bitset() → bitset_filter over full index
@@ -151,6 +151,11 @@ public:
 
     std::unique_ptr<ivf_flat_index> index_;
     std::string data_filename_;
+
+    // cuVS dynamic_batching wrappers, keyed by (device_id, k=limit, n_probes).
+    // Only touched when batch_window() > 0.
+    // See dynamic_batching.hpp.
+    dynb_cache_t<T, int64_t> dynb_cache_;
 
     ~gpu_ivf_flat_t() override {
         destroy();
@@ -694,7 +699,7 @@ public:
         // std::cout << "[DEBUG] IVF-Flat search: num_queries=" << num_queries << " limit=" << limit << " n_probes=" << sp.n_probes << std::endl;
 
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-        // The helper picks the standalone or dequeue-time-fused path; queries_data
+        // The helper submits the search to the worker; queries_data
         // outlives the wait().get() below (this thread blocks in it), so owner=null.
         uint64_t job_id = this->search_batchable_typed(nullptr, queries_data, num_queries, limit, sp);
         auto result_wait = this->worker->wait(job_id).get();
@@ -784,60 +789,20 @@ public:
         return std::any_cast<search_result_t>(result_wait.result);
     }
 
-    // Submit a T-typed search. When dequeue-time batching is enabled
-    // (worker->batch_window() > 0) and a batch key is available, it goes through
-    // worker->submit_batchable so the worker can fuse concurrent same-(index,
-    // variant,limit) requests into one cuVS call; otherwise it runs standalone
-    // via worker->submit — byte-identical to the non-batched search path.
+    // Submit a T-typed search to the worker (round-robin across device threads).
+    // Request-level batching, when enabled (batch_window() > 0), happens
+    // inside search_internal via cuVS dynamic_batching — see dynamic_batching.hpp.
     // `owner` is null on the sync path (the caller blocks in wait().get(), so the
     // query buffer stays alive) and on the async path is the shared_ptr that
     // keeps the copied queries alive until the search runs. Returns a job id
     // resolvable via worker->wait().
     uint64_t search_batchable_typed(std::shared_ptr<std::vector<T>> owner, const T* queries_data,
                                     uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
-        struct search_req_t { std::shared_ptr<std::vector<T>> owner; const T* data; uint64_t n; };
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-
-        // Standalone unless batching is on AND a batch key is available. Checking
-        // batch_window() first keeps the default (batching-off) path free of the
-        // batch_key_for mutex.
-        uint64_t bk = (this->worker->batch_window() == 0) ? 0 : this->batch_key_for(/*variant=*/0, limit);
-        if (bk == 0) {
-            auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_internal(handle, queries_data, num_queries, limit, sp);
-            };
-            return this->worker->submit(task);
-        }
-
-        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-            uint64_t total_queries = 0;
-            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
-
-            std::vector<T> aggregated_queries(total_queries * this->dimension);
-            uint64_t offset = 0;
-            for (const auto& r_any : reqs) {
-                auto req = std::any_cast<search_req_t>(r_any);
-                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
-                offset += req.n;
-            }
-
-            auto results = this->search_internal(handle, aggregated_queries.data(), total_queries, limit, sp);
-
-            offset = 0;
-            for (size_t i = 0; i < reqs.size(); ++i) {
-                auto req = std::any_cast<search_req_t>(reqs[i]);
-                search_result_t individual_res;
-                individual_res.neighbors.resize(req.n * limit);
-                individual_res.distances.resize(req.n * limit);
-                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
-                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](std::any(std::move(individual_res)));
-                offset += req.n;
-            }
+        auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_data, num_queries, limit, sp);
         };
-
-        return this->worker->submit_batchable(bk,
-            std::any(search_req_t{std::move(owner), queries_data, num_queries}), num_queries, std::move(exec_fn));
+        return this->worker->submit(task);
     }
 
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_flat_search_params_t& sp) {
@@ -1003,52 +968,15 @@ public:
         return this->search_batchable_float(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
-    // float32-input search. Mirrors search_batchable_typed (standalone unless
-    // batching is on and a key is available) but the request holds a vector<float>
-    // owner, the fused runner calls search_float_internal, and the batch key uses
-    // variant=1 so it never fuses with T-typed searches.
+    // float32-input search. Mirrors search_batchable_typed but calls
+    // search_float_internal; request-level batching (if enabled) happens inside it.
     uint64_t search_batchable_float(std::shared_ptr<std::vector<float>> owner, const float* queries_data,
                                     uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp) {
-        struct search_req_t { std::shared_ptr<std::vector<float>> owner; const float* data; uint64_t n; };
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-
-        uint64_t bk = (this->worker->batch_window() == 0) ? 0 : this->batch_key_for(/*variant=*/1, limit);
-        if (bk == 0) {
-            auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
-                return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
-            };
-            return this->worker->submit(task);
-        }
-
-        auto exec_fn = [this, limit, sp](raft_handle_wrapper_t& handle, const std::vector<std::any>& reqs, const std::vector<std::function<void(std::any)>>& setters) {
-            uint64_t total_queries = 0;
-            for (const auto& r_any : reqs) total_queries += std::any_cast<search_req_t>(r_any).n;
-
-            std::vector<float> aggregated_queries(total_queries * this->dimension);
-            uint64_t offset = 0;
-            for (const auto& r_any : reqs) {
-                auto req = std::any_cast<search_req_t>(r_any);
-                std::copy(req.data, req.data + (req.n * this->dimension), aggregated_queries.begin() + (offset * this->dimension));
-                offset += req.n;
-            }
-
-            auto results = this->search_float_internal(handle, aggregated_queries.data(), total_queries, this->dimension, limit, sp);
-
-            offset = 0;
-            for (size_t i = 0; i < reqs.size(); ++i) {
-                auto req = std::any_cast<search_req_t>(reqs[i]);
-                search_result_t individual_res;
-                individual_res.neighbors.resize(req.n * limit);
-                individual_res.distances.resize(req.n * limit);
-                std::copy(results.neighbors.begin() + (offset * limit), results.neighbors.begin() + ((offset + req.n) * limit), individual_res.neighbors.begin());
-                std::copy(results.distances.begin() + (offset * limit), results.distances.begin() + ((offset + req.n) * limit), individual_res.distances.begin());
-                setters[i](std::any(std::move(individual_res)));
-                offset += req.n;
-            }
+        auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
         };
-
-        return this->worker->submit_batchable(bk,
-            std::any(search_req_t{std::move(owner), queries_data, num_queries}), num_queries, std::move(exec_fn));
+        return this->worker->submit(task);
     }
 
     // `prebuilt`, when non-null, supplies a host_mask_bundle_t computed off the
@@ -1147,6 +1075,23 @@ public:
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device),
                                                     neighbors_device, distances_device, filter);
+            } else if constexpr (!std::is_same_v<T, __half>) {
+                // cuVS ships no dynamic_batching wrapper for ivf_flat::index<__half>,
+                // so half-typed IVF-Flat stays unbatched (this branch is discarded for T=__half).
+                if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(limit),
+                                             static_cast<uint32_t>(search_params.n_probes), 0u,
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(queries_device),
+                                             neighbors_device, distances_device);
+                } else {
+                    cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(queries_device),
+                                                        neighbors_device, distances_device);
+                }
             } else {
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(queries_device),
@@ -1308,6 +1253,23 @@ public:
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(q_dev_t),
                                                     neighbors_device, distances_device, filter);
+            } else if constexpr (!std::is_same_v<T, __half>) {
+                // cuVS ships no dynamic_batching wrapper for ivf_flat::index<__half>,
+                // so half-typed IVF-Flat stays unbatched (this branch is discarded for T=__half).
+                if (this->batch_window() != 0) {
+                    this->dynb_cache_.search(*res, handle.get_device_id(), local_index, search_params,
+                                             static_cast<int64_t>(limit),
+                                             static_cast<uint32_t>(search_params.n_probes), 0u,
+                                             this->dynb_concurrency_hint(),
+                                             this->dynb_conservative_dispatch(),
+                                             static_cast<double>(this->batch_window()) / 1000.0,
+                                             raft::make_const_mdspan(q_dev_t),
+                                             neighbors_device, distances_device);
+                } else {
+                    cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
+                                                        raft::make_const_mdspan(q_dev_t),
+                                                        neighbors_device, distances_device);
+                }
             } else {
                 cuvs::neighbors::ivf_flat::search(*res, search_params, *local_index,
                                                     raft::make_const_mdspan(q_dev_t),
@@ -1603,6 +1565,7 @@ public:
     void destroy() override {
         if (this->worker) this->worker->stop();
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
+        this->dynb_cache_.clear();  // drop wrappers before the upstream indices they reference
         index_.reset();
         this->replicated_indices_.clear();
         this->replicated_datasets_.clear();

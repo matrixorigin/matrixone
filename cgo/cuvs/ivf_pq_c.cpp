@@ -320,23 +320,6 @@ void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, u
     }
 }
 
-void gpu_ivf_pq_set_per_thread_device(gpu_ivf_pq_c index_c, bool enable, void* errmsg) {
-    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
-    try {
-        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
-        switch (any->qtype) {
-            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_per_thread_device(enable); break;
-            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_per_thread_device(enable); break;
-            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_per_thread_device(enable); break;
-            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_per_thread_device(enable); break;
-            default: break;
-        }
-    } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
- "Error in gpu_ivf_pq_set_per_thread_device", e.what());
-    }
-}
-
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
@@ -351,6 +334,23 @@ void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* 
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_ivf_pq_set_batch_window", e.what());
+    }
+}
+
+void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        switch (any->qtype) {
+            case Quantization_F32: static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
+            case Quantization_F16: static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
+            case Quantization_INT8: static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
+            case Quantization_UINT8: static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->set_dynb_conservative_dispatch(enable); break;
+            default: break;
+        }
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg,
+ "Error in gpu_ivf_pq_set_dynb_conservative_dispatch", e.what());
     }
 }
 

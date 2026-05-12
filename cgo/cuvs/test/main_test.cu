@@ -429,39 +429,6 @@ TEST(CuvsWorkerTest, StopUnderLoad) {
     if (producer.joinable()) producer.join();
 }
 
-// A completed dequeue-time batch must resolve each request's result via
-// results_store_ like any other task, and must not leave stray entries that
-// would corrupt the id counter or the next wait().
-TEST(CuvsWorkerTest, BatchableTaskNoLeak) {
-    cuvs_worker_t worker(1, std::vector<int>{0});
-    worker.start();
-    worker.set_batch_window(100);
-
-    std::atomic<int> exec_count{0};
-    auto bexec = [&exec_count](raft_handle_wrapper_t&,
-                               const std::vector<std::any>& /*reqs*/,
-                               const std::vector<std::function<void(std::any)>>& setters) {
-        exec_count++;
-        for (size_t i = 0; i < setters.size(); ++i) {
-            setters[i](std::any(int(42)));
-        }
-    };
-
-    uint64_t id = worker.submit_batchable(/*batch_key=*/123, std::any(int(1)), /*batch_nq=*/1, bexec);
-    auto r = worker.wait(id).get();
-    ASSERT_FALSE((bool)r.error);
-    ASSERT_EQ(std::any_cast<int>(r.result), 42);
-    ASSERT_GE(exec_count.load(), 1);
-
-    // Submit a normal tracked task and verify it completes — if stray results
-    // from the batch were in the store this could corrupt the id counter.
-    auto id2 = worker.submit([](raft_handle_wrapper_t&) -> std::any { return int(99); });
-    auto result = worker.wait(id2).get();
-    ASSERT_EQ(std::any_cast<int>(result.result), 99);
-
-    worker.stop();
-}
-
 // Verify sync() returns promptly (does not busy-spin forever) when tasks complete.
 TEST(CuvsWorkerTest, SyncNoSpin) {
     cuvs_worker_t worker(2, std::vector<int>{0});
@@ -489,37 +456,6 @@ TEST(CuvsWorkerTest, SyncNoSpin) {
     worker.stop();
 }
 
-// stop() drains in-flight work via sync() before tearing down, so a batchable
-// task submitted just before stop() runs to completion and its result resolves
-// with the computed value, not an exception. (wait() must be obtained before
-// stop() — results_store_ rejects new waits once stopped.)
-TEST(CuvsWorkerTest, StopWaitsForBatchableTask) {
-    cuvs_worker_t worker(1, std::vector<int>{0});
-    worker.start();
-    worker.set_batch_window(100);
-
-    std::atomic<int> exec_count{0};
-    auto bexec = [&exec_count](raft_handle_wrapper_t&,
-                               const std::vector<std::any>& /*reqs*/,
-                               const std::vector<std::function<void(std::any)>>& setters) {
-        exec_count++;
-        for (size_t i = 0; i < setters.size(); ++i) {
-            setters[i](std::any(int(7)));
-        }
-    };
-
-    uint64_t id = worker.submit_batchable(/*batch_key=*/777, std::any(int(1)), /*batch_nq=*/1, bexec);
-    auto fut = worker.wait(id);
-
-    worker.stop();
-
-    ASSERT_NO_THROW({
-        auto r = fut.get();
-        ASSERT_FALSE((bool)r.error);
-        ASSERT_EQ(std::any_cast<int>(r.result), 7);
-    });
-    ASSERT_EQ(exec_count.load(), 1);
-}
 
 TEST(CuvsWorkerTest, SubmitAllDevicesErrorHandling) {
     // Need at least 2 devices to test multiple failures
