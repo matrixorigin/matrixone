@@ -118,6 +118,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	for _, obj := range entry.createdObjs {
 		createdObjIDs = append(createdObjIDs, obj.ID())
 	}
+	writeFailed := false
 	for _, obj := range entry.droppedObjs {
 		ioVector := model.InitTransferPageIO()
 		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
@@ -148,11 +149,17 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 		}
 
 		start = time.Now()
-		transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
-		if err != nil {
-			return err
+		if !writeFailed {
+			transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
+			if err != nil {
+				return err
+			}
+			if writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector); writeErr != nil {
+				writeFailed = true
+				logutil.Warnf("[MergeObjects] persist transfer page failed (page count %d), keeping in-memory pages for remaining objects: %v",
+					len(pages), writeErr)
+			}
 		}
-		model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
@@ -161,8 +168,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	now := time.Now()
 	for _, pages := range pagesToSet {
 		for _, page := range pages {
-			if page.BornTS() != bts {
-				page.SetBornTS(now.Add(time.Minute))
+			if writeFailed {
+				// Extend bornTS so in-memory hashmap survives the full diskTTL
+				// window instead of being evicted after the short ttl (5s).
+				page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
 			} else {
 				page.SetBornTS(now)
 			}
