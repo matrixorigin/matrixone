@@ -289,7 +289,7 @@ func (zm ZM) Update(v any) (err error) {
 
 func (zm ZM) FastContainsAny(keys *vector.Vector) (ok bool) {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
@@ -332,7 +332,10 @@ func (zm ZM) containsString(k []byte) bool {
 // TODO: remove me later
 func (zm ZM) Contains(k any) bool {
 	if !zm.IsInited() {
-		return false
+		// For types whose ZM is intentionally skipped (e.g. T_decimal256),
+		// an uninited ZM means "range unknown" — not "definitely absent".
+		// Return true to force callers through the exact-match path (ART).
+		return zm.GetType() == types.T_decimal256
 	}
 	if zm.IsString() {
 		return zm.containsString(k.([]byte))
@@ -345,7 +348,7 @@ func (zm ZM) Contains(k any) bool {
 
 func (zm ZM) ContainsKey(k []byte) bool {
 	if !zm.IsInited() {
-		return false
+		return zm.GetType() == types.T_decimal256
 	}
 	if zm.IsString() {
 		return zm.containsString(k)
@@ -601,6 +604,12 @@ func (zm ZM) FastLEValue(v []byte, scale int32) (res bool) {
 }
 
 func (zm ZM) FastIntersect(o ZM) (res bool) {
+	if !zm.IsInited() || !o.IsInited() {
+		// Decimal256 ZMs are intentionally never initialized; treat as
+		// "unknown range" → assume intersection possible.
+		// For other types an uninited ZM means "no data seen" → no intersect.
+		return zm.GetType() == types.T_decimal256 || o.GetType() == types.T_decimal256
+	}
 	t := zm.GetType()
 	// zm.max >= o.min && zm.min <= v2.max
 	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
