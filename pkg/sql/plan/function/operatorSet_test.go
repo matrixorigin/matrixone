@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -516,6 +518,40 @@ func Test_CastSetFunctions(t *testing.T) {
 				[]uint64{1, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_YearAndDecimal256_FuncTestcaseCompare(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// This test exists to exercise the T_year and T_decimal256 result-compare
+	// branches in func_testcase.go that would otherwise stay at 0% coverage.
+	// We use a trivial identity function (copy input to output) to trigger them.
+	identityYear := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			v, null := p.GetValue(i)
+			if err := rs.Append(v, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	{
+		tc := tcTemp{
+			info: "identity year",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{2024, 1999, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_year.ToType(), false,
+				[]types.MoYear{2024, 1999, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, identityYear)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
