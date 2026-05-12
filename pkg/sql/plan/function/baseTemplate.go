@@ -1423,7 +1423,7 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
 
 	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
-	// INSERT IGNORE is handled above through StmtProfile.ignore.
+	// INSERT IGNORE is handled through StmtProfile.ignore.
 	if hasStrictMode && hasErrorForDivByZero {
 		if stmtProfile.GetIgnore() {
 			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
