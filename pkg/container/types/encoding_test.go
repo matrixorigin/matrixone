@@ -605,3 +605,14 @@ func TestInt32Uint32Encoding(t *testing.T) {
 		require.Equal(t, v, decoded)
 	}
 }
+
+func TestEncodeDecodeDecimal256AndMoYear(t *testing.T) {
+	d, err := ParseDecimal256("12345678901234567890.1234", 65, 4)
+	require.NoError(t, err)
+	buf := EncodeDecimal256(&d)
+	require.Equal(t, d, DecodeDecimal256(buf))
+
+	y := MoYear(2024)
+	ybuf := EncodeMoYear(&y)
+	require.Equal(t, y, DecodeMoYear(ybuf))
+}

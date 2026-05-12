@@ -488,18 +488,34 @@ func Test_CastSetFunctions(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// CastSetIndexToValue: bitmask 3 → "read,write"
+	// CastSetIndexToValue: bitmask 3 → "read,write", with null
 	{
 		tc := tcTemp{
-			info: "cast_index_to_set_value('read,write,execute', 3) -> 'read,write'",
+			info: "cast_index_to_set_value('read,write,execute', 3/4/null) -> 'read,write'/'execute'/null",
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
-				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 4, 7}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 4, 0}, []bool{false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"read,write", "execute", "read,write,execute"}, nil),
+				[]string{"read,write", "execute", ""}, []bool{false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetIndexToValue)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetValueToIndex with null input
+	{
+		tc := tcTemp{
+			info: "cast_set_value_to_index with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"read", ""}, []bool{false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 0}, []bool{false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetValueToIndex)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}

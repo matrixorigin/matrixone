@@ -611,3 +611,27 @@ func TestZMDecimal256Skipped(t *testing.T) {
 	require.Equal(t, types.T_decimal256, built.GetType())
 	require.False(t, built.IsInited())
 }
+
+func TestZMYearAnyIn(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(1999)
+	y2 := types.MoYear(2024)
+	y3 := types.MoYear(2155)
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y3))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, y1, false, mp))
+	require.NoError(t, vector.AppendFixed(vec, y2, false, mp))
+	vec.InplaceSort()
+
+	require.True(t, zm.AnyIn(vec))
+
+	// Vector fully outside range
+	vec2 := vector.NewVec(types.T_year.ToType())
+	defer vec2.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec2, types.MoYear(1900), false, mp))
+	require.False(t, zm.AnyIn(vec2))
+}
