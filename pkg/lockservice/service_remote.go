@@ -303,7 +303,8 @@ func (s *service) handleForwardLock(
 }
 
 func remoteLockResponseLogFields(req *pb.Request) responseLogFieldsFunc {
-	return remoteLockResponseLogFieldsFromValues(req.Lock.TxnID, req.LockTable, req.Lock.ServiceID, len(req.Lock.Rows))
+	txnID := append([]byte(nil), req.Lock.TxnID...)
+	return remoteLockResponseLogFieldsFromValues(txnID, req.LockTable, req.Lock.ServiceID, len(req.Lock.Rows))
 }
 
 func remoteLockResponseLogFieldsFromValues(
