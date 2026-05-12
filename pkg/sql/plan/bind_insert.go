@@ -192,6 +192,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 
+				if isGeometryPlanType(&col.Typ) {
+					newDefExpr, err = funcCastForGeometryType(builder.GetContext(), newDefExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				}
 				updateExprs[col.Name] = newDefExpr
 			}
 		}
@@ -1243,6 +1249,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				return 0, nil, nil, err
 			}
 
+			if isGeometryPlanType(&col.Typ) {
+				defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+			}
+
 			if !col.Typ.AutoIncr {
 				if lit := defExpr.GetLit(); lit != nil {
 					if lit.Isnull {
@@ -1391,6 +1404,12 @@ func (builder *QueryBuilder) buildValueScan(
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
 						return 0, err
+					}
+					if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return 0, err
+						}
 					}
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)

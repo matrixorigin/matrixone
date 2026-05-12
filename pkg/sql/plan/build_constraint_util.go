@@ -608,6 +608,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 
+			if isGeometryPlanType(&col.Typ) {
+				defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+				if err != nil {
+					return false, nil, nil, err
+				}
+			}
+
 			if col.Typ.AutoIncr {
 				if _, ok := pkCols[col.Name]; ok {
 					existAutoPkCol = true
@@ -1179,6 +1186,12 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
+			if isGeometryPlanType(&col.Typ) {
+				defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+				if err != nil {
+					return err
+				}
+			}
 			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 			if err != nil {
 				return err
@@ -1210,6 +1223,12 @@ func buildValueScan(
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
 						return err
+					}
+					if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return err
+						}
 					}
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
