@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,7 +249,7 @@ func TestReclaimCore_DropList(t *testing.T) {
 	require.Zero(t, deleteCalls)
 
 	// ---- Loader error propagates.
-	sentinel := errors.New("boom")
+	sentinel := moerr.NewInternalErrorNoCtx("boom")
 	err = databranchutils.ReclaimBranchSnapshotsCore(
 		[]uint64{3},
 		func() (databranchutils.BranchReclaimDag, error) { return databranchutils.BranchReclaimDag{}, sentinel },
