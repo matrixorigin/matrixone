@@ -838,7 +838,7 @@ func canRetryLock(
 	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if shouldAbortExplicitTxnOnBindChanged(txn, err) {
+	if shouldAbortUserTxnOnBindChanged(txn, err) {
 		return false
 	}
 	if !shouldBypassHeldLockTableCheck(err) &&
@@ -857,12 +857,12 @@ func canRetryLock(
 	return waitToRetryLock(ctx, wait)
 }
 
-func shouldAbortExplicitTxnOnBindChanged(txn client.TxnOperator, err error) bool {
+func shouldAbortUserTxnOnBindChanged(txn client.TxnOperator, err error) bool {
 	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 		return false
 	}
 	opts := txn.TxnOptions()
-	return opts.UserTxn() && (opts.ByBegin || !opts.Autocommit)
+	return opts.UserTxn()
 }
 
 func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
