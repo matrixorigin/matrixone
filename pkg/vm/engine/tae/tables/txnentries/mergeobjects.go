@@ -168,7 +168,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	now := time.Now()
 	for _, pages := range pagesToSet {
 		for _, page := range pages {
-			if writeFailed && page.path.Name == "" {
+			if writeFailed {
 				// Extend bornTS so in-memory hashmap survives the full diskTTL
 				// window instead of being evicted after the short ttl (5s).
 				page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
