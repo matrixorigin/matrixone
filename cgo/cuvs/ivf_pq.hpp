@@ -1973,12 +1973,15 @@ public:
     }
 
     void destroy() override {
+        // Drop the dynamic_batching wrappers first — *before* worker->stop().
+        // They hold CUDA streams / IO buffers created with the worker threads'
+        // resources; destroying a wrapper after the worker is stopped would free
+        // those against torn-down resources (cudaErrorInvalidResourceHandle).
+        // dynb_cache_ has its own mutex, so this is safe vs. an in-flight search
+        // (which keeps the wrapper alive via its own shared_ptr).
+        this->dynb_cache_.clear();
         if (this->worker) this->worker->stop();
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        // Drop the dynamic_batching wrappers before the upstream indices they
-        // hold by const reference (index_ / replicated_indices_). The worker is
-        // already stopped, so no thread is in dynb_cache_.search().
-        this->dynb_cache_.clear();
         index_.reset();
         this->replicated_indices_.clear();
         this->replicated_datasets_.clear();

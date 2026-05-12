@@ -63,7 +63,11 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <tuple>
+
+#include <cuda_runtime.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -71,13 +75,14 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include <raft/core/device_mdspan.hpp>
 #include <raft/core/resources.hpp>
+#include <raft/core/resource/cuda_stream.hpp>
 #include <cuvs/neighbors/dynamic_batching.hpp>
 #pragma GCC diagnostic pop
 
 namespace matrixone {
 
-// Compile-time cuVS dynamic_batching::index_params. (The on/off switch
-// (batch_window) and conservative_dispatch are runtime knobs on gpu_index_base_t.)
+// Compile-time cuVS dynamic_batching::index_params. (The runtime knobs
+// batch_window and conservative_dispatch live on gpu_index_base_t.)
 inline constexpr int64_t kDynBMaxBatchSize          = 64;     // ceiling; see TUNING NOTES
 inline constexpr std::size_t kDynBNQueues           = 3;
 
@@ -146,9 +151,36 @@ public:
             }
             w = it->second.wrapper;
         }
+        // The caller queued the queries H2D (and possibly other prep) on `res`'s
+        // stream; dynamic_batching gathers from `queries` on its own internal
+        // streams, so drain `res` first or the gather can race the H2D.
+        raft::resource::sync_stream(res);
         cuvs::neighbors::dynamic_batching::search_params sp;
         sp.dispatch_timeout_ms = dispatch_timeout_ms;
         cuvs::neighbors::dynamic_batching::search(res, sp, *w, queries, neighbors, distances);
+        // ====================================================================
+        // WARNING — full-device sync; performance-killing workaround, not a real fix.
+        // --------------------------------------------------------------------
+        // cuVS dynamic_batching coalesces queries across threads and runs the
+        // gather → upstream search → scatter on its own internal CUDA streams; a
+        // batch may dispatch only after the dispatch_timeout window, possibly
+        // *after* this call returns. Empirically, syncing the caller's `res`
+        // (raft::resource::sync_stream, what the cuVS docs say is sufficient)
+        // does NOT reliably wait for that pipeline — non-dispatcher threads can
+        // read their `neighbors`/`distances` before the scatter lands, and the
+        // caller reuses `queries`/`neighbors`/`distances` (per-thread workspace)
+        // for its next task, corrupting in-flight batches (~1 in 128 searches in
+        // the AsyncBatched tests). cuVS exposes no handle to its queue streams,
+        // so the only way to wait for "all of cuVS's batch work" is a full
+        // device sync — which serializes the device per search and can make the
+        // batched path slower than the standalone one. Remove this once upstream
+        // fixes the synchronization (file a cuVS issue with the repro); until
+        // then, do not enable a batch window in latency/throughput-sensitive use.
+        // ====================================================================
+        cudaError_t cuerr = cudaDeviceSynchronize();
+        if (cuerr != cudaSuccess) {
+            throw std::runtime_error(std::string("dynamic_batching: cudaDeviceSynchronize: ") + cudaGetErrorString(cuerr));
+        }
     }
 
     // Drop all cached wrappers. Call before the upstream indices they reference

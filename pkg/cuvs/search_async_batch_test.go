@@ -115,6 +115,9 @@ func TestGpuCagraSearchFloat32AsyncBatched(t *testing.T) {
 	if err := index.SetBatchWindow(200); err != nil {
 		t.Fatalf("SetBatchWindow: %v", err)
 	}
+	if err := index.SetDynbConservativeDispatch(true); err != nil {
+		t.Fatalf("SetDynbConservativeDispatch: %v", err)
+	}
 
 	sp := DefaultCagraSearchParams()
 	sp.ItopkSize = 64
@@ -158,6 +161,9 @@ func TestGpuIvfFlatSearchFloat32AsyncBatched(t *testing.T) {
 	}
 	if err := index.SetBatchWindow(200); err != nil {
 		t.Fatalf("SetBatchWindow: %v", err)
+	}
+	if err := index.SetDynbConservativeDispatch(true); err != nil {
+		t.Fatalf("SetDynbConservativeDispatch: %v", err)
 	}
 
 	sp := DefaultIvfFlatSearchParams()
@@ -211,6 +217,9 @@ func TestGpuIvfPqSearchFloat32AsyncBatched(t *testing.T) {
 	}
 	if err := index.SetBatchWindow(200); err != nil {
 		t.Fatalf("SetBatchWindow: %v", err)
+	}
+	if err := index.SetDynbConservativeDispatch(true); err != nil {
+		t.Fatalf("SetDynbConservativeDispatch: %v", err)
 	}
 
 	sp := DefaultIvfPqSearchParams()
@@ -290,6 +299,9 @@ func TestGpuCagraAsyncBatchedMatchesSync(t *testing.T) {
 	// 2) Async + batching ON, fire all queries concurrently.
 	if err := index.SetBatchWindow(200); err != nil {
 		t.Fatalf("SetBatchWindow(200): %v", err)
+	}
+	if err := index.SetDynbConservativeDispatch(true); err != nil {
+		t.Fatalf("SetDynbConservativeDispatch: %v", err)
 	}
 	got := make([]int64, nQueries)
 	var wg sync.WaitGroup

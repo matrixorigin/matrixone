@@ -1563,9 +1563,11 @@ public:
     }
 
     void destroy() override {
+        // Drop dynamic_batching wrappers *before* worker->stop() — they hold CUDA
+        // streams/buffers tied to the worker threads' resources (see ivf_pq.hpp).
+        this->dynb_cache_.clear();
         if (this->worker) this->worker->stop();
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        this->dynb_cache_.clear();  // drop wrappers before the upstream indices they reference
         index_.reset();
         this->replicated_indices_.clear();
         this->replicated_datasets_.clear();
