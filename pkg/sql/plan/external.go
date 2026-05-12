@@ -179,6 +179,10 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		return DefaultHugeStats()
 	}
 
+	if param.HivePartitioning {
+		return DefaultHugeStats()
+	}
+
 	if param.ScanType == tree.S3 {
 		if err = InitS3Param(param); err != nil {
 			return DefaultHugeStats()
