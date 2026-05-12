@@ -476,6 +476,24 @@ func waitStarted(started *atomic.Bool, timeout time.Duration) {
 	}
 }
 
+func waitDaemonTask(t *testing.T, r *taskRunner, id uint64, timeout time.Duration) *daemonTask {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(time.Millisecond * 10)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			t.Fatalf("daemon task %d not found", id)
+		case <-ticker.C:
+			if dt, ok := r.getDaemonTask(id); ok {
+				return dt
+			}
+		}
+	}
+}
+
 func TestPauseResumeDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
@@ -498,8 +516,7 @@ func TestPauseTaskHandleIdempotent(t *testing.T) {
 		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
 		waitStarted(&started, time.Second*5)
 
-		localDT, ok := r.getDaemonTask(1)
-		require.True(t, ok)
+		localDT := waitDaemonTask(t, r, 1, time.Second*5)
 
 		h := newPauseTask(r, localDT)
 		require.NoError(t, h.Handle(context.Background()))

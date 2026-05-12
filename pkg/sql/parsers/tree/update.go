@@ -161,6 +161,20 @@ type ExParamConst struct {
 	Data         string
 	Tail         *TailParameter
 	StageName    Identifier
+
+	HivePartitioning      bool
+	HivePartitionCols     []string
+	HivePartitionColTypes []HivePartColType
+}
+
+// HivePartColType is a compact snapshot of a partition column's type info.
+// Defined in tree package to avoid importing pkg/pb/plan.
+type HivePartColType struct {
+	Id          int32
+	Width       int32
+	Scale       int32
+	Enumvalues  string
+	NullAbility bool
 }
 
 type ExParam struct {

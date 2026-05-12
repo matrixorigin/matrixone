@@ -67,7 +67,7 @@ func ParsePath(s string) (path Path, err error) {
 			continue
 		}
 		switch r {
-		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/':
+		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/', '=':
 			continue
 		}
 		// printable non-ASCII characters

@@ -1,0 +1,21 @@
+drop database if exists test_binary_decimal;
+create database test_binary_decimal;
+use test_binary_decimal;
+create table test_decimal(
+id int,
+dec_int32 decimal(5, 2),
+dec_int64 decimal(12, 2),
+dec_fixed decimal(24, 4)
+);
+load data infile {'filepath'='$resources/load_data/binary_decimal.parq', 'format'='parquet'}
+into table test_decimal;
+select * from test_decimal order by id;
+id    dec_int32    dec_int64    dec_fixed
+1    123.45    1234567890.12    12345678901234567890.1234
+2    -678.90    -9876543210.99    -99999999999999999999.9999
+3    0.01    0.01    0.0001
+4    null    null    null
+select count(*) as total, count(dec_int32) as non_null from test_decimal;
+total    non_null
+4    3
+drop database test_binary_decimal;

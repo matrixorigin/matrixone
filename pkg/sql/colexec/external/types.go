@@ -74,13 +74,14 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	prevStr   string
-	reader    io.ReadCloser
-	plh       *ParseLineHandler
-	Fileparam *ExFileparam
-	Zoneparam *ZonemapFileparam
-	Filter    *FilterParam
-	parqh     *ParquetHandler
+	prevStr           string
+	reader            io.ReadCloser
+	plh               *ParseLineHandler
+	Fileparam         *ExFileparam
+	Zoneparam         *ZonemapFileparam
+	Filter            *FilterParam
+	parqh             *ParquetHandler
+	currentPartValues map[string]string
 }
 
 type ExFileparam struct {
@@ -248,6 +249,14 @@ type ParquetHandler struct {
 	batchCnt int64
 	cols     []*parquet.Column
 	mappers  []*columnMapper
+
+	// virtual column support (hive partitions + __mo_filepath)
+	partitionColIndices []int
+	filepathColIndex    int // -1 = not projected
+	hasPhysicalCol      bool
+	rowCountOnly        bool
+	currentRowGroup     int
+	rowCountRemaining   int
 }
 
 type columnMapper struct {

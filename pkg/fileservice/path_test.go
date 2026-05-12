@@ -67,4 +67,8 @@ func TestParsePath(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "矩阵", path.File)
 	assert.Equal(t, "矩阵", path.String())
+
+	path, err = ParsePath("hive/year=2024/data.parquet")
+	assert.Nil(t, err)
+	assert.Equal(t, "hive/year=2024/data.parquet", path.File)
 }
