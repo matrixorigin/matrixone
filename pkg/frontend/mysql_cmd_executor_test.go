@@ -93,6 +93,27 @@ func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
 }
 
+func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetIgnore())
+
+	insert := &tree.Insert{}
+	cw = InitTxnComputationWrapper(ses, insert, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetIgnore())
+}
+
 func Test_mce(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {

@@ -37,7 +37,7 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "use ",
+		input:  "INSERT IGNORE INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);",
 		output: "use",
 	}
 )

@@ -161,6 +161,8 @@ type StmtProfile struct {
 	//the sql from user may have multiple statements
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
+	//ignore for insert
+	ignore bool
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -179,6 +181,7 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
+	sp.ignore = false
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -237,6 +240,18 @@ func (sp *StmtProfile) GetStmtType() string {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.stmtType
+}
+
+func (sp *StmtProfile) SetIgnore(ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.ignore = ignore
+}
+
+func (sp *StmtProfile) GetIgnore() bool {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.ignore
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {

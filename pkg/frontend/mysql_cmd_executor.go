@@ -179,6 +179,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
 	ses.SetQueryType(getStatementType(statement).GetQueryType())
+	ses.stmtProfile.SetIgnore(isIgnoreStatement(statement))
 	ses.SetSqlSourceType(sqlType)
 	ses.SetSqlOfStmt(text)
 	if proc != nil {
@@ -259,6 +260,14 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func isIgnoreStatement(statement tree.Statement) bool {
+	insertStmt, ok := statement.(*tree.Insert)
+	if !ok {
+		return false
+	}
+	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
