@@ -57,6 +57,7 @@ type service struct {
 	clock                clock.Clock
 	stopper              *stopper.Stopper
 	stopOnce             sync.Once
+	bindChangeMu         sync.RWMutex
 	fetchWhoWaitingListC chan who
 	logger               *log.MOLogger
 
@@ -154,9 +155,11 @@ func (s *service) Lock(
 		return s.forwardLock(ctx, tableID, rows, txnID, options)
 	}
 
+	s.bindChangeMu.RLock()
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 	l, err := s.getLockTableWithCreate(options.Group, tableID, rows, options.Sharding)
 	if err != nil {
+		s.bindChangeMu.RUnlock()
 		return pb.Result{}, err
 	}
 
@@ -164,24 +167,36 @@ func (s *service) Lock(
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
 	txn.Lock()
-	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrTxnNotFound
 	}
 	if txn.deadlockFound {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrDeadLockDetected
+	}
+	if txn.bindChanged {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, ErrLockTableBindChanged
 	}
 
 	// it needs to inc table bind ref when set restart cn
-	h := txn.getHoldLocksLocked(l.getBind().Group)
-	_, hasBind := h.tableBinds[l.getBind().Table]
+	bind := l.getBind()
+	h := txn.getHoldLocksLocked(bind.Group)
+	_, hasBind := h.tableBinds[bind.Table]
+	txn.lockTableBindAdded(bind)
+	s.bindChangeMu.RUnlock()
+	defer txn.Unlock()
 	defer func() {
 		if s.isStatus(pb.Status_ServiceLockEnable) ||
 			err != nil ||
 			hasBind {
 			return
 		}
-		s.incRef(l.getBind().Group, l.getBind().Table)
+		s.incRef(bind.Group, bind.Table)
 	}()
 
 	var result pb.Result
@@ -601,8 +616,19 @@ func (s *service) getLockTableWithCreate(
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	s.fenceByBindChanged(newBind)
+}
+
+func (s *service) fenceByBindChanged(bind pb.LockTable) {
+	if s.activeTxnHolder == nil {
+		return
+	}
+	s.activeTxnHolder.fenceByBindChanged(bind)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -653,6 +679,7 @@ type activeTxnHolder interface {
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
+	fenceByBindChanged(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
@@ -792,6 +819,19 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 		delete(h.mu.activeTxnServices, txnKey)
 	}
 	return v
+}
+
+func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	n := 0
+	for _, txn := range h.mu.activeTxns {
+		if txn.fenceByBindChanged(bind, h.logger) {
+			n++
+		}
+	}
+	return n
 }
 
 func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {

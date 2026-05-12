@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestKeeper(t *testing.T) {
@@ -196,6 +198,80 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond * 100)
 			}
+		},
+	)
+}
+
+func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldBind := pb.LockTable{Group: 0, Table: 1, OriginTable: 1, ServiceID: "s2", Version: 1, Valid: true}
+			newBind := oldBind
+			newBind.ServiceID = "s3"
+			newBind.Version = 2
+
+			server.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.NewBind = &newBind
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			fsp := newFixedSlicePool(2)
+			svc := &service{
+				serviceID: "s1",
+				fsp:       fsp,
+				logger:    logger,
+			}
+			svc.remote.client = c
+			svc.tableGroups = &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
+			svc.activeTxnHolder = newMapBasedTxnHandler(
+				svc.serviceID,
+				logger,
+				fsp,
+				func(string) (bool, error) { return true, nil },
+				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func(pb.WaitTxn) (bool, error) { return true, nil },
+			)
+			svc.tableGroups.set(
+				oldBind.Group,
+				oldBind.Table,
+				newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger),
+			)
+
+			txnID := []byte("txn1")
+			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
+			txn.Lock()
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			txn.Unlock()
+
+			keeper := &lockTableKeeper{
+				serviceID:   svc.serviceID,
+				client:      c,
+				groupTables: svc.tableGroups,
+				service:     svc,
+			}
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+
+			txn.Lock()
+			require.True(t, txn.bindChanged)
+			txn.Unlock()
+			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
+
+			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
+			txn.Lock()
+			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return nil, nil
+			}, logger)
+			txn.Unlock()
+			require.NoError(t, err)
 		},
 	)
 }

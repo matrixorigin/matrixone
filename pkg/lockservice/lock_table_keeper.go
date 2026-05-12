@@ -157,7 +157,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	for idx, f := range futures {
 		v, err := f.Get()
 		if err == nil {
-			releaseResponse(v.(*pb.Response))
+			resp := v.(*pb.Response)
+			if resp.NewBind != nil {
+				k.service.handleBindChanged(*resp.NewBind)
+			}
+			releaseResponse(resp)
 		} else {
 			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
 		}

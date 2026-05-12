@@ -2055,12 +2055,19 @@ func TestIssue3288(t *testing.T) {
 			// No flakiness: no sleep; outcome is determined only by retry-until-success. CI stable
 			// unless the environment is so slow that allocator cannot move bind within 10s.
 			var result pb.Result
+			txnID := []byte("txn2")
+			txnSeq := byte(3)
 			for {
-				result, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+				result, err = l2.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
 				if err == nil {
 					break
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					txnID = []byte{txnSeq}
+					txnSeq++
+					continue
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
 					continue
 				}
 				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
@@ -4204,7 +4211,72 @@ func TestIssue2128(t *testing.T) {
 				[][]byte{{1}},
 				[]byte("txn1"),
 				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+		},
+	)
+}
+
+func TestBindChangedFencesActiveTxnHoldingOldBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			option := newTestRowExclusiveOptions()
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txn1, option)
 			require.NoError(t, err)
+			_, err = s.Lock(ctx, 1, [][]byte{{1}}, txn2, option)
+			require.NoError(t, err)
+
+			oldBind := s.tableGroups.get(0, 0).getBind()
+			newBind := oldBind
+			newBind.Version++
+			newBind.ServiceID = "new-service"
+			s.handleBindChanged(newBind)
+
+			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn1, option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn2, option)
+			require.NoError(t, err)
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestBindChangedFencesActiveTxnAfterOldTableRemoved(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("txn1")
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+
+			oldBind := s.tableGroups.get(0, 0).getBind()
+			s.tableGroups.removeWithFilter(func(table uint64, lt lockTable) bool {
+				return table == oldBind.Table
+			}, closeReasonBindChanged)
+
+			newBind := oldBind
+			newBind.Version++
+			newBind.ServiceID = "new-service"
+			s.handleBindChanged(newBind)
+
+			_, err = s.Lock(ctx, 1, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
 		},
 	)
 }

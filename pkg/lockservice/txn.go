@@ -47,6 +47,7 @@ type activeTxn struct {
 	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
+	bindChanged    bool
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
@@ -136,6 +137,13 @@ func (txn *activeTxn) lockAdded(
 	h.tableKeys[bind.Table] = cs
 	h.tableBinds[bind.Table] = bind
 	return nil
+}
+
+func (txn *activeTxn) lockTableBindAdded(bind pb.LockTable) {
+	h := txn.getHoldLocksLocked(bind.Group)
+	if _, ok := h.tableBinds[bind.Table]; !ok {
+		h.tableBinds[bind.Table] = bind
+	}
 }
 
 func (txn *activeTxn) close(
@@ -230,6 +238,7 @@ func (txn *activeTxn) reset() {
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
+	txn.bindChanged = false
 }
 
 func (txn *activeTxn) abort(
@@ -255,6 +264,26 @@ func (txn *activeTxn) abort(
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: err}, logger)
 	}
+}
+
+func (txn *activeTxn) fenceByBindChanged(bind pb.LockTable, logger *log.MOLogger) bool {
+	txn.Lock()
+	defer txn.Unlock()
+
+	h, ok := txn.lockHolders[bind.Group]
+	if !ok {
+		return false
+	}
+	held, ok := h.tableBinds[bind.Table]
+	if !ok || !held.Changed(bind) {
+		return false
+	}
+
+	txn.bindChanged = true
+	for _, w := range txn.blockedWaiters {
+		w.notify(notifyValue{err: ErrLockTableBindChanged}, logger)
+	}
+	return true
 }
 
 func (txn *activeTxn) cancelBlocks(
