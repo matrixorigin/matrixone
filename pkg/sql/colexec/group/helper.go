@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -665,7 +666,7 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	return ctr.needSpillImpl(opAnalyzer, false)
 }
 
-func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, localOnly bool) bool {
+func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, duringRebuild bool) bool {
 
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
@@ -679,11 +680,21 @@ func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, localOnly bool)
 	} else {
 		needSpill = memUsed > ctr.spillMem
 	}
-	if localOnly {
-		return needSpill
-	}
 	if !needSpill {
-		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
+		// During rebuild use a higher threshold (7/8) to avoid cascading
+		// re-spills from transient global pressure, while still providing
+		// a safety net against unbounded mpool growth.
+		if duringRebuild {
+			needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*7/8
+		} else {
+			needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
+		}
+	}
+	if !needSpill && system.HasCgroupMemLimit() {
+		total := system.MemoryTotal()
+		if total > 0 {
+			needSpill = system.MemoryUsed() > total*7/8
+		}
 	}
 
 	return needSpill
