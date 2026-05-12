@@ -2,6 +2,13 @@
 -- @case
 -- @desc: insert / select for YEAR columns
 -- @label:bvt
+--
+-- Note: 3.0-dev's frontend renders YEAR as a DATE (`YYYY-01-01`) rather than
+-- MySQL's bare `YYYY`, because pkg/defines/type.go lacks a MYSQL_TYPE_YEAR
+-- branch in GetLength. The CAST(... AS UNSIGNED) assertions below lock down
+-- the numeric semantics independently of that display quirk. When the YEAR
+-- protocol metadata is fixed, update the expected `SELECT *` rendering in
+-- the companion .result file.
 
 DROP DATABASE IF EXISTS test_year;
 CREATE DATABASE test_year;
@@ -25,6 +32,14 @@ SELECT * FROM t_year ORDER BY id;
 -- boundary values 1901 / 2155).
 SELECT id, CAST(birth_year AS UNSIGNED) AS by_num, CAST(grad_year AS UNSIGNED) AS gy_num
 FROM t_year ORDER BY id;
+
+-- ORDER BY on the YEAR column exercises the T_year arms in the planner
+-- sort path as well as the Compare / InplaceSort code in the vector
+-- layer. (WHERE-on-YEAR is deliberately omitted — 3.0-dev has no
+-- comparison operator overload for T_year vs integer literals, and
+-- fixing that is tracked separately.)
+SELECT id, CAST(birth_year AS UNSIGNED) AS by_num
+FROM t_year ORDER BY birth_year DESC;
 
 UPDATE t_year SET grad_year = 2026 WHERE id = 1;
 SELECT id, CAST(grad_year AS UNSIGNED) AS gy_num FROM t_year WHERE id = 1;

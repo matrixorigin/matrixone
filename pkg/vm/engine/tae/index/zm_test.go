@@ -603,4 +603,11 @@ func TestZMDecimal256Skipped(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(vec, d, false, mp))
 	require.NoError(t, BatchUpdateZM(zm, vec))
 	require.False(t, zm.IsInited())
+
+	// BuildZM must also skip doInit for T_decimal256; otherwise a 32-byte
+	// payload would overwrite the length byte at offset 30 inside the fixed
+	// 64-byte ZM buffer. The returned ZM is typed but uninitialized.
+	built := BuildZM(types.T_decimal256, types.EncodeDecimal256(&d))
+	require.Equal(t, types.T_decimal256, built.GetType())
+	require.False(t, built.IsInited())
 }

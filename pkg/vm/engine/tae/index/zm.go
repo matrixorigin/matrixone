@@ -64,6 +64,13 @@ func NewZM(t types.T, scale int32) ZM {
 func BuildZM(t types.T, v []byte) ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
+	if t == types.T_decimal256 {
+		// Decimal256 payload (32 bytes) exceeds the fixed ZM min/max slot
+		// (30 bytes) and would corrupt the length byte at offset 30 / 61
+		// if doInit ran. Matches the skip in UpdateZM / BatchUpdateZM —
+		// the ZM simply stays uninitialized for this type.
+		return zm
+	}
 	zm.doInit(v)
 	return zm
 }

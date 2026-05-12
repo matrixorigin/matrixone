@@ -20,6 +20,12 @@ id    by_num    gy_num
 1    2024    2023
 2    1999    1999
 3    1901    2155
+SELECT id, CAST(birth_year AS UNSIGNED) AS by_num
+FROM t_year ORDER BY birth_year DESC;
+id    by_num
+1    2024
+2    1999
+3    1901
 UPDATE t_year SET grad_year = 2026 WHERE id = 1;
 SELECT id, CAST(grad_year AS UNSIGNED) AS gy_num FROM t_year WHERE id = 1;
 id    gy_num

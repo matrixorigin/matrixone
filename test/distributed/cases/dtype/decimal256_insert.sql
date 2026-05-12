@@ -23,6 +23,10 @@ INSERT INTO t_decimal VALUES
 
 SELECT * FROM t_decimal ORDER BY id;
 
+-- Exercise the operatorUnaryMinusDecimal256 overload in SELECT context
+-- (the INSERT path only covers the planner side; this hits the executor).
+SELECT id, -large_val AS neg FROM t_decimal ORDER BY id;
+
 UPDATE t_decimal SET large_val = 11111111111111111111111111111111111111111111111111111.1111111111 WHERE id = 3;
 SELECT id, large_val FROM t_decimal WHERE id = 3;
 
