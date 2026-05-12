@@ -181,6 +181,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetQueryType(getStatementType(statement).GetQueryType())
 	ses.SetSqlSourceType(sqlType)
 	ses.SetSqlOfStmt(text)
+	if proc != nil {
+		// RecordStatement mutates the session profile in place; refresh the
+		// process view so statement-dependent cached decisions are recomputed.
+		proc.SetStmtProfile(&ses.stmtProfile)
+	}
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.

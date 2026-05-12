@@ -75,6 +75,24 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	return ctx, stubs
 }
 
+func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	cw := InitTxnComputationWrapper(ses, &tree.Insert{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+
+	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+	require.Equal(t, "Insert", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
 func Test_mce(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {
