@@ -14,18 +14,18 @@ set @b_extra_sname = concat('__mo_branch_', cast(@b_extra_tid as char));
 select count(*) as branch_rows_before
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%' and sname in (@b1_sname, @b_extra_sname);
-➤ branch_rows_before[-5,64,0]  𝄀
+branch_rows_before
 2
 use protect_db9_parent;
 drop database protect_db9_branch;
 select count(*) as branch_rows_after
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%' and sname in (@b1_sname, @b_extra_sname);
-➤ branch_rows_after[-5,64,0]  𝄀
+branch_rows_after
 0
 select count(*) as deleted_branch_meta_rows
 from mo_catalog.mo_branch_metadata
 where table_id in (@b1_tid, @b_extra_tid) and table_deleted = true;
-➤ deleted_branch_meta_rows[-5,64,0]  𝄀
+deleted_branch_meta_rows
 2
 drop database protect_db9_parent;

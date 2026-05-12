@@ -13,20 +13,20 @@ select count(*) as show_visible_rows
 from mo_catalog.mo_snapshots
 where sname not like 'ccpr_%' and sname not like '__mo_branch_%'
 and sname like 'user_sp_%';
-➤ show_visible_rows[-5,64,0]  𝄀
+show_visible_rows
 2
 select sname as visible_sname
 from mo_catalog.mo_snapshots
 where sname not like 'ccpr_%' and sname not like '__mo_branch_%'
 and sname like 'user_sp_%'
 order by sname;
-➤ visible_sname[12,-1,0]  𝄀
-user_sp_a  𝄀
+visible_sname
+user_sp_a
 user_sp_b
 select count(*) as direct_branch_rows
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%' and database_name = 'protect_db6';
-➤ direct_branch_rows[-5,64,0]  𝄀
+direct_branch_rows
 2
 drop snapshot user_sp_a;
 drop snapshot user_sp_b;

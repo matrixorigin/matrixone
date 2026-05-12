@@ -12,19 +12,19 @@ set @t3_sname = concat('__mo_branch_', cast(@t3_tid as char));
 select count(*) as initial_branch_rows
 from mo_catalog.mo_snapshots
 where sname in (@t2_sname, @t3_sname) and sname like '__mo_branch_%';
-➤ initial_branch_rows[-5,64,0]  𝄀
+initial_branch_rows
 2
 data branch delete table protect_db2.t3;
 select sname like concat('%', cast(@t2_tid as char)) as keeps_t2_edge
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%' and sname in (@t2_sname, @t3_sname);
-➤ keeps_t2_edge[-7,1,0]  𝄀
+keeps_t2_edge
 1
 data branch delete table protect_db2.t2;
 select count(*) as remaining_branch_rows
 from mo_catalog.mo_snapshots
 where sname in (@t2_sname, @t3_sname) and sname like '__mo_branch_%';
-➤ remaining_branch_rows[-5,64,0]  𝄀
+remaining_branch_rows
 0
 drop table t1;
 drop database protect_db2;

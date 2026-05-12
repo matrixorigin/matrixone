@@ -12,7 +12,7 @@ data branch create database protect_db8_dst from protect_db8_src;
 select count(*) as branch_rows_after_db_create
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%' and database_name = 'protect_db8_src';
-➤ branch_rows_after_db_create[-5,64,0]  𝄀
+branch_rows_after_db_create
 3
 set @dst_t1_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db8_dst' and relname='t1');
 set @dst_t2_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db8_dst' and relname='t2');
@@ -24,13 +24,13 @@ select count(*) as matched_edges
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%'
 and sname in (@dst_t1_sname, @dst_t2_sname, @dst_t3_sname);
-➤ matched_edges[-5,64,0]  𝄀
+matched_edges
 3
 data branch delete database protect_db8_dst;
 select count(*) as branch_rows_after_db_delete
 from mo_catalog.mo_snapshots
 where sname like '__mo_branch_%'
 and sname in (@dst_t1_sname, @dst_t2_sname, @dst_t3_sname);
-➤ branch_rows_after_db_delete[-5,64,0]  𝄀
+branch_rows_after_db_delete
 0
 drop database protect_db8_src;

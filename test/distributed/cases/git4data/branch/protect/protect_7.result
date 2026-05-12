@@ -13,12 +13,12 @@ table_name,
 obj_id = @t1_tid as obj_id_matches_parent
 from mo_catalog.mo_snapshots
 where sname = @t2_sname and sname like '__mo_branch_%';
-➤ level[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  ¦  obj_id_matches_parent[-7,1,0]  𝄀
-table  ¦  protect_db7  ¦  t1  ¦  1
+level    database_name    table_name    obj_id_matches_parent
+table    protect_db7    t1    1
 drop table t2;
 select count(*) as branch_row_after_drop
 from mo_catalog.mo_snapshots where sname = @t2_sname and sname like '__mo_branch_%';
-➤ branch_row_after_drop[-5,64,0]  𝄀
+branch_row_after_drop
 0
 drop table t1;
 drop database protect_db7;

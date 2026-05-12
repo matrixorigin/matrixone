@@ -15,29 +15,29 @@ set @t4_sname = concat('__mo_branch_', cast(@t4_tid as char));
 select count(*) as initial_branch_rows
 from mo_catalog.mo_snapshots
 where sname in (@t2_sname, @t3_sname, @t4_sname) and sname like '__mo_branch_%';
-➤ initial_branch_rows[-5,64,0]  𝄀
+initial_branch_rows
 3
 drop table t3;
 select count(*) as t2_edge
 from mo_catalog.mo_snapshots where sname = @t2_sname and sname like '__mo_branch_%';
-➤ t2_edge[-5,64,0]  𝄀
+t2_edge
 1
 select count(*) as t4_edge
 from mo_catalog.mo_snapshots where sname = @t4_sname and sname like '__mo_branch_%';
-➤ t4_edge[-5,64,0]  𝄀
+t4_edge
 1
 select count(*) as t3_edge_gone
 from mo_catalog.mo_snapshots where sname = @t3_sname and sname like '__mo_branch_%';
-➤ t3_edge_gone[-5,64,0]  𝄀
+t3_edge_gone
 0
 drop table t2;
 select count(*) as t4_edge_still_there
 from mo_catalog.mo_snapshots where sname = @t4_sname and sname like '__mo_branch_%';
-➤ t4_edge_still_there[-5,64,0]  𝄀
+t4_edge_still_there
 1
 select count(*) as t2_edge_gone
 from mo_catalog.mo_snapshots where sname = @t2_sname and sname like '__mo_branch_%';
-➤ t2_edge_gone[-5,64,0]  𝄀
+t2_edge_gone
 0
 drop table t4;
 drop table t1;

@@ -19,16 +19,16 @@ select level, database_name, table_name, account_name,
 obj_id = @t1_tid as obj_id_matches_parent
 from mo_catalog.mo_snapshots
 where sname = @t2_sname and sname like '__mo_branch_%';
-➤ level[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  ¦  account_name[12,-1,0]  ¦  obj_id_matches_parent[-7,1,0]  𝄀
-table  ¦  protect_db10_src  ¦  t1  ¦  sys  ¦  1
+level    database_name    table_name    account_name    obj_id_matches_parent
+table    protect_db10_src    t1    sys    1
 drop table protect_db10_dst.t2;
 select count(*) as branch_row_after_child_drop
 from mo_catalog.mo_snapshots
 where sname = @t2_sname and sname like '__mo_branch_%';
-➤ branch_row_after_child_drop[-5,64,0]  𝄀
+branch_row_after_child_drop
 0
 select table_deleted from mo_catalog.mo_branch_metadata where table_id = @t2_tid;
-➤ table_deleted[-7,1,0]  𝄀
+table_deleted
 1
 drop database protect_db10_dst;
 drop snapshot sp_protect_db10;
