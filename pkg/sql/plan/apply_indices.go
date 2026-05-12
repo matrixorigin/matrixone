@@ -527,6 +527,7 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	defer builder.clearProjectGuard(projNode.NodeId)
+	var vecCtx *vectorSortContext
 	// FullText
 	{
 		// support the followings:
@@ -589,7 +590,12 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	// 1. Vector Index Check
 	// Handle Queries like
 	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
-	if vecCtx := builder.buildVectorSortContext(projNode); vecCtx != nil {
+	// Also handles: ORDER BY l2_distance(embedding, (SELECT vec FROM t WHERE pk='x')) LIMIT 10;
+	vecCtx = builder.buildVectorSortContext(projNode)
+	if vecCtx == nil {
+		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+	}
+	if vecCtx != nil {
 		multiTableIndexes := builder.collectVectorIndexes(vecCtx.scanNode)
 		if len(multiTableIndexes) == 0 {
 			return nodeID, nil
@@ -814,6 +820,9 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	vecCtx := builder.buildVectorSortContext(projNode)
+	if vecCtx == nil {
+		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+	}
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return nil
 	}
