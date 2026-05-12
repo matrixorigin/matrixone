@@ -542,7 +542,7 @@ func TestLockMeta_doLock(t *testing.T) {
 func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) {
 	c := newCompileForShuffleGroupV2Test(t)
 	aggNode, nodes := newShuffleGroupV2TestNodes(16)
-	scope := newShuffleGroupV2InputScope(1)
+	scope := newShuffleGroupV2InputScope(t, 1)
 
 	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
 
@@ -552,10 +552,23 @@ func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) 
 	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
 }
 
+func TestCompileShuffleGroupV2FallbackToMergeGroupWhenInputScopesNotSingle(t *testing.T) {
+	c := newCompileForShuffleGroupV2Test(t)
+	aggNode, nodes := newShuffleGroupV2TestNodes(16)
+	scope1 := newShuffleGroupV2InputScope(t, 1)
+	scope2 := newShuffleGroupV2InputScope(t, 1)
+
+	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	require.IsType(t, &group.MergeGroup{}, result[0].RootOp)
+	require.False(t, hasOperatorType(result[0].RootOp, vm.ShuffleV2))
+}
+
 func TestCompileShuffleGroupV2UsesShuffleWhenScopeMcpuMatchesDop(t *testing.T) {
 	c := newCompileForShuffleGroupV2Test(t)
 	aggNode, nodes := newShuffleGroupV2TestNodes(16)
-	scope := newShuffleGroupV2InputScope(16)
+	scope := newShuffleGroupV2InputScope(t, 16)
 
 	result := c.compileShuffleGroupV2(aggNode, []*Scope{scope}, nodes)
 
@@ -575,9 +588,10 @@ func newCompileForShuffleGroupV2Test(t *testing.T) *Compile {
 	return c
 }
 
-func newShuffleGroupV2InputScope(mcpu int) *Scope {
+func newShuffleGroupV2InputScope(t *testing.T, mcpu int) *Scope {
 	scope := newScope(Merge)
 	scope.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: mcpu}
+	scope.Proc = testutil.NewProcess(t)
 	scope.setRootOperator(colexec.NewMockOperator())
 	return scope
 }
