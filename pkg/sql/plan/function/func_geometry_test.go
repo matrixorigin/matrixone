@@ -130,3 +130,15 @@ func TestCastGeometryToSubtypeRejectNonFinite(t *testing.T) {
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
 }
+
+func TestCastGeometryToSubtypeRejectGeometryWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT"}, nil),
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"GEOMETRY(LINESTRING(0 0, 1 1))"}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil)
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastGeometryToSubtype)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}

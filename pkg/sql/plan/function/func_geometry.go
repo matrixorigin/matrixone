@@ -60,7 +60,7 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 		if err != nil {
 			return nil, err
 		}
-		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
+		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
 			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
 		}
 
