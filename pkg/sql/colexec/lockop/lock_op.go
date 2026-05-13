@@ -524,6 +524,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if g == lock.Granularity_Row && len(rows) > 1 {
+		rows = dedupLockRows(rows)
+	}
+
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
@@ -1335,6 +1339,22 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
+}
+
+func dedupLockRows(rows [][]byte) [][]byte {
+	if len(rows) <= 1 {
+		return rows
+	}
+	seen := make(map[string]struct{}, len(rows))
+	deduped := rows[:0]
+	for _, r := range rows {
+		k := string(r)
+		if _, exists := seen[k]; !exists {
+			seen[k] = struct{}{}
+			deduped = append(deduped, r)
+		}
+	}
+	return deduped
 }
 
 func getRowsFilter(
