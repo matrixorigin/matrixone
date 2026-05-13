@@ -87,11 +87,11 @@ where t.reldatabase = 'test_tree_diff' and t.relname like 't%';
 data branch diff t9 against t0 output summary;
 ➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t0[-5,0,0]  𝄀
 INSERTED  ¦  3  ¦  1  𝄀
-DELETED  ¦  2  ¦  1  𝄀
+DELETED  ¦  2  ¦  0  𝄀
 UPDATED  ¦  3  ¦  1
 data branch diff t9 against t0 output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
-11
+10
 data branch diff t9 against t0;
 ➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
 t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
@@ -100,7 +100,6 @@ t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
 t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
 t9  ¦  DELETE  ¦  11  ¦  11  𝄀
 t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t0  ¦  DELETE  ¦  19  ¦  19  𝄀
 t9  ¦  INSERT  ¦  101  ¦  101  𝄀
 t9  ¦  INSERT  ¦  104  ¦  104  𝄀
 t9  ¦  INSERT  ¦  109  ¦  109  𝄀
@@ -172,18 +171,17 @@ t13  ¦  INSERT  ¦  113  ¦  113
 data branch diff t4 against t0 output summary;
 ➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t0[-5,0,0]  𝄀
 INSERTED  ¦  2  ¦  1  𝄀
-DELETED  ¦  1  ¦  1  𝄀
+DELETED  ¦  1  ¦  0  𝄀
 UPDATED  ¦  2  ¦  1
 data branch diff t4 against t0 output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
-8
+7
 data branch diff t4 against t0;
 ➤ diff t4 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
 t4  ¦  UPDATE  ¦  1  ¦  10000  𝄀
 t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
 t4  ¦  UPDATE  ¦  4  ¦  40000  𝄀
 t4  ¦  DELETE  ¦  16  ¦  16  𝄀
-t0  ¦  DELETE  ¦  19  ¦  19  𝄀
 t4  ¦  INSERT  ¦  101  ¦  101  𝄀
 t4  ¦  INSERT  ¦  104  ¦  104  𝄀
 t0  ¦  INSERT  ¦  200  ¦  200
@@ -315,7 +313,6 @@ t9  ¦  UPDATE  ¦  4  𝄀
 t9  ¦  UPDATE  ¦  9  𝄀
 t9  ¦  DELETE  ¦  11  𝄀
 t9  ¦  DELETE  ¦  16  𝄀
-t0  ¦  DELETE  ¦  19  𝄀
 t9  ¦  INSERT  ¦  101  𝄀
 t9  ¦  INSERT  ¦  104  𝄀
 t9  ¦  INSERT  ¦  109  𝄀
@@ -328,7 +325,6 @@ t9  ¦  UPDATE  ¦  40000  𝄀
 t9  ¦  UPDATE  ¦  90000  𝄀
 t9  ¦  DELETE  ¦  11  𝄀
 t9  ¦  DELETE  ¦  16  𝄀
-t0  ¦  DELETE  ¦  19  𝄀
 t9  ¦  INSERT  ¦  101  𝄀
 t9  ¦  INSERT  ¦  104  𝄀
 t9  ¦  INSERT  ¦  109  𝄀
