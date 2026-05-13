@@ -70,6 +70,10 @@ const (
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
+// pkCheckSemaphore limits concurrent block I/O in PKPersistedBetween to prevent
+// mpool explosion when many transactions simultaneously check primary key conflicts.
+var pkCheckSemaphore = make(chan struct{}, 16)
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -2484,6 +2488,16 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+
+	// Under high-concurrency workloads (e.g., 1000 TPCC terminals), many transactions
+	// write to the same table, producing many changed objects. If there are too many,
+	// conservatively return true to avoid thundering-herd block I/O that causes OOM.
+	const maxChangedObjectsForIO = 64
+	if len(cObjs)+len(delObjs) > maxChangedObjectsForIO {
+		v2.TxnPKChangeCheckChangedCounter.Inc()
+		return true, nil
+	}
+
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
@@ -2594,13 +2608,30 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
+	// If too many candidate blocks, conservatively return true to avoid excessive
+	// concurrent block reads that cause mpool explosion under high concurrency.
+	const maxCandidateBlksForIO = 32
+	if len(candidateBlks) > maxCandidateBlksForIO {
+		v2.TxnPKChangeCheckChangedCounter.Inc()
+		return true, nil
+	}
+
 	cacheVectors := containers.NewVectors(1)
-	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
 		v2.TxnPKChangeCheckIOCounter.Inc()
+
+		// Acquire semaphore to limit concurrent block I/O across all transactions.
+		// This prevents 1000 goroutines from simultaneously reading blocks and
+		// exhausting mpool capacity.
+		select {
+		case pkCheckSemaphore <- struct{}{}:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+		defer func() { <-pkCheckSemaphore }()
 	}
 	for _, blk := range candidateBlks {
 		release, err := ioutil.LoadColumns(
