@@ -334,7 +334,14 @@ func dataBranchCreateTable(
 		return
 	}
 
-	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipt); err != nil {
+		return
+	}
+
+	// Branch Protect Snapshot: pin the parent-side history for as long as
+	// this branch edge lives. Runs in the same background executor txn as
+	// the CLONE and the mo_branch_metadata insert, so rollback is atomic.
+	if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipt); err != nil {
 		return
 	}
 
@@ -370,8 +377,14 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	for _, rcpt := range receipts {
-		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+	for i := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
+			return
+		}
+		// Pin parent-side history for this table in the newly cloned
+		// database. See createBranchProtectSnapshot for the atomicity
+		// contract with updateBranchMetaTable.
+		if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
 			return
 		}
 	}
@@ -500,6 +513,13 @@ func dataBranchDeleteTable(
 		return
 	}
 
+	// Release any branch protect snapshots whose dependent subtree is
+	// now fully deleted. Synchronous so the delete path has identical
+	// semantics to the compile-layer plain DROP TABLE path.
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
+		return
+	}
+
 	return nil
 }
 
@@ -565,6 +585,13 @@ func dataBranchDeleteDatabase(
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	// Release any branch protect snapshots whose dependent subtree is
+	// now fully deleted — same synchronous contract as the table-level
+	// delete above.
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
 		return
 	}
 

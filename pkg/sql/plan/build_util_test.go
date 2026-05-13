@@ -534,3 +534,43 @@ func TestSetEmptyMemberFormatting(t *testing.T) {
 	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: encoded}
 	require.Equal(t, "SET('','a')", FormatColType(setType))
 }
+
+func TestFuncCastForSetType_NonLiteral(t *testing.T) {
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "read,write,execute"}
+
+	// Non-literal varchar expression (e.g. column ref or function result).
+	// funcCastForSetType should wrap it with cast_set_value_to_index.
+	varcharExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	result, err := funcCastForSetType(context.Background(), varcharExpr, setType)
+	require.NoError(t, err)
+	require.NotNil(t, result.GetF())
+	require.Equal(t, "cast_set_value_to_index", result.GetF().Func.ObjName)
+
+	// Non-literal integer expression → should wrap with cast_set_index_value_to_index.
+	intExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+		},
+	}
+	result2, err := funcCastForSetType(context.Background(), intExpr, setType)
+	require.NoError(t, err)
+	require.NotNil(t, result2.GetF())
+	require.Equal(t, "cast_set_index_value_to_index", result2.GetF().Func.ObjName)
+
+	// Expression already typed as target SET should short-circuit.
+	setExpr := &plan.Expr{
+		Typ: setType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 2},
+		},
+	}
+	result3, err := funcCastForSetType(context.Background(), setExpr, setType)
+	require.NoError(t, err)
+	require.Equal(t, setExpr, result3)
+}
