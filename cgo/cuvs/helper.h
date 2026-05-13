@@ -24,6 +24,10 @@
 #include <cuvs/distance/distance.hpp>
 #include <vector>
 #include <string>
+#include <cstdint>
+#include <algorithm>
+#include <limits>
+#include <utility>
 #include <cuda_fp16.h>
 
 namespace matrixone {
@@ -104,6 +108,68 @@ void convert_f16_to_f32_on_device(const raft::resources& res, const half* src, f
  */
 void cast_float_to_half_host(const float* __restrict__ src,
                              half* __restrict__ dst, size_t n);
+
+/**
+ * @brief Sentinel placed in cuvs_task_result_t::result by the SHARDED async
+ * search path. search_wait() in each index family detects this type, fans out
+ * over the shard job_ids, and runs the k-way merge on the caller's thread —
+ * so the worker's main_thread_ is never on the search hot path.
+ *
+ * See plan: .claude/plans/effervescent-hatching-dewdrop.md
+ */
+struct composite_search_pending_t {
+    std::vector<uint64_t> shard_ids;
+    uint64_t              num_queries;
+    uint32_t              limit;
+};
+
+/**
+ * @brief CPU k-way merge of per-shard top-k results into a single top-k per
+ * query. Replaces the byte-identical merge_sharded_results() that previously
+ * lived in cagra.hpp / ivf_flat.hpp / ivf_pq.hpp.
+ *
+ * SearchResult must expose `.neighbors` (vector<int64_t>) and `.distances`
+ * (vector<float>) sized num_queries * limit. -1 sentinels in `neighbors`
+ * indicate empty slots and are skipped. Output is dense top-`limit` per query,
+ * sorted by ascending distance; trailing slots are padded with (-1, FLT_MAX).
+ */
+template <typename SearchResult>
+SearchResult cpu_topk_merge_sharded(const std::vector<SearchResult>& shard_results,
+                                    uint64_t num_queries, uint32_t limit) {
+    SearchResult global_res;
+    global_res.neighbors.resize(num_queries * limit);
+    global_res.distances.resize(num_queries * limit);
+
+    std::vector<std::pair<float, int64_t>> candidates;
+    candidates.reserve(shard_results.size() * limit);
+
+    for (uint64_t q = 0; q < num_queries; ++q) {
+        candidates.clear();
+        for (size_t s = 0; s < shard_results.size(); ++s) {
+            const auto& sr = shard_results[s];
+            for (uint32_t k = 0; k < limit; ++k) {
+                int64_t id = sr.neighbors[q * limit + k];
+                if (id != -1LL) {
+                    candidates.emplace_back(sr.distances[q * limit + k], id);
+                }
+            }
+        }
+
+        uint32_t to_sort = std::min<uint32_t>(limit, static_cast<uint32_t>(candidates.size()));
+        std::partial_sort(candidates.begin(), candidates.begin() + to_sort, candidates.end());
+
+        for (uint32_t k = 0; k < limit; ++k) {
+            if (k < to_sort) {
+                global_res.neighbors[q * limit + k] = candidates[k].second;
+                global_res.distances[q * limit + k] = candidates[k].first;
+            } else {
+                global_res.neighbors[q * limit + k] = -1LL;
+                global_res.distances[q * limit + k] = std::numeric_limits<float>::max();
+            }
+        }
+    }
+    return global_res;
+}
 
 } // namespace matrixone
 #endif

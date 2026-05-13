@@ -188,17 +188,22 @@ TEST(GpuBruteForceTest, SearchWithInnerProduct) {
 }
 
 TEST(GpuBruteForceTest, EmptyDataset) {
+    // Searching an empty (count==0) brute-force index is now an error:
+    // there is nothing to search. search_async throws "index not loaded"
+    // (the underlying brute_force_index is never constructed when count==0
+    // — see brute_force.hpp build()). Callers must check the size of their
+    // backing data before submitting a search.
     const uint32_t dimension = 128;
     const uint64_t count = 0;
-    
+
     gpu_brute_force_t<float> index(nullptr, count, dimension, DistanceType_L2Expanded, 1, 0);
     index.start();
     index.build();
 
     std::vector<float> queries(dimension, 0.0);
-    auto result = index.search(queries.data(), 1, dimension, 5, brute_force_search_params_default());
-
-    ASSERT_EQ(result.neighbors.size(), (size_t)0);
+    ASSERT_THROW(
+        index.search(queries.data(), 1, dimension, 5, brute_force_search_params_default()),
+        std::runtime_error);
 
     index.destroy();
 }

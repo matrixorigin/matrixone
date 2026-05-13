@@ -75,8 +75,8 @@ void gpu_ivf_pq_add_chunk_float(gpu_ivf_pq_c index_c, const float* chunk_data, u
 // Trains the scalar quantizer (if T is 1-byte)
 void gpu_ivf_pq_train_quantizer(gpu_ivf_pq_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
 
-void gpu_ivf_pq_set_per_thread_device(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
 void gpu_ivf_pq_set_batch_window(gpu_ivf_pq_c index_c, int64_t window_us, void* errmsg);
+void gpu_ivf_pq_set_dynb_conservative_dispatch(gpu_ivf_pq_c index_c, bool enable, void* errmsg);
 
 void gpu_ivf_pq_set_quantizer(gpu_ivf_pq_c index_c, float min, float max, void* errmsg);
 void gpu_ivf_pq_get_quantizer(gpu_ivf_pq_c index_c, float* min, float* max, void* errmsg);
@@ -153,8 +153,11 @@ char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg);
 // frees with free().
 char* gpu_ivf_pq_get_filter_col_meta_json(gpu_ivf_pq_c index_c, void* errmsg);
 
-// Gets the trained centroids
-void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, void* errmsg);
+// Gets the trained centroids. `count` is the number of elements the caller's
+// `centers` buffer can hold; the copy is clamped to it (the index has
+// n_lists * rot_dim center coords — size it with gpu_ivf_pq_get_n_list /
+// gpu_ivf_pq_get_rot_dim).
+void gpu_ivf_pq_get_centers(gpu_ivf_pq_c index_c, void* centers, uint64_t count, void* errmsg);
 
 // Gets the number of lists (centroids)
 uint32_t gpu_ivf_pq_get_n_list(gpu_ivf_pq_c index_c);

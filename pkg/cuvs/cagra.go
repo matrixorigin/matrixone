@@ -38,6 +38,7 @@ type GpuCagra[T VectorType] struct {
 	nthread       uint32
 	distMode      DistributionMode
 	batchWindowUs int64
+	dynbConservativeDispatch bool
 }
 
 // SetBatchWindow sets the batching window in microseconds for search operations.
@@ -47,6 +48,24 @@ func (gi *GpuCagra[T]) SetBatchWindow(windowUs int64) error {
 	if gi.cCagra != nil {
 		var errmsg *C.char
 		C.gpu_cagra_set_batch_window(gi.cCagra, C.int64_t(windowUs), unsafe.Pointer(&errmsg))
+		if errmsg != nil {
+			errStr := C.GoString(errmsg)
+			C.free(unsafe.Pointer(errmsg))
+			return moerr.NewInternalErrorNoCtx(errStr)
+		}
+	}
+	return nil
+}
+
+// SetDynbConservativeDispatch sets the cuVS dynamic_batching conservative_dispatch
+// flag. false (default): dispatch eagerly at the full batch size. true: wait for
+// the batch to fill or the window to elapse, then dispatch at the real size.
+// Has no effect unless the batch window is > 0.
+func (gi *GpuCagra[T]) SetDynbConservativeDispatch(enable bool) error {
+	gi.dynbConservativeDispatch = enable
+	if gi.cCagra != nil {
+		var errmsg *C.char
+		C.gpu_cagra_set_dynb_conservative_dispatch(gi.cCagra, C.bool(enable), unsafe.Pointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
 			C.free(unsafe.Pointer(errmsg))
@@ -266,18 +285,14 @@ func (gi *GpuCagra[T]) Start() error {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
-	if gi.distMode == Replicated && gi.nthread > 1 {
-		var errmsg *C.char
-		C.gpu_cagra_set_per_thread_device(gi.cCagra, C.bool(true), unsafe.Pointer(&errmsg))
-		if errmsg != nil {
-			errStr := C.GoString(errmsg)
-			C.free(unsafe.Pointer(errmsg))
-			return moerr.NewInternalErrorNoCtx(errStr)
+	if gi.batchWindowUs > 0 {
+		if err := gi.SetBatchWindow(gi.batchWindowUs); err != nil {
+			return err
 		}
 	}
 
-	if gi.batchWindowUs > 0 {
-		if err := gi.SetBatchWindow(gi.batchWindowUs); err != nil {
+	if gi.dynbConservativeDispatch {
+		if err := gi.SetDynbConservativeDispatch(true); err != nil {
 			return err
 		}
 	}

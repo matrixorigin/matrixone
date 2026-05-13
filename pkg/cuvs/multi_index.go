@@ -84,37 +84,13 @@ func NewMultiGpuIvfFlat[T VectorType](indices []*GpuIvfFlat[T], bruteForce *GpuB
 	return &MultiGpuIvfFlat[T]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
 }
 
+// All MultiIndex paths funnel through multiGpuSearch — every inner index
+// (incl. the 1-index and brute-force-only configurations) dispatches via
+// SearchAsync + SearchWait. After the C++ side defers SHARDED merge to
+// search_wait() (plan: effervescent-hatching-dewdrop.md), there is no
+// remaining reason to keep the sync fallbacks here; they bypassed dynamic
+// batching and serialized through main_thread_.
 func (mi *MultiGpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.Search(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchAsync(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -125,36 +101,6 @@ func (mi *MultiGpuIvfFlat[T]) Search(queries []T, numQueries uint64, dimension u
 }
 
 func (mi *MultiGpuIvfFlat[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloat(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloat32Async(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -178,36 +124,6 @@ func NewMultiGpuIvfPq[T VectorType](indices []*GpuIvfPq[T], bruteForce *GpuBrute
 }
 
 func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.Search(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchAsync(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -218,36 +134,6 @@ func (mi *MultiGpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uin
 }
 
 func (mi *MultiGpuIvfPq[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloat(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloat32Async(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -271,36 +157,6 @@ func NewMultiGpuCagra[T VectorType](indices []*GpuCagra[T], bruteForce *GpuBrute
 }
 
 func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.Search(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchAsync(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].Search(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -311,36 +167,6 @@ func (mi *MultiGpuCagra[T]) Search(queries []T, numQueries uint64, dimension uin
 }
 
 func (mi *MultiGpuCagra[T]) SearchFloat32(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloat(queries, numQueries, dimension, limit)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloat32Async(queries, numQueries, dimension, limit)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloat(queries, numQueries, dimension, limit, sp)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -484,53 +310,17 @@ func mergeMultiResults(allNeighbors [][]int64, allDistances [][]float32, numQuer
 
 // --- Filtered async search variants ---
 //
-// With multiple inner workers, each per-index filtered search is dispatched
-// via SearchFloatWithFilterAsync (which returns a job_id) and collected with
-// SearchWait, matching how the unfiltered SearchFloat32 already uses
-// multiGpuSearch. This lets predicate evaluation, H2D, and GPU work for
-// sibling indices overlap on their own worker threads.
+// Every per-index filtered search is dispatched via SearchFloatWithFilterAsync
+// (which returns a job_id) and collected with SearchWait, matching the
+// unfiltered SearchFloat32 path. Predicate evaluation, H2D, and GPU work for
+// sibling indices overlap on their own worker threads, including the
+// brute-force fallback when mi.bruteForce is non-nil.
 //
-// Single-worker fast path: when there is exactly one inner index (and no
-// brute-force fallback) or only the brute-force fallback, we call the
-// sync SearchFloatWithFilter directly. Going through the async path would
-// route a SHARDED inner index through its main_thread_, which would
-// serialize concurrent multi-index callers and defeat per-shard auto-
-// batching in the device queues.
-//
-// The brute-force fallback (when mi.bruteForce is non-nil) otherwise
-// participates in the multi-index fan-out via SearchFloatWithFilterAsync.
+// SHARDED inner indices no longer get routed through main_thread_ — see the
+// C++ search_*_with_filter_async branches and plan
+// .claude/plans/effervescent-hatching-dewdrop.md.
 
 func (mi *MultiGpuCagra[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloatWithFilter(queries, numQueries, dimension, limit, predsJSON)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloatWithFilterAsync(queries, numQueries, dimension, limit, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -543,36 +333,6 @@ func (mi *MultiGpuCagra[T]) SearchFloat32WithFilter(queries []float32, numQuerie
 }
 
 func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfFlatSearchParams, predsJSON string) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloatWithFilter(queries, numQueries, dimension, limit, predsJSON)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloatWithFilterAsync(queries, numQueries, dimension, limit, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -585,36 +345,6 @@ func (mi *MultiGpuIvfFlat[T]) SearchFloat32WithFilter(queries []float32, numQuer
 }
 
 func (mi *MultiGpuIvfPq[T]) SearchFloat32WithFilter(queries []float32, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) ([]int64, []float32, error) {
-	if len(mi.indices) == 1 && mi.bruteForce == nil {
-		res, err := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		return res.Neighbors, res.Distances, nil
-	}
-	if len(mi.indices) == 0 && mi.bruteForce != nil {
-		return mi.bruteForce.SearchFloatWithFilter(queries, numQueries, dimension, limit, predsJSON)
-	}
-	if len(mi.indices) == 1 && mi.bruteForce != nil {
-		bfJobID, err := mi.bruteForce.SearchFloatWithFilterAsync(queries, numQueries, dimension, limit, predsJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		idxRes, idxErr := mi.indices[0].SearchFloatWithFilter(queries, numQueries, dimension, limit, sp, predsJSON)
-		bfNeighbors, bfDistances, bfErr := mi.bruteForce.SearchWait(bfJobID, numQueries, limit)
-		if idxErr != nil {
-			return nil, nil, idxErr
-		}
-		if bfErr != nil {
-			return nil, nil, bfErr
-		}
-		n, d := mergeMultiResults(
-			[][]int64{idxRes.Neighbors, bfNeighbors},
-			[][]float32{idxRes.Distances, bfDistances},
-			numQueries, limit,
-		)
-		return n, d, nil
-	}
 	genericIndices := make([]GpuIndex[T], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx

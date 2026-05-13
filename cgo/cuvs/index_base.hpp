@@ -228,21 +228,6 @@ using ::distribution_mode_t;
 //
 // =============================================================================
 
-// Process-wide monotone allocator of batch keys for dequeue-time search fusion.
-// 0 is reserved (means "non-batchable"); the first allocated key is 1.
-inline std::atomic<uint64_t>& g_next_batch_key() {
-    static std::atomic<uint64_t> v{1};
-    return v;
-}
-// Latched true the first time g_next_batch_key wraps 2^64-1 -> 0. After that
-// batch_key_for() returns 0 forever (everything runs standalone) — reusing a
-// non-zero key post-wrap could make the worker fuse two unrelated indices'
-// searches. Reaching this takes ~58,000 years of index churn at 1e9 keys/yr.
-inline std::atomic<bool>& g_batch_keys_exhausted() {
-    static std::atomic<bool> b{false};
-    return b;
-}
-
 /**
  * @brief Base class for GPU-based vector indices (IVF-Flat, IVF-PQ, CAGRA).
  *
@@ -295,6 +280,8 @@ public:
 
     // ---- Worker and GPU resource management ----
     std::unique_ptr<cuvs_worker_t> worker;  ///< Thread pool + CUDA stream pool
+    int64_t batch_window_us_ = 0;           ///< Request-level batching window (µs); 0 = off. See dynamic_batching.hpp
+    bool dynb_conservative_dispatch_ = false; ///< cuVS dynamic_batching conservative_dispatch flag
     mutable std::shared_mutex mutex_;       ///< Guards all shared host-side state (see Locking Rules)
     bool is_loaded_ = false;                ///< True once build() has completed successfully
     int build_device_id_ = 0;              ///< Primary GPU used for SINGLE_GPU mode
@@ -474,6 +461,17 @@ public:
         bool                  has_filter = false;
         bool                  deletes_only = false;
     };
+
+    // Relaxed predicate used only to gate an optional stream sync in the
+    // derived search paths (no user filter + no soft deletes ⇒ build_search_bitset
+    // is a pure no-op, so the post-H2D sync_stream is wasted). build_search_bitset
+    // / build_filter_host_mask re-check deleted_count_ under mutex_, so a race here
+    // is harmless: a 0→1 transition just means the deletes-only path runs (which
+    // does its own device-bitset sync), a 1→0 transition means one wasted sync.
+    bool has_soft_deletes() {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return deleted_count_ > 0;
+    }
 
     // CPU-only half of build_search_bitset. Safe to call from any thread:
     // touches no GPU handle, only filter_host_ (post-build immutable) and a
@@ -725,9 +723,6 @@ public:
         if (worker) worker->stop();
     }
 
-    void set_per_thread_device(bool enable) {
-        if (worker) worker->set_per_thread_device(enable);
-    }
 
     void transform_distance(distance_type_t metric, std::vector<float>& distances) const {
         if (metric == DistanceType_InnerProduct) {
@@ -739,38 +734,37 @@ public:
         }
     }
 
-    void set_batch_window(int64_t window_us) {
-        if (worker) worker->set_batch_window(window_us);
-    }
+    // ---- Request-level batching knobs (see dynamic_batching.hpp) ----
+    // These live on the index, not the worker — the worker just runs tasks; the
+    // index search paths (search_internal) read these to drive cuVS dynamic_batching.
 
-    // Stable, process-unique key for (this index, variant, limit) used by the
-    // worker's dequeue-time batching: two requests share a key iff same index
-    // instance + same variant + same limit — exactly the requests the worker
-    // can fuse into one search. `variant` distinguishes search shapes that must
-    // NOT fuse, e.g. T-typed search (0) vs float32-input search (1). Keys are
-    // monotone-allocated, so collisions are impossible.
-    //
-    // Precondition (documented, not enforced): the search params `sp` passed to
-    // search/search_float are assumed constant per (index, limit) — the fused
-    // search uses the first arrival's exec_fn (which closed over its `sp`). In
-    // practice `sp` is fixed by the query plan, so this holds.
-    //
-    // Returns 0 if the process has exhausted the 2^64-1 key space (latched, so
-    // it stays 0 forever after the first wrap). Callers treat a 0 key the same
-    // as batch_window()==0: run the search standalone, never fuse.
-    uint64_t batch_key_for(uint32_t variant, uint32_t limit) {
-        if (g_batch_keys_exhausted().load(std::memory_order_relaxed)) return 0;
-        uint64_t k = (uint64_t(variant) << 32) | uint64_t(limit);
-        std::lock_guard<std::mutex> lk(batch_key_mu_);
-        auto it = batch_key_map_.find(k);
-        if (it != batch_key_map_.end()) return it->second;
-        uint64_t a = g_next_batch_key().fetch_add(1, std::memory_order_relaxed);
-        if (a == 0) {  // counter wrapped — disable batching process-wide, do NOT memoize
-            g_batch_keys_exhausted().store(true, std::memory_order_relaxed);
-            return 0;
-        }
-        batch_key_map_.emplace(k, a);
-        return a;
+    // Batching window in microseconds; 0 (default) disables request-level batching,
+    // > 0 enables it and is used as the cuVS dynamic_batching dispatch_timeout_ms.
+    void set_batch_window(int64_t window_us) {
+        if (worker) worker->sync();  // drain in-flight work before flipping the knob
+        batch_window_us_ = window_us;
+    }
+    int64_t batch_window() const { return batch_window_us_; }
+
+    // cuVS dynamic_batching conservative_dispatch: false (default) ⇒ dispatch
+    // eagerly at the full batch size (low latency, possible padding waste);
+    // true ⇒ wait until the batch fills or the window elapses, then dispatch at
+    // the real size (no waste, exposes upstream latency). Changing it invalidates
+    // the cached dynamic_batching wrappers (rebuilt lazily on the next search).
+    void set_dynb_conservative_dispatch(bool enable) {
+        if (worker) worker->sync();
+        dynb_conservative_dispatch_ = enable;
+    }
+    bool dynb_conservative_dispatch() const { return dynb_conservative_dispatch_; }
+
+    // Estimate of the per-GPU search concurrency: the number of worker threads
+    // servicing one device queue (≈ ThreadsSearch / numGPU). Used as the cuVS
+    // dynamic_batching max_batch_size hint so a batch fills as fast as the
+    // threads committing to it (dynb_cache_t clamps it to kDynBMaxBatchSize).
+    int64_t dynb_concurrency_hint() const {
+        const size_t ndev = std::max<size_t>(1, devices_.size());
+        const int64_t nthr = worker ? static_cast<int64_t>(worker->nthread()) : 1;
+        return std::max<int64_t>(1, nthr / static_cast<int64_t>(ndev));
     }
 
     uint64_t cap() const {
@@ -1546,11 +1540,6 @@ protected:
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
     std::vector<pending_float_chunk_t> pending_float_chunks_;
     uint64_t pending_total_count_ = 0;
-
-    // (variant<<32 | limit) -> stable batch key, for dequeue-time search fusion.
-    // See batch_key_for(). Tiny map; guarded by its own mutex.
-    std::mutex batch_key_mu_;
-    std::unordered_map<uint64_t, uint64_t> batch_key_map_;
 };
 
 } // namespace matrixone

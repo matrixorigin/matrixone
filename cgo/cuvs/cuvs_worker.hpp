@@ -199,24 +199,12 @@ inline rmm::mr::cuda_memory_resource* raw_device_mr() {
 //   - sync():     calls raft::resource::sync_stream(); with force_all_ranks=true
 //                 also syncs all other ranks (used by build completion).
 //
-// DEQUEUE-TIME BATCHING
-// ---------------------
-// Optional path for fusing multiple concurrent search requests into a single
-// cuVS call to improve GPU utilization.  Batching happens *inside* the worker
-// loop (run_device_loop), not at submit time:
-//   - Enabled by set_batch_window(window_us > 0) on the index; 0 = disabled
-//     (the default — every task then runs standalone, byte-identical behavior).
-//   - submit_batchable(batch_key, req, nq, bexec) enqueues an ordinary task
-//     tagged with a batch_key (a process-unique id for "this index + variant +
-//     limit"; see gpu_index_base_t::batch_key_for) and a fused-search runner.
-//   - When the worker pops a batchable task it drains all already-queued tasks
-//     with the same key (zero wait), then waits up to a total batch_window_us
-//     budget for stragglers (caps: kMaxBatchCount, kMaxBatchQueries), then runs
-//     them as ONE fused search via bexec, fulfilling each request's result.
-//   - bexec(handle, reqs, setters): gets the per-request payloads and a vector
-//     of per-request setters (each writes one result/exception into results_store_).
-//   - A non-matching head task is left in the queue and becomes the first task
-//     of the next group, preserving FIFO between batch groups.
+// REQUEST-LEVEL BATCHING
+// ----------------------
+// The worker has no part in it. Fusing concurrent single-query searches into one
+// cuVS call is done by cuvs::neighbors::dynamic_batching inside the index search
+// paths; the knobs (batch window, conservative_dispatch) live on gpu_index_base_t,
+// not here. See dynamic_batching.hpp. The worker just runs whatever task it's given.
 //
 // DISTRIBUTION MODE USAGE BY INDEX TYPES
 // ----------------------------------------
@@ -244,8 +232,6 @@ inline rmm::mr::cuda_memory_resource* raw_device_mr() {
 // - cuvs_task_result_store_t: 64-shard lock-striped; each shard has its own
 //   mutex so high-concurrency wait/store calls rarely contend.
 // - next_device_idx_: atomic uint32_t, incremented without lock for round-robin.
-// - Dequeue-time batch grouping happens entirely on the worker thread inside
-//   run_device_loop; no extra shared state / mutex is needed for it.
 //
 // =============================================================================
 
@@ -303,38 +289,6 @@ public:
         return true;
     }
 
-    // Non-blocking pop, but only if the head satisfies `pred`. A non-matching
-    // (or empty) head is left untouched and false is returned. Used by the
-    // worker to drain already-queued same-batch-key tasks with zero wait.
-    template <class Pred>
-    bool try_pop_if(Pred&& pred, T& item) {
-        std::unique_lock<std::mutex> lock(mu_);
-        if (queue_.empty()) return false;
-        if (!pred(static_cast<const T&>(queue_.front()))) return false;
-        item = std::move(queue_.front());
-        queue_.pop();
-        cond_can_push_.notify_one();
-        return true;
-    }
-
-    // Blocking pop with timeout, but only if the head satisfies `pred`. If the
-    // head does not match (different batch key), it is left in the queue and
-    // false is returned immediately — this is what preserves FIFO between batch
-    // groups: the non-matching task becomes the first task of the next group.
-    template <class Pred>
-    bool pop_wait_if(Pred&& pred, T& item, std::chrono::microseconds timeout) {
-        std::unique_lock<std::mutex> lock(mu_);
-        if (!cond_can_pop_.wait_for(lock, timeout, [this]() { return stopped_ || !queue_.empty(); })) {
-            return false;  // timed out, still empty
-        }
-        if (queue_.empty()) return false;                                 // stopped / spurious
-        if (!pred(static_cast<const T&>(queue_.front()))) return false;   // different key: leave it
-        item = std::move(queue_.front());
-        queue_.pop();
-        cond_can_push_.notify_one();
-        return true;
-    }
-
     void stop() {
         std::lock_guard<std::mutex> lock(mu_);
         stopped_ = true;
@@ -381,6 +335,9 @@ struct cuvs_task_result_t {
  */
 class cuvs_task_result_store_t {
 public:
+    // No sentinel — job_id 0 is a perfectly valid id. Errors propagate via
+    // exceptions from search_*_async / via errmsg from the C-shim catch; the
+    // Go layer detects errors through that channel, not by checking jobID==0.
     uint64_t get_next_job_id() { return next_id_++; }
 
     void store(uint64_t id, cuvs_task_result_t result) {
@@ -585,10 +542,7 @@ public:
     // always release into a live pool — no ordering hazard at shutdown.
     //
     // Thread-safety: one handle per worker thread; no synchronization
-    // needed on access. Dequeue-time batching aggregates queries from
-    // multiple callers into one search, but the fused search runs on the
-    // worker thread holding the handle, so concurrent access is impossible
-    // by construction.
+    // needed on access.
     // ------------------------------------------------------------------
 
     rmm::device_uvector<float>& q_dev_buf_float(size_t n) {
@@ -670,47 +624,22 @@ public:
     using raft_handle = raft_handle_wrapper_t;
     using task_fn_t = std::function<std::any(raft_handle&)>;
 
-    // Fused-search runner for a batch group: given the worker handle, the
-    // per-request payloads (each carrying that request's queries), and one
-    // setter per request (which writes its individual result/exception into
-    // results_store_), run a single fused search and resolve every setter.
-    using batch_exec_fn_t = std::function<void(raft_handle& /*handle*/,
-                                               const std::vector<std::any>& /*reqs*/,
-                                               const std::vector<std::function<void(std::any)>>& /*setters*/)>;
-
     struct cuvs_task_t {
         uint64_t id = 0;
-        task_fn_t fn{};                  // empty for batchable tasks
+        task_fn_t fn{};
         bool fire_and_forget = false;    // skip results_store_ — used for internal tasks
-        // ---- batchable-task fields (meaningful only when batch_key != 0) ----
-        uint64_t batch_key = 0;          // 0 = non-batchable (ordinary task: run fn)
-        uint64_t batch_nq  = 0;          // this request's query count (for kMaxBatchQueries)
-        std::any  breq{};                // per-request payload (the per-index search_req_t)
-        batch_exec_fn_t bexec{};         // fused-search runner
-        // (default member initializers above keep the factories below
-        //  warning-free under -Wmissing-field-initializers)
 
-        // An ordinary task: runs `fn` and (unless fire_and_forget) stores its result.
+        // Runs `fn` and (unless fire_and_forget) stores its result in results_store_.
         static cuvs_task_t ordinary(task_fn_t fn, bool fire_and_forget = false) {
             cuvs_task_t t;
             t.fn = std::move(fn);
             t.fire_and_forget = fire_and_forget;
             return t;
         }
-        // A batchable task: `fn` stays empty; the worker fuses it with same-key
-        // peers and runs them via `exec`. `key` must be non-zero (0 = ordinary).
-        static cuvs_task_t batchable(uint64_t key, uint64_t nq, std::any req, batch_exec_fn_t exec) {
-            cuvs_task_t t;
-            t.batch_key = key;
-            t.batch_nq  = nq;
-            t.breq      = std::move(req);
-            t.bexec     = std::move(exec);
-            return t;
-        }
     };
 
     cuvs_worker_t(uint32_t nthread, const std::vector<int>& devices, distribution_mode_t mode = DistributionMode_SINGLE_GPU)
-        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), stopping_(false), batch_window_us_(0), per_thread_device_(false), next_device_idx_(0), in_flight_tasks_(0) {
+        : nthread_(std::max(nthread, (uint32_t)devices.size())), devices_(devices), mode_(mode), running_(false), stopping_(false), next_device_idx_(0), in_flight_tasks_(0) {
         
         // One queue per physical GPU device
         for (size_t i = 0; i < devices_.size(); ++i) {
@@ -789,8 +718,8 @@ public:
         device_threads_.clear();
 
         // 3. Drain physical queues (defensive; should be empty after sync).
-        //    Each task — ordinary or batchable — counts as exactly one
-        //    in-flight unit (submit_batchable does one ++), so one -- per task.
+        //    Each task counts as exactly one in-flight unit (one ++ at enqueue),
+        //    so one -- per task drained here.
         cuvs_task_t task;
         while (main_tasks_.try_pop(task)) {
             in_flight_tasks_--;
@@ -848,6 +777,25 @@ public:
         return ids;
     }
 
+    // Used by the SHARDED async search path. After fanning out per-shard
+    // searches with submit_all_devices_no_wait(), the caller passes the
+    // returned shard job_ids here. We reserve a composite job_id, stash the
+    // shard ids (plus num_queries / limit) into the result store as a
+    // matrixone::composite_search_pending_t sentinel, and hand the composite
+    // id back. The index family's search_wait() detects the sentinel via
+    // std::any type-check, waits on each shard, and runs the k-way merge
+    // on the caller's thread — so neither submit_main nor main_thread_
+    // is on the search hot path.
+    uint64_t submit_composite_pending(std::vector<uint64_t> shard_ids,
+                                      uint64_t num_queries, uint32_t limit) {
+        uint64_t id = results_store_.get_next_job_id();
+        cuvs_task_result_t r;
+        r.result = matrixone::composite_search_pending_t{
+            std::move(shard_ids), num_queries, limit};
+        results_store_.store(id, std::move(r));
+        return id;
+    }
+
     void submit_all_devices(task_fn_t fn) {
         auto ids = submit_all_devices_no_wait(fn);
         std::exception_ptr first_error;
@@ -882,42 +830,7 @@ public:
 
     uint32_t nthread() const { return nthread_; }
 
-    void set_batch_window(int64_t window_us) {
-        // Drain in-flight work first so no batch group is mid-straggler-wait
-        // when the budget changes, then flip it. 0 disables dequeue-time
-        // batching entirely (every task runs standalone).
-        this->sync();
-        batch_window_us_ = window_us;
-    }
-    int64_t batch_window() const { return batch_window_us_; }
-    // NOTE: per_thread_device_ is wired through gpu_*_set_per_thread_device in the
-    // C wrappers but is currently consulted by no worker code path; kept only for
-    // API stability.
-    void set_per_thread_device(bool enable) { per_thread_device_ = enable; }
-
-    // Stats: number of fused batch groups executed, and total requests fused
-    // across all groups. (reqs - groups) > 0 iff fusion actually happened.
-    uint64_t batched_groups_total() const { return batched_groups_total_.load(std::memory_order_relaxed); }
-    uint64_t batched_reqs_total()   const { return batched_reqs_total_.load(std::memory_order_relaxed); }
-
-    // Submit a batchable search task. batch_key (must be non-zero) identifies a
-    // fusable group ("this index + variant + limit"; see batch_key_for); breq is
-    // the per-request payload; batch_nq is its query-row count (used to cap a
-    // fused batch at kMaxBatchQueries); bexec is the fused-search runner.
-    // Returns a job id resolvable via wait(id). When batch_window() == 0 the
-    // task still runs (standalone) — bexec is just invoked with a 1-element group.
-    uint64_t submit_batchable(uint64_t batch_key, std::any breq, uint64_t batch_nq, batch_exec_fn_t bexec) {
-        if (!running_ || stopping_) throw std::runtime_error("Worker is not running");
-        if (devices_.empty())       throw std::runtime_error("No devices configured");
-        if (batch_key == 0)         throw std::runtime_error("submit_batchable: batch_key must be non-zero");
-        auto& q = *device_queues_[next_device_idx_++ % devices_.size()];
-        return enqueue_(q, cuvs_task_t::batchable(batch_key, batch_nq, std::move(breq), std::move(bexec)));
-    }
-
 private:
-    // Caps on a single fused batch group (dequeue-time batching).
-    static constexpr size_t   kMaxBatchCount   = 64;     // max tasks fused into one search
-    static constexpr uint64_t kMaxBatchQueries = 4096;   // max total query rows in one fused search
     // Bounded capacity of every task queue (per-device + main); push blocks when full.
     static constexpr size_t   kQueueCapacity   = 1000;
 
@@ -966,77 +879,10 @@ private:
     void run_device_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn, uint32_t d_idx) {
         auto& q = *device_queues_[d_idx];
         cuvs_task_t task;
-        // Reused across iterations: clear() keeps capacity, so the kMaxBatchCount
-        // backing store is allocated exactly once per worker thread (not per
-        // batchable search). Moved-from cuvs_task_t slots from the previous batch
-        // are destroyed by the clear() at the top of the next batchable iteration.
-        std::vector<cuvs_task_t> group;
-        group.reserve(kMaxBatchCount);
         while (q.pop(task)) {
-            if (task.batch_key == 0) { execute_task(task, handle); continue; }
-
-            group.clear();
-            group.push_back(std::move(task));
-            gather_batch_group(q, group);
-
-            // execute_batch is effectively noexcept (bexec's exceptions are
-            // caught inside it, and execute_batch's own backstops resolve every
-            // group id before any exception unwinds). Catch defensively anyway
-            // so a setup-phase bad_alloc can't escape the worker thread fn and
-            // std::terminate the process — the in-flight count and result store
-            // are already consistent by the time we get here.
-            try {
-                execute_batch(group, handle);
-            } catch (const std::exception& e) {
-                log_err("run_device_loop: execute_batch escaped: ", e.what());
-            } catch (...) {
-                log_err("run_device_loop: execute_batch escaped (unknown)");
-            }
+            execute_task(task, handle);
         }
         if (stop_fn) stop_fn(handle);
-    }
-
-    // Grow `group` (which already holds the head batchable task at [0]) with
-    // same-batch-key peers: first a zero-wait drain of everything already queued,
-    // then a bounded straggler wait sharing ONE total batch_window_us_ budget, so
-    // the head request's worst-case extra latency is exactly that window. Caps:
-    // kMaxBatchCount tasks / kMaxBatchQueries total query rows. A non-matching
-    // head encountered along the way is left in `q` and becomes the first task of
-    // the next group, preserving FIFO between batch groups.
-    //
-    // No-op when batching is disabled (batch_window_us_ == 0): a batchable task
-    // can only reach the worker then via a set_batch_window(0) race, and
-    // execute_batch (a 1-element group) is the only path that knows how to run
-    // one — its fn is empty; bexec is the runner.
-    void gather_batch_group(thread_safe_queue_t<cuvs_task_t>& q, std::vector<cuvs_task_t>& group) {
-        if (batch_window_us_ == 0) return;
-
-        const uint64_t key = group[0].batch_key;
-        uint64_t nq = group[0].batch_nq;
-        auto same_key = [key](const cuvs_task_t& t) noexcept { return t.batch_key == key; };
-
-        // (a) zero-wait drain of everything already queued under this key
-        while (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
-            cuvs_task_t t;
-            if (!q.try_pop_if(same_key, t)) break;
-            nq += t.batch_nq;
-            group.push_back(std::move(t));
-        }
-        // (b) straggler wait — ONE total budget (not reset per iteration),
-        // so the first request's worst-case extra latency is exactly
-        // batch_window_us_.
-        if (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(batch_window_us_);
-            while (group.size() < kMaxBatchCount && nq < kMaxBatchQueries) {
-                auto now = std::chrono::steady_clock::now();
-                if (now >= deadline) break;
-                cuvs_task_t t;
-                if (!q.pop_wait_if(same_key, t,
-                        std::chrono::duration_cast<std::chrono::microseconds>(deadline - now))) break;
-                nq += t.batch_nq;
-                group.push_back(std::move(t));
-            }
-        }
     }
 
     void run_main_loop(raft_handle& handle, std::function<std::any(raft_handle&)> stop_fn) {
@@ -1065,90 +911,6 @@ private:
         }
     }
 
-    // Run a group of batchable tasks as ONE fused search, then resolve each
-    // request's result into results_store_. The fused-search runner is the
-    // first arrival's bexec (it closed over that request's search params; per
-    // the carried-over precondition, params are constant per (index, variant,
-    // limit) — so any group member's bexec would do). Each task — whether part
-    // of a multi-element group or run standalone — counts as exactly one
-    // in-flight unit, matching submit_batchable's single ++.
-    void execute_batch(std::vector<cuvs_task_t>& group, raft_handle& handle) {
-        flight_guard guard{in_flight_tasks_, sync_cv_, sync_mu_, (int64_t)group.size()};
-
-        // Early backstop: covers the *setup* phase (building per-request setters,
-        // copying bexec). If anything there throws — e.g. bad_alloc from a
-        // std::function ctor or make_shared — every group member still gets a
-        // result stored before the exception unwinds, so no wait(id) hangs. No
-        // setter has fired yet at this point (setters only fire inside bexec),
-        // so this never overwrites a real result. Disarmed just before bexec.
-        struct early_backstop_t {
-            cuvs_task_result_store_t* store;
-            const std::vector<cuvs_task_t>* group;
-            bool armed = true;
-            ~early_backstop_t() {
-                if (!armed) return;
-                try {
-                    auto e = std::make_exception_ptr(std::runtime_error("Batch setup failed"));
-                    for (const auto& t : *group) {
-                        try { cuvs_task_result_t r; r.error = e; store->store(t.id, std::move(r)); } catch (...) {}
-                    }
-                } catch (...) {}
-            }
-        } eb{&results_store_, &group};
-
-        std::vector<std::any> reqs;
-        reqs.reserve(group.size());
-        std::vector<std::function<void(std::any)>> setters;
-        setters.reserve(group.size());
-        for (auto& t : group) {
-            reqs.push_back(std::move(t.breq));
-            const uint64_t id = t.id;
-            auto fulfilled = std::make_shared<std::atomic<bool>>(false);
-            setters.push_back([this, id, fulfilled](std::any res) {
-                if (fulfilled->exchange(true)) return;
-                cuvs_task_result_t s;
-                if (res.type() == typeid(std::exception_ptr)) s.error  = std::any_cast<std::exception_ptr>(res);
-                else                                          s.result = std::move(res);
-                results_store_.store(id, std::move(s));
-            });
-        }
-        auto bexec = group[0].bexec;
-        const uint64_t key = group[0].batch_key;
-
-        // Late backstop: if bexec returns without resolving every setter (a buggy
-        // exec_fn), the leftovers get an error. Setters are idempotent, so a
-        // partial run (some resolved by bexec, some not) is handled cleanly.
-        struct setters_guard_t {
-            std::vector<std::function<void(std::any)>>* setters;
-            bool fulfilled = false;
-            ~setters_guard_t() {
-                if (!fulfilled && setters) {
-                    auto e = std::make_exception_ptr(std::runtime_error("Batch task cancelled"));
-                    for (auto& s : *setters) { try { s(std::any(e)); } catch (...) {} }
-                }
-            }
-        } sg{&setters};
-
-        eb.armed = false;  // committed: the setters / late backstop now own resolution.
-
-        try {
-            bexec(handle, reqs, setters);
-        } catch (const std::exception& e) {
-            log_err("execute_batch error key=", key, " count=", group.size(),
-                    " rank=", handle.get_rank(), ": ", e.what());
-            auto err = std::current_exception();
-            for (auto& s : setters) { try { s(std::any(err)); } catch (...) {} }
-        } catch (...) {
-            log_err("execute_batch unknown error key=", key, " count=", group.size(),
-                    " rank=", handle.get_rank());
-            auto err = std::current_exception();
-            for (auto& s : setters) { try { s(std::any(err)); } catch (...) {} }
-        }
-        sg.fulfilled = true;
-        batched_groups_total_.fetch_add(1, std::memory_order_relaxed);
-        batched_reqs_total_.fetch_add(group.size(), std::memory_order_relaxed);
-    }
-
     uint32_t nthread_;
     std::vector<int> devices_;
     distribution_mode_t mode_;
@@ -1156,10 +918,6 @@ private:
     std::vector<std::thread> device_threads_;
     std::atomic<bool> running_;
     std::atomic<bool> stopping_;  // set true at start of stop(); blocks new external submits
-    int64_t batch_window_us_;  // batching window in microseconds; 0 = disabled
-    // Set via set_per_thread_device() (wired to the C wrappers) but not read by
-    // any worker code path; kept only for API stability.
-    bool per_thread_device_;
 
     std::vector<std::unique_ptr<thread_safe_queue_t<cuvs_task_t>>> device_queues_;
     thread_safe_queue_t<cuvs_task_t> main_tasks_;
@@ -1169,10 +927,6 @@ private:
     std::condition_variable sync_cv_;
 
     cuvs_task_result_store_t results_store_;
-
-    // Dequeue-time batching stats (relaxed; informational / test assertions).
-    std::atomic<uint64_t> batched_groups_total_{0};
-    std::atomic<uint64_t> batched_reqs_total_{0};
 };
 
 } // namespace matrixone
