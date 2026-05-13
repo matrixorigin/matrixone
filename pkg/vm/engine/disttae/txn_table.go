@@ -2490,11 +2490,12 @@ func (tbl *txnTable) PKPersistedBetween(
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 
 	// Under high-concurrency workloads (e.g., 1000 TPCC terminals), many transactions
-	// write to the same table, producing many changed objects. If there are too many,
-	// conservatively return true to avoid thundering-herd block I/O that causes OOM.
+	// write to the same table, producing many changed objects. Only inserted objects
+	// (cObjs) can contain conflicting PKs; deleted objects are excluded from the count
+	// since they don't contribute to PK conflict I/O.
 	const maxChangedObjectsForIO = 64
-	if len(cObjs)+len(delObjs) > maxChangedObjectsForIO {
-		v2.TxnPKChangeCheckChangedCounter.Inc()
+	if len(cObjs) > maxChangedObjectsForIO {
+		v2.TxnPKChangeCheckBailoutCounter.Inc()
 		return true, nil
 	}
 
@@ -2612,7 +2613,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	// concurrent block reads that cause mpool explosion under high concurrency.
 	const maxCandidateBlksForIO = 32
 	if len(candidateBlks) > maxCandidateBlksForIO {
-		v2.TxnPKChangeCheckChangedCounter.Inc()
+		v2.TxnPKChangeCheckBailoutCounter.Inc()
 		return true, nil
 	}
 
@@ -2621,43 +2622,47 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
-		v2.TxnPKChangeCheckIOCounter.Inc()
-
 		// Acquire semaphore to limit concurrent block I/O across all transactions.
 		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity.
+		// exhausting mpool capacity. Scoped to the block loop only — tombstone
+		// checking below is not rate-limited by this semaphore.
 		select {
 		case pkCheckSemaphore <- struct{}{}:
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}
-		defer func() { <-pkCheckSemaphore }()
-	}
-	for _, blk := range candidateBlks {
-		release, err := ioutil.LoadColumns(
-			ctx,
-			[]uint16{uint16(pkSeq)},
-			[]types.Type{pkType},
-			fs,
-			blk.MetaLocation(),
-			cacheVectors,
-			tbl.proc.Load().GetMPool(),
-			fileservice.Policy(0),
-		)
-		if err != nil {
-			return true, err
-		}
 
-		searchFunc := filter.DecideSearchFunc(blk.IsSorted())
-		if searchFunc == nil {
-			searchFunc = buildUnsortedFilter()
-		}
+		v2.TxnPKChangeCheckIOCounter.Inc()
 
-		sels := searchFunc(cacheVectors)
-		release()
-		if len(sels) > 0 {
-			return true, nil
+		for _, blk := range candidateBlks {
+			release, err := ioutil.LoadColumns(
+				ctx,
+				[]uint16{uint16(pkSeq)},
+				[]types.Type{pkType},
+				fs,
+				blk.MetaLocation(),
+				cacheVectors,
+				tbl.proc.Load().GetMPool(),
+				fileservice.Policy(0),
+			)
+			if err != nil {
+				<-pkCheckSemaphore
+				return true, err
+			}
+
+			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
+			if searchFunc == nil {
+				searchFunc = buildUnsortedFilter()
+			}
+
+			sels := searchFunc(cacheVectors)
+			release()
+			if len(sels) > 0 {
+				<-pkCheckSemaphore
+				return true, nil
+			}
 		}
+		<-pkCheckSemaphore
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
