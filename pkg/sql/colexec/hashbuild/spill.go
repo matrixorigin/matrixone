@@ -277,6 +277,11 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
 		return false
 	}
+	// dedupjoin does not support spill mode — it calls NewIterator() on the
+	// JoinMap directly and would panic on a spilled (hashmap-less) JoinMap.
+	if hashBuild.IsDedup {
+		return false
+	}
 	ctr := &hashBuild.ctr
 	if ctr.spillThreshold <= 0 {
 		return false

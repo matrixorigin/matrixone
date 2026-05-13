@@ -144,6 +144,22 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.True(t, hb.shouldSpillBatches())
 	})
+
+	t.Run("dedup_never_spills", func(t *testing.T) {
+		hb := &HashBuild{
+			IsShuffle:      true,
+			SpillThreshold: 1, // 1 byte — would normally spill
+			CanSpill:       true,
+			NeedHashMap:    true,
+			IsDedup:        true,
+		}
+		hb.ctr.setSpillThreshold(1)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
+		bat.SetRowCount(5)
+		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
+		require.False(t, hb.shouldSpillBatches())
+	})
 }
 
 func TestHashDistributionBuild(t *testing.T) {

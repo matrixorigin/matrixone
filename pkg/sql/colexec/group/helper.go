@@ -680,20 +680,23 @@ func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, duringRebuild b
 	} else {
 		needSpill = memUsed > ctr.spillMem
 	}
+
+	// During rebuild, only use the local threshold above. Global/system
+	// memory pressure must not trigger re-spill because it causes cascading
+	// spill-level escalation ("spill level too deep") — the operator's own
+	// per-bucket data is within budget but unrelated memory consumers push
+	// global stats over the threshold.
+	if duringRebuild {
+		return needSpill
+	}
+
 	if !needSpill {
-		// During rebuild use a higher threshold (7/8) to avoid cascading
-		// re-spills from transient global pressure, while still providing
-		// a safety net against unbounded mpool growth.
-		if duringRebuild {
-			needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*7/8
-		} else {
-			needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
-		}
+		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
 	}
 	if !needSpill && system.HasCgroupMemLimit() {
 		total := system.MemoryTotal()
 		if total > 0 {
-			needSpill = system.MemoryUsed() > total*7/8
+			needSpill = system.MemoryUsed() > total*3/4
 		}
 	}
 
