@@ -513,18 +513,15 @@ func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
 	})
 
 	stmtProfile := &process.StmtProfile{}
-	stmtProfile.SetStmtType("Insert")
-	stmtProfile.SetQueryType(tree.QueryTypeDML)
-	stmtProfile.SetIgnore(true)
 	proc.SetStmtProfile(stmtProfile)
+	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, true)
 
 	require.False(t, checkDivisionByZeroBehavior(proc, nil), "INSERT IGNORE should return NULL for division by zero")
 	require.Equal(t, int32(0), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 
 	stmtProfile = &process.StmtProfile{}
-	stmtProfile.SetStmtType("Insert")
-	stmtProfile.SetQueryType(tree.QueryTypeDML)
 	proc.SetStmtProfile(stmtProfile)
+	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
 
 	require.True(t, checkDivisionByZeroBehavior(proc, nil), "plain INSERT should still error in strict mode")
 	require.Equal(t, int32(1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))

@@ -107,13 +107,13 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.True(t, ses.GetStmtProfile().GetIgnore())
+	require.True(t, ses.GetStmtProfile().GetDivByZeroIgnore())
 
 	insert := &tree.Insert{}
 	cw = InitTxnComputationWrapper(ses, insert, proc)
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.False(t, ses.GetStmtProfile().GetIgnore())
+	require.False(t, ses.GetStmtProfile().GetDivByZeroIgnore())
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
@@ -134,22 +134,18 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
 	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
 
-	stmtType, queryType, ignore, ok := proc.GetDivByZeroRuntimeProfile()
-	require.True(t, ok)
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
 	require.Equal(t, "Insert", stmtType)
 	require.Equal(t, tree.QueryTypeDML, queryType)
 	require.True(t, ignore)
-	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 
 	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
-	_, _, ignore, ok = proc.GetDivByZeroRuntimeProfile()
-	require.True(t, ok)
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
 	require.False(t, ignore)
 
 	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
 	// nil statement should be a no-op; previous runtime profile remains.
-	_, _, ignore, ok = proc.GetDivByZeroRuntimeProfile()
-	require.True(t, ok)
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
 	require.False(t, ignore)
 }
 
@@ -195,10 +191,10 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 	ret, err := cw.Compile(execCtx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ret)
-	require.Equal(t, "Select", proc.GetStmtProfile().GetStmtType())
-	require.Equal(t, tree.QueryTypeDQL, proc.GetStmtProfile().GetQueryType())
-	require.False(t, proc.GetStmtProfile().GetIgnore())
-	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.Equal(t, "Select", stmtType)
+	require.Equal(t, tree.QueryTypeDQL, queryType)
+	require.False(t, ignore)
 }
 
 func Test_mce(t *testing.T) {

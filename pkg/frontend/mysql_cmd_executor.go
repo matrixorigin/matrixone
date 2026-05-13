@@ -177,9 +177,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
-	ses.SetStmtType(getStatementType(statement).GetStatementType())
-	ses.SetQueryType(getStatementType(statement).GetQueryType())
-	ses.stmtProfile.SetIgnore(isIgnoreStatement(statement))
+	stmtTyp := getStatementType(statement).GetStatementType()
+	queryTyp := getStatementType(statement).GetQueryType()
+	ses.SetStmtType(stmtTyp)
+	ses.SetQueryType(queryTyp)
 	ses.SetSqlSourceType(sqlType)
 	ses.SetSqlOfStmt(text)
 	if proc != nil {
@@ -187,6 +188,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
+	ses.stmtProfile.SetDivByZeroRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -275,7 +277,8 @@ func refreshProcessDivByZeroProfileForPreparedStmt(proc *process.Process, statem
 		return
 	}
 
-	proc.SetDivByZeroRuntimeProfile(
+	stmtProfile := proc.GetStmtProfile()
+	stmtProfile.SetDivByZeroRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
 		isIgnoreStatement(statement),

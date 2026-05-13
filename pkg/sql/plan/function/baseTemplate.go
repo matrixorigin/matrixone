@@ -1381,17 +1381,12 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	}
 
 	// Not cached (-1), need to compute
-	stmtType, queryType, ignore, ok := proc.GetDivByZeroRuntimeProfile()
-	if !ok {
-		stmtProfile := proc.GetStmtProfile()
-		if stmtProfile == nil {
-			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-			return false
-		}
-		stmtType = stmtProfile.GetStmtType()
-		queryType = stmtProfile.GetQueryType()
-		ignore = stmtProfile.GetIgnore()
+	stmtProfile := proc.GetStmtProfile()
+	if stmtProfile == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
 	}
+	stmtType, queryType, ignore := stmtProfile.GetDivByZeroRuntimeProfile()
 
 	stmtTypeUpper := strings.ToUpper(strings.TrimSpace(stmtType))
 	queryTypeUpper := strings.ToUpper(strings.TrimSpace(queryType))

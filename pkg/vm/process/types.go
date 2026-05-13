@@ -161,8 +161,11 @@ type StmtProfile struct {
 	//the sql from user may have multiple statements
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
-	//ignore for insert
-	ignore bool
+
+	//for div by zero, avoid contaminating session main STMT profiles like PREPARE,EXECUTE
+	divByZeroStmtType  string
+	divByZeroQueryType string
+	divByZeroIgnore    bool //ignore for insert
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -181,7 +184,6 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
-	sp.ignore = false
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -242,16 +244,32 @@ func (sp *StmtProfile) GetStmtType() string {
 	return sp.stmtType
 }
 
-func (sp *StmtProfile) SetIgnore(ignore bool) {
+func (sp *StmtProfile) GetDivByZeroIgnore() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	sp.ignore = ignore
+	return sp.divByZeroIgnore
 }
 
-func (sp *StmtProfile) GetIgnore() bool {
+func (sp *StmtProfile) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return sp.ignore
+	sp.divByZeroStmtType = stmtType
+	sp.divByZeroQueryType = queryType
+	sp.divByZeroIgnore = ignore
+}
+
+func (sp *StmtProfile) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.divByZeroStmtType, sp.divByZeroQueryType, sp.divByZeroIgnore
+}
+
+func (sp *StmtProfile) clearDivByZeroRuntimeProfile() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.divByZeroStmtType = ""
+	sp.divByZeroQueryType = ""
+	sp.divByZeroIgnore = false
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {
@@ -329,12 +347,6 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
-	//for div by zero, avoid contaminating session STMT profiles
-	divByZeroProfileMu sync.Mutex
-	divByZeroStmtType  string
-	divByZeroQueryType string
-	divByZeroIgnore    bool
-	divByZeroProfileOK bool
 }
 
 // Process contains context used in query execution
@@ -388,10 +400,10 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.StmtProfile = sp
-	proc.clearDivByZeroRuntimeProfile()
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+	sp.clearDivByZeroRuntimeProfile()
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
@@ -399,31 +411,6 @@ func (proc *Process) GetStmtProfile() *StmtProfile {
 		return proc.Base.StmtProfile
 	}
 	return &StmtProfile{}
-}
-
-func (proc *Process) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
-	proc.Base.divByZeroProfileMu.Lock()
-	defer proc.Base.divByZeroProfileMu.Unlock()
-	proc.Base.divByZeroStmtType = stmtType
-	proc.Base.divByZeroQueryType = queryType
-	proc.Base.divByZeroIgnore = ignore
-	proc.Base.divByZeroProfileOK = true
-	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-}
-
-func (proc *Process) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool, ok bool) {
-	proc.Base.divByZeroProfileMu.Lock()
-	defer proc.Base.divByZeroProfileMu.Unlock()
-	return proc.Base.divByZeroStmtType, proc.Base.divByZeroQueryType, proc.Base.divByZeroIgnore, proc.Base.divByZeroProfileOK
-}
-
-func (proc *Process) clearDivByZeroRuntimeProfile() {
-	proc.Base.divByZeroProfileMu.Lock()
-	defer proc.Base.divByZeroProfileMu.Unlock()
-	proc.Base.divByZeroStmtType = ""
-	proc.Base.divByZeroQueryType = ""
-	proc.Base.divByZeroIgnore = false
-	proc.Base.divByZeroProfileOK = false
 }
 
 func (proc *Process) InitSeq() {
