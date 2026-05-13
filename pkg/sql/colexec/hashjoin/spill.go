@@ -467,8 +467,10 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if sz > ctr.spillThreshold {
 		return true
 	}
-	if mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
-		return true
+	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
+		if mpool.GlobalUsedWithPending() > globalCap*2/3 {
+			return true
+		}
 	}
 	if system.HasCgroupMemLimit() {
 		used := int64(system.MemoryUsed())
@@ -552,7 +554,11 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		if system.HasCgroupMemLimit() {
 			systemPressure = system.MemoryUsed() > system.MemoryTotal()*2/3
 		}
-		if systemPressure || mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
+		mpoolPressure := false
+		if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
+			mpoolPressure = mpool.GlobalUsedWithPending() > globalCap*2/3
+		}
+		if systemPressure || mpoolPressure {
 			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, mpool=%dMB, rows=%d, bucket=%s",
 				mpool.GlobalUsedWithPending()/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.

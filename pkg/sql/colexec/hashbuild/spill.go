@@ -298,8 +298,11 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 }
 
 func processMemoryOverBudget() bool {
-	curr := mpool.GlobalUsedWithPending()
 	globalCap := mpool.GlobalCap()
+	if globalCap <= 0 || globalCap >= mpool.PB {
+		return false
+	}
+	curr := mpool.GlobalUsedWithPending()
 	if curr > globalCap*2/3 {
 		return true
 	}

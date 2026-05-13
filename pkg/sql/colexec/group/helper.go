@@ -691,7 +691,9 @@ func (ctr *container) needSpillImpl(opAnalyzer process.Analyzer, duringRebuild b
 	}
 
 	if !needSpill {
-		needSpill = mpool.GlobalUsedWithPending() > mpool.GlobalCap()*3/4
+		if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
+			needSpill = mpool.GlobalUsedWithPending() > globalCap*3/4
+		}
 	}
 	if !needSpill && system.HasCgroupMemLimit() {
 		total := system.MemoryTotal()
