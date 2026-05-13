@@ -2121,15 +2121,27 @@ func TestIssue3538(t *testing.T) {
 
 			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
+			txnID := []byte("txn2")
+			txnSeq := byte(3)
 			for {
 				_, err = l2.Lock(
 					ctx,
 					0,
 					[][]byte{{1}},
-					[]byte("txn2"),
+					txnID,
 					option)
 				if err == nil {
 					break
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					txnID = []byte{txnSeq}
+					txnSeq++
+				} else if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+					// retry with the same txn while the old owner is draining
+				} else {
+					require.NoError(t, err)
 				}
 				select {
 				case <-ctx.Done():

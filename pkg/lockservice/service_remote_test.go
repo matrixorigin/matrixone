@@ -346,10 +346,15 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 			txnID2 := []byte("txn2")
 			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
-			checkBind(
-				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
-				l2)
+			bind := l2.tableGroups.get(0, table).getBind()
+			require.Equal(t, l1.serviceID, bind.ServiceID)
+			require.Equal(t, table, bind.Table)
+			require.Equal(t, table, bind.OriginTable)
+			require.True(t, bind.Valid)
+			require.True(t,
+				bind.Version == alloc.version || bind.Version == alloc.version+1,
+				"bind can stay unchanged or be refreshed asynchronously by keepRemoteLock, got %s",
+				bind.DebugString())
 		},
 	)
 }
