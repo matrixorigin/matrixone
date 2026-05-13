@@ -716,14 +716,7 @@ func hashDiffIfHasLCA(
 	// resolution probes the LCA at "the moment THIS side forked off
 	// the LCA" (or, when the side IS the LCA, at the OTHER side's
 	// snapshot — see branchMetaInfo helper docs).
-	txnSP := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
-	tarSP, baseSP := txnSP, txnSP
-	if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS != nil {
-		tarSP = types.TimestampToTS(*tblStuff.tarSnap.TS)
-	}
-	if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS != nil {
-		baseSP = types.TimestampToTS(*tblStuff.baseSnap.TS)
-	}
+	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
 	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
 	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
 
