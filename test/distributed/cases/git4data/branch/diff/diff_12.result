@@ -547,16 +547,16 @@ insert into t1 values (10, 10);
 delete from t1 where a = 1;
 data branch diff t3 against t1 output summary;
 ➤ metric[12,0,0]  ¦  t3[-5,0,0]  ¦  t1[-5,0,0]  𝄀
-INSERTED  ¦  4  ¦  1  𝄀
+INSERTED  ¦  3  ¦  1  𝄀
 DELETED  ¦  2  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+UPDATED  ¦  2  ¦  1
 data branch diff t3 against t1 output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 10
 data branch diff t3 against t1;
 ➤ diff t3 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t3  ¦  UPDATE  ¦  1  ¦  11  𝄀
 t1  ¦  DELETE  ¦  1  ¦  1  𝄀
-t3  ¦  INSERT  ¦  1  ¦  11  𝄀
 t3  ¦  DELETE  ¦  2  ¦  2  𝄀
 t3  ¦  UPDATE  ¦  3  ¦  103  𝄀
 t3  ¦  DELETE  ¦  4  ¦  4  𝄀
@@ -567,9 +567,9 @@ t3  ¦  INSERT  ¦  9  ¦  9  𝄀
 t1  ¦  INSERT  ¦  10  ¦  10
 data branch diff t2 against t1 output summary;
 ➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  1  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
 DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  0  ¦  1
+UPDATED  ¦  1  ¦  1
 data branch diff t2 against t1 output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 7
@@ -579,22 +579,22 @@ delete from t2 where a = 7;
 data branch diff t3 against t2 output summary;
 ➤ metric[12,0,0]  ¦  t3[-5,0,0]  ¦  t2[-5,0,0]  𝄀
 INSERTED  ¦  2  ¦  1  𝄀
-DELETED  ¦  1  ¦  1  𝄀
+DELETED  ¦  1  ¦  0  𝄀
 UPDATED  ¦  2  ¦  1
 data branch diff t3 against t1 output summary;
 ➤ metric[12,0,0]  ¦  t3[-5,0,0]  ¦  t1[-5,0,0]  𝄀
-INSERTED  ¦  4  ¦  1  𝄀
+INSERTED  ¦  3  ¦  1  𝄀
 DELETED  ¦  2  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+UPDATED  ¦  2  ¦  1
 data branch diff t2 against t1 output summary;
 ➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  1  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
 DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  0  ¦  1
+UPDATED  ¦  1  ¦  1
 data branch diff t2 against t1;
 ➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t2  ¦  UPDATE  ¦  1  ¦  11  𝄀
 t1  ¦  DELETE  ¦  1  ¦  1  𝄀
-t2  ¦  INSERT  ¦  1  ¦  11  𝄀
 t2  ¦  DELETE  ¦  2  ¦  2  𝄀
 t1  ¦  UPDATE  ¦  5  ¦  1005  𝄀
 t2  ¦  INSERT  ¦  6  ¦  11  𝄀
@@ -727,9 +727,9 @@ DELETED  ¦  3  ¦  0  𝄀
 UPDATED  ¦  1  ¦  1
 data branch diff t4 against t2 output summary;
 ➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t2[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  1  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
 DELETED  ¦  2  ¦  1  𝄀
-UPDATED  ¦  1  ¦  0
+UPDATED  ¦  2  ¦  0
 data branch diff t4 against t3 output summary;
 ➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t3[-5,0,0]  𝄀
 INSERTED  ¦  1  ¦  0  𝄀
@@ -785,7 +785,7 @@ data branch diff t2 against t1;
 ➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
 t2  ¦  UPDATE  ¦  1  ¦  11  𝄀
 t1  ¦  UPDATE  ¦  1  ¦  -1  𝄀
-t2  ¦  DELETE  ¦  2  ¦  222  𝄀
+t2  ¦  DELETE  ¦  2  ¦  2  𝄀
 t1  ¦  UPDATE  ¦  2  ¦  222  𝄀
 t1  ¦  DELETE  ¦  3  ¦  3  𝄀
 t1  ¦  UPDATE  ¦  4  ¦  444  𝄀
@@ -806,7 +806,7 @@ data branch diff t1 against t2;
 t1  ¦  UPDATE  ¦  1  ¦  -1  𝄀
 t2  ¦  UPDATE  ¦  1  ¦  11  𝄀
 t1  ¦  UPDATE  ¦  2  ¦  222  𝄀
-t2  ¦  DELETE  ¦  2  ¦  222  𝄀
+t2  ¦  DELETE  ¦  2  ¦  2  𝄀
 t1  ¦  DELETE  ¦  3  ¦  3  𝄀
 t1  ¦  UPDATE  ¦  4  ¦  444  𝄀
 t1  ¦  DELETE  ¦  5  ¦  5  𝄀
@@ -826,7 +826,7 @@ data branch diff t2 against t1;
 ➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
 t2  ¦  UPDATE  ¦  1  ¦  11  𝄀
 t1  ¦  UPDATE  ¦  1  ¦  -2  𝄀
-t2  ¦  DELETE  ¦  2  ¦  222  𝄀
+t2  ¦  DELETE  ¦  2  ¦  2  𝄀
 t1  ¦  UPDATE  ¦  2  ¦  222  𝄀
 t1  ¦  DELETE  ¦  3  ¦  3  𝄀
 t1  ¦  UPDATE  ¦  4  ¦  444  𝄀
@@ -856,7 +856,7 @@ data branch diff t2 against t1;
 ➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  ¦  note[12,0,0]  𝄀
 t2  ¦  UPDATE  ¦  1  ¦  10  ¦  t2-A  𝄀
 t1  ¦  UPDATE  ¦  1  ¦  100  ¦  t1-A  𝄀
-t2  ¦  DELETE  ¦  2  ¦  200  ¦  t1-A  𝄀
+t2  ¦  DELETE  ¦  2  ¦  2  ¦  init  𝄀
 t1  ¦  UPDATE  ¦  2  ¦  200  ¦  t1-A  𝄀
 t1  ¦  DELETE  ¦  3  ¦  3  ¦  init  𝄀
 t2  ¦  INSERT  ¦  10  ¦  10  ¦  t2-A  𝄀
@@ -881,7 +881,7 @@ data branch diff t2 against t1;
 ➤ diff t2 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  ¦  note[12,0,0]  𝄀
 t2  ¦  UPDATE  ¦  1  ¦  11  ¦  t2-B  𝄀
 t1  ¦  UPDATE  ¦  1  ¦  111  ¦  t1-B  𝄀
-t2  ¦  DELETE  ¦  2  ¦  200  ¦  t1-A  𝄀
+t2  ¦  DELETE  ¦  2  ¦  2  ¦  init  𝄀
 t1  ¦  UPDATE  ¦  2  ¦  200  ¦  t1-A  𝄀
 t1  ¦  DELETE  ¦  3  ¦  3  ¦  init  𝄀
 t2  ¦  UPDATE  ¦  4  ¦  44  ¦  t2-B  𝄀

@@ -130,16 +130,20 @@ func (m *branchMetaInfo) hasLCA() bool {
 	return m.lcaTableId != 0
 }
 
-// tarLCASnapshot is the LCA-side snapshot from which tar inherited
-// its initial state. It is the moment the OTHER side (base) forked
-// off the LCA, i.e. base's first child clone TS — or, when base IS
-// the LCA itself, base's own snapshot collapses with this value
-// (the caller passes baseSP for that scenario).
+// tarLCASnapshot is the snapshot of the LCA at which tar's view of
+// the LCA's state is anchored. It feeds tombstone resolution on the
+// tar side: tar's tombstones must be resolved against the LCA at
+// this moment.
 //
-// Used by tombstone resolution (findDeleteAndUpdateBat) to read the
-// LCA at the right snapshot when expanding tar-side tombstones into
-// full UPDATE / DELETE rows.
+// When tar forked off the LCA (len(pathFromLCAToTar) > 1), the
+// anchor is tar's own first-child CloneTS — the moment tar diverged.
+// When tar IS the LCA (length-1 path), tar inherits the meeting
+// point from base: base's first-child CloneTS, or baseSP if base is
+// also the LCA (case-0 same-table diff).
 func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
+	if len(m.pathFromLCAToTar) > 1 {
+		return m.pathFromLCAToTarTS[1]
+	}
 	if len(m.pathFromLCAToBase) > 1 {
 		return m.pathFromLCAToBaseTS[1]
 	}
@@ -148,6 +152,9 @@ func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
 
 // baseLCASnapshot is the mirror of tarLCASnapshot for the base side.
 func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
+	if len(m.pathFromLCAToBase) > 1 {
+		return m.pathFromLCAToBaseTS[1]
+	}
 	if len(m.pathFromLCAToTar) > 1 {
 		return m.pathFromLCAToTarTS[1]
 	}
