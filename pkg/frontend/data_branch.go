@@ -1033,14 +1033,7 @@ func diffOnBase(
 		case tblStuff.baseRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.baseRel
 		default:
-			txnSP := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
-			tarSp, baseSp := txnSP, txnSP
-			if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS != nil {
-				tarSp = types.TimestampToTS(*tblStuff.tarSnap.TS)
-			}
-			if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS != nil {
-				baseSp = types.TimestampToTS(*tblStuff.baseSnap.TS)
-			}
+			tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
 			probe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 			lcaSnapshot := &plan2.Snapshot{
 				Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
@@ -1399,9 +1392,6 @@ func decideCollectRange(
 ) {
 
 	var (
-		tarSp  types.TS
-		baseSp types.TS
-
 		tarCTS  types.TS
 		baseCTS types.TS
 
@@ -1409,19 +1399,9 @@ func decideCollectRange(
 
 		tarTableID  = tables.tarRel.GetTableID(ctx)
 		baseTableID = tables.baseRel.GetTableID(ctx)
-
-		txnSnapshot = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	)
 
-	tarSp = txnSnapshot
-	if tables.tarSnap != nil && tables.tarSnap.TS != nil {
-		tarSp = types.TimestampToTS(*tables.tarSnap.TS)
-	}
-
-	baseSp = txnSnapshot
-	if tables.baseSnap != nil && tables.baseSnap.TS != nil {
-		baseSp = types.TimestampToTS(*tables.baseSnap.TS)
-	}
+	tarSp, baseSp := tables.resolvedSnapshots(ses)
 
 	if tblCommitTS, err = getTablesCreationCommitTS(
 		ctx, ses, tables.tarRel, tables.baseRel,
@@ -1626,39 +1606,40 @@ func decideCollectRange(
 //
 // Per-ancestor window (A is the i-th node on selfPath):
 //
-//   windowFrom_A = A.CTS.Next()
-//   windowEnd_A  = selfPath[i+1].CloneTS  if A is intermediate
-//                | endpointSP             if A is endpoint
+//	windowFrom_A = A.CTS.Next()
+//	windowEnd_A  = selfPath[i+1].CloneTS  if A is intermediate
+//	             | endpointSP             if A is endpoint
 //
 // LCA prune (i == 0):
-//   windowFrom_A = max(windowFrom_A, otherFork.Next())
-//   where otherFork = otherPath[1].CloneTS if otherEndpoint != LCA
-//                   | otherSP              if otherEndpoint == LCA
+//
+//	windowFrom_A = max(windowFrom_A, otherFork.Next())
+//	where otherFork = otherPath[1].CloneTS if otherEndpoint != LCA
+//	                | otherSP              if otherEndpoint == LCA
 //
 // Walked through on the running example `diff t9 against t0` for the
 // tar side (selfPath = [t0, t1, t4, t9], otherPath = [t0]):
 //
-//   i=0  A = t0 (LCA)
-//        windowFrom = t0.CTS + 1
-//        windowEnd  = t1.CloneTS                       (selfPath[1])
-//        LCA prune:  otherEndpoint == LCA, so otherFork = otherSP
-//                    (= baseSP). baseSP > t1.CloneTS so no clamp.
-//        emit (t0_rel, t0.CTS+1, t1.CloneTS]
+//	i=0  A = t0 (LCA)
+//	     windowFrom = t0.CTS + 1
+//	     windowEnd  = t1.CloneTS                       (selfPath[1])
+//	     LCA prune:  otherEndpoint == LCA, so otherFork = otherSP
+//	                 (= baseSP). baseSP > t1.CloneTS so no clamp.
+//	     emit (t0_rel, t0.CTS+1, t1.CloneTS]
 //
-//   i=1  A = t1 (intermediate)
-//        windowFrom = t1.CTS + 1
-//        windowEnd  = t4.CloneTS                       (selfPath[2])
-//        emit (t1_rel, t1.CTS+1, t4.CloneTS]
+//	i=1  A = t1 (intermediate)
+//	     windowFrom = t1.CTS + 1
+//	     windowEnd  = t4.CloneTS                       (selfPath[2])
+//	     emit (t1_rel, t1.CTS+1, t4.CloneTS]
 //
-//   i=2  A = t4 (intermediate)
-//        windowFrom = t4.CTS + 1
-//        windowEnd  = t9.CloneTS                       (selfPath[3])
-//        emit (t4_rel, t4.CTS+1, t9.CloneTS]
+//	i=2  A = t4 (intermediate)
+//	     windowFrom = t4.CTS + 1
+//	     windowEnd  = t9.CloneTS                       (selfPath[3])
+//	     emit (t4_rel, t4.CTS+1, t9.CloneTS]
 //
-//   i=3  A = t9 (endpoint)
-//        windowFrom = t9.CTS + 1
-//        windowEnd  = tarSP
-//        emit (t9_rel, t9.CTS+1, tarSP]
+//	i=3  A = t9 (endpoint)
+//	     windowFrom = t9.CTS + 1
+//	     windowEnd  = tarSP
+//	     emit (t9_rel, t9.CTS+1, tarSP]
 //
 // Empty windows (windowFrom > windowEnd) are dropped silently.
 //
@@ -1718,6 +1699,11 @@ func buildSideCollectRange(
 			)
 			if err2 != nil {
 				err = err2
+				return
+			}
+			if len(ctsList) == 0 {
+				err = moerr.NewInternalErrorNoCtxf(
+					"data branch: failed to resolve creation TS for table %d", nodeID)
 				return
 			}
 			nodeCTS = ctsList[0]
@@ -1958,8 +1944,20 @@ func decideLCABranchTSFromBranchDAG(
 	}
 
 	if lcaTableID, _, _, hasLca := dag.FindLCA(tarTableID, baseTableID); hasLca {
-		tarIDs, tarTSs, _ := dag.PathFromAncestor(tarTableID, lcaTableID)
-		baseIDs, baseTSs, _ := dag.PathFromAncestor(baseTableID, lcaTableID)
+		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to tar %d",
+				lcaTableID, tarTableID)
+			return
+		}
+		baseIDs, baseTSs, ok := dag.PathFromAncestor(baseTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to base %d",
+				lcaTableID, baseTableID)
+			return
+		}
 		branchInfo.lcaTableId = lcaTableID
 		branchInfo.pathFromLCAToTar = tarIDs
 		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
