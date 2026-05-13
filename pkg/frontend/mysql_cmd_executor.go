@@ -270,6 +270,17 @@ func isIgnoreStatement(statement tree.Statement) bool {
 	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
 }
 
+func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, baseProfile *process.StmtProfile, statement tree.Statement) {
+	if proc == nil || baseProfile == nil || statement == nil {
+		return
+	}
+
+	baseProfile.SetStmtType(getStatementType(statement).GetStatementType())
+	baseProfile.SetQueryType(getStatementType(statement).GetQueryType())
+	baseProfile.SetIgnore(isIgnoreStatement(statement))
+	proc.SetStmtProfile(baseProfile)
+}
+
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
 	envStmt []string, sqlTypes []string, err error) (context.Context, error) {
 	retErr := moerr.NewParseError(ctx, err.Error())

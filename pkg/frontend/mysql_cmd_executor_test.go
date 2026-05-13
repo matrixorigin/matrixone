@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -112,6 +114,88 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
 	require.False(t, ses.GetStmtProfile().GetIgnore())
+}
+
+func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	cw := InitTxnComputationWrapper(ses, &tree.Execute{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "execute stmt1", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.Equal(t, "Execute", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeOth, ses.GetQueryType())
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), insertIgnore)
+
+	runtimeProfile := proc.GetStmtProfile()
+	require.Equal(t, "Insert", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+	require.Equal(t, "Insert", runtimeProfile.GetStmtType())
+	require.Equal(t, tree.QueryTypeDML, runtimeProfile.GetQueryType())
+	require.True(t, runtimeProfile.GetIgnore())
+	require.Equal(t, ses.GetStmtId(), runtimeProfile.GetStmtId())
+	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+
+	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), &tree.Insert{})
+	require.False(t, proc.GetStmtProfile().GetIgnore())
+
+	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), nil)
+	require.False(t, proc.GetStmtProfile().GetIgnore())
+}
+
+func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing.T) {
+	ctx := context.Background()
+	ctx = statistic.ContextWithStatsInfo(ctx, statistic.NewStatsInfo())
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+
+	stmtName := getPrepareStmtName(1)
+	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
+	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		Sql:                 prepareString.Sql,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		compile:             compile.NewCompile("", "", prepareString.Sql, "", "", nil, proc, stmts[0], false, nil, time.Now()),
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
+	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		input: &UserInput{
+			stmtName:            stmtName,
+			isBinaryProtExecute: true,
+		},
+	}
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	ret, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ret)
+	require.Equal(t, "Select", proc.GetStmtProfile().GetStmtType())
+	require.Equal(t, tree.QueryTypeDQL, proc.GetStmtProfile().GetQueryType())
+	require.False(t, proc.GetStmtProfile().GetIgnore())
+	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 }
 
 func Test_mce(t *testing.T) {
