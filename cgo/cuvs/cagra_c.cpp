@@ -388,8 +388,8 @@ void gpu_cagra_load_dir(gpu_cagra_c index_c, const char* dir,
     }
 }
 
-gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
-                                            uint32_t query_dimension, uint32_t limit, 
+gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                            uint32_t query_dimension, uint32_t limit,
                                             cagra_search_params_t search_params, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     gpu_cagra_search_res_t result = {nullptr};
@@ -405,7 +405,7 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
         }
         result.result_ptr = static_cast<gpu_cagra_result_c>(cpp_res);
     } catch (const std::exception& e) {
-        matrixone::set_errmsg(errmsg, 
+        matrixone::set_errmsg(errmsg,
  "Error in gpu_cagra_search", e.what());
     }
     return result;

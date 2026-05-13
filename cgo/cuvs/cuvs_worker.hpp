@@ -335,6 +335,9 @@ struct cuvs_task_result_t {
  */
 class cuvs_task_result_store_t {
 public:
+    // No sentinel — job_id 0 is a perfectly valid id. Errors propagate via
+    // exceptions from search_*_async / via errmsg from the C-shim catch; the
+    // Go layer detects errors through that channel, not by checking jobID==0.
     uint64_t get_next_job_id() { return next_id_++; }
 
     void store(uint64_t id, cuvs_task_result_t result) {

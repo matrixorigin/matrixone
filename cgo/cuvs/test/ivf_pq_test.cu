@@ -263,11 +263,12 @@ TEST(GpuIvfPqTest, ManualShardedGetCenters) {
     index.build();
     
     auto centers = index.get_centers();
-    // In sharded mode, get_centers returns centers from a SINGLE shard.
-    // IVF-PQ codebook size is n_lists * pq_dim * pq_bits_dimension
-    // For default 8 bits, pq_bits_dimension is 3. 
-    // In this test: 50 * 8 * 3 = 1200
-    ASSERT_EQ(centers.size(), (size_t)1200);
+    // In sharded mode, get_centers returns the cluster centers from a SINGLE
+    // shard (n_lists rows × rot_dim cols, with the squared-norm/padding stripped
+    // — see ivf_pq.hpp::get_centers and commit d4e0409d1). rot_dim is the
+    // original dim rounded up to a multiple of pq_dim (m). For this test
+    // dim=16, m=8, so rot_dim=16. Expected: n_lists * rot_dim = 50 * 16 = 800.
+    ASSERT_EQ(centers.size(), (size_t)800);
 
     index.destroy();
 }

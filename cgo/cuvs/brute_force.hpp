@@ -336,24 +336,17 @@ public:
         handle.sync();
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || !index_) return search_result_t{};
-
-        // std::cout << "[DEBUG] Brute-Force search: num_queries=" << num_queries << " limit=" << limit << std::endl;
-
-        auto task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_internal(handle, queries_data, num_queries, limit, sp);
-        };
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+    // Sync T-typed entry — wraps search_async + search_wait.
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
+        uint64_t job_id = this->search_async(queries_data, num_queries, query_dimension, limit, sp);
+        return this->search_wait(job_id);
     }
 
     uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
-        if (!this->is_loaded_ || !index_) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
@@ -363,27 +356,34 @@ public:
         return this->worker->submit(task);
     }
 
-    // Filtered search — same off-worker bitmap-eval pattern as IVF-PQ /
-    // CAGRA / IVF-Flat: build_filter_host_mask runs on the calling thread,
-    // the bundle is captured by shared_ptr in the worker lambda, and the
-    // worker only does GPU work. Brute force is single-GPU only, so there
-    // is no SHARDED branch.
+    // Sync T-typed filtered entry — wraps search_with_filter_async + search_wait.
     search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
-                                       uint32_t /*query_dimension*/, uint32_t limit,
+                                       uint32_t query_dimension, uint32_t limit,
                                        const brute_force_search_params_t& sp,
                                        const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || !index_) return search_result_t{};
+        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        return this->search_wait(job_id);
+    }
 
-        auto mask = this->build_filter_single_mask(preds_json);
-        auto task = [this, num_queries, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_internal(handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", mask.get());
-        };
+    // Async T-typed filtered search. Brute force is single-GPU only, so the
+    // bitmap eval stays on the calling thread and the GPU search goes through
+    // worker->submit.
+    uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
+                                      uint32_t /*query_dimension*/, uint32_t limit,
+                                      const brute_force_search_params_t& sp,
+                                      const std::string& preds_json) {
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
         if (!this->worker) throw std::runtime_error("Worker not initialized");
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+
+        auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
+        auto mask = this->build_filter_single_mask(preds_json);
+        auto task = [this, num_queries, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", mask.get());
+        };
+        return this->worker->submit(task);
     }
 
     search_result_t search_wait(uint64_t job_id) {
@@ -463,26 +463,18 @@ public:
         return search_res;
     }
 
+    // Sync float entry — wraps search_float_async + search_wait.
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
-        if constexpr (std::is_same_v<T, float>) return search(queries_data, num_queries, query_dimension, limit, sp);
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || !index_) return search_result_t{};
-
-        // std::cout << "[DEBUG] Brute-Force search_float: num_queries=" << num_queries << " limit=" << limit << " query_dimension=" << query_dimension << std::endl;
-
-        auto task = [this, num_queries, query_dimension, limit, sp, queries_data](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp);
-        };
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+        uint64_t job_id = this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+        return this->search_wait(job_id);
     }
 
     uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const brute_force_search_params_t& sp) {
         if constexpr (std::is_same_v<T, float>) return search_async(queries_data, num_queries, query_dimension, limit, sp);
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
-        if (!this->is_loaded_ || !index_) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
 
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
 
@@ -492,24 +484,13 @@ public:
         return this->worker->submit(task);
     }
 
-    // Filtered variant of search_float() — same off-worker bitmap-eval pattern
-    // as search_with_filter above.
+    // Sync float filtered entry — wraps search_float_with_filter_async + search_wait.
     search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const brute_force_search_params_t& sp,
                                              const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        if (!this->is_loaded_ || !index_) return search_result_t{};
-
-        auto mask = this->build_filter_single_mask(preds_json);
-        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
-        };
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+        uint64_t job_id = this->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        return this->search_wait(job_id);
     }
 
     // Async variant of search_float_with_filter. Brute force is single-GPU
@@ -521,8 +502,10 @@ public:
                                             uint32_t query_dimension, uint32_t limit,
                                             const brute_force_search_params_t& sp,
                                             const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
-        if (!this->is_loaded_ || !index_) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);

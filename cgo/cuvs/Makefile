@@ -47,6 +47,13 @@ NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -mar
 # produce the shared library.
 LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -fopenmp"
 
+# Conservative header dependency: every .o (and every test obj) depends on
+# every .h / .hpp in this directory. Editing any header invalidates all
+# objects on the next make. Overbuilds vs. true compiler-tracked deps (.d
+# files), but doesn't need a prior compile to populate dep info and never
+# misses a header — touch a .hpp and the next `make` rebuilds.
+HEADERS := $(wildcard *.h *.hpp)
+
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
 CPP_SRCS := helper.cpp
@@ -91,11 +98,11 @@ asan: all
 libmocuvs.so: $(OBJS)
 	$(NVCC) $(LDFLAGS) -shared -o $@ $^ $(LIBS)
 
-%.o: %.cpp
+%.o: %.cpp $(HEADERS)
 	@echo "Compiling $< with NVCC"
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
 
-obj/test/%.o: test/%.cu
+obj/test/%.o: test/%.cu $(HEADERS)
 	@mkdir -p $(@D)
 	@echo "NVCC $<"
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@

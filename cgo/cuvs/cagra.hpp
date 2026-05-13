@@ -711,93 +711,70 @@ public:
         }
     }
 
-    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const cagra_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        {
-            std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
-        }
-
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
-            // std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
-            std::vector<search_result_t> shard_results(num_shards);
-
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_internal(gpu_handle, queries_data, num_queries, limit, sp);
-            };
-
-            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-
-            for (int i = 0; i < num_shards; ++i) {
-                auto res = this->worker->wait(job_ids[i]).get();
-                if (res.error) std::rethrow_exception(res.error);
-                shard_results[i] = std::any_cast<search_result_t>(res.result);
-            }
-
-            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
-        }
-
-        // std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
-
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        // The helper submits the search to the worker; queries_data
-        // outlives the wait().get() below (this thread blocks in it), so owner=null.
-        uint64_t job_id = this->search_batchable_typed(nullptr, queries_data, num_queries, limit, sp);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+    // Sync API surface preserved for the C-shim and direct callers. Routes
+    // through search_async + search_wait so SHARDED async/wait paths and
+    // sync share one execution path.
+    search_result_t search(const T* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
+        uint64_t job_id = this->search_async(queries_data, num_queries, query_dimension, limit, sp);
+        return this->search_wait(job_id);
     }
 
-    // Filtered variant of search(). Threads preds_json through to search_internal which
-    // calls build_search_bitset() for the combined (user-filter AND NOT deleted) mask.
-    // Per-query filters make request-level batching invalid, so we always take the
-    // non-batched path here. Empty preds_json falls back to the unfiltered behavior.
+    // Filtered T-typed sync. Single execution path: routes through
+    // search_with_filter_async + search_wait. Mask build still runs on the
+    // caller's thread (inside search_with_filter_async, see
+    // feedback_ivfpq_offworker_bitmap_qps memory).
     search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
-                                       uint32_t /*query_dimension*/, uint32_t limit,
+                                       uint32_t query_dimension, uint32_t limit,
                                        const cagra_search_params_t& sp,
                                        const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
+        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        return this->search_wait(job_id);
+    }
+
+    // Async T-typed filtered search. Mirrors search_float_with_filter_async
+    // but for the T-typed query path (T may be float / half / int8 / uint8).
+    // Build masks on the caller's thread, copy queries into a shared_ptr so
+    // they outlive the Go caller, capture both in the worker lambda.
+    uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
+                                      uint32_t query_dimension, uint32_t limit,
+                                      const cagra_search_params_t& sp,
+                                      const std::string& preds_json) {
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+        (void)query_dimension;  // search_internal uses this->dimension; param kept for signature parity.
+
+        auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            // Off-worker CPU mask eval — see search_internal for the contract.
-            auto shard_masks   = this->build_filter_shard_masks(preds_json);
-            const int num_shards = static_cast<int>(shard_masks.size());
-
-            std::vector<search_result_t> shard_results(num_shards);
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+            auto shard_masks = this->build_filter_shard_masks(preds_json);
+            auto shard_search_task = [this, num_queries, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
-                return this->search_internal(gpu_handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                return this->search_internal(gpu_handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-            for (int i = 0; i < num_shards; ++i) {
-                auto res = this->worker->wait(job_ids[i]).get();
-                if (res.error) std::rethrow_exception(res.error);
-                shard_results[i] = std::any_cast<search_result_t>(res.result);
-            }
-            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
+            return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
         }
 
         auto mask = this->build_filter_single_mask(preds_json);
-        auto task = [this, num_queries, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_internal(handle, queries_data, num_queries, limit, sp, /*preds_json=*/"", mask.get());
+        auto task = [this, num_queries, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
+            return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", mask.get());
         };
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+        return this->worker->submit(task);
     }
 
     uint64_t search_async(const T* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const cagra_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
@@ -1036,84 +1013,19 @@ public:
         return search_res;
     }
 
+    // Sync float entry — wraps search_float_async + search_wait.
     search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        {
-            std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
-        }
-
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            int num_shards = this->devices_.size();
-            // std::cout << "[DEBUG] CAGRA search SHARDED: num_shards=" << num_shards << " num_queries=" << num_queries << " limit=" << limit << std::endl;
-            std::vector<search_result_t> shard_results(num_shards);
-
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_float_internal(gpu_handle, queries_data, num_queries, this->dimension, limit, sp);
-            };
-
-            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-
-            for (int i = 0; i < num_shards; ++i) {
-                auto res = this->worker->wait(job_ids[i]).get();
-                if (res.error) std::rethrow_exception(res.error);
-                shard_results[i] = std::any_cast<search_result_t>(res.result);
-            }
-
-            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
-        }
-
-        // std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
-
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        (void)query_dimension;  // search_float_internal ignores it (== this->dimension)
-        uint64_t job_id = this->search_batchable_float(nullptr, queries_data, num_queries, limit, sp);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+        uint64_t job_id = this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+        return this->search_wait(job_id);
     }
 
-    // Filtered variant of search_float() — see search_with_filter() for rationale.
-    // Same off-worker bitmap-eval pattern as IVF-PQ: build_filter_host_mask
-    // runs on the calling thread, the bundle is captured by shared_ptr in the
-    // worker lambda, and the worker only does GPU work.
+    // Sync float filtered entry — wraps search_float_with_filter_async + search_wait.
     search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const cagra_search_params_t& sp,
                                              const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return search_result_t{};
-        {
-            std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return search_result_t{};
-        }
-
-        if (this->dist_mode == DistributionMode_SHARDED) {
-            auto shard_masks   = this->build_filter_shard_masks(preds_json);
-            const int num_shards = static_cast<int>(shard_masks.size());
-
-            std::vector<search_result_t> shard_results(num_shards);
-            auto shard_search_task = [this, num_queries, limit, sp, queries_data, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                int rank = gpu_handle.get_rank();
-                return this->search_float_internal(gpu_handle, queries_data, num_queries, this->dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
-            };
-            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-            for (int i = 0; i < num_shards; ++i) {
-                auto res = this->worker->wait(job_ids[i]).get();
-                if (res.error) std::rethrow_exception(res.error);
-                shard_results[i] = std::any_cast<search_result_t>(res.result);
-            }
-            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
-        }
-
-        auto mask = this->build_filter_single_mask(preds_json);
-        auto task = [this, num_queries, query_dimension, limit, sp, queries_data, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
-        };
-        if (!this->worker) throw std::runtime_error("Worker not initialized");
-        uint64_t job_id = this->worker->submit(task);
-        auto result_wait = this->worker->wait(job_id).get();
-        if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+        uint64_t job_id = this->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        return this->search_wait(job_id);
     }
 
     // Async variant of search_float_with_filter. Builds the host mask bundle on
@@ -1125,10 +1037,12 @@ public:
                                             uint32_t query_dimension, uint32_t limit,
                                             const cagra_search_params_t& sp,
                                             const std::string& preds_json) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
@@ -1160,10 +1074,12 @@ public:
     }
 
     uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const cagra_search_params_t& sp) {
-        if (!queries_data || num_queries == 0 || this->dimension == 0) return 0;
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) return 0;
+            if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
 
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
