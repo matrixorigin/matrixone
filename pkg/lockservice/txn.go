@@ -33,8 +33,9 @@ var (
 )
 
 type tableLockHolder struct {
-	tableKeys  map[uint64]*cowSlice
-	tableBinds map[uint64]pb.LockTable
+	tableKeys        map[uint64]*cowSlice
+	tableBinds       map[uint64]pb.LockTable
+	tableBindIntents map[uint64]pb.LockTable
 }
 
 // activeTxn one goroutine write, multi goroutine read
@@ -139,10 +140,10 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
-func (txn *activeTxn) lockTableBindAdded(bind pb.LockTable) {
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) {
 	h := txn.getHoldLocksLocked(bind.Group)
-	if _, ok := h.tableBinds[bind.Table]; !ok {
-		h.tableBinds[bind.Table] = bind
+	if _, ok := h.tableBindIntents[bind.Table]; !ok {
+		h.tableBindIntents[bind.Table] = bind
 	}
 }
 
@@ -228,7 +229,12 @@ func (txn *activeTxn) reset() {
 		for table, cs := range h.tableKeys {
 			cs.close()
 			delete(h.tableKeys, table)
+		}
+		for table := range h.tableBinds {
 			delete(h.tableBinds, table)
+		}
+		for table := range h.tableBindIntents {
+			delete(h.tableBindIntents, table)
 		}
 		delete(txn.lockHolders, g)
 	}
@@ -274,8 +280,10 @@ func (txn *activeTxn) fenceByBindChanged(bind pb.LockTable, logger *log.MOLogger
 	if !ok {
 		return false
 	}
-	held, ok := h.tableBinds[bind.Table]
-	if !ok || !held.Changed(bind) {
+	actual, actualOK := h.tableBinds[bind.Table]
+	intent, intentOK := h.tableBindIntents[bind.Table]
+	if (!actualOK || !actual.Changed(bind)) &&
+		(!intentOK || !intent.Changed(bind)) {
 		return false
 	}
 
@@ -452,8 +460,9 @@ func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
 		return h
 	}
 	h = &tableLockHolder{
-		tableKeys:  make(map[uint64]*cowSlice),
-		tableBinds: make(map[uint64]pb.LockTable),
+		tableKeys:        make(map[uint64]*cowSlice),
+		tableBinds:       make(map[uint64]pb.LockTable),
+		tableBindIntents: make(map[uint64]pb.LockTable),
 	}
 	txn.lockHolders[group] = h
 	return h

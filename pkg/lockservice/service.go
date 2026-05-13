@@ -187,7 +187,7 @@ func (s *service) Lock(
 	bind := l.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
-	txn.lockTableBindAdded(bind)
+	txn.lockTableBindTouched(bind)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	defer func() {
