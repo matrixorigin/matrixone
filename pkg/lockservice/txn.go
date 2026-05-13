@@ -33,8 +33,9 @@ var (
 )
 
 type tableLockHolder struct {
-	tableKeys  map[uint64]*cowSlice
-	tableBinds map[uint64]pb.LockTable
+	tableKeys        map[uint64]*cowSlice
+	tableBinds       map[uint64]pb.LockTable
+	tableBindIntents map[uint64]pb.LockTable
 }
 
 // activeTxn one goroutine write, multi goroutine read
@@ -47,6 +48,7 @@ type activeTxn struct {
 	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
+	bindChanged    bool
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
@@ -138,6 +140,13 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) {
+	h := txn.getHoldLocksLocked(bind.Group)
+	if _, ok := h.tableBindIntents[bind.Table]; !ok {
+		h.tableBindIntents[bind.Table] = bind
+	}
+}
+
 func (txn *activeTxn) close(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
@@ -220,7 +229,12 @@ func (txn *activeTxn) reset() {
 		for table, cs := range h.tableKeys {
 			cs.close()
 			delete(h.tableKeys, table)
+		}
+		for table := range h.tableBinds {
 			delete(h.tableBinds, table)
+		}
+		for table := range h.tableBindIntents {
+			delete(h.tableBindIntents, table)
 		}
 		delete(txn.lockHolders, g)
 	}
@@ -230,6 +244,7 @@ func (txn *activeTxn) reset() {
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
+	txn.bindChanged = false
 }
 
 func (txn *activeTxn) abort(
@@ -255,6 +270,28 @@ func (txn *activeTxn) abort(
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: err}, logger)
 	}
+}
+
+func (txn *activeTxn) fenceByBindChanged(bind pb.LockTable, logger *log.MOLogger) bool {
+	txn.Lock()
+	defer txn.Unlock()
+
+	h, ok := txn.lockHolders[bind.Group]
+	if !ok {
+		return false
+	}
+	actual, actualOK := h.tableBinds[bind.Table]
+	intent, intentOK := h.tableBindIntents[bind.Table]
+	if (!actualOK || !actual.Changed(bind)) &&
+		(!intentOK || !intent.Changed(bind)) {
+		return false
+	}
+
+	txn.bindChanged = true
+	for _, w := range txn.blockedWaiters {
+		w.notify(notifyValue{err: ErrLockTableBindChanged}, logger)
+	}
+	return true
 }
 
 func (txn *activeTxn) cancelBlocks(
@@ -423,8 +460,9 @@ func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
 		return h
 	}
 	h = &tableLockHolder{
-		tableKeys:  make(map[uint64]*cowSlice),
-		tableBinds: make(map[uint64]pb.LockTable),
+		tableKeys:        make(map[uint64]*cowSlice),
+		tableBinds:       make(map[uint64]pb.LockTable),
+		tableBindIntents: make(map[uint64]pb.LockTable),
 	}
 	txn.lockHolders[group] = h
 	return h

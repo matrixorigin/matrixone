@@ -348,7 +348,11 @@ func dataBranchCreateTable(
 		return
 	}
 
-	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipt); err != nil {
+		return
+	}
+
+	if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipt); err != nil {
 		return
 	}
 
@@ -388,8 +392,11 @@ func dataBranchCreateDatabase(
 		return err
 	}
 
-	for _, rcpt := range receipts {
-		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+	for i := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
+			return
+		}
+		if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
 			return
 		}
 	}
@@ -518,6 +525,10 @@ func dataBranchDeleteTable(
 		return
 	}
 
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
+		return
+	}
+
 	return nil
 }
 
@@ -583,6 +594,10 @@ func dataBranchDeleteDatabase(
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
 		return
 	}
 

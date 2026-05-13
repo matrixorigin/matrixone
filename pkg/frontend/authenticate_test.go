@@ -11189,6 +11189,12 @@ func TestDoDropSnapshot(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
+		sql = fmt.Sprintf(
+			"select kind from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1",
+			string(ds.Name),
+		)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
+
 		sql = getSqlForDropSnapshot(string(ds.Name))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
@@ -11243,6 +11249,12 @@ func TestDoDropSnapshot(t *testing.T) {
 			{0, 0},
 		})
 		bh.sql2result[sql] = mrs
+
+		sql = fmt.Sprintf(
+			"select kind from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1",
+			string(ds.Name),
+		)
+		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
 		sql = getSqlForDropSnapshot(string(ds.Name))
 		mrs = newMrsForPasswordOfUser([][]interface{}{})
