@@ -100,10 +100,25 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
 
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if resp.NewBind != nil {
+			txn.Unlock()
+			err = l.maybeHandleBindChanged(resp)
+			txn.Lock()
+			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+				cb(pb.Result{}, ErrTxnNotFound)
+				return
+			}
+			if txn.bindChanged {
+				cb(pb.Result{}, ErrLockTableBindChanged)
+				return
+			}
 			logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 			cb(pb.Result{}, err)
 			return
@@ -126,7 +141,18 @@ func (l *remoteLockTable) lock(
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	originalErr := err
-	if e := l.handleError(err, true); e != nil {
+	txn.Unlock()
+	e := l.handleError(err, true)
+	txn.Lock()
+	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
+	if e != nil {
 		err = e
 	} else {
 		// handleError returned nil, meaning bind changed and error was swallowed

@@ -72,8 +72,9 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	Fileparam *ExFileparam
-	Filter    *FilterParam
+	Fileparam         *ExFileparam
+	Filter            *FilterParam
+	currentPartValues map[string]string
 }
 
 type ExFileparam struct {
@@ -285,6 +286,14 @@ type ParquetHandler struct {
 	// for nested types support
 	hasNestedCols bool
 	rowReader     *parquet.Reader
+
+	// virtual column support (hive partitions + __mo_filepath)
+	partitionColIndices []int
+	filepathColIndex    int // -1 = not projected
+	hasPhysicalCol      bool
+	rowCountOnly        bool
+	currentRowGroup     int
+	rowCountRemaining   int
 }
 
 type columnMapper struct {

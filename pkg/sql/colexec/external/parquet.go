@@ -46,7 +46,8 @@ var maxParquetBatchCnt int64 = 100000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
-		batchCnt: maxParquetBatchCnt,
+		batchCnt:         maxParquetBatchCnt,
+		filepathColIndex: -1, // sentinel: not projected
 	}
 	err := h.openFile(param)
 	if err != nil {
@@ -54,29 +55,26 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	}
 
 	// Empty file handling (0 rows): only check column count, skip column name and type checks.
-	// This aligns with DuckDB behavior for empty parquet files.
 	if h.file.NumRows() == 0 {
-		// Check if @vars are used in column list (LOAD DATA ... (col1, @v, col2))
-		// Parquet doesn't support @vars, report explicit error
 		if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 			param.ColumnListLen > int32(len(param.Attrs)) {
 			return nil, moerr.NewNYI(param.Ctx, "parquet load with @variables in column list")
 		}
-
-		// Only check column count, not column names or types
-		// Column count must match exactly (align with DuckDB behavior)
-		parquetColCnt := len(h.file.Root().Columns())
-		tableColCnt := getParquetExpectedColCnt(param)
-		if parquetColCnt != tableColCnt {
-			return nil, moerr.NewInvalidInputf(param.Ctx,
-				"column count mismatch: parquet file has %d columns, but table has %d columns",
-				parquetColCnt, tableColCnt)
+		// Skip column count check in Hive mode: partition-only projections have
+		// 0 expected physical columns while the empty file still has schema columns.
+		if !param.Extern.HivePartitioning {
+			parquetColCnt := len(h.file.Root().Columns())
+			tableColCnt := getParquetExpectedColCnt(param)
+			if parquetColCnt != tableColCnt {
+				return nil, moerr.NewInvalidInputf(param.Ctx,
+					"column count mismatch: parquet file has %d columns, but table has %d columns",
+					parquetColCnt, tableColCnt)
+			}
 		}
-		// Return nil to indicate empty file, no data to load
+		// Caller treats (nil, nil) as "empty file, advance to next".
 		return nil, nil
 	}
 
-	// Non-empty file: use original logic (check column names and types)
 	err = h.prepare(param)
 	if err != nil {
 		return nil, err
@@ -191,6 +189,18 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 
+		// Skip virtual columns: they are not in Parquet schema.
+		if param.isHivePartitionCol(attr.ColName) {
+			h.partitionColIndices = append(h.partitionColIndices, int(attr.ColIndex))
+			continue
+		}
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			h.filepathColIndex = int(attr.ColIndex)
+			continue
+		}
+
+		h.hasPhysicalCol = true
+
 		// Use case-insensitive column lookup (fix for issue #15621)
 		col, err := h.findColumnIgnoreCase(param.Ctx, attr.ColName)
 		if err != nil {
@@ -232,6 +242,10 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
 		h.pages[attr.ColIndex] = col.Pages()
+	}
+
+	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
+		h.rowCountOnly = true
 	}
 
 	// init row reader if has nested columns
@@ -1790,10 +1804,37 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.rowCountOnly {
+		return h.getDataRowCountOnly(bat)
+	}
 	if h.hasNestedCols {
 		return h.getDataByRow(bat, param, proc)
 	}
 	return h.getDataByPage(bat, param, proc)
+}
+
+func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
+	batchLimit := int(h.batchCnt)
+	rowCount := 0
+
+	if h.rowCountRemaining > 0 {
+		rowCount = min(h.rowCountRemaining, batchLimit)
+		h.rowCountRemaining -= rowCount
+	} else {
+		rgs := h.file.RowGroups()
+		if h.currentRowGroup >= len(rgs) {
+			bat.SetRowCount(0)
+			return nil
+		}
+		total := int(rgs[h.currentRowGroup].NumRows())
+		h.currentRowGroup++
+		rowCount = min(total, batchLimit)
+		h.rowCountRemaining = total - rowCount
+	}
+
+	h.offset += int64(rowCount)
+	bat.SetRowCount(rowCount)
+	return nil
 }
 
 func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
@@ -1991,9 +2032,13 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 func getParquetExpectedColCnt(param *ExternalParam) int {
 	cnt := 0
 	for _, attr := range param.Attrs {
-		if !catalog.ContainExternalHidenCol(attr.ColName) {
-			cnt++
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
 		}
+		if param.isHivePartitionCol(attr.ColName) {
+			continue
+		}
+		cnt++
 	}
 	return cnt
 }
