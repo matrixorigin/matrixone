@@ -594,7 +594,7 @@ func hashDiff(
 			logutil.Warn("DataBranch-HashDiff-Error",
 				zap.Int("base-handle-cnt", len(baseHandle)),
 				zap.Int("target-handle-cnt", len(tarHandle)),
-				zap.Int("lca-type", dagInfo.lcaType),
+				zap.Bool("has-lca", dagInfo.hasLCA()),
 				zap.Duration("build-base-cost", buildBaseCost),
 				zap.Duration("build-target-cost", buildTargetCost),
 				zap.Duration("diff-cost", diffCost),
@@ -606,7 +606,7 @@ func hashDiff(
 
 	buildBaseStart := time.Now()
 	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, baseHandle, "base", pickKeyHashmap,
+		ctx, ses.proc.Mp(), &tblStuff, baseHandle, "base", pickKeyHashmap,
 	); err != nil {
 		return
 	}
@@ -614,16 +614,16 @@ func hashDiff(
 
 	buildTargetStart := time.Now()
 	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
-		ctx, ses.proc.Mp(), dagInfo.lcaType, &tblStuff, tarHandle, "target", pickKeyHashmap,
+		ctx, ses.proc.Mp(), &tblStuff, tarHandle, "target", pickKeyHashmap,
 	); err != nil {
 		return
 	}
 	buildTargetCost = time.Since(buildTargetStart)
 
 	diffStart := time.Now()
-	if dagInfo.lcaType == lcaEmpty {
+	if !dagInfo.hasLCA() {
 		if err = hashDiffIfNoLCA(
-			ctx, ses, tblStuff, dagInfo.lcaType, copt, emit,
+			ctx, ses, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -656,6 +656,21 @@ func hashDiffIfHasLCA(
 	baseDataHashmap databranchutils.BranchHashmap,
 	baseTombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
+
+	// Resolve per-side LCA snapshots once: each side's tombstone
+	// resolution probes the LCA at "the moment THIS side forked off
+	// the LCA" (or, when the side IS the LCA, at the OTHER side's
+	// snapshot — see branchMetaInfo helper docs).
+	txnSP := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	tarSP, baseSP := txnSP, txnSP
+	if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS != nil {
+		tarSP = types.TimestampToTS(*tblStuff.tarSnap.TS)
+	}
+	if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS != nil {
+		baseSP = types.TimestampToTS(*tblStuff.baseSnap.TS)
+	}
+	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
+	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
 
 	var (
 		wg        sync.WaitGroup
@@ -896,14 +911,14 @@ func hashDiffIfHasLCA(
 
 	asyncDelsAndUpdatesHandler := func(forBase bool, tmpCh chan batchWithKind) (err2 error) {
 		var (
-			branchTS = dagInfo.baseBranchTS
+			branchTS = baseLCAProbe
 			hashmap1 = baseDataHashmap
 			hashmap2 = baseTombstoneHashmap
 			name     = tblStuff.baseRel.GetTableName()
 		)
 
 		if !forBase {
-			branchTS = dagInfo.tarBranchTS
+			branchTS = tarLCAProbe
 			hashmap1 = tarDataHashmap
 			hashmap2 = tarTombstoneHashmap
 			name = tblStuff.tarRel.GetTableName()
@@ -1035,14 +1050,13 @@ func hashDiffIfHasLCA(
 		}
 	}
 
-	return diffDataHelper(ctx, ses, dagInfo.lcaType, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func hashDiffIfNoLCA(
 	ctx context.Context,
 	ses *Session,
 	tblStuff tableStuff,
-	lcaType int,
 	copt compositeOption,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
@@ -1071,7 +1085,7 @@ func hashDiffIfNoLCA(
 		return
 	}
 
-	return diffDataHelper(ctx, ses, lcaType, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func compareRowInWrappedBatches(
@@ -1427,7 +1441,6 @@ func checkConflictAndAppendToBat(
 func diffDataHelper(
 	ctx context.Context,
 	ses *Session,
-	lcaType int,
 	copt compositeOption,
 	tblStuff tableStuff,
 	emit emitFunc,
@@ -1659,7 +1672,6 @@ func diffDataHelper(
 func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,
-	lcaType int,
 	tblStuff *tableStuff,
 	handles []engine.ChangesHandle,
 	side string,

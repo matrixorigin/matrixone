@@ -1026,22 +1026,26 @@ func diffOnBase(
 		closeHandle()
 	}()
 
-	if dagInfo.lcaType != lcaEmpty {
-		if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
+	if dagInfo.hasLCA() {
+		switch dagInfo.lcaTableId {
+		case tblStuff.tarRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.tarRel
-		} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
+		case tblStuff.baseRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.baseRel
-		} else {
+		default:
+			txnSP := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+			tarSp, baseSp := txnSP, txnSP
+			if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS != nil {
+				tarSp = types.TimestampToTS(*tblStuff.tarSnap.TS)
+			}
+			if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS != nil {
+				baseSp = types.TimestampToTS(*tblStuff.baseSnap.TS)
+			}
+			probe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 			lcaSnapshot := &plan2.Snapshot{
-				Tenant: &plan.SnapshotTenant{
-					TenantID: ses.GetAccountId(),
-				},
+				Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
+				TS:     &timestamp.Timestamp{PhysicalTime: probe.Physical()},
 			}
-			lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-			if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
-				lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
-			}
-
 			if tblStuff.lcaRel, err = getRelationById(
 				ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
 				return
@@ -1483,22 +1487,14 @@ func decideCollectRange(
 				end:  []types.TS{baseSp},
 				rel:  []engine.Relation{tables.baseRel},
 			}
-			dagInfo.tarBranchTS = tarSp
-			dagInfo.baseBranchTS = tarSp
 		} else {
 			tarCollectRange = collectRange{
 				from: []types.TS{baseSp.Next()},
 				end:  []types.TS{tarSp},
 				rel:  []engine.Relation{tables.tarRel},
 			}
-
-			dagInfo.tarBranchTS = baseSp
-			dagInfo.baseBranchTS = baseSp
 			// base collect nothing
 		}
-
-		dagInfo.lcaTableId = baseTableID
-
 		return
 	}
 
@@ -1926,19 +1922,23 @@ func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
 
 // decideLCABranchTSFromBranchDAG resolves the lineage relationship
 // between tar and base by consulting the branch DAG. It populates
-// branchMetaInfo with:
-//   * lcaType / lcaTableId — coarse classification used downstream by
-//     hashDiff for symmetric vs asymmetric reconciliation;
-//   * tarBranchTS / baseBranchTS — per-side snapshot of the LCA
-//     consumed by findDeleteAndUpdateBat when probing the LCA to
-//     resolve tombstones into full UPDATE / DELETE rows;
-//   * pathFromLCAToTar / pathFromLCAToBase — the full ancestor chain
-//     from LCA down to each endpoint, foundation of the unified
-//     collect-range model in decideCollectRange.
+// branchMetaInfo.lcaTableId and the pathFromLCAToTar /
+// pathFromLCAToBase chains. All downstream consumers (collect-range
+// builder, hash-diff, tombstone resolver) derive whatever per-side
+// snapshot or LCA classification they need from these paths via the
+// helper methods on branchMetaInfo.
 //
 // The DAG only answers lineage questions: the CloneTS attached to an
 // outgoing edge is the *source* snapshot used by the clone operation
 // on the parent, not the creation commit timestamp of the child.
+//
+// Special case: when tar and base resolve to the same table id (so
+// the diff is purely snapshot-vs-snapshot on a single relation), no
+// DAG-derived chain is needed but tombstone resolution still wants
+// to probe the table at the earlier of the two snapshots. We model
+// that with synthetic single-node paths so the LCA-snapshot helpers
+// uniformly fall back to the other side's SP, matching the historic
+// case-0 semantics.
 func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
@@ -1957,69 +1957,27 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
-	lcaTableID, tarFirstChild, baseFirstChild, hasLca := dag.FindLCA(tarTableID, baseTableID)
-
-	if hasLca {
-		// Walk LCA → endpoint for each side. Path[0] is the LCA;
-		// path[1] (when present) is the LCA's direct child on the
-		// way to the endpoint, whose CloneTS is the moment this
-		// side forked off the LCA.
-		tarPathIDs, tarPathTSs, _ := dag.PathFromAncestor(tarTableID, lcaTableID)
-		basePathIDs, basePathTSs, _ := dag.PathFromAncestor(baseTableID, lcaTableID)
-
+	if lcaTableID, _, _, hasLca := dag.FindLCA(tarTableID, baseTableID); hasLca {
+		tarIDs, tarTSs, _ := dag.PathFromAncestor(tarTableID, lcaTableID)
+		baseIDs, baseTSs, _ := dag.PathFromAncestor(baseTableID, lcaTableID)
 		branchInfo.lcaTableId = lcaTableID
-		branchInfo.pathFromLCAToTar = tarPathIDs
-		branchInfo.pathFromLCAToTarTS = buildTSs(tarPathTSs)
-		branchInfo.pathFromLCAToBase = basePathIDs
-		branchInfo.pathFromLCAToBaseTS = buildTSs(basePathTSs)
-
-		// Per-side LCA snapshot for tombstone resolution. The other
-		// side's first child's CloneTS marks the moment this side's
-		// view of the LCA was forked off (or, when an endpoint IS
-		// the LCA, that endpoint's branchTS collapses with its
-		// clone-source). When LCA == base, tar's view of the LCA is
-		// CloneTS(tarFirstChild) and base — sitting on the LCA
-		// itself — collapses to the same value. The mirror holds
-		// when LCA == tar.
-		switch lcaTableID {
-		case baseTableID:
-			branchInfo.lcaType = lcaRight
-			ts, _ := dag.GetCloneTS(tarFirstChild)
-			branchInfo.tarBranchTS = types.BuildTS(ts, 0)
-			branchInfo.baseBranchTS = branchInfo.tarBranchTS
-		case tarTableID:
-			branchInfo.lcaType = lcaLeft
-			ts, _ := dag.GetCloneTS(baseFirstChild)
-			branchInfo.baseBranchTS = types.BuildTS(ts, 0)
-			branchInfo.tarBranchTS = branchInfo.baseBranchTS
-		default:
-			branchInfo.lcaType = lcaOther
-			tarTS, _ := dag.GetCloneTS(tarFirstChild)
-			baseTS, _ := dag.GetCloneTS(baseFirstChild)
-			branchInfo.tarBranchTS = types.BuildTS(tarTS, 0)
-			branchInfo.baseBranchTS = types.BuildTS(baseTS, 0)
-		}
+		branchInfo.pathFromLCAToTar = tarIDs
+		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
+		branchInfo.pathFromLCAToBase = baseIDs
+		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
 		return
 	}
 
-	// No LCA. Two unrelated tables — diffMergeAgency may still be
-	// dispatched in the rare case of "diff t against t" without any
-	// branch lineage; classify lcaType from the snapshot ordering so
-	// hashDiff still produces a deterministic side-bias.
+	// No DAG-derived LCA, but if tar and base resolve to the same
+	// table id we still need to feed downstream tombstone resolution
+	// with a probe snapshot. Synthetic single-node paths give the
+	// branchMetaInfo helpers exactly that.
 	if tarTableID == baseTableID {
 		branchInfo.lcaTableId = tarTableID
-		switch {
-		case tblStuff.tarSnap == nil && tblStuff.baseSnap == nil:
-			branchInfo.lcaType = lcaRight
-		case tblStuff.tarSnap == nil:
-			branchInfo.lcaType = lcaRight
-		case tblStuff.baseSnap == nil:
-			branchInfo.lcaType = lcaLeft
-		case tblStuff.tarSnap.TS.LessEq(*tblStuff.baseSnap.TS):
-			branchInfo.lcaType = lcaLeft
-		default:
-			branchInfo.lcaType = lcaRight
-		}
+		branchInfo.pathFromLCAToTar = []uint64{tarTableID}
+		branchInfo.pathFromLCAToTarTS = []types.TS{{}}
+		branchInfo.pathFromLCAToBase = []uint64{baseTableID}
+		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 	}
 	return
 }
