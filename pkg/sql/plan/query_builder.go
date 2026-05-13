@@ -3129,6 +3129,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.hasSingleRow = true
 	}
 
+	// For group_concat with ORDER BY, sort the data before aggregation.
+	// The sort key is GROUP BY columns (if any) followed by the group_concat
+	// ORDER BY columns, so that within each group the rows arrive in order.
+	if len(ctx.groupConcatOrderBys) > 0 && (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) {
+		var sortSpecs []*plan.OrderBySpec
+		for _, groupExpr := range ctx.groups {
+			sortSpecs = append(sortSpecs, &plan.OrderBySpec{
+				Expr: DeepCopyExpr(groupExpr),
+				Flag: plan.OrderBySpec_ASC,
+			})
+		}
+		sortSpecs = append(sortSpecs, ctx.groupConcatOrderBys...)
+
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{nodeID},
+			OrderBy:  sortSpecs,
+		}, ctx)
+	}
+
 	// append AGG node or SAMPLE node
 	if ctx.sampleFunc.hasSampleFunc {
 		if nodeID, err = builder.appendSampleNode(ctx, nodeID, boundHavingList); err != nil {

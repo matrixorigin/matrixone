@@ -230,25 +230,15 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
+// processForceWindows processes the ORDER BY clause inside group_concat.
+// Instead of rewriting group_concat into a window function, it records the
+// ORDER BY specs in BindContext.groupConcatOrderBys so that a Sort node can
+// be inserted before the Agg node. group_concat itself stays on the regular
+// aggregate path.
 func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
-
 	if len(astExpr.OrderBy) < 1 {
 		return nil
 	}
-	b.ctx.forceWindows = true
-	b.ctx.isDistinct = true
-
-	w := &plan.WindowSpec{}
-	ws := &tree.WindowSpec{}
-
-	// window function
-	w.Name = funcName
-
-	// partition by
-	w.PartitionBy = DeepCopyExprList(b.ctx.groups)
-
-	//order by
-	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
 
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
@@ -257,7 +247,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			case tree.Int:
 				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
@@ -266,7 +256,6 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			default:
 				return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
 			}
-
 		}
 
 		if _, ok := order.Expr.(*tree.Subquery); ok {
@@ -300,15 +289,8 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 		}
 
-		w.OrderBy = append(w.OrderBy, orderBy)
+		b.ctx.groupConcatOrderBys = append(b.ctx.groupConcatOrderBys, orderBy)
 	}
-
-	w.Frame = getFrame(ws)
-
-	// append
-	b.ctx.windows = append(b.ctx.windows, &plan.Expr{
-		Expr: &plan.Expr_W{W: w},
-	})
 
 	return nil
 }

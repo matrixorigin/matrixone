@@ -336,6 +336,10 @@ type BindContext struct {
 
 	tmpGroups []*plan.Expr
 
+	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
+	// Used to generate a Sort node before the Agg node instead of using window function.
+	groupConcatOrderBys []*plan.OrderBySpec
+
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
