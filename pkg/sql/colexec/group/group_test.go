@@ -389,3 +389,59 @@ func TestGroupSpillReloadManyGroups(t *testing.T) {
 
 	g.Free(proc, false, nil)
 }
+
+// TestGroupSpillRebuildNoGlobalPressureCascade verifies that global memory
+// pressure during spill-reload does NOT cascade into "spill level too deep".
+// Before the fix, needSpillImpl checked GlobalUsedWithPending during rebuild,
+// causing unlimited re-spill when other operators held memory.
+func TestGroupSpillRebuildNoGlobalPressureCascade(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	// Set a small GlobalCap so we can easily simulate pressure.
+	oldCap := mpool.GlobalCap()
+	mpool.InitCap(1 * mpool.GB)
+	defer mpool.InitCap(oldCap)
+
+	// Simulate global memory pressure: inject pending bytes > GlobalCap*7/8.
+	// This mimics other operators (hashbuild, hashjoin) holding memory.
+	pressure := mpool.Reserve(mpool.GlobalCap() * 9 / 10)
+	defer pressure.Cancel()
+
+	const numRows = 10000
+
+	keys := make([]int32, numRows)
+	vals := make([]int32, numRows)
+	for i := 0; i < numRows; i++ {
+		keys[i] = int32(i)
+		vals[i] = 1
+	}
+	bat := batch.New([]string{"key", "val"})
+	bat.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat.SetRowCount(numRows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{sumAgg(1)})
+	g.NeedEval = true
+	// Use group-count-based spill (< 10000). Set to 500 so level-0 spills
+	// (10000 > 500) but each level-1 bucket (~312 groups) does not.
+	g.SpillMem = 500
+
+	mockOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	g.AppendChild(mockOp)
+
+	require.NoError(t, g.Prepare(proc))
+
+	var totalRows int
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err, "should not get 'spill level too deep'")
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		totalRows += result.Batch.RowCount()
+	}
+
+	require.Equal(t, numRows, totalRows)
+	g.Free(proc, false, nil)
+}
