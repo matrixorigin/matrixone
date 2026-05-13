@@ -329,6 +329,12 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
+	//for div by zero, avoid contaminating session STMT profiles
+	divByZeroProfileMu sync.Mutex
+	divByZeroStmtType  string
+	divByZeroQueryType string
+	divByZeroIgnore    bool
+	divByZeroProfileOK bool
 }
 
 // Process contains context used in query execution
@@ -382,6 +388,7 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.StmtProfile = sp
+	proc.clearDivByZeroRuntimeProfile()
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
@@ -392,6 +399,31 @@ func (proc *Process) GetStmtProfile() *StmtProfile {
 		return proc.Base.StmtProfile
 	}
 	return &StmtProfile{}
+}
+
+func (proc *Process) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
+	proc.Base.divByZeroProfileMu.Lock()
+	defer proc.Base.divByZeroProfileMu.Unlock()
+	proc.Base.divByZeroStmtType = stmtType
+	proc.Base.divByZeroQueryType = queryType
+	proc.Base.divByZeroIgnore = ignore
+	proc.Base.divByZeroProfileOK = true
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+}
+
+func (proc *Process) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool, ok bool) {
+	proc.Base.divByZeroProfileMu.Lock()
+	defer proc.Base.divByZeroProfileMu.Unlock()
+	return proc.Base.divByZeroStmtType, proc.Base.divByZeroQueryType, proc.Base.divByZeroIgnore, proc.Base.divByZeroProfileOK
+}
+
+func (proc *Process) clearDivByZeroRuntimeProfile() {
+	proc.Base.divByZeroProfileMu.Lock()
+	defer proc.Base.divByZeroProfileMu.Unlock()
+	proc.Base.divByZeroStmtType = ""
+	proc.Base.divByZeroQueryType = ""
+	proc.Base.divByZeroIgnore = false
+	proc.Base.divByZeroProfileOK = false
 }
 
 func (proc *Process) InitSeq() {

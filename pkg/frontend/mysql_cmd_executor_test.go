@@ -132,22 +132,25 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
-	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), insertIgnore)
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
 
-	runtimeProfile := proc.GetStmtProfile()
-	require.Equal(t, "Insert", ses.GetStmtType())
-	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
-	require.Equal(t, "Insert", runtimeProfile.GetStmtType())
-	require.Equal(t, tree.QueryTypeDML, runtimeProfile.GetQueryType())
-	require.True(t, runtimeProfile.GetIgnore())
-	require.Equal(t, ses.GetStmtId(), runtimeProfile.GetStmtId())
+	stmtType, queryType, ignore, ok := proc.GetDivByZeroRuntimeProfile()
+	require.True(t, ok)
+	require.Equal(t, "Insert", stmtType)
+	require.Equal(t, tree.QueryTypeDML, queryType)
+	require.True(t, ignore)
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 
-	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), &tree.Insert{})
-	require.False(t, proc.GetStmtProfile().GetIgnore())
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
+	_, _, ignore, ok = proc.GetDivByZeroRuntimeProfile()
+	require.True(t, ok)
+	require.False(t, ignore)
 
-	refreshProcessStmtProfileForPreparedStmt(proc, ses.GetStmtProfile(), nil)
-	require.False(t, proc.GetStmtProfile().GetIgnore())
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
+	// nil statement should be a no-op; previous runtime profile remains.
+	_, _, ignore, ok = proc.GetDivByZeroRuntimeProfile()
+	require.True(t, ok)
+	require.False(t, ignore)
 }
 
 func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing.T) {

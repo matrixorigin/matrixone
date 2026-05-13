@@ -272,7 +272,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				return nil, err
 			}
 		}
-		refreshProcessStmtProfileForPreparedStmt(cwft.proc, cwft.ses.GetStmtProfile(), stmt)
+		refreshProcessDivByZeroProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
 
