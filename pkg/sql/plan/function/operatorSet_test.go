@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,6 +95,27 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 				[]bool{false, false, false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinusDecimal128)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		d1, err := types.ParseDecimal256("11111111111111111111111111111111.1111", 65, 4)
+		require.NoError(t, err)
+		d2, err := types.ParseDecimal256("22222222222222222222222222222222.2222", 65, 4)
+		require.NoError(t, err)
+		tc := tcTemp{
+			info: "select -(decimal256) with big values and a null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 65, 4),
+					[]types.Decimal256{d1, d2, {}},
+					[]bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal256, 65, 4), false,
+				[]types.Decimal256{d1.Minus(), d2.Minus(), {}},
+				[]bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryMinusDecimal256)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
@@ -429,5 +452,107 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 		}
 		result := iffCheck(nil, inputs)
 		require.True(t, result.status != failedFunctionParametersWrong, "iffCheck should accept same int types")
+	}
+}
+
+func Test_CastSetFunctions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// CastSetValueToIndex: "read,write" with members "read,write,execute" → 3
+	{
+		tc := tcTemp{
+			info: "cast_set_value_to_index('read,write,execute', 'read,write') -> 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"read,write", "execute", ""}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{3, 4, 0}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetIndexValueToIndex: validate bitmask 3 against "read,write,execute" → 3
+	{
+		tc := tcTemp{
+			info: "cast_set_index_value_to_index('read,write,execute', 3) -> 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 7, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{3, 7, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetIndexValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetIndexToValue: bitmask 3 → "read,write", with null
+	{
+		tc := tcTemp{
+			info: "cast_index_to_set_value('read,write,execute', 3/4/null) -> 'read,write'/'execute'/null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{3, 4, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"read,write", "execute", ""}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetIndexToValue)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// CastSetValueToIndex with null input
+	{
+		tc := tcTemp{
+			info: "cast_set_value_to_index with null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"read,write,execute"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"read", ""}, []bool{false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 0}, []bool{false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastSetValueToIndex)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_YearAndDecimal256_FuncTestcaseCompare(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// This test exists to exercise the T_year and T_decimal256 result-compare
+	// branches in func_testcase.go that would otherwise stay at 0% coverage.
+	// We use a trivial identity function (copy input to output) to trigger them.
+	identityYear := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0])
+		for i := uint64(0); i < uint64(length); i++ {
+			v, null := p.GetValue(i)
+			if err := rs.Append(v, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	{
+		tc := tcTemp{
+			info: "identity year",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{2024, 1999, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_year.ToType(), false,
+				[]types.MoYear{2024, 1999, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, identityYear)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
 	}
 }

@@ -334,7 +334,14 @@ func dataBranchCreateTable(
 		return
 	}
 
-	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipt); err != nil {
+		return
+	}
+
+	// Branch Protect Snapshot: pin the parent-side history for as long as
+	// this branch edge lives. Runs in the same background executor txn as
+	// the CLONE and the mo_branch_metadata insert, so rollback is atomic.
+	if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipt); err != nil {
 		return
 	}
 
@@ -370,8 +377,14 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	for _, rcpt := range receipts {
-		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+	for i := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
+			return
+		}
+		// Pin parent-side history for this table in the newly cloned
+		// database. See createBranchProtectSnapshot for the atomicity
+		// contract with updateBranchMetaTable.
+		if err = createBranchProtectSnapshot(execCtx.reqCtx, ses, bh, &receipts[i]); err != nil {
 			return
 		}
 	}
@@ -500,6 +513,13 @@ func dataBranchDeleteTable(
 		return
 	}
 
+	// Release any branch protect snapshots whose dependent subtree is
+	// now fully deleted. Synchronous so the delete path has identical
+	// semantics to the compile-layer plain DROP TABLE path.
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
+		return
+	}
+
 	return nil
 }
 
@@ -565,6 +585,13 @@ func dataBranchDeleteDatabase(
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	// Release any branch protect snapshots whose dependent subtree is
+	// now fully deleted — same synchronous contract as the table-level
+	// delete above.
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
 		return
 	}
 
@@ -999,29 +1026,26 @@ func diffOnBase(
 		closeHandle()
 	}()
 
-	if dagInfo.lcaType != lcaEmpty {
-		if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
+	if dagInfo.hasLCA() {
+		switch dagInfo.lcaTableId {
+		case tblStuff.tarRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.tarRel
-		} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
+		case tblStuff.baseRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.baseRel
-		} else {
+		default:
+			tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
+			probe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 			lcaSnapshot := &plan2.Snapshot{
-				Tenant: &plan.SnapshotTenant{
-					TenantID: ses.GetAccountId(),
-				},
+				Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
+				TS:     &timestamp.Timestamp{PhysicalTime: probe.Physical()},
 			}
-			lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-			if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
-				lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
-			}
-
 			if tblStuff.lcaRel, err = getRelationById(
 				ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
 				return
 			}
 		}
 	}
-	// has no lca
+
 	if tarHandle, baseHandle, err = constructChangeHandle(
 		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
@@ -1368,11 +1392,6 @@ func decideCollectRange(
 ) {
 
 	var (
-		lcaRel engine.Relation
-
-		tarSp  types.TS
-		baseSp types.TS
-
 		tarCTS  types.TS
 		baseCTS types.TS
 
@@ -1380,19 +1399,9 @@ func decideCollectRange(
 
 		tarTableID  = tables.tarRel.GetTableID(ctx)
 		baseTableID = tables.baseRel.GetTableID(ctx)
-
-		txnSnapshot = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
 	)
 
-	tarSp = txnSnapshot
-	if tables.tarSnap != nil && tables.tarSnap.TS != nil {
-		tarSp = types.TimestampToTS(*tables.tarSnap.TS)
-	}
-
-	baseSp = txnSnapshot
-	if tables.baseSnap != nil && tables.baseSnap.TS != nil {
-		baseSp = types.TimestampToTS(*tables.baseSnap.TS)
-	}
+	tarSp, baseSp := tables.resolvedSnapshots(ses)
 
 	if tblCommitTS, err = getTablesCreationCommitTS(
 		ctx, ses, tables.tarRel, tables.baseRel,
@@ -1404,25 +1413,52 @@ func decideCollectRange(
 	tarCTS = tblCommitTS[0]
 	baseCTS = tblCommitTS[1]
 
-	// Boundary semantics:
-	// 1. childCreateCommitTS marks when the child table itself becomes visible.
-	//    The cloned rows are materialized by that DDL, so child-owned change collection
-	//    must start from childCreateCommitTS.Next() to avoid re-reading inherited rows.
-	// 2. branchTS marks the source snapshot on the parent/LCA side used by the clone.
-	//    Parent-side incremental comparison must start from branchTS.Next() because the
-	//    snapshot at branchTS is already included in the cloned contents.
-
-	// now we got the t1.snapshot, t1.branchTS, t2.snapshot, t2.branchTS and txnSnapshot,
-	// and then we need to decide the range that t1 and t2 should collect.
+	// ============================================================
+	// Running example used throughout the comments below.
 	//
-	// case 0: special cases:
-	//	i. tar = base
-	//   -|------------|-------------|----
-	//   cts          sp1           sp2
-	//	diff t(sp1) against t(sp2)
-	// 		diff empty against (sp1, sp2]
-	//	diff t(sp2) against t(sp2)
-	//		diff (sp1, sp2] against empty
+	// A multi-fork branch tree (depth 4, 19 nodes, 10 leaves):
+	//
+	//                          t0  (root)
+	//                       /   |   \
+	//                     t1   t2   t3
+	//                    /  \   |   /  \
+	//                  t4   t5 t6  t7   t8
+	//                 / \   /\ /\  /\   /\
+	//                t9 t10 ... t15 t16 ... t18
+	//
+	// Every non-root node was cloned from its parent at some
+	// CloneTS, then performed its own insert/update/delete writes.
+	// The root t0 also performed extra writes after the whole tree
+	// was built. The `data branch diff` query we need to answer:
+	//
+	//     data branch diff t9 against t0
+	//
+	// `t9 against t0` exercises a 3-edge skip: the LCA of (t9, t0)
+	// is t0 itself; the path from LCA down to the target endpoint
+	// is path[LCA → tar] = [t0, t1, t4, t9]; the path on the base
+	// side is path[LCA → base] = [t0]. With this geometry, the
+	// invariants below let us derive the correct collect ranges
+	// for any pair of nodes in any tree shape.
+	//
+	// Boundary semantics:
+	// 1. childCreateCommitTS (child.CTS) marks when the child table
+	//    itself becomes visible. The cloned rows are materialized
+	//    by that DDL, so child-owned change collection must start
+	//    from child.CTS.Next() to avoid re-reading inherited rows.
+	// 2. CloneTS marks the source snapshot on the parent side used
+	//    by the clone. Parent-side incremental comparison ending at
+	//    the next child's CloneTS captures every parent write that
+	//    is still observable on this side (later parent writes are
+	//    invisible — the fork already happened).
+	// ============================================================
+
+	// case 0: tar and base resolve to the same table id.
+	// Diff degenerates into a snapshot-vs-snapshot comparison on
+	// that single relation; the DAG model does not apply.
+	//   -|-----------|------------|----
+	//   cts          sp1          sp2
+	//   diff t(sp1) against t(sp2) → diff empty against (sp1, sp2]
+	//   diff t(sp2) against t(sp1) → diff (sp1, sp2] against empty
 	if tarTableID == baseTableID {
 		if tarSp.LE(&baseSp) {
 			// tar collect nothing
@@ -1431,28 +1467,22 @@ func decideCollectRange(
 				end:  []types.TS{baseSp},
 				rel:  []engine.Relation{tables.baseRel},
 			}
-			dagInfo.tarBranchTS = tarSp
-			dagInfo.baseBranchTS = tarSp
 		} else {
 			tarCollectRange = collectRange{
 				from: []types.TS{baseSp.Next()},
 				end:  []types.TS{tarSp},
 				rel:  []engine.Relation{tables.tarRel},
 			}
-
-			dagInfo.tarBranchTS = baseSp
-			dagInfo.baseBranchTS = baseSp
 			// base collect nothing
 		}
-
-		dagInfo.lcaTableId = baseTableID
-
 		return
 	}
 
-	//
-	// case 1: t1 and t2 have no LCA
-	//	==> t1 collect [0, sp], t2 collect [0, sp]
+	// case 1: tar and base have no LCA (two unrelated tables).
+	// Whole-history diff: each side reads everything it has from
+	// the start of time up to its snapshot. There is no shared
+	// ancestor to anchor the comparison, so the DAG model does
+	// not apply either.
 	if dagInfo.lcaTableId == 0 {
 		tarCollectRange = collectRange{
 			from: []types.TS{types.MinTs()},
@@ -1467,123 +1497,252 @@ func decideCollectRange(
 		return
 	}
 
-	// case 2: t1 and t2 have the LCA t0 (not t1 nor t2)
-	// 	i. t1 and t2 branched from to at the same ts
-	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
-	//	ii. t1 and t2 have different branchTS
-	//                             seg2  sp2
-	//		  common    seg1  t2 --------|--->
-	//   t0 |-------|---------|-------------->
-	//             t1 ----------------|----->
-	//					seg3		 sp1
-	// the diff between	(t0.seg1 ∩ t2.seg2)	 and t1.seg3
-	if dagInfo.lcaTableId != tarTableID && dagInfo.lcaTableId != baseTableID {
-		tarCollectRange = collectRange{
-			from: []types.TS{tarCTS.Next()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		if dagInfo.tarBranchTS.EQ(&dagInfo.baseBranchTS) {
-			// do nothing
-		} else {
-			if lcaRel, err = getRelationById(
-				ctx, ses, bh, dagInfo.lcaTableId, &plan2.Snapshot{
+	// ============================================================
+	// case 2: tar and base share an LCA in the DAG. This is the
+	// general path that must work uniformly for any tree shape and
+	// any depth. We unify what used to be three separate sub-cases
+	// (LCA == base, LCA == tar, LCA == third node) into one model
+	// driven by the LCA→endpoint paths captured in dagInfo.
+	//
+	// Logical state of an endpoint X at some snapshot tX:
+	//
+	//     state(X, tX) = ⋃ over each ancestor A on path[root, X] of
+	//                       writes_on(A) within window_for(A, X, tX)
+	//
+	// Two sides of the diff therefore differ only in writes that
+	// happen on path[LCA, endpoint] of each side — every ancestor
+	// strictly above LCA is shared and contributes the same rows
+	// (folded into both sides' clone-materialization), so it
+	// cancels out and never needs to be read.
+	//
+	// For each ancestor A on path[LCA, endpoint] this side's own
+	// "mutation window" is:
+	//
+	//     windowFrom_A = A.CTS + 1                        (A's own
+	//                                                      writes,
+	//                                                      excluding
+	//                                                      clone)
+	//     windowEnd_A  = nextChildOnPath.CloneTS          (A is on
+	//                                                      the path
+	//                                                      but is not
+	//                                                      the
+	//                                                      endpoint)
+	//                  | endpointSP                       (A is the
+	//                                                      endpoint)
+	//
+	// Walked through on the running example for `diff t9 against t0`:
+	//
+	//   path[LCA → tar]  = [t0, t1, t4, t9]
+	//   path[LCA → base] = [t0]
+	//
+	//   For tar (t9):
+	//     A = t0 (LCA): own writes that *t9* sees =
+	//         (t0.CTS, t1.CloneTS]  ← t0 writes BEFORE t1 was
+	//                                  forked are the ones t9
+	//                                  inherits via the t0→t1→t4→t9
+	//                                  clone chain. After t1 was
+	//                                  forked, t0 mutations are
+	//                                  invisible to t9.
+	//     A = t1 (intermediate): (t1.CTS, t4.CloneTS]
+	//     A = t4 (intermediate): (t4.CTS, t9.CloneTS]
+	//     A = t9 (endpoint):     (t9.CTS, tarSP]
+	//
+	//   For base (t0): A = t0 (endpoint = LCA): (t0.CTS, baseSP]
+	//
+	// Symmetric prefix on the LCA. Both endpoints inherit the LCA's
+	// state cloned at *their* fork moment. The prefix
+	// (LCA.CTS, min(thisFirstChildCloneTS, otherFirstChildCloneTS)]
+	// is therefore identical on both sides and would simply cancel
+	// inside the hash-diff. We clamp this side's LCA window lower
+	// bound up to otherFork.Next() so the IO is skipped entirely.
+	//
+	// Concretely for `diff t9 against t0`: tar's LCA window is
+	// (t0.CTS, t1.CloneTS]. Base IS the LCA, so otherFork = baseSP
+	// (= "now"); since baseSP > t1.CloneTS, the clamp does not move
+	// windowFrom and the full window is collected. Conversely for
+	// base (which is the LCA), tar's first child is t1, so
+	// otherFork = t1.CloneTS and base collects only
+	// (t1.CloneTS, baseSP] — t0's pre-fork writes that t9 already
+	// inherits are not collected on either side.
+	//
+	// The two sides' segment lists feed the hash-diff algorithm,
+	// which still reconciles whatever remaining symmetric writes
+	// reach both sides (e.g. the LCA's own post-fork writes that
+	// some descendants share). The unified model thus generalizes
+	// the historical case-2/3/4 logic into a single walk regardless
+	// of depth or which side hosts the LCA.
+	// ============================================================
+	tarPath := dagInfo.pathFromLCAToTar
+	tarPathTS := dagInfo.pathFromLCAToTarTS
+	basePath := dagInfo.pathFromLCAToBase
+	basePathTS := dagInfo.pathFromLCAToBaseTS
+	if len(tarPath) == 0 || len(basePath) == 0 {
+		err = moerr.NewInternalErrorNoCtxf(
+			"data branch diff: missing DAG path (tar=%d base=%d lca=%d)",
+			tarTableID, baseTableID, dagInfo.lcaTableId,
+		)
+		return
+	}
+
+	if tarCollectRange, err = buildSideCollectRange(
+		ctx, ses, bh, tables, tarSp, tarCTS,
+		tarPath, tarPathTS, basePathTS, baseSp,
+	); err != nil {
+		return
+	}
+	if baseCollectRange, err = buildSideCollectRange(
+		ctx, ses, bh, tables, baseSp, baseCTS,
+		basePath, basePathTS, tarPathTS, tarSp,
+	); err != nil {
+		return
+	}
+	return
+}
+
+// buildSideCollectRange materializes one side of `data branch diff`
+// using the unified ancestor-walk described above. It walks selfPath
+// (LCA → endpoint, top-down) and emits one collect segment per
+// ancestor.
+//
+// Per-ancestor window (A is the i-th node on selfPath):
+//
+//	windowFrom_A = A.CTS.Next()
+//	windowEnd_A  = selfPath[i+1].CloneTS  if A is intermediate
+//	             | endpointSP             if A is endpoint
+//
+// LCA prune (i == 0):
+//
+//	windowFrom_A = max(windowFrom_A, otherFork.Next())
+//	where otherFork = otherPath[1].CloneTS if otherEndpoint != LCA
+//	                | otherSP              if otherEndpoint == LCA
+//
+// Walked through on the running example `diff t9 against t0` for the
+// tar side (selfPath = [t0, t1, t4, t9], otherPath = [t0]):
+//
+//	i=0  A = t0 (LCA)
+//	     windowFrom = t0.CTS + 1
+//	     windowEnd  = t1.CloneTS                       (selfPath[1])
+//	     LCA prune:  otherEndpoint == LCA, so otherFork = otherSP
+//	                 (= baseSP). baseSP > t1.CloneTS so no clamp.
+//	     emit (t0_rel, t0.CTS+1, t1.CloneTS]
+//
+//	i=1  A = t1 (intermediate)
+//	     windowFrom = t1.CTS + 1
+//	     windowEnd  = t4.CloneTS                       (selfPath[2])
+//	     emit (t1_rel, t1.CTS+1, t4.CloneTS]
+//
+//	i=2  A = t4 (intermediate)
+//	     windowFrom = t4.CTS + 1
+//	     windowEnd  = t9.CloneTS                       (selfPath[3])
+//	     emit (t4_rel, t4.CTS+1, t9.CloneTS]
+//
+//	i=3  A = t9 (endpoint)
+//	     windowFrom = t9.CTS + 1
+//	     windowEnd  = tarSP
+//	     emit (t9_rel, t9.CTS+1, tarSP]
+//
+// Empty windows (windowFrom > windowEnd) are dropped silently.
+//
+// Relations are looked up once per node (cache-hit on tar/base/lca,
+// one fresh fetch per intermediate). CTSes are resolved lazily and
+// reuse the already-known endpointCTS for the endpoint.
+func buildSideCollectRange(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tables tableStuff,
+	endpointSP types.TS,
+	endpointCTS types.TS,
+	selfPath []uint64,
+	selfPathTS []types.TS,
+	otherPathTS []types.TS,
+	otherSP types.TS,
+) (cr collectRange, err error) {
+
+	endpointID := selfPath[len(selfPath)-1]
+	for i, nodeID := range selfPath {
+		var (
+			rel        engine.Relation
+			windowFrom types.TS
+			windowEnd  types.TS
+			nodeCTS    types.TS
+		)
+
+		// Resolve the relation handle for this node.
+		switch {
+		case nodeID == tables.tarRel.GetTableID(ctx):
+			rel = tables.tarRel
+		case nodeID == tables.baseRel.GetTableID(ctx):
+			rel = tables.baseRel
+		case tables.lcaRel != nil && nodeID == tables.lcaRel.GetTableID(ctx):
+			rel = tables.lcaRel
+		default:
+			if rel, err = getRelationById(
+				ctx, ses, bh, nodeID, &plan2.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-					TS:     &timestamp.Timestamp{PhysicalTime: tarSp.Physical()},
-				}); err != nil {
+					TS:     &timestamp.Timestamp{PhysicalTime: endpointSP.Physical()},
+				},
+			); err != nil {
 				return
 			}
-
-			if dagInfo.tarBranchTS.GT(&dagInfo.baseBranchTS) {
-				tarCollectRange.rel = append(tarCollectRange.rel, lcaRel)
-				tarCollectRange.from = append(tarCollectRange.from, dagInfo.baseBranchTS.Next())
-				tarCollectRange.end = append(tarCollectRange.end, dagInfo.tarBranchTS)
-				dagInfo.tarBranchTS = dagInfo.baseBranchTS
-			} else {
-				baseCollectRange.rel = append(baseCollectRange.rel, lcaRel)
-				baseCollectRange.from = append(baseCollectRange.from, dagInfo.tarBranchTS.Next())
-				baseCollectRange.end = append(baseCollectRange.end, dagInfo.baseBranchTS)
-				dagInfo.baseBranchTS = dagInfo.tarBranchTS
-			}
 		}
-		return
-	}
 
-	// case 3: t1 is the LCA of t1 and t2
-	//	i. t1.sp < t2.branchTS
-	//		t1 -----sp1--------|-------------->
-	//				    seg1  t2-------sp2---->
-	//							  seg2
-	//		==> the diff between null and (t1.seg1 ∩ t2.seg2)
-	//  ii. t1.sp == t2.branchTS
-	//		==> t1 collect nothing, t2 collect [branchTS+1, sp]
-	// iii. t1.sp > t2.branchTS
-	//		==> t1 collect [branchTS+1, sp], t2 collect [branchTS+1, sp]
-	if dagInfo.lcaTableId == baseTableID {
-		// base is the lca
-		if baseSp.LT(&dagInfo.tarBranchTS) {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next(), baseSp.Next()},
-				end:  []types.TS{tarSp, dagInfo.tarBranchTS},
-				rel:  []engine.Relation{tables.tarRel, tables.baseRel},
-			}
-			// base collect nothing
-		} else if baseSp.EQ(&dagInfo.tarBranchTS) {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next()},
-				end:  []types.TS{tarSp},
-				rel:  []engine.Relation{tables.tarRel},
-			}
-			// base collect nothing
+		// Resolve creation commit TS so the window starts after the
+		// clone-materialization commit. Reuse endpointCTS for the
+		// endpoint to avoid a redundant lookup.
+		if nodeID == endpointID {
+			nodeCTS = endpointCTS
 		} else {
-			tarCollectRange = collectRange{
-				from: []types.TS{tarCTS.Next()},
-				end:  []types.TS{tarSp},
-				rel:  []engine.Relation{tables.tarRel},
+			ctsList, err2 := getTablesCreationCommitTS(
+				ctx, ses, rel, rel,
+				[]types.TS{endpointSP, endpointSP},
+			)
+			if err2 != nil {
+				err = err2
+				return
 			}
-			baseCollectRange = collectRange{
-				from: []types.TS{dagInfo.tarBranchTS.Next()},
-				end:  []types.TS{baseSp},
-				rel:  []engine.Relation{tables.baseRel},
+			if len(ctsList) == 0 {
+				err = moerr.NewInternalErrorNoCtxf(
+					"data branch: failed to resolve creation TS for table %d", nodeID)
+				return
+			}
+			nodeCTS = ctsList[0]
+		}
+
+		// Window upper bound.
+		if i == len(selfPath)-1 {
+			windowEnd = endpointSP
+		} else {
+			windowEnd = selfPathTS[i+1]
+		}
+
+		// Window lower bound.
+		windowFrom = nodeCTS.Next()
+
+		// LCA prune (i == 0): clamp to skip the prefix that the
+		// other side inherits identically via clone.
+		if i == 0 {
+			var otherFork types.TS
+			if len(otherPathTS) > 1 {
+				otherFork = otherPathTS[1]
+			} else {
+				// Other endpoint IS the LCA; observation goes up to
+				// otherSP.
+				otherFork = otherSP
+			}
+			otherForkNext := otherFork.Next()
+			if otherForkNext.GT(&windowFrom) {
+				windowFrom = otherForkNext
 			}
 		}
-		return
-	}
 
-	// case 4: t2 is the LCA of t1 and t2
-	// tar is the lca
-	if tarSp.LT(&dagInfo.baseBranchTS) {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next(), tarSp.Next()},
-			end:  []types.TS{baseSp, dagInfo.baseBranchTS},
-			rel:  []engine.Relation{tables.baseRel, tables.tarRel},
+		if windowFrom.GT(&windowEnd) {
+			continue
 		}
-		// tar collect nothing
-	} else if tarSp.EQ(&dagInfo.baseBranchTS) {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		// tar collect nothing
-	} else {
-		baseCollectRange = collectRange{
-			from: []types.TS{baseCTS.Next()},
-			end:  []types.TS{baseSp},
-			rel:  []engine.Relation{tables.baseRel},
-		}
-		tarCollectRange = collectRange{
-			from: []types.TS{dagInfo.baseBranchTS.Next()},
-			end:  []types.TS{tarSp},
-			rel:  []engine.Relation{tables.tarRel},
-		}
+		cr.rel = append(cr.rel, rel)
+		cr.from = append(cr.from, windowFrom)
+		cr.end = append(cr.end, windowEnd)
 	}
-
 	return
 }
 
@@ -1747,6 +1906,25 @@ func locateColumnsInChangeBatch(data *batch.Batch) (relIDIdx, commitTSIdx int) {
 	return
 }
 
+// decideLCABranchTSFromBranchDAG resolves the lineage relationship
+// between tar and base by consulting the branch DAG. It populates
+// branchMetaInfo.lcaTableId and the pathFromLCAToTar /
+// pathFromLCAToBase chains. All downstream consumers (collect-range
+// builder, hash-diff, tombstone resolver) derive whatever per-side
+// snapshot or LCA classification they need from these paths via the
+// helper methods on branchMetaInfo.
+//
+// The DAG only answers lineage questions: the CloneTS attached to an
+// outgoing edge is the *source* snapshot used by the clone operation
+// on the parent, not the creation commit timestamp of the child.
+//
+// Special case: when tar and base resolve to the same table id (so
+// the diff is purely snapshot-vs-snapshot on a single relation), no
+// DAG-derived chain is needed but tombstone resolution still wants
+// to probe the table at the earlier of the two snapshots. We model
+// that with synthetic single-node paths so the LCA-snapshot helpers
+// uniformly fall back to the other side's SP, matching the historic
+// case-0 semantics.
 func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
@@ -1757,97 +1935,59 @@ func decideLCABranchTSFromBranchDAG(
 	err error,
 ) {
 
-	var (
-		dag *databranchutils.DataBranchDAG
+	tarTableID := tblStuff.tarRel.GetTableID(ctx)
+	baseTableID := tblStuff.baseRel.GetTableID(ctx)
 
-		tarBranchTableID  uint64
-		baseBranchTableID uint64
-		hasLca            bool
-		lcaType           int
-
-		lcaTableID   uint64
-		tarBranchTS  types.TS
-		baseBranchTS types.TS
-	)
-
-	defer func() {
-		branchInfo = branchMetaInfo{
-			lcaType:      lcaType,
-			lcaTableId:   lcaTableID,
-			tarBranchTS:  tarBranchTS,
-			baseBranchTS: baseBranchTS,
-		}
-	}()
-
-	if dag, err = constructBranchDAG(ctx, ses, bh); err != nil {
+	dag, err := constructBranchDAG(ctx, ses, bh)
+	if err != nil {
 		return
 	}
 
-	// 1. has no lca
-	//		[0, now] join [0, now]
-	// 2. t1 and t2 has lca
-	//		1. t0 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	// 		2. t1 is the lca
-	//			t1's [branch_t2_ts + 1, now] join t2's [branch_t2_ts + 1, now]
-	//      3. t2 is the lca
-	//			t1's [branch_t1_ts + 1, now] join t2's [branch_t1_ts + 1, now]
-	//
-	// The DAG only answers lineage questions. The branch timestamp attached to an
-	// outgoing edge is the source snapshot used by the clone operation, not the
-	// creation commit timestamp of the child table.
-	if lcaTableID, tarBranchTableID, baseBranchTableID, hasLca = dag.FindLCA(
-		tblStuff.tarRel.GetTableID(ctx), tblStuff.baseRel.GetTableID(ctx),
-	); hasLca {
-		if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
-			lcaType = lcaRight
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
-				return
-			}
-			tarBranchTS = types.BuildTS(ts, 0)
-			baseBranchTS = tarBranchTS
-		} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
-			lcaType = lcaLeft
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
-				return
-			}
-			baseBranchTS = types.BuildTS(ts, 0)
-			tarBranchTS = baseBranchTS
-		} else {
-			lcaType = lcaOther
-			var ts int64
-			if ts, hasLca = dag.GetCloneTS(tarBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", tarBranchTableID)
-				return
-			}
-			tarBranchTS = types.BuildTS(ts, 0)
-			if ts, hasLca = dag.GetCloneTS(baseBranchTableID); !hasLca {
-				err = moerr.NewInternalErrorNoCtxf("cannot find clone ts for table %d", baseBranchTableID)
-				return
-			}
-			baseBranchTS = types.BuildTS(ts, 0)
+	if lcaTableID, _, _, hasLca := dag.FindLCA(tarTableID, baseTableID); hasLca {
+		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to tar %d",
+				lcaTableID, tarTableID)
+			return
 		}
-	} else if tblStuff.tarRel.GetTableID(ctx) == tblStuff.baseRel.GetTableID(ctx) {
-		lcaTableID = tblStuff.tarRel.GetTableID(ctx)
-		if tblStuff.tarSnap == nil && tblStuff.baseSnap == nil {
-			lcaType = lcaRight
-		} else if tblStuff.tarSnap == nil {
-			// diff tar{now} against base{sp}
-			lcaType = lcaRight
-		} else if tblStuff.baseSnap == nil {
-			// diff tar{sp} against base{now}
-			lcaType = lcaLeft
-		} else if tblStuff.tarSnap.TS.LessEq(*tblStuff.baseSnap.TS) {
-			lcaType = lcaLeft
-		} else {
-			lcaType = lcaRight
+		baseIDs, baseTSs, ok := dag.PathFromAncestor(baseTableID, lcaTableID)
+		if !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"data branch: DAG path broken from LCA %d to base %d",
+				lcaTableID, baseTableID)
+			return
 		}
+		branchInfo.lcaTableId = lcaTableID
+		branchInfo.pathFromLCAToTar = tarIDs
+		branchInfo.pathFromLCAToTarTS = buildTSs(tarTSs)
+		branchInfo.pathFromLCAToBase = baseIDs
+		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
+		return
+	}
+
+	// No DAG-derived LCA, but if tar and base resolve to the same
+	// table id we still need to feed downstream tombstone resolution
+	// with a probe snapshot. Synthetic single-node paths give the
+	// branchMetaInfo helpers exactly that.
+	if tarTableID == baseTableID {
+		branchInfo.lcaTableId = tarTableID
+		branchInfo.pathFromLCAToTar = []uint64{tarTableID}
+		branchInfo.pathFromLCAToTarTS = []types.TS{{}}
+		branchInfo.pathFromLCAToBase = []uint64{baseTableID}
+		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 	}
 	return
+}
+
+// buildTSs lifts a slice of int64 physical timestamps into the
+// types.TS form expected by branchMetaInfo.
+func buildTSs(in []int64) []types.TS {
+	out := make([]types.TS, len(in))
+	for i, ts := range in {
+		out[i] = types.BuildTS(ts, 0)
+	}
+	return out
 }
 
 func constructBranchDAG(

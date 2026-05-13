@@ -472,6 +472,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_decimal256:
+		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_date:
 		r := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](vExpected)
@@ -577,8 +598,29 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_year:
+		r := vector.GenerateFunctionFixedTypeParameter[types.MoYear](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
 		for i = 0; i < uint64(fc.fnLength); i++ {
@@ -820,6 +862,12 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
 		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_decimal256:
+		values := val.([]types.Decimal256)
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_year:
+		values := val.([]types.MoYear)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)
 		vector.AppendFixedList(vec, values, nil, mp)
@@ -832,7 +880,7 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		vector.AppendFixedList(vec, values, nil, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_array_float32:

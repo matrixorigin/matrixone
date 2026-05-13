@@ -1097,3 +1097,87 @@ func castRangevalueUnitToHourUnit(value uint8, unit string) (int64, error) {
 		return -1, moerr.NewInvalidArgNoCtx("invalid pitr time unit %s", unit)
 	}
 }
+
+// CastSetIndexToValue converts a SET bitmask (uint64) to the comma-separated member names.
+// e.g. SET('read','write','execute') with bits=3 → "read,write"
+func CastSetIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexes := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		indexVal, indexNull := indexes.GetValue(i)
+		if typeSetNull || indexNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		setValue, err := types.ParseSetIndex(functionUtil.QuickBytesToStr(typeSet), indexVal)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes([]byte(setValue), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CastSetValueToIndex converts a comma-separated member string to a SET bitmask.
+// e.g. SET('read','write','execute') with value="read,write" → 3
+func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	setValues := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		setValue, setValueNull := setValues.GetStrValue(i)
+		if typeSetNull || setValueNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		index, err := types.ParseSet(functionUtil.QuickBytesToStr(typeSet), functionUtil.QuickBytesToStr(setValue))
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(index, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CastSetIndexValueToIndex validates a uint64 value as a valid SET bitmask.
+// e.g. SET('read','write','execute') with bits=3 → 3 (validated OK)
+func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[uint64](result)
+	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
+	setIndexValues := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeSet, typeSetNull := typeSets.GetStrValue(i)
+		setIndexValue, setIndexNull := setIndexValues.GetValue(i)
+		if typeSetNull || setIndexNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(index, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}

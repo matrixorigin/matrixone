@@ -36,7 +36,7 @@ func Test_getColData_Timestamp_WithSessionTimeZone(t *testing.T) {
 	// Create a process with session timezone set to UTC+8
 	proc := testutil.NewProcess(t)
 	utc8 := time.FixedZone("UTC+8", 8*3600)
-	proc.Base.SessionInfo.TimeZone = utc8
+	proc.GetSessionInfo().TimeZone = utc8
 
 	// Create test data
 	timestampStr := "2020-09-07 00:00:00"
@@ -153,7 +153,7 @@ func Test_getColData_Timestamp_DifferentTimeZones(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			proc.Base.SessionInfo.TimeZone = tc.sessionTZ
+			proc.GetSessionInfo().TimeZone = tc.sessionTZ
 
 			colType := types.T_timestamp.ToType()
 			colType.Scale = 0
@@ -217,7 +217,7 @@ func Test_getColData_Timestamp_Consistency(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// Use UTC+8 as session timezone (different from system timezone if system is not UTC+8)
 	sessionTZ := time.FixedZone("UTC+8", 8*3600)
-	proc.Base.SessionInfo.TimeZone = sessionTZ
+	proc.GetSessionInfo().TimeZone = sessionTZ
 
 	testValues := []string{
 		"2020-09-07 00:00:00",
