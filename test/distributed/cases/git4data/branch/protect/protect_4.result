@@ -1,0 +1,36 @@
+drop database if exists protect_db4;
+create database protect_db4;
+use protect_db4;
+create table t1(a int primary key);
+insert into t1 values (1);
+data branch create table t2 from t1;
+data branch create table t3 from t2;
+set @t2_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db4' and relname='t2');
+set @t3_tid = (select rel_id from mo_catalog.mo_tables where reldatabase='protect_db4' and relname='t3');
+set @t2_sname = concat('__mo_branch_', cast(@t2_tid as char));
+set @t3_sname = concat('__mo_branch_', cast(@t3_tid as char));
+select count(*) as initial_branch_rows
+from mo_catalog.mo_snapshots
+where sname in (@t2_sname, @t3_sname) and kind='branch';
+➤ initial_branch_rows[-5,64,0]  𝄀
+2
+drop table t2;
+select table_deleted from mo_catalog.mo_branch_metadata where table_id = @t2_tid;
+➤ table_deleted[-7,1,0]  𝄀
+1
+select count(*) as t2_edge_retained
+from mo_catalog.mo_snapshots where sname = @t2_sname and kind='branch';
+➤ t2_edge_retained[-5,64,0]  𝄀
+1
+select count(*) as t3_edge_retained
+from mo_catalog.mo_snapshots where sname = @t3_sname and kind='branch';
+➤ t3_edge_retained[-5,64,0]  𝄀
+1
+drop table t3;
+select count(*) as remaining_branch_rows
+from mo_catalog.mo_snapshots
+where sname in (@t2_sname, @t3_sname) and kind='branch';
+➤ remaining_branch_rows[-5,64,0]  𝄀
+0
+drop table t1;
+drop database protect_db4;

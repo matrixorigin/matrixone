@@ -443,7 +443,7 @@ func writeResponse(
 	err error,
 	cs morpc.ClientSession,
 ) {
-	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout)
+	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout, nil)
 }
 
 func writeResponseWithDeadline(
@@ -453,6 +453,7 @@ func writeResponseWithDeadline(
 	err error,
 	cs morpc.ClientSession,
 	timeout time.Duration,
+	extraFields func() []zap.Field,
 ) error {
 	if cancel != nil {
 		defer cancel()
@@ -467,6 +468,9 @@ func writeResponseWithDeadline(
 		logger.Debug("handle request completed",
 			zap.String("response", detail))
 	}
+	requestID := resp.RequestID
+	method := resp.Method.String()
+	remote := cs.RemoteAddress()
 
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), timeout)
 	defer writeCancel()
@@ -475,9 +479,31 @@ func writeResponseWithDeadline(
 		defer stop()
 	}
 	if err := cs.Write(writeCtx, resp); err != nil {
-		logger.Error("write response failed",
+		var extra []zap.Field
+		if extraFields != nil {
+			extra = extraFields()
+		}
+		fields := []zap.Field{
 			zap.Error(err),
-			zap.String("response", detail))
+			zap.Uint64("request-id", requestID),
+			zap.String("method", method),
+			zap.String("remote", remote),
+			zap.String("response", detail),
+		}
+		fields = append(fields, extra...)
+		logger.Error("write response failed", fields...)
+		// A dropped response leaves the peer's Future waiting unless the
+		// session is closed and the client-side backend fails pending futures.
+		if closeErr := cs.Close(); closeErr != nil {
+			closeFields := []zap.Field{
+				zap.Error(closeErr),
+				zap.Uint64("request-id", requestID),
+				zap.String("method", method),
+				zap.String("remote", remote),
+			}
+			closeFields = append(closeFields, extra...)
+			logger.Error("close client session after write response failed", closeFields...)
+		}
 		return err
 	}
 	return nil

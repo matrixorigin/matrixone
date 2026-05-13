@@ -61,6 +61,40 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
+	req := &pb.Request{
+		LockTable: pb.LockTable{
+			Group:       1,
+			Table:       2,
+			OriginTable: 3,
+			ServiceID:   "bind-service",
+			Version:     4,
+		},
+		Lock: pb.LockRequest{
+			TxnID:     []byte{0x01, 0x02},
+			ServiceID: "caller-service",
+			Rows:      [][]byte{{1}, {2}},
+		},
+	}
+	logFields := remoteLockResponseLogFields(req)
+
+	req.Reset()
+	fields := logFields()
+	values := make(map[string]any, len(fields))
+	for _, field := range fields {
+		if field.String != "" {
+			values[field.Key] = field.String
+			continue
+		}
+		values[field.Key] = field.Integer
+	}
+
+	require.Equal(t, "0102", values["txn"])
+	require.Equal(t, "1-2(3)-bind-service-4", values["bind"])
+	require.Equal(t, "caller-service", values["caller-service"])
+	require.Equal(t, int64(2), values["row-count"])
+}
+
 func TestLockResultWithNoConflictOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -179,6 +213,37 @@ func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
+		},
+	)
+}
+
+func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			s.setStatus(pb.Status_ServiceCanRestart)
+
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: pb.LockTable{Table: 10},
+				Lock: pb.LockRequest{
+					TxnID:     []byte("txn1"),
+					ServiceID: "remote-service",
+					Rows:      [][]byte{{1}},
+					Options:   newTestRowExclusiveOptions(),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleForwardLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.False(t, cs.closeCalled)
+			require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrRetryForCNRollingRestart))
 		},
 	)
 }

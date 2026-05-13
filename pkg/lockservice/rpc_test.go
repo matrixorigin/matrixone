@@ -31,17 +31,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type testClientSession struct {
 	ctx         context.Context
 	writeCtx    context.Context
 	writeErr    error
+	closeErr    error
 	writeCalled bool
 	asyncCalled bool
+	closeCalled bool
 }
 
-func (s *testClientSession) Close() error { return nil }
+func (s *testClientSession) Close() error {
+	s.closeCalled = true
+	return s.closeErr
+}
 
 func (s *testClientSession) SessionCtx() context.Context { return s.ctx }
 
@@ -70,11 +76,17 @@ func TestWriteResponseWithDeadlineUsesSyncWrite(t *testing.T) {
 	resp := acquireResponse()
 	defer releaseResponse(resp)
 
+	extraFieldsCalled := false
 	cs := &testClientSession{ctx: context.Background()}
-	err := writeResponseWithDeadline(getLogger(""), nil, resp, nil, cs, time.Second)
+	err := writeResponseWithDeadline(getLogger(""), nil, resp, nil, cs, time.Second, func() []zap.Field {
+		extraFieldsCalled = true
+		return nil
+	})
 	require.NoError(t, err)
 	require.True(t, cs.writeCalled)
 	require.False(t, cs.asyncCalled)
+	require.False(t, cs.closeCalled)
+	require.False(t, extraFieldsCalled)
 	_, ok := cs.writeCtx.Deadline()
 	require.True(t, ok)
 }
@@ -87,8 +99,31 @@ func TestWriteResponseUsesSyncWrite(t *testing.T) {
 	writeResponse(getLogger(""), nil, resp, nil, cs)
 	require.True(t, cs.writeCalled)
 	require.False(t, cs.asyncCalled)
+	require.False(t, cs.closeCalled)
 	_, ok := cs.writeCtx.Deadline()
 	require.True(t, ok)
+}
+
+func TestWriteResponseWithDeadlineClosesSessionOnWriteError(t *testing.T) {
+	resp := acquireResponse()
+	defer releaseResponse(resp)
+	resp.RequestID = 42
+	resp.Method = lock.Method_Lock
+
+	cs := &testClientSession{
+		closeErr: moerr.NewInternalErrorNoCtx("close failed"),
+		ctx:      context.Background(),
+		writeErr: context.DeadlineExceeded,
+	}
+	extraFieldsCalled := false
+	err := writeResponseWithDeadline(getLogger(""), nil, resp, nil, cs, time.Second, func() []zap.Field {
+		extraFieldsCalled = true
+		return nil
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.True(t, cs.writeCalled)
+	require.True(t, cs.closeCalled)
+	require.True(t, extraFieldsCalled)
 }
 
 func TestRPCSend(t *testing.T) {
