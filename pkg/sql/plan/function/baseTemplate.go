@@ -1387,7 +1387,6 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 		return false
 	}
 	stmtType, queryType, ignore := stmtProfile.GetDivByZeroRuntimeProfile()
-
 	stmtTypeUpper := strings.ToUpper(strings.TrimSpace(stmtType))
 	queryTypeUpper := strings.ToUpper(strings.TrimSpace(queryType))
 

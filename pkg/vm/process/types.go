@@ -162,7 +162,7 @@ type StmtProfile struct {
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
 
-	//for div by zero, avoid contaminating session main STMT profiles like PREPARE,EXECUTE
+	//for div by zero, avoid contaminating session main stmt profiles like PREPARE,EXECUTE
 	divByZeroStmtType  string
 	divByZeroQueryType string
 	divByZeroIgnore    bool //ignore for insert
