@@ -300,20 +300,7 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 func processMemoryOverBudget() bool {
 	curr := mpool.GlobalUsedWithPending()
 	globalCap := mpool.GlobalCap()
-	if curr > globalCap*2/3 {
-		return true
-	}
-	// Also check cgroup memory to catch Go heap and page cache pressure
-	// that mpool alone can't see. Only meaningful when a cgroup memory limit
-	// was detected — on shared bare-metal hosts, system memory includes
-	// other processes and would cause false positives.
-	if system.HasCgroupMemLimit() {
-		total := system.MemoryTotal()
-		if total > 0 && system.MemoryUsed() > total*3/4 {
-			return true
-		}
-	}
-	return false
+	return curr > globalCap*2/3
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
