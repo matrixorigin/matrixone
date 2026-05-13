@@ -296,6 +296,16 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 					resp.GetBind.LockTable = newBind
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
+			server.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(getLogger(""), cancel, resp, ErrLockTableNotFound, cs)
+				})
 
 			logger := getLogger("")
 			fsp := newFixedSlicePool(2)
