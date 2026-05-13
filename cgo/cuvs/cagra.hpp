@@ -115,7 +115,7 @@ namespace matrixone {
 //   Each GPU holds a disjoint slice of the dataset (a separate CAGRA sub-graph).
 //   Build dispatches each shard to its GPU. Search dispatches to all shards
 //   concurrently via submit_all_devices_no_wait(), collects results, and merges
-//   them (merge_sharded_results). Each shard returns local IDs (0..shard_sz-1);
+//   them (matrixone::cpu_topk_merge_sharded). Each shard returns local IDs (0..shard_sz-1);
 //   search_internal adds the shard offset before returning so callers see global IDs.
 //   Extend is NOT supported for SHARDED mode — throws std::runtime_error.
 //
@@ -735,7 +735,7 @@ public:
                 shard_results[i] = std::any_cast<search_result_t>(res.result);
             }
 
-            return this->merge_sharded_results(shard_results, num_queries, limit);
+            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
         }
 
         // std::cout << "[DEBUG] CAGRA search: num_queries=" << num_queries << " limit=" << limit << " itopk=" << sp.itopk_size << std::endl;
@@ -779,7 +779,7 @@ public:
                 if (res.error) std::rethrow_exception(res.error);
                 shard_results[i] = std::any_cast<search_result_t>(res.result);
             }
-            return this->merge_sharded_results(shard_results, num_queries, limit);
+            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
         }
 
         auto mask = this->build_filter_single_mask(preds_json);
@@ -803,21 +803,16 @@ public:
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            auto task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& /*handle*/) -> std::any {
-                int num_shards = this->devices_.size();
-                std::vector<search_result_t> shard_results(num_shards);
-                auto shard_search_task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                    return this->search_internal(gpu_handle, queries_copy->data(), num_queries, limit, sp);
-                };
-                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-                for (int i = 0; i < num_shards; ++i) {
-                    auto res = this->worker->wait(job_ids[i]).get();
-                    if (res.error) std::rethrow_exception(res.error);
-                    shard_results[i] = std::any_cast<search_result_t>(res.result);
-                }
-                return this->merge_sharded_results(shard_results, num_queries, limit);
+            // Per-shard searches go to their own device queues — auto-batching
+            // is preserved. The merge is deferred to search_wait() via a
+            // composite_search_pending_t sentinel so we never sit on
+            // main_thread_ in the search hot path. See plan
+            // .claude/plans/effervescent-hatching-dewdrop.md.
+            auto shard_search_task = [this, num_queries, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                return this->search_internal(gpu_handle, queries_copy->data(), num_queries, limit, sp);
             };
-            return this->worker->submit_main(task);
+            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+            return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
         }
 
         // Single-GPU / replicated: the helper decides standalone vs fused; the
@@ -828,7 +823,21 @@ public:
     search_result_t search_wait(uint64_t job_id) {
         auto result_wait = this->worker->wait(job_id).get();
         if (result_wait.error) std::rethrow_exception(result_wait.error);
-        return std::any_cast<search_result_t>(result_wait.result);
+
+        // SHARDED composite path: the result holds the shard job_ids. Wait on
+        // each shard here (caller's thread) and run the k-way merge.
+        if (result_wait.result.type() == typeid(matrixone::composite_search_pending_t)) {
+            auto pending = std::any_cast<matrixone::composite_search_pending_t>(std::move(result_wait.result));
+            std::vector<search_result_t> shard_results(pending.shard_ids.size());
+            for (size_t i = 0; i < pending.shard_ids.size(); ++i) {
+                auto r = this->worker->wait(pending.shard_ids[i]).get();
+                if (r.error) std::rethrow_exception(r.error);
+                shard_results[i] = std::any_cast<search_result_t>(std::move(r.result));
+            }
+            return matrixone::cpu_topk_merge_sharded(shard_results, pending.num_queries, pending.limit);
+        }
+
+        return std::any_cast<search_result_t>(std::move(result_wait.result));
     }
 
     // Submit a T-typed search to the worker (round-robin across device threads).
@@ -1051,7 +1060,7 @@ public:
                 shard_results[i] = std::any_cast<search_result_t>(res.result);
             }
 
-            return this->merge_sharded_results(shard_results, num_queries, limit);
+            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
         }
 
         // std::cout << "[DEBUG] CAGRA search_float: num_queries=" << num_queries << " limit=" << limit << std::endl;
@@ -1093,7 +1102,7 @@ public:
                 if (res.error) std::rethrow_exception(res.error);
                 shard_results[i] = std::any_cast<search_result_t>(res.result);
             }
-            return this->merge_sharded_results(shard_results, num_queries, limit);
+            return matrixone::cpu_topk_merge_sharded(shard_results, num_queries, limit);
         }
 
         auto mask = this->build_filter_single_mask(preds_json);
@@ -1126,26 +1135,17 @@ public:
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            // Bitmap eval moved INSIDE the submit_main task — the calling
-            // (Go) thread returns immediately with a job_id; main_thread_
-            // does eval → fan-out → wait → merge.
-            auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, preds_json](raft_handle_wrapper_t& /*handle*/) -> std::any {
-                auto shard_masks = this->build_filter_shard_masks(preds_json);
-                int num_shards = this->devices_.size();
-                std::vector<search_result_t> shard_results(num_shards);
-                auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                    int rank = gpu_handle.get_rank();
-                    return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
-                };
-                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-                for (int i = 0; i < num_shards; ++i) {
-                    auto res = this->worker->wait(job_ids[i]).get();
-                    if (res.error) std::rethrow_exception(res.error);
-                    shard_results[i] = std::any_cast<search_result_t>(res.result);
-                }
-                return this->merge_sharded_results(shard_results, num_queries, limit);
+            // Bitmap eval runs on the caller's (Go) thread — off-worker — so
+            // the device queues never see CPU mask work. Per-shard searches go
+            // straight to their device queues, and the merge is deferred to
+            // search_wait() via composite_search_pending_t. See plan.
+            auto shard_masks = this->build_filter_shard_masks(preds_json);
+            auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                int rank = gpu_handle.get_rank();
+                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
-            return this->worker->submit_main(task);
+            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+            return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
         }
 
         // Single-GPU / replicated: bitmap eval stays on the calling thread
@@ -1169,21 +1169,13 @@ public:
         auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
-            auto task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& /*handle*/) -> std::any {
-                int num_shards = this->devices_.size();
-                std::vector<search_result_t> shard_results(num_shards);
-                auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                    return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
-                };
-                auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
-                for (int i = 0; i < num_shards; ++i) {
-                    auto res = this->worker->wait(job_ids[i]).get();
-                    if (res.error) std::rethrow_exception(res.error);
-                    shard_results[i] = std::any_cast<search_result_t>(res.result);
-                }
-                return this->merge_sharded_results(shard_results, num_queries, limit);
+            // Same shape as search_async — fan out, hand back a composite id,
+            // let search_wait() do the merge on the caller's thread.
+            auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
+                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
             };
-            return this->worker->submit_main(task);
+            auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
+            return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
         }
 
         // Single-GPU / replicated: the helper decides standalone vs fused; the
@@ -1619,55 +1611,6 @@ public:
 
         this->load_common_components(dir, m);
         this->is_loaded_ = true;
-    }
-
-    search_result_t merge_sharded_results(const std::vector<search_result_t>& shard_results, uint64_t num_queries, uint32_t limit) {
-        // std::cout << "[DEBUG] merge_sharded_results: num_shards=" << shard_results.size() << " num_queries=" << num_queries << " limit=" << limit << std::endl;
-        search_result_t global_res;
-        global_res.neighbors.resize(num_queries * limit);
-        global_res.distances.resize(num_queries * limit);
-
-        for (uint64_t q = 0; q < num_queries; ++q) {
-            std::vector<std::pair<float, int64_t>> candidates;
-            for (size_t s = 0; s < shard_results.size(); ++s) {
-                const auto& sr = shard_results[s];
-                /*
-                if (q == 0) {
-                    std::cout << "  Shard " << s << " query 0 results: ";
-                    for (uint32_t k = 0; k < std::min(limit, 5U); ++k) {
-                        std::cout << "id=" << sr.neighbors[q * limit + k] << "(d=" << sr.distances[q * limit + k] << ") ";
-                    }
-                    std::cout << std::endl;
-                }
-                */
-                for (uint32_t k = 0; k < limit; ++k) {
-                    int64_t id = sr.neighbors[q * limit + k];
-                    if (id != -1LL) {
-                        candidates.push_back({sr.distances[q * limit + k], id});
-                    }
-                }
-            }
-
-            uint32_t to_sort = std::min((uint32_t)limit, (uint32_t)candidates.size());
-            std::partial_sort(candidates.begin(), candidates.begin() + to_sort, candidates.end());
-
-            /*
-            if (q == 0) {
-                std::cout << "  Query 0 total candidates: " << candidates.size() << " best candidate id=" << (candidates.empty() ? -1 : candidates[0].second) << " dist=" << (candidates.empty() ? -1 : candidates[0].first) << std::endl;
-            }
-            */
-
-            for (uint32_t k = 0; k < limit; ++k) {
-                if (k < to_sort) {
-                    global_res.neighbors[q * limit + k] = candidates[k].second;
-                    global_res.distances[q * limit + k] = candidates[k].first;
-                } else {
-                    global_res.neighbors[q * limit + k] = -1LL;
-                    global_res.distances[q * limit + k] = std::numeric_limits<float>::max();
-                }
-            }
-        }
-        return global_res;
     }
 
     void destroy() override {

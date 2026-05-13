@@ -774,6 +774,25 @@ public:
         return ids;
     }
 
+    // Used by the SHARDED async search path. After fanning out per-shard
+    // searches with submit_all_devices_no_wait(), the caller passes the
+    // returned shard job_ids here. We reserve a composite job_id, stash the
+    // shard ids (plus num_queries / limit) into the result store as a
+    // matrixone::composite_search_pending_t sentinel, and hand the composite
+    // id back. The index family's search_wait() detects the sentinel via
+    // std::any type-check, waits on each shard, and runs the k-way merge
+    // on the caller's thread — so neither submit_main nor main_thread_
+    // is on the search hot path.
+    uint64_t submit_composite_pending(std::vector<uint64_t> shard_ids,
+                                      uint64_t num_queries, uint32_t limit) {
+        uint64_t id = results_store_.get_next_job_id();
+        cuvs_task_result_t r;
+        r.result = matrixone::composite_search_pending_t{
+            std::move(shard_ids), num_queries, limit};
+        results_store_.store(id, std::move(r));
+        return id;
+    }
+
     void submit_all_devices(task_fn_t fn) {
         auto ids = submit_all_devices_no_wait(fn);
         std::exception_ptr first_error;
