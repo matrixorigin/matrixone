@@ -2,6 +2,11 @@
 -- Verifies that data-driven exponential recursive CTEs are stopped by the
 -- memory quota with a clear query-level error instead of node OOM.
 
+-- recursive_cte.sql leaves cte_max_recursion_depth = 100 in this session;
+-- restore the default so the recursion-depth gate doesn't preempt the
+-- memory-quota gate we're testing here.
+set cte_max_recursion_depth = 1000;
+
 -- The session variable should be visible and dynamically settable.
 show variables like 'cte_max_memory_bytes';
 set cte_max_memory_bytes = 1073741824;
@@ -56,3 +61,4 @@ with recursive seq2(v) as (
 
 drop table if exists product_q;
 set cte_max_memory_bytes = 1073741824;
+set cte_max_recursion_depth = 1000;

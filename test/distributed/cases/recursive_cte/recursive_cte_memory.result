@@ -1,3 +1,4 @@
+set cte_max_recursion_depth = 1000;
 show variables like 'cte_max_memory_bytes';
 Variable_name    Value
 cte_max_memory_bytes    1073741824
@@ -44,3 +45,4 @@ count(*)
 100
 drop table if exists product_q;
 set cte_max_memory_bytes = 1073741824;
+set cte_max_recursion_depth = 1000;
