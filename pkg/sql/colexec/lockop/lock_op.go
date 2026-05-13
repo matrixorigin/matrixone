@@ -119,7 +119,11 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 			}
 		}
 	}
-	lockOp.ctr.parker = types.NewPacker()
+	if lockOp.ctr.parker == nil {
+		lockOp.ctr.parker = types.NewPacker()
+	} else {
+		lockOp.ctr.parker.Reset()
+	}
 	return nil
 }
 

@@ -560,7 +560,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 	rowCntInc := 0
 	count := bat.RowCount()
-	itr := ctr.mp.NewIterator()
+	if ctr.cachedItr == nil {
+		ctr.cachedItr = ctr.mp.NewIterator()
+	}
+	itr := ctr.cachedItr
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
