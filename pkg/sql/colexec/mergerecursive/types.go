@@ -17,6 +17,7 @@ package mergerecursive
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,6 +32,8 @@ type container struct {
 
 	freeBats []*batch.Batch
 	i        int
+
+	memAcct cteaccount.Accountant
 }
 
 type MergeRecursive struct {
@@ -79,6 +82,7 @@ func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFaile
 	mergeRecursive.ctr.freeBats = nil
 	mergeRecursive.ctr.bats = nil
 	mergeRecursive.ctr.buf = nil
+	mergeRecursive.ctr.memAcct.SetBaseline(0)
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {

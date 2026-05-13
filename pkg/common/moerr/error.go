@@ -303,6 +303,7 @@ const (
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
+	ErrCteMemoryQuotaExceeded              uint16 = 20825
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -558,6 +559,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
 	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
+	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this node: used %d bytes, per-operator limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 	ErrSameNamePartitionField:              {ER_SAME_NAME_PARTITION_FIELD, []string{MySQLDefaultSqlState}, "Duplicate partition field name '%-.192s'"},
 	ErrMaxvalueInValuesIn:                  {ER_MAXVALUE_IN_VALUES_IN, []string{MySQLDefaultSqlState}, "Cannot use MAXVALUE as value in VALUES IN"},
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
@@ -1570,6 +1572,10 @@ func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 }
 func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewErrCteMemoryQuotaExceeded(ctx context.Context, used, limit int64) *Error {
+	return newError(ctx, ErrCteMemoryQuotaExceeded, used, limit)
 }
 
 func NewErrTooManyFields(ctx context.Context) *Error {

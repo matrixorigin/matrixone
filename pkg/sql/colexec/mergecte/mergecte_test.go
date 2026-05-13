@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -27,7 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// add unit tests for cases
 type mergeCTETestCase struct {
 	arg  *MergeCTE
 	proc *process.Process
@@ -82,4 +82,78 @@ func resetChildren(arg *MergeCTE, m *mpool.MPool) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+func TestResetSeedsBaselineFromFreeBats(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	arg := &MergeCTE{}
+	defer arg.Free(proc, false, nil)
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, arg.ctr.memAcct.AccountSlot(proc, arg.ctr.freeBats, arg.ctr.i, bat))
+	require.Greater(t, arg.ctr.memAcct.TotalBytes(), int64(0))
+
+	dup, err := bat.Dup(proc.Mp())
+	require.NoError(t, err)
+	arg.ctr.freeBats = append(arg.ctr.freeBats, dup)
+
+	arg.Reset(proc, false, nil)
+	require.Equal(t, int64(dup.Size()), arg.ctr.memAcct.TotalBytes(),
+		"Reset must seed totalBytes with retained freeBats size")
+	require.False(t, arg.ctr.memAcct.Resolved())
+}
+
+func TestResetSkipsSentinelMarker(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	arg := &MergeCTE{}
+	defer arg.Free(proc, false, nil)
+
+	sentinel := makeRecursiveBatch(proc)
+	arg.ctr.freeBats = append(arg.ctr.freeBats, sentinel)
+
+	arg.Reset(proc, false, nil)
+	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes(),
+		"Reset must skip sentinel last-marker batches when seeding baseline")
+}
+
+func TestAccountForRetainedBatchSurfacesQuotaError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "cte_max_memory_bytes" {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	})
+
+	arg := &MergeCTE{}
+	defer arg.Free(proc, false, nil)
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+	err := arg.ctr.memAcct.AccountSlot(proc, arg.ctr.freeBats, arg.ctr.i, bat)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCteMemoryQuotaExceeded),
+		"want ErrCteMemoryQuotaExceeded, got %v", err)
+	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes())
 }

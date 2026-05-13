@@ -17,6 +17,7 @@ package mergecte
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,9 +31,7 @@ const (
 	sendRecursive = 2
 )
 
-const (
-	moDefaultRecursionMax = 1000
-)
+const moDefaultRecursionMax = 1000
 
 type container struct {
 	buf            *batch.Batch
@@ -43,6 +42,7 @@ type container struct {
 	freeBats       []*batch.Batch
 	i              int
 	recursiveLevel int
+	memAcct        cteaccount.Accountant
 }
 
 type MergeCTE struct {
@@ -95,6 +95,15 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 	mergeCTE.ctr.i = 0
 	mergeCTE.ctr.last = false
 	mergeCTE.ctr.recursiveLevel = 0
+
+	// Sum non-sentinel batch sizes; sentinels are skipped in Account too.
+	var baseline int64
+	for _, bat := range mergeCTE.ctr.freeBats {
+		if bat != nil && !bat.Last() {
+			baseline += int64(bat.Size())
+		}
+	}
+	mergeCTE.ctr.memAcct.SetBaseline(baseline)
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {

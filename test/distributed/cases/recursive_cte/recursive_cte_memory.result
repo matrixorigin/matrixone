@@ -1,0 +1,46 @@
+show variables like 'cte_max_memory_bytes';
+Variable_name    Value
+cte_max_memory_bytes    1073741824
+set cte_max_memory_bytes = 1073741824;
+show variables like 'cte_max_memory_bytes';
+Variable_name    Value
+cte_max_memory_bytes    1073741824
+set cte_max_memory_bytes = 0;
+show variables like 'cte_max_memory_bytes';
+Variable_name    Value
+cte_max_memory_bytes    0
+set cte_max_memory_bytes = 1073741824;
+with recursive seq(v) as (
+select 1
+union all
+select v+1 from seq where v < 500
+) select count(*) from seq;
+count(*)
+500
+drop table if exists product_q;
+create table product_q (id int primary key, p_id int, p_name varchar(25), price decimal(10,3));
+insert into product_q values
+(3,2,'bed',3560.98),
+(2,null,'chair',1599.00),
+(4,1,'desk',2999.99),
+(5,3,'door',8123.09),
+(6,3,'mirrors',698.00),
+(7,4,'tv',5678.00);
+set cte_max_memory_bytes = 16777216;
+with recursive cte_ab_8(productID, price) as (
+select p_id, price from product_q
+union all
+select c.productID, p.price
+from product_q p join cte_ab_8 c on p.p_id = c.productID
+) select count(*) from cte_ab_8;
+recursive CTE memory quota exceeded on this node
+set cte_max_memory_bytes = 1073741824;
+with recursive seq2(v) as (
+select 1
+union all
+select v+1 from seq2 where v < 100
+) select count(*) from seq2;
+count(*)
+100
+drop table if exists product_q;
+set cte_max_memory_bytes = 1073741824;

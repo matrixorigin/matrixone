@@ -65,6 +65,10 @@ func (mergeRecursive *MergeRecursive) Call(proc *process.Process) (vm.CallResult
 			ctr.last = true
 		}
 
+		if err = ctr.memAcct.AccountSlot(proc, ctr.freeBats, ctr.i, result.Batch); err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
 		if len(ctr.freeBats) > ctr.i {
 			if ctr.freeBats[ctr.i] != nil {
 				ctr.freeBats[ctr.i].CleanOnlyData()
