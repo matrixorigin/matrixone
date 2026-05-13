@@ -67,6 +67,59 @@ func TestLockRemote(t *testing.T) {
 	)
 }
 
+func TestLockRemoteChecksBindChangedAfterRPC(t *testing.T) {
+	reqArrived := make(chan struct{})
+	releaseResp := make(chan struct{})
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1", Table: 1, Valid: true, Version: 1},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					close(reqArrived)
+					<-releaseResp
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			defer reuse.Free(txn, nil)
+
+			errC := make(chan error, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				defer cancel()
+				txn.Lock()
+				defer txn.Unlock()
+				l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+					errC <- err
+				})
+			}()
+
+			<-reqArrived
+			txn.Lock()
+			txn.bindChanged = true
+			txn.Unlock()
+			close(releaseResp)
+
+			err := <-errC
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			txn.Lock()
+			require.Empty(t, txn.getHoldLocksLocked(0).tableBinds)
+			txn.Unlock()
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
 func TestIssue20747(t *testing.T) {
 	runRemoteLockTableTests(
 		t,
