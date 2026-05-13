@@ -132,33 +132,61 @@ func (update *MultiUpdate) insert_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
 ) (err error) {
-
-	insertBatch.CleanOnlyData()
-	for insertIdx, inputIdx := range updateCtx.InsertCols {
-		err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
-		if err != nil {
-			return err
-		}
+	rowCount := inputBatch.RowCount()
+	if rowCount == 0 {
+		return
 	}
-	rowCount := insertBatch.Vecs[0].Length()
-	if rowCount > 0 {
-		insertBatch.SetRowCount(rowCount)
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-		update.addInsertAffectRows(tableType, uint64(rowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
-		crs := analyzer.GetOpCounterSet()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Write(newCtx, insertBatch)
-		if err != nil {
-			return err
+	// Fast path: when InsertCols form a contiguous 0-based sequence matching
+	// the insertBatch layout, we can build a zero-copy reference batch that
+	// shares the input vectors directly, avoiding UnionBatch memcpy overhead.
+	writeBatch := insertBatch
+	if isContiguousMapping(updateCtx.InsertCols) {
+		writeBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			writeBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
 		}
-		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
+		writeBatch.SetAttributes(insertBatch.Attrs)
+		writeBatch.SetRowCount(rowCount)
+	} else {
+		insertBatch.CleanOnlyData()
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 	}
+
+	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+	update.addInsertAffectRows(tableType, uint64(writeBatch.RowCount()))
+	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	err = source.Write(newCtx, writeBatch)
+	if err != nil {
+		return err
+	}
+	analyzer.AddWrittenRows(int64(writeBatch.RowCount()))
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
+	analyzer.AddDiskIO(crs)
 	return
+}
+
+func isContiguousMapping(cols []int) bool {
+	if len(cols) == 0 {
+		return false
+	}
+	base := cols[0]
+	for i, col := range cols {
+		if col != base+i {
+			return false
+		}
+	}
+	return true
 }
 
 func (update *MultiUpdate) check_null_and_insert_table(
