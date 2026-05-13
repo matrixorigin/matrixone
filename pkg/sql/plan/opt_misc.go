@@ -606,6 +606,43 @@ func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef 
 	return nil
 }
 
+// isColDefinedNotNull checks whether a column reference traces back to a
+// table column with a NOT NULL constraint (or is part of the primary key).
+// This is needed because plan optimizations (e.g. LEFT JOIN output marking)
+// may clear Typ.NotNullable on expressions even when the underlying column
+// is definitionally non-nullable.
+func isColDefinedNotNull(col *plan.ColRef, childNodeID int32, builder *QueryBuilder) bool {
+	node := builder.qry.Nodes[childNodeID]
+	tag := col.RelPos
+	colPos := col.ColPos
+
+	// Walk down through non-leaf nodes to find the TABLE_SCAN with matching tag.
+	for node.NodeType != plan.Node_TABLE_SCAN {
+		found := false
+		for _, childID := range node.Children {
+			child := builder.qry.Nodes[childID]
+			for _, t := range child.BindingTags {
+				if t == tag {
+					node = child
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	if node.TableDef == nil || int(colPos) >= len(node.TableDef.Cols) {
+		return false
+	}
+	return node.TableDef.Cols[colPos].Typ.NotNullable
+}
+
 func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineHashOnPK != 0 {
 		return nil
@@ -668,11 +705,10 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 			expr = condImpl.F.Args[1]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
-				//the nullable column ref is not primary key.
-				//can not use the hashOnPk.
-				//it assume build hashamp on right side.
 				if !expr.Typ.NotNullable {
-					return nil
+					if !isColDefinedNotNull(exprImpl.Col, node.Children[1], builder) {
+						return nil
+					}
 				}
 				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}

@@ -467,15 +467,13 @@ func (ctr *container) shouldReSpill(builder *hashbuild.HashmapBuilder) bool {
 	if sz > ctr.spillThreshold {
 		return true
 	}
-	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
-		if mpool.GlobalUsedWithPending() > globalCap*2/3 {
-			return true
-		}
-		if system.HasCgroupMemLimit() {
-			used := int64(system.MemoryUsed())
-			total := int64(system.MemoryTotal())
-			return used > total*2/3
-		}
+	if mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
+		return true
+	}
+	if system.HasCgroupMemLimit() {
+		used := int64(system.MemoryUsed())
+		total := int64(system.MemoryTotal())
+		return used > total*2/3
 	}
 	return false
 }
@@ -551,14 +549,10 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	// is already high to prevent the thundering-herd OOM.
 	if ctr.spillThreshold > 0 && bucket.depth < spillMaxPass && builder.InputBatchRowCount > 0 {
 		systemPressure := false
-		mpoolPressure := false
-		if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
-			if system.HasCgroupMemLimit() {
-				systemPressure = system.MemoryUsed() > system.MemoryTotal()*2/3
-			}
-			mpoolPressure = mpool.GlobalUsedWithPending() > globalCap*2/3
+		if system.HasCgroupMemLimit() {
+			systemPressure = system.MemoryUsed() > system.MemoryTotal()*2/3
 		}
-		if systemPressure || mpoolPressure {
+		if systemPressure || mpool.GlobalUsedWithPending() > mpool.GlobalCap()*2/3 {
 			logutil.Debugf("rebuildHashmap: pre-BuildHashmap re-spill triggered, mpool=%dMB, rows=%d, bucket=%s",
 				mpool.GlobalUsedWithPending()/1024/1024, builder.InputBatchRowCount, bucket.baseName)
 			// Reader is already at EOF since we read all batches above.

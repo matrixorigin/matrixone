@@ -116,6 +116,71 @@ func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *Quer
 	}
 }
 
+// TestDetermineHashOnPK_ExprNullableButColNotNull verifies that HashOnPK is
+// still enabled when the expression's Typ.NotNullable is false (e.g. cleared
+// by LEFT JOIN output marking) but the underlying table column has a NOT NULL
+// constraint. This matches the TPCH scenario where all FK columns are NOT NULL
+// but plan optimizations may clear NotNullable on intermediate expressions.
+func TestDetermineHashOnPK_ExprNullableButColNotNull(t *testing.T) {
+	// Table column is NOT NULL, but expr type says nullable (simulates plan optimizer clearing it)
+	colType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
+	exprType := plan.Type{Id: int32(types.T_int64), NotNullable: false}
+
+	leftExpr := GetColExpr(plan.Type{Id: int32(types.T_int64), NotNullable: true}, 1, 0)
+	rightExpr := GetColExpr(exprType, 2, 0)
+	eqExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
+				Args: []*plan.Expr{leftExpr, rightExpr},
+			},
+		},
+	}
+
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      0,
+					BindingTags: []int32{1},
+					TableDef: &plan.TableDef{
+						Name:          "left_t",
+						Cols:          []*plan.ColDef{{Name: "l_col", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}}},
+						Name2ColIndex: map[string]int32{"l_col": 0},
+					},
+				},
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      1,
+					BindingTags: []int32{2},
+					TableDef: &plan.TableDef{
+						Name:          "right_t",
+						Cols:          []*plan.ColDef{{Name: "r_pk", Typ: colType}},
+						Name2ColIndex: map[string]int32{"r_pk": 0},
+						Pkey:          &plan.PrimaryKeyDef{PkeyColName: "r_pk", Names: []string{"r_pk"}},
+					},
+				},
+				{
+					NodeType: plan.Node_JOIN,
+					NodeId:   2,
+					Stats: &plan.Stats{
+						HashmapStats: &plan.HashMapStats{},
+					},
+					Children: []int32{0, 1},
+					JoinType: plan.Node_INNER,
+					OnList:   []*plan.Expr{eqExpr},
+				},
+			},
+		},
+	}
+
+	determineHashOnPK(2, builder)
+	require.True(t, builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK,
+		"HashOnPK should be true when table column is NOT NULL even if expr.Typ.NotNullable is false")
+}
+
 func TestRemapWindowClause(t *testing.T) {
 	b := &QueryBuilder{
 		compCtx: &MockCompilerContext{
