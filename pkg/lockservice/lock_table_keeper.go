@@ -147,6 +147,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		}
 		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
+		k.maybeHandleRemoteBindChanged(bind)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
@@ -158,17 +159,39 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		v, err := f.Get()
 		if err == nil {
 			resp := v.(*pb.Response)
-			if resp.NewBind != nil {
+			if err = resp.UnwrapError(); err != nil {
+				logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+				k.maybeHandleRemoteBindChanged(binds[idx])
+			} else if resp.NewBind != nil {
 				k.service.handleBindChanged(*resp.NewBind)
 			}
 			releaseResponse(resp)
 		} else {
 			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+			k.maybeHandleRemoteBindChanged(binds[idx])
 		}
 		f.Close()
 		futures[idx] = nil // gc
 	}
 	return futures[:0], binds[:0]
+}
+
+func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
+	newBind, err := getLockTableBind(
+		k.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		k.serviceID,
+		bind.Sharding,
+	)
+	if err != nil {
+		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+		return
+	}
+	if newBind.Changed(bind) {
+		k.service.handleBindChanged(newBind)
+	}
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
