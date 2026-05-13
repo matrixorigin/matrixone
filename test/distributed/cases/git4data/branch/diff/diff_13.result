@@ -82,253 +82,253 @@ select count(*) as tree_nodes from mo_catalog.mo_branch_metadata m
 join mo_catalog.mo_tables t
 on t.rel_id = m.table_id
 where t.reldatabase = 'test_tree_diff' and t.relname like 't%';
-➤ tree_nodes[-5,64,0]  𝄀
+tree_nodes
 18
 data branch diff t9 against t0 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t0[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  1  𝄀
-DELETED  ¦  2  ¦  0  𝄀
-UPDATED  ¦  3  ¦  1
+metric    t9    t0
+INSERTED    3    1
+DELETED    2    0
+UPDATED    3    1
 data branch diff t9 against t0 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 10
 data branch diff t9 against t0;
-➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t9  ¦  INSERT  ¦  101  ¦  101  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109  𝄀
-t0  ¦  INSERT  ¦  200  ¦  200
+diff t9 against t0    flag    a    b
+t9    UPDATE    1    10000
+t0    UPDATE    1    99999
+t9    UPDATE    4    40000
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t9    DELETE    16    16
+t9    INSERT    101    101
+t9    INSERT    104    104
+t9    INSERT    109    109
+t0    INSERT    200    200
 data branch diff t9 against t10 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t10[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  1  𝄀
-DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+metric    t9    t10
+INSERTED    1    1
+DELETED    1    1
+UPDATED    1    1
 data branch diff t9 against t10 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 6
 data branch diff t9 against t10;
-➤ diff t9 against t10[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t10  ¦  UPDATE  ¦  10  ¦  100000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t10  ¦  DELETE  ¦  20  ¦  20  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109  𝄀
-t10  ¦  INSERT  ¦  110  ¦  110
+diff t9 against t10    flag    a    b
+t9    UPDATE    9    90000
+t10    UPDATE    10    100000
+t9    DELETE    11    11
+t10    DELETE    20    20
+t9    INSERT    109    109
+t10    INSERT    110    110
 data branch diff t9 against t11 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t11[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  2  𝄀
-DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  2  ¦  2
+metric    t9    t11
+INSERTED    2    2
+DELETED    1    1
+UPDATED    2    2
 data branch diff t9 against t11 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 10
 data branch diff t9 against t11;
-➤ diff t9 against t11[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t11  ¦  UPDATE  ¦  1  ¦  110000  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t11  ¦  UPDATE  ¦  5  ¦  50000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t11  ¦  DELETE  ¦  15  ¦  15  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t11  ¦  INSERT  ¦  105  ¦  105  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109  𝄀
-t11  ¦  INSERT  ¦  111  ¦  111
+diff t9 against t11    flag    a    b
+t11    UPDATE    1    110000
+t9    UPDATE    4    40000
+t11    UPDATE    5    50000
+t9    UPDATE    9    90000
+t11    DELETE    15    15
+t9    DELETE    16    16
+t9    INSERT    104    104
+t11    INSERT    105    105
+t9    INSERT    109    109
+t11    INSERT    111    111
 data branch diff t9 against t13 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t13[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  3  𝄀
-DELETED  ¦  3  ¦  3  𝄀
-UPDATED  ¦  3  ¦  3
+metric    t9    t13
+INSERTED    3    3
+DELETED    3    3
+UPDATED    3    3
 data branch diff t9 against t13 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 18
 data branch diff t9 against t13;
-➤ diff t9 against t13[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t13  ¦  UPDATE  ¦  2  ¦  20000  𝄀
-t13  ¦  UPDATE  ¦  3  ¦  130000  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t13  ¦  UPDATE  ¦  6  ¦  60000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t13  ¦  DELETE  ¦  13  ¦  13  𝄀
-t13  ¦  DELETE  ¦  14  ¦  14  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t13  ¦  DELETE  ¦  18  ¦  18  𝄀
-t9  ¦  DELETE  ¦  19  ¦  19  𝄀
-t9  ¦  INSERT  ¦  101  ¦  101  𝄀
-t13  ¦  INSERT  ¦  102  ¦  102  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t13  ¦  INSERT  ¦  106  ¦  106  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109  𝄀
-t13  ¦  INSERT  ¦  113  ¦  113
+diff t9 against t13    flag    a    b
+t9    UPDATE    1    10000
+t13    UPDATE    2    20000
+t13    UPDATE    3    130000
+t9    UPDATE    4    40000
+t13    UPDATE    6    60000
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t13    DELETE    13    13
+t13    DELETE    14    14
+t9    DELETE    16    16
+t13    DELETE    18    18
+t9    DELETE    19    19
+t9    INSERT    101    101
+t13    INSERT    102    102
+t9    INSERT    104    104
+t13    INSERT    106    106
+t9    INSERT    109    109
+t13    INSERT    113    113
 data branch diff t4 against t0 output summary;
-➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t0[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  1  𝄀
-DELETED  ¦  1  ¦  0  𝄀
-UPDATED  ¦  2  ¦  1
+metric    t4    t0
+INSERTED    2    1
+DELETED    1    0
+UPDATED    2    1
 data branch diff t4 against t0 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 7
 data branch diff t4 against t0;
-➤ diff t4 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t4  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
-t4  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t4  ¦  DELETE  ¦  16  ¦  16  𝄀
-t4  ¦  INSERT  ¦  101  ¦  101  𝄀
-t4  ¦  INSERT  ¦  104  ¦  104  𝄀
-t0  ¦  INSERT  ¦  200  ¦  200
+diff t4 against t0    flag    a    b
+t4    UPDATE    1    10000
+t0    UPDATE    1    99999
+t4    UPDATE    4    40000
+t4    DELETE    16    16
+t4    INSERT    101    101
+t4    INSERT    104    104
+t0    INSERT    200    200
 data branch diff t9 against t4 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t4[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  0  𝄀
-DELETED  ¦  1  ¦  0  𝄀
-UPDATED  ¦  1  ¦  0
+metric    t9    t4
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
 data branch diff t9 against t4 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 3
 data branch diff t9 against t4;
-➤ diff t9 against t4[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109
+diff t9 against t4    flag    a    b
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t9    INSERT    109    109
 data branch diff t9 against t1 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t1[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  0  𝄀
-DELETED  ¦  2  ¦  0  𝄀
-UPDATED  ¦  2  ¦  0
+metric    t9    t1
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
 data branch diff t9 against t1 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 6
 data branch diff t9 against t1;
-➤ diff t9 against t1[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109
+diff t9 against t1    flag    a    b
+t9    UPDATE    4    40000
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t9    DELETE    16    16
+t9    INSERT    104    104
+t9    INSERT    109    109
 data branch diff t9 against t6 output summary;
-➤ metric[12,0,0]  ¦  t9[-5,0,0]  ¦  t6[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  2  𝄀
-DELETED  ¦  3  ¦  2  𝄀
-UPDATED  ¦  3  ¦  2
+metric    t9    t6
+INSERTED    3    2
+DELETED    3    2
+UPDATED    3    2
 data branch diff t9 against t6 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 15
 data branch diff t9 against t6;
-➤ diff t9 against t6[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t6  ¦  UPDATE  ¦  2  ¦  20000  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t6  ¦  UPDATE  ¦  6  ¦  60000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t6  ¦  DELETE  ¦  14  ¦  14  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t6  ¦  DELETE  ¦  18  ¦  18  𝄀
-t9  ¦  DELETE  ¦  19  ¦  19  𝄀
-t9  ¦  INSERT  ¦  101  ¦  101  𝄀
-t6  ¦  INSERT  ¦  102  ¦  102  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t6  ¦  INSERT  ¦  106  ¦  106  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109
+diff t9 against t6    flag    a    b
+t9    UPDATE    1    10000
+t6    UPDATE    2    20000
+t9    UPDATE    4    40000
+t6    UPDATE    6    60000
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t6    DELETE    14    14
+t9    DELETE    16    16
+t6    DELETE    18    18
+t9    DELETE    19    19
+t9    INSERT    101    101
+t6    INSERT    102    102
+t9    INSERT    104    104
+t6    INSERT    106    106
+t9    INSERT    109    109
 data branch diff t4 against t3 output summary;
-➤ metric[12,0,0]  ¦  t4[-5,0,0]  ¦  t3[-5,0,0]  𝄀
-INSERTED  ¦  2  ¦  1  𝄀
-DELETED  ¦  2  ¦  1  𝄀
-UPDATED  ¦  2  ¦  1
+metric    t4    t3
+INSERTED    2    1
+DELETED    2    1
+UPDATED    2    1
 data branch diff t4 against t3 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 9
 data branch diff t4 against t3;
-➤ diff t4 against t3[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t4  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t3  ¦  UPDATE  ¦  3  ¦  30000  𝄀
-t4  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t4  ¦  DELETE  ¦  16  ¦  16  𝄀
-t3  ¦  DELETE  ¦  17  ¦  17  𝄀
-t4  ¦  DELETE  ¦  19  ¦  19  𝄀
-t4  ¦  INSERT  ¦  101  ¦  101  𝄀
-t3  ¦  INSERT  ¦  103  ¦  103  𝄀
-t4  ¦  INSERT  ¦  104  ¦  104
+diff t4 against t3    flag    a    b
+t4    UPDATE    1    10000
+t3    UPDATE    3    30000
+t4    UPDATE    4    40000
+t4    DELETE    16    16
+t3    DELETE    17    17
+t4    DELETE    19    19
+t4    INSERT    101    101
+t3    INSERT    103    103
+t4    INSERT    104    104
 data branch diff t18 against t9 output summary;
-➤ metric[12,0,0]  ¦  t18[-5,0,0]  ¦  t9[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  3  𝄀
-DELETED  ¦  3  ¦  3  𝄀
-UPDATED  ¦  2  ¦  3
+metric    t18    t9
+INSERTED    3    3
+DELETED    3    3
+UPDATED    2    3
 data branch diff t18 against t9 output count;
-➤ COUNT(*)[-5,0,0]  𝄀
+COUNT(*)
 17
 data branch diff t18 against t9;
-➤ diff t18 against t9[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
-t18  ¦  UPDATE  ¦  3  ¦  30000  𝄀
-t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
-t18  ¦  UPDATE  ¦  8  ¦  180000  𝄀
-t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  ¦  11  𝄀
-t18  ¦  DELETE  ¦  12  ¦  12  𝄀
-t9  ¦  DELETE  ¦  16  ¦  16  𝄀
-t18  ¦  DELETE  ¦  17  ¦  17  𝄀
-t18  ¦  DELETE  ¦  18  ¦  18  𝄀
-t9  ¦  DELETE  ¦  19  ¦  19  𝄀
-t9  ¦  INSERT  ¦  101  ¦  101  𝄀
-t18  ¦  INSERT  ¦  103  ¦  103  𝄀
-t9  ¦  INSERT  ¦  104  ¦  104  𝄀
-t18  ¦  INSERT  ¦  108  ¦  108  𝄀
-t9  ¦  INSERT  ¦  109  ¦  109  𝄀
-t18  ¦  INSERT  ¦  118  ¦  118
+diff t18 against t9    flag    a    b
+t9    UPDATE    1    10000
+t18    UPDATE    3    30000
+t9    UPDATE    4    40000
+t18    UPDATE    8    180000
+t9    UPDATE    9    90000
+t9    DELETE    11    11
+t18    DELETE    12    12
+t9    DELETE    16    16
+t18    DELETE    17    17
+t18    DELETE    18    18
+t9    DELETE    19    19
+t9    INSERT    101    101
+t18    INSERT    103    103
+t9    INSERT    104    104
+t18    INSERT    108    108
+t9    INSERT    109    109
+t18    INSERT    118    118
 data branch diff t13 against t9 output summary;
-➤ metric[12,0,0]  ¦  t13[-5,0,0]  ¦  t9[-5,0,0]  𝄀
-INSERTED  ¦  3  ¦  3  𝄀
-DELETED  ¦  3  ¦  3  𝄀
-UPDATED  ¦  3  ¦  3
+metric    t13    t9
+INSERTED    3    3
+DELETED    3    3
+UPDATED    3    3
 data branch diff t10 against t9 output summary;
-➤ metric[12,0,0]  ¦  t10[-5,0,0]  ¦  t9[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  1  𝄀
-DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+metric    t10    t9
+INSERTED    1    1
+DELETED    1    1
+UPDATED    1    1
 data branch diff t12 against t11 output summary;
-➤ metric[12,0,0]  ¦  t12[-5,0,0]  ¦  t11[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  1  𝄀
-DELETED  ¦  1  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+metric    t12    t11
+INSERTED    1    1
+DELETED    1    1
+UPDATED    1    1
 data branch diff t14 against t13 output summary;
-➤ metric[12,0,0]  ¦  t14[-5,0,0]  ¦  t13[-5,0,0]  𝄀
-INSERTED  ¦  1  ¦  1  𝄀
-DELETED  ¦  0  ¦  1  𝄀
-UPDATED  ¦  1  ¦  1
+metric    t14    t13
+INSERTED    1    1
+DELETED    0    1
+UPDATED    1    1
 data branch diff t9 against t0 columns (a);
-➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  1  𝄀
-t0  ¦  UPDATE  ¦  1  𝄀
-t9  ¦  UPDATE  ¦  4  𝄀
-t9  ¦  UPDATE  ¦  9  𝄀
-t9  ¦  DELETE  ¦  11  𝄀
-t9  ¦  DELETE  ¦  16  𝄀
-t9  ¦  INSERT  ¦  101  𝄀
-t9  ¦  INSERT  ¦  104  𝄀
-t9  ¦  INSERT  ¦  109  𝄀
-t0  ¦  INSERT  ¦  200
+diff t9 against t0    flag    a
+t9    UPDATE    1
+t0    UPDATE    1
+t9    UPDATE    4
+t9    UPDATE    9
+t9    DELETE    11
+t9    DELETE    16
+t9    INSERT    101
+t9    INSERT    104
+t9    INSERT    109
+t0    INSERT    200
 data branch diff t9 against t0 columns (b);
-➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  10000  𝄀
-t0  ¦  UPDATE  ¦  99999  𝄀
-t9  ¦  UPDATE  ¦  40000  𝄀
-t9  ¦  UPDATE  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  𝄀
-t9  ¦  DELETE  ¦  16  𝄀
-t9  ¦  INSERT  ¦  101  𝄀
-t9  ¦  INSERT  ¦  104  𝄀
-t9  ¦  INSERT  ¦  109  𝄀
-t0  ¦  INSERT  ¦  200
+diff t9 against t0    flag    b
+t9    UPDATE    10000
+t0    UPDATE    99999
+t9    UPDATE    40000
+t9    UPDATE    90000
+t9    DELETE    11
+t9    DELETE    16
+t9    INSERT    101
+t9    INSERT    104
+t9    INSERT    109
+t0    INSERT    200
 drop table t9;
 drop table t10;
 drop table t11;
