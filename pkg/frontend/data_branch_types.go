@@ -98,23 +98,28 @@ type collectRange struct {
 //
 // Running example. Tree (depth 4, 19 nodes, 10 leaves):
 //
-//                          t0
-//                       /   |   \
-//                     t1   t2   t3
-//                    /  \   |   /  \
-//                  t4   t5 t6  t7   t8
-//                 / \   /\ /\  /\   /\
-//                t9 t10 ... ... ... t18
+//	          t0
+//	       /   |   \
+//	     t1   t2   t3
+//	    /  \   |   /  \
+//	  t4   t5 t6  t7   t8
+//	 / \   /\ /\  /\   /\
+//	t9 t10 ... ... ... t18
 //
 // For `data branch diff t9 against t0`:
-//   pathFromLCAToTar  = [t0, t1, t4, t9]
-//   pathFromLCAToBase = [t0]
+//
+//	pathFromLCAToTar  = [t0, t1, t4, t9]
+//	pathFromLCAToBase = [t0]
+//
 // For `data branch diff t9 against t11` (t11 sits under t5):
-//   pathFromLCAToTar  = [t1, t4, t9]
-//   pathFromLCAToBase = [t1, t5, t11]
+//
+//	pathFromLCAToTar  = [t1, t4, t9]
+//	pathFromLCAToBase = [t1, t5, t11]
+//
 // For `data branch diff t9 against t13` (t13 sits under t2→t6):
-//   pathFromLCAToTar  = [t0, t1, t4, t9]
-//   pathFromLCAToBase = [t0, t2, t6, t13]
+//
+//	pathFromLCAToTar  = [t0, t1, t4, t9]
+//	pathFromLCAToBase = [t0, t2, t6, t13]
 type branchMetaInfo struct {
 	lcaTableId uint64
 
@@ -203,6 +208,23 @@ type tableStuff struct {
 	retPool *retBatchList
 
 	bufPool *sync.Pool
+}
+
+// resolvedSnapshots returns the effective per-side snapshot timestamps:
+// the snapshot bound to {tar,base}Snap when present, otherwise the
+// session's transaction snapshot. Centralized here so every call site
+// (decideCollectRange, diffOnBase, hashDiffIfHasLCA) uses the exact
+// same derivation.
+func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
+	tarSP = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	baseSP = tarSP
+	if t.tarSnap != nil && t.tarSnap.TS != nil {
+		tarSP = types.TimestampToTS(*t.tarSnap.TS)
+	}
+	if t.baseSnap != nil && t.baseSnap.TS != nil {
+		baseSP = types.TimestampToTS(*t.baseSnap.TS)
+	}
+	return
 }
 
 type batchWithKind struct {

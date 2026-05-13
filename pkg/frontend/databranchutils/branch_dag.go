@@ -216,11 +216,19 @@ func (d *DataBranchDAG) GetCloneTS(tableID uint64) (int64, bool) {
 	return node.CloneTS, true
 }
 
+// maxBranchDAGDepth bounds PathFromAncestor's walk so a corrupted
+// DAG with a Parent-pointer cycle cannot drive an infinite loop.
+// In practice user-visible chains never approach this limit; deep
+// real-world trees have been seen to ~16 levels.
+const maxBranchDAGDepth = 1024
+
 // PathFromAncestor returns the table IDs and clone timestamps along the
 // chain from ancestorID (inclusive) down to descendantID (inclusive).
 // Entries are ordered top-down: result[0] is ancestorID, result[len-1]
 // is descendantID. Returns ok=false if descendantID is not a (possibly
-// transitive) descendant of ancestorID.
+// transitive) descendant of ancestorID, or if the walk exceeds
+// maxBranchDAGDepth (a defense-in-depth guard against a corrupted DAG
+// with a cycle in Parent pointers).
 //
 // cloneTSes[0] is ancestorID's own CloneTS (or 0 if ancestorID is a
 // root); cloneTSes[i] for i>0 is the CloneTS of result[i] (i.e. the
@@ -231,13 +239,13 @@ func (d *DataBranchDAG) GetCloneTS(tableID uint64) (int64, bool) {
 //
 // Example. With the tree
 //
-//                          t0
-//                       /   |   \
-//                     t1   t2   t3
-//                     |     |
-//                    t4    t6
-//                    /
-//                   t9
+//	       t0
+//	    /   |   \
+//	  t1   t2   t3
+//	  |     |
+//	 t4    t6
+//	 /
+//	t9
 //
 // PathFromAncestor(t9, t0) = ([t0, t1, t4, t9], [<cts>, <cts>, <cts>, <cts>], true)
 // PathFromAncestor(t6, t0) = ([t0, t2, t6], ..., true)
@@ -253,22 +261,20 @@ func (d *DataBranchDAG) PathFromAncestor(descendantID, ancestorID uint64) (
 		return nil, nil, false
 	}
 	// Walk up from descendant collecting nodes; stop when we reach
-	// ancestor (inclusive) or run off the top.
-	for node != nil {
+	// ancestor (inclusive), run off the top, or exceed the depth
+	// guard.
+	for steps := 0; node != nil && steps < maxBranchDAGDepth; steps++ {
 		tableIDs = append(tableIDs, node.TableID)
 		cloneTSes = append(cloneTSes, node.CloneTS)
 		if node.TableID == ancestorID {
-			break
+			// Reverse into top-down order (ancestor first).
+			for i, j := 0, len(tableIDs)-1; i < j; i, j = i+1, j-1 {
+				tableIDs[i], tableIDs[j] = tableIDs[j], tableIDs[i]
+				cloneTSes[i], cloneTSes[j] = cloneTSes[j], cloneTSes[i]
+			}
+			return tableIDs, cloneTSes, true
 		}
 		node = node.Parent
 	}
-	if node == nil || node.TableID != ancestorID {
-		return nil, nil, false
-	}
-	// Reverse into top-down order (ancestor first).
-	for i, j := 0, len(tableIDs)-1; i < j; i, j = i+1, j-1 {
-		tableIDs[i], tableIDs[j] = tableIDs[j], tableIDs[i]
-		cloneTSes[i], cloneTSes[j] = cloneTSes[j], cloneTSes[i]
-	}
-	return tableIDs, cloneTSes, true
+	return nil, nil, false
 }
