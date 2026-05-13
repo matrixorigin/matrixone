@@ -524,6 +524,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
+			{"kind", types.T_varchar, false, 32, 0},
 		},
 		pks: []int{0},
 	}

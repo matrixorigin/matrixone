@@ -316,6 +316,35 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
+// EvictWithWait is like Evict but blocks until the eviction lock is acquired,
+// guaranteeing that eviction actually runs before returning. This is used by
+// EnsureNBytes to prevent unbounded memory growth under high concurrency where
+// TryLock-based Evict would skip eviction entirely.
+func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
+
+	for {
+		globalCapacityCut := c.capacityCut.Swap(0)
+		target := c.capacity() - capacityCut - globalCapacityCut
+		if target < 0 {
+			target = 0
+		}
+		if c.used1+c.used2 <= target {
+			break
+		}
+		target1 := c.capacity1() - capacityCut - globalCapacityCut
+		if target1 < 0 {
+			target1 = 0
+		}
+		if c.used1 > target1 {
+			c.evict1(ctx)
+		} else {
+			c.evict2(ctx)
+		}
+	}
+}
+
 func (c *Cache[K, V]) used() int64 {
 	c.queueLock.RLock()
 	defer c.queueLock.RUnlock()
