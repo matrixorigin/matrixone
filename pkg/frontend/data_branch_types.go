@@ -89,6 +89,44 @@ type branchMetaInfo struct {
 	lcaTableId   uint64
 	tarBranchTS  types.TS
 	baseBranchTS types.TS
+
+	// pathFromLCAToTar / pathFromLCAToBase carry the full DAG chain
+	// from the LCA (lowest common ancestor of tar and base) down to
+	// each endpoint. Index 0 is the LCA itself; the last index is
+	// the endpoint. pathFromLCAToXxxTS[i] holds the CloneTS of the
+	// i-th node (the i-th node was cloned off the (i-1)-th node at
+	// that timestamp; pathFromLCAToXxxTS[0] is the LCA's own
+	// CloneTS, which is unused for diff purposes — the LCA's own
+	// mutation window starts at its creation commit TS instead).
+	//
+	// Running example. Tree (depth 4, 19 nodes, 10 leaves):
+	//
+	//                          t0
+	//                       /   |   \
+	//                     t1   t2   t3
+	//                    /  \   |   /  \
+	//                  t4   t5 t6  t7   t8
+	//                 / \   /\ /\  /\   /\
+	//                t9 t10 ... ... ... t18
+	//
+	// For `data branch diff t9 against t0`:
+	//   pathFromLCAToTar  = [t0, t1, t4, t9]
+	//   pathFromLCAToBase = [t0]
+	// For `data branch diff t9 against t11` (t11 sits under t5):
+	//   pathFromLCAToTar  = [t1, t4, t9]
+	//   pathFromLCAToBase = [t1, t5, t11]
+	// For `data branch diff t9 against t13` (t13 sits under t2→t6):
+	//   pathFromLCAToTar  = [t0, t1, t4, t9]
+	//   pathFromLCAToBase = [t0, t2, t6, t13]
+	//
+	// These chains let decideCollectRange iterate every intermediate
+	// ancestor (not just the direct child of LCA) and emit one
+	// collect segment per ancestor, surfacing inherited mutations
+	// that would otherwise be invisible to a single-relation scan.
+	pathFromLCAToTar    []uint64
+	pathFromLCAToTarTS  []types.TS
+	pathFromLCAToBase   []uint64
+	pathFromLCAToBaseTS []types.TS
 }
 
 type tableStuff struct {
