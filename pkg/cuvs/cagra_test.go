@@ -191,6 +191,20 @@ func TestGpuCagraFromDataDirectory(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	// Same queries we'll re-run after Pack/Unpack/load — gives us a "before"
+	// baseline. If this returns [1 100] dist [0 0] but the post-reload search
+	// returns garbage, the bug is in the save/load round-trip itself (not the
+	// build / dataset / search params).
+	queriesBefore := []float32{1.0, 1.0, 100.0, 100.0}
+	spBefore := DefaultCagraSearchParams()
+	spBefore.ItopkSize = 128
+	spBefore.SearchWidth = 3
+	resBefore, err := index.Search(queriesBefore, 2, dimension, 1, spBefore)
+	if err != nil {
+		t.Fatalf("pre-pack Search failed: %v", err)
+	}
+	t.Logf("[before Pack] Neighbors: %v, Distances: %v", resBefore.Neighbors, resBefore.Distances)
+
 	// Pack to tar, then extract to a directory, then load via NewGpuCagraFromDataDirectory
 	tarFile := "test_cagra_dir.tar"
 	if err := index.Pack(tarFile); err != nil {
@@ -223,6 +237,13 @@ func TestGpuCagraFromDataDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
+	// Distances disambiguate the failure mode: ~0 ⇒ search returned the
+	// wrong dataset row but the dataset *is* there (graph corruption); large
+	// ⇒ dataset missing/wrong on the loaded index (cuVS serialize did not
+	// include the dataset, or deserialize lost it). For collinear vec[i]=(i,i),
+	// L2² distance to query (q,q) is 2*(i-q)² — so vec[1] should be 0 from
+	// (1,1) and vec[100] should be 0 from (100,100).
+	t.Logf("[after  load] Neighbors: %v, Distances: %v", result.Neighbors, result.Distances)
 	if result.Neighbors[0] != 1 {
 		t.Errorf("Expected neighbor 1, got %d", result.Neighbors[0])
 	}

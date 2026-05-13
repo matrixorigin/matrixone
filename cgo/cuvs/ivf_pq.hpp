@@ -1645,6 +1645,11 @@ public:
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_pq_index>(*res);
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
+            // Drain `res`'s stream so any H2D copy committed by deserialize is
+            // visible before any search thread reads the loaded index. Without
+            // this, a worker on a different stream can race the H2D and see
+            // pre-copy garbage. Same race fixed in cagra.hpp.
+            raft::resource::sync_stream(*res);
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -1800,6 +1805,10 @@ public:
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<ivf_pq_index>(*res);
                 cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
+                // Drain `res`'s stream so deserialize's H2D copy is committed
+                // before any search thread reads the loaded index. See the
+                // longer comment in cagra.hpp load_dir() for the failure mode.
+                raft::resource::sync_stream(*res);
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(local_idx);
                 return std::any();
@@ -1815,6 +1824,8 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
                     cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
+                    // See SINGLE_GPU branch above for the rationale.
+                    raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
@@ -1832,6 +1843,8 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
                     cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
+                    // See SINGLE_GPU branch above for the rationale.
+                    raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));

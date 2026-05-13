@@ -1337,6 +1337,10 @@ public:
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<cagra_index>(*res);
             cuvs::neighbors::cagra::deserialize(*res, filename, local_idx.get());
+            // Drain `res`'s stream so the dataset H2D copy committed by
+            // deserialize is visible before any search thread reads it.
+            // See the longer comment in load_dir() for the failure mode.
+            raft::resource::sync_stream(*res);
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -1479,6 +1483,18 @@ public:
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<cagra_index>(*res);
                 cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get());
+                // cuVS' cagra::deserialize stages the dataset host→device on
+                // `res`'s stream and returns BEFORE the H2D copy is committed.
+                // If we publish `local_idx` to other worker threads (search
+                // tasks run on round-robin workers, each with its own stream)
+                // without first draining `res`'s stream, the first search can
+                // read pre-H2D garbage from the dataset region and return
+                // bogus neighbors at distance² ≈ ‖q‖² (the all-zeros tie). On
+                // hosts where the H2D happens to finish before any search
+                // runs, the race is benign; on this WSL2 box it fires every
+                // time. Drain the stream here to make the dataset visible to
+                // any subsequent searcher.
+                raft::resource::sync_stream(*res);
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(local_idx);
                 return std::any();
@@ -1494,6 +1510,8 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<cagra_index>(*res);
                     cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get());
+                    // See SINGLE_GPU branch above for the rationale.
+                    raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<cagra_index>(std::move(local_idx));
@@ -1511,6 +1529,8 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<cagra_index>(*res);
                     cuvs::neighbors::cagra::deserialize(*res, shard_path, local_idx.get());
+                    // See SINGLE_GPU branch above for the rationale.
+                    raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<cagra_index>(std::move(local_idx));
