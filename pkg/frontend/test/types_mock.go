@@ -485,6 +485,12 @@ func (m *MockExecResult) GetColumnCount() uint64 {
 	return ret0
 }
 
+// GetColumnCount indicates an expected call of GetColumnCount.
+func (mr *MockExecResultMockRecorder) GetColumnCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumnCount", reflect.TypeOf((*MockExecResult)(nil).GetColumnCount))
+}
+
 // GetRowCount indicates an expected call of GetRowCount.
 func (mr *MockExecResultMockRecorder) GetRowCount() *gomock.Call {
 	mr.mock.ctrl.T.Helper()

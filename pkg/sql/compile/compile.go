@@ -1604,6 +1604,11 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 }
 
 func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	// Hive partition tables use recursive list-and-filter discovery, not ReadDir.
+	// ReadDir requires glob patterns in filepath; Hive base paths are opaque directories.
+	if param.HivePartitioning {
+		return c.getHivePartitionFileList(node, param)
+	}
 	switch node.ExternScan.Type {
 	case int32(plan.ExternType_EXTERNAL_TB):
 		t := time.Now()
@@ -1635,6 +1640,68 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 		fileSize = []int64{param.FileSize}
 	}
 	return fileList, fileSize, nil
+}
+
+func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternParam) ([]string, []int64, error) {
+	partColSet := toLowerSet(param.HivePartitionCols)
+	partFilters, fpFilters, rowFilters := external.ClassifyFilters(
+		node.TableDef, node.FilterList, partColSet)
+
+	preds := external.ExtractPartitionPredicatesFromExprs(node.TableDef, partFilters, partColSet)
+
+	listDir := external.NewListDirFunc(param)
+	result, err := external.DiscoverHivePartitions(
+		c.proc.Ctx, listDir, param.Filepath,
+		param.HivePartitionCols, param.HivePartitionColTypes, preds)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fileList := make([]string, len(result.Files))
+	fileSize := make([]int64, len(result.Files))
+	for i, f := range result.Files {
+		fileList[i] = f.FilePath
+		fileSize[i] = f.FileSize
+	}
+
+	if len(fpFilters) > 0 {
+		var leftover []*plan.Expr
+		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node.TableDef, fpFilters, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		rowFilters = append(rowFilters, leftover...)
+	}
+
+	node.FilterList = rowFilters
+	return fileList, fileSize, nil
+}
+
+func runFilePathFilters(
+	ctx context.Context,
+	proc *process.Process,
+	tableDef *plan.TableDef,
+	fpFilters []*plan.Expr,
+	fileList []string,
+	fileSize []int64,
+) ([]string, []int64, []*plan.Expr, error) {
+	tmpNode := &plan.Node{
+		TableDef:   tableDef,
+		FilterList: fpFilters,
+	}
+	outFileList, outFileSize, err := external.FilterFileList(ctx, tmpNode, proc, fileList, fileSize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return outFileList, outFileSize, tmpNode.FilterList, nil
+}
+
+func toLowerSet(cols []string) map[string]bool {
+	m := make(map[string]bool, len(cols))
+	for _, col := range cols {
+		m[strings.ToLower(col)] = true
+	}
+	return m
 }
 
 func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
@@ -1686,6 +1753,10 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 
 		ret.Proc = c.proc.NewNoContextChildProc(0)
 		return []*Scope{ret}, nil
+	}
+
+	if param.HivePartitioning {
+		return c.compileExternScanHiveFileFanout(node, param, fileList, fileSize, strictSqlMode)
 	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
@@ -1815,6 +1886,152 @@ func capLoadParallelism(cpuNum int) int {
 	}
 
 	return cpuNum
+}
+
+type hiveFileShard struct {
+	node     engine.Node
+	fileList []string
+	fileSize []int64
+}
+
+func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
+	shards := splitHiveFileShards(fileList, fileSize, nodes)
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		// Each fanout scope scans whole parquet files. Keeping Parallel=false
+		// avoids the generic parallel path's per-file offset splitting while
+		// preserving Extern.Filepath as the Hive base path for partition fills.
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
+	if fileCount <= 0 {
+		return nil
+	}
+	if param.ScanType == tree.S3 && len(c.cnList) > 0 {
+		nodes := make([]engine.Node, 0, fileCount)
+		for _, node := range c.cnList {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			if mcpu > external.S3ParallelMaxnum {
+				mcpu = external.S3ParallelMaxnum
+			}
+			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
+				n := node
+				n.Mcpu = 1
+				nodes = append(nodes, n)
+			}
+			if len(nodes) >= fileCount {
+				break
+			}
+		}
+		if len(nodes) > 0 {
+			return nodes
+		}
+	}
+
+	mcpu := c.ncpu
+	if mcpu <= 0 {
+		mcpu = 1
+	}
+	if mcpu > fileCount {
+		mcpu = fileCount
+	}
+	nodes := make([]engine.Node, mcpu)
+	for i := range nodes {
+		nodes[i] = engine.Node{Addr: c.addr, Mcpu: 1}
+	}
+	return nodes
+}
+
+func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Node) []hiveFileShard {
+	if len(fileList) == 0 || len(nodes) == 0 {
+		return nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(fileList) {
+		shardCount = len(fileList)
+	}
+	shards := make([]hiveFileShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+	}
+
+	indices := make([]int, len(fileList))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	})
+
+	for _, fileIdx := range indices {
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].fileList) < len(shards[shardIdx].fileList)) {
+				shardIdx = i
+			}
+		}
+		shards[shardIdx].fileList = append(shards[shardIdx].fileList, fileList[fileIdx])
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
+		loads[shardIdx] += size
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.fileList) > 0 {
+			nonEmpty = append(nonEmpty, shard)
+		}
+	}
+	return nonEmpty
+}
+
+func hiveFileSizeAt(fileSize []int64, idx int) int64 {
+	if idx >= 0 && idx < len(fileSize) {
+		return fileSize[idx]
+	}
+	return 0
+}
+
+func makeWholeFileOffsets(count int) []*pipeline.FileOffset {
+	offsets := make([]*pipeline.FileOffset, count)
+	for i := range offsets {
+		offsets[i] = &pipeline.FileOffset{Offset: []int64{0, -1}}
+	}
+	return offsets
 }
 
 func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
@@ -2785,23 +3002,23 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	buildScopeAttached := false
 	for i := range rs {
 		if isSameCN(rs[i].NodeInfo.Addr, buildScopes[0].NodeInfo.Addr) {
 			rs[i].PreScopes = append(rs[i].PreScopes, buildScopes[0])
+			buildScopeAttached = true
 			break
 		}
 	}
+	if !buildScopeAttached {
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+	}
 
 	buildOpScopes := make([]*Scope, 0, len(c.cnList))
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs)
 
-	if len(rs) > len(c.cnList) { // probe side is shuffle scopes
-		for i := range c.cnList {
-			var tmp []*Scope
-			for j := range rs {
-				if isSameCN(c.cnList[i].Addr, rs[j].NodeInfo.Addr) {
-					tmp = append(tmp, rs[j])
-				}
-			}
+	if len(rs) > len(c.cnList) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+		for _, tmp := range probeScopeGroups {
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -2844,6 +3061,50 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	buildScopes[0].setRootOperator(dispatchArg)
 	return rs
+}
+
+func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope) [][]*Scope {
+	groups := make([][]*Scope, 0, len(rs))
+	used := make([]bool, len(rs))
+
+	for _, cn := range c.cnList {
+		var group []*Scope
+		for i := range rs {
+			if !used[i] && isSameCN(cn.Addr, rs[i].NodeInfo.Addr) {
+				group = append(group, rs[i])
+				used[i] = true
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+
+	for i := range rs {
+		if used[i] {
+			continue
+		}
+		group := []*Scope{rs[i]}
+		used[i] = true
+		for j := i + 1; j < len(rs); j++ {
+			if !used[j] && isSameCN(rs[i].NodeInfo.Addr, rs[j].NodeInfo.Addr) {
+				group = append(group, rs[j])
+				used[j] = true
+			}
+		}
+		groups = append(groups, group)
+	}
+
+	return groups
+}
+
+func hasMultiScopeGroup(groups [][]*Scope) bool {
+	for _, group := range groups {
+		if len(group) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
@@ -3276,6 +3537,17 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 		}
 		c.anal.isFirst = false
 		return inputSS
+	}
+
+	//fallback to non-shuffle group
+	if len(inputSS) != 1 || inputSS[0].NodeInfo.Mcpu <= 1 || inputSS[0].NodeInfo.Mcpu != int(node.Stats.Dop) {
+		if c.IsSingleScope(inputSS) {
+			return c.compileTPGroup(node, inputSS, nodes)
+		}
+
+		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		defer groupInfo.Release()
+		return c.compileMergeGroup(node, inputSS, nodes, groupInfo.AnyDistinctAgg())
 	}
 
 	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -454,6 +455,134 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	gzPath = path.Clean("/" + gzPath)
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{gzPath}, fileSize, false)
 	require.Error(t, err)
+}
+
+func TestCompileExternScanHiveFileFanout(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType:         tree.S3,
+			Filepath:         "warehouse/sales",
+			Format:           tree.PARQUET,
+			HivePartitioning: true,
+			Tail:             &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			Parallel: true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	fileList := []string{
+		"warehouse/sales/year=2024/month=01/p0.parquet",
+		"warehouse/sales/year=2024/month=02/p1.parquet",
+		"warehouse/sales/year=2025/month=01/p2.parquet",
+		"warehouse/sales/year=2025/month=02/p3.parquet",
+	}
+	fileSize := []int64{10, 20, 30, 40}
+
+	ss, err := testCompile.compileExternScanHiveFileFanout(n, param, fileList, fileSize, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 4)
+	require.Equal(t, "warehouse/sales", param.Filepath)
+	require.True(t, param.Parallel)
+
+	totalFiles := 0
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, "warehouse/sales", ext.Es.Extern.Filepath)
+		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.FileList))
+		for _, off := range ext.Es.FileOffsetTotal {
+			require.Equal(t, []int64{0, -1}, off.Offset)
+		}
+		totalFiles += len(ext.Es.FileList)
+	}
+	require.Equal(t, len(fileList), totalFiles)
+}
+
+func TestCompileBuildSideForBroadcastJoinSkipsEmptyCN(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	node := &plan.Node{
+		Stats: &plan.Stats{
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	buildScope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	buildScope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	rs := []*Scope{
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+	}
+	for _, scope := range rs {
+		scope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	}
+
+	out := testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
+
+	require.Same(t, rs[0], out[0])
+	require.Len(t, rs[0].PreScopes, 2)
+	require.Empty(t, rs[1].PreScopes)
+	require.Empty(t, rs[2].PreScopes)
+	require.Same(t, buildScope, rs[0].PreScopes[0])
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	require.NoError(t, checkScopeWithExpectedList(buildScope, []vm.OpType{vm.TableScan, vm.Dispatch}))
+	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, dispatchOp.LocalRegs, 1)
+	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	node := &plan.Node{
+		Stats: &plan.Stats{
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	buildScope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	buildScope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	rs := []*Scope{
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+		generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.HashJoin}),
+	}
+	for _, scope := range rs {
+		scope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
+	}
+
+	testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
+
+	require.Len(t, rs[0].PreScopes, 2)
+	require.Empty(t, rs[1].PreScopes)
+	require.Same(t, buildScope, rs[0].PreScopes[0])
+	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Len(t, dispatchOp.LocalRegs, 1)
+	require.Empty(t, dispatchOp.RemoteRegs)
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
