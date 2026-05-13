@@ -15,10 +15,13 @@
 package system
 
 import (
+	"bufio"
 	"context"
 	"math"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -115,6 +118,69 @@ func MemoryUsed() uint64 {
 	return mem.Used
 }
 
+// WorkingSet returns the working set memory in bytes, which is
+// memory.current - inactive_file (cgroups v2) or
+// memory.usage_in_bytes - total_inactive_file (cgroups v1).
+// This matches how Kubernetes computes working_set_bytes for eviction
+// decisions and excludes reclaimable page cache that the kernel can
+// reclaim under memory pressure without triggering OOM.
+// Falls back to MemoryUsed() if inactive_file cannot be read.
+func WorkingSet() uint64 {
+	used := MemoryUsed()
+	inactive := cgroupInactiveFile()
+	if inactive > 0 && inactive < used {
+		return used - inactive
+	}
+	return used
+}
+
+// cgroupInactiveFile reads inactive_file from the cgroup memory.stat.
+// Returns 0 if it cannot be determined.
+func cgroupInactiveFile() uint64 {
+	return cgroupInactiveFileValue.Load()
+}
+
+var cgroupInactiveFileValue atomic.Uint64
+
+func refreshCgroupInactiveFile() {
+	// cgroups v2: /sys/fs/cgroup/memory.stat key "inactive_file"
+	if v := readStatKey("/sys/fs/cgroup/memory.stat", "inactive_file"); v > 0 {
+		cgroupInactiveFileValue.Store(v)
+		return
+	}
+	// cgroups v1: /sys/fs/cgroup/memory/memory.stat key "total_inactive_file"
+	if v := readStatKey("/sys/fs/cgroup/memory/memory.stat", "total_inactive_file"); v > 0 {
+		cgroupInactiveFileValue.Store(v)
+		return
+	}
+	cgroupInactiveFileValue.Store(0)
+}
+
+func readStatKey(path, key string) uint64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, key) {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) != 2 || parts[0] != key {
+			continue
+		}
+		v, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return v
+	}
+	return 0
+}
+
 // MallocTrimIfTight calls malloc_trim(0) if container memory usage > 75%.
 // Rate-limited to at most once per 5 seconds to avoid excessive overhead.
 func MallocTrimIfTight() {
@@ -197,6 +263,8 @@ func runWithContainer(stopper *stopper.Stopper) {
 		for {
 			select {
 			case <-ticker.C:
+				refreshCgroupInactiveFile()
+
 				stats, err := cgroup.GetCPUAcctStats(pid)
 				if err != nil {
 					logutil.Errorf("failed to get cpu acct cgroup stats: %v", err)
@@ -344,5 +412,6 @@ func refreshQuotaConfig() {
 func init() {
 	pid = os.Getpid()
 	refreshQuotaConfig()
+	refreshCgroupInactiveFile()
 	SetGoMaxProcs(int(cpuNum.Load()))
 }

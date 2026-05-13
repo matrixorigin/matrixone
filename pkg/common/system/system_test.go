@@ -43,6 +43,29 @@ func TestMemory(t *testing.T) {
 	require.Equal(t, true, totalMemory >= availableMemory)
 }
 
+func TestWorkingSet(t *testing.T) {
+	ws := WorkingSet()
+	used := MemoryUsed()
+	// WorkingSet <= MemoryUsed (inactive_file subtracted)
+	require.LessOrEqual(t, ws, used)
+	// WorkingSet > 0 (we're running, so some memory is in use)
+	require.Greater(t, ws, uint64(0))
+}
+
+func TestReadStatKey(t *testing.T) {
+	t.Run("nonexistent file returns 0", func(t *testing.T) {
+		v := readStatKey("/nonexistent/path", "inactive_file")
+		require.Equal(t, uint64(0), v)
+	})
+
+	t.Run("reads cgroup v2 memory.stat if available", func(t *testing.T) {
+		v := readStatKey("/sys/fs/cgroup/memory.stat", "inactive_file")
+		// On systems with cgroups v2, this should be > 0
+		// On systems without, it will be 0 (file doesn't exist)
+		t.Logf("inactive_file from cgroups v2: %d", v)
+	})
+}
+
 // Benchmark_GoRutinues
 // goos: darwin
 // goarch: arm64
