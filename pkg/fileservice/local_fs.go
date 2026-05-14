@@ -181,11 +181,14 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			l.perfCounterSets,
 			true,
-			l,
+			nil,
 			l.name,
 		)
 		if err != nil {
 			return err
+		}
+		if l.memCache != nil {
+			l.diskCache.memoryCache = l.memCache.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", l.name),
