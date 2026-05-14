@@ -890,10 +890,10 @@ public:
     // worker lambda. When prebuilt is null we use the legacy build_search_bitset
     // entry point which keeps its own internal sync (host_mask is local there).
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        // std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // No top-level lock: the index pointer is taken from the per-handle
+        // cache or, on a miss, a narrow inner shared_lock below (see the
+        // replicated_indices_ lookup). GPU work must run unlocked.
         auto res = handle.get_raft_resources();
-
-        // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         // Step C: reuse per-thread grow-only query workspace buffer.
         auto& q_buf = handle.template q_dev_buf<T>(static_cast<size_t>(num_queries) * this->dimension);
@@ -1045,10 +1045,10 @@ public:
     // semantics here (off-worker CPU mask eval, skip queries-H2D sync_stream
     // when prebuilt is non-null).
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const ivf_flat_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        // std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // No top-level lock: see search_internal() above — pointer fetched
+        // via per-handle cache / narrow inner shared_lock, GPU work runs
+        // unlocked.
         auto res = handle.get_raft_resources();
-
-        // std::cout << "[DEBUG " << get_timestamp() << "] IVF-Flat search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         // Step C: reuse the per-thread T-typed query workspace buffer.
         const size_t n_q_elems = static_cast<size_t>(num_queries) * this->dimension;
