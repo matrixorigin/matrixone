@@ -73,6 +73,8 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
 // If the rule set is empty, the original SQL is returned unchanged.
 // This function only injects hints when enable_remap_hint is true.
+// Rule cache load failures are returned to the caller so access-control rewrites
+// do not silently fall back to the unmodified SQL.
 func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	// Check if enable_remap_hint is enabled using cached value
 	if !ses.rewriteEnabled.Load() {
@@ -88,9 +90,8 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		// Load rules if cache is empty
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
-			// Log the error for debugging
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
-			return sql, nil
+			return sql, err
 		}
 
 		// Update cache with write lock and double-check
@@ -110,7 +111,7 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 
 	hint, err := formatRewriteHint(ctx, cache)
 	if err != nil {
-		return sql, nil
+		return sql, err
 	}
 
 	return hint + " " + sql, nil
@@ -152,24 +153,71 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 		return rules, nil
 	}
 
+	rolePriority := make(map[int64]int, len(roleIDs))
+	for i, roleID := range roleIDs {
+		rolePriority[roleID] = i
+	}
+
+	ruleRows := make([]rewriteRuleRow, 0, erArray[0].GetRowCount())
 	rowCount := erArray[0].GetRowCount()
 	for i := uint64(0); i < rowCount; i++ {
-		ruleName, err := erArray[0].GetString(ctx, i, 0)
+		roleID, err := erArray[0].GetInt64(ctx, i, 0)
 		if err != nil {
 			return nil, err
 		}
-		rule, err := erArray[0].GetString(ctx, i, 1)
+		ruleName, err := erArray[0].GetString(ctx, i, 1)
 		if err != nil {
 			return nil, err
 		}
-		if existingRule, ok := rules[ruleName]; ok {
-			rules[ruleName] = mergeRewriteRules(ctx, existingRule, rule)
+		rule, err := erArray[0].GetString(ctx, i, 2)
+		if err != nil {
+			return nil, err
+		}
+		ruleRows = append(ruleRows, rewriteRuleRow{
+			roleID:   roleID,
+			ruleName: ruleName,
+			rule:     rule,
+		})
+	}
+
+	// Rule conflict priority follows active-role discovery order:
+	// primary role, directly granted secondary roles by grant time, then inherited
+	// roles in breadth-first grant-time order. Later rows override incompatible
+	// earlier rows for the same rule_name.
+	sort.SliceStable(ruleRows, func(i, j int) bool {
+		iPriority, iOK := rolePriority[ruleRows[i].roleID]
+		jPriority, jOK := rolePriority[ruleRows[j].roleID]
+		if !iOK {
+			iPriority = len(rolePriority)
+		}
+		if !jOK {
+			jPriority = len(rolePriority)
+		}
+		if iPriority != jPriority {
+			return iPriority < jPriority
+		}
+		return ruleRows[i].ruleName < ruleRows[j].ruleName
+	})
+
+	for _, row := range ruleRows {
+		if existingRule, ok := rules[row.ruleName]; ok {
+			mergedRule, err := mergeRewriteRules(ctx, existingRule, row.rule)
+			if err != nil {
+				return nil, err
+			}
+			rules[row.ruleName] = mergedRule
 		} else {
-			rules[ruleName] = rule
+			rules[row.ruleName] = row.rule
 		}
 	}
 
 	return rules, nil
+}
+
+type rewriteRuleRow struct {
+	roleID   int64
+	ruleName string
+	rule     string
 }
 
 func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) ([]int64, error) {
@@ -187,7 +235,7 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 	addRoleID(int64(tenant.GetDefaultRoleID()))
 
 	if tenant.GetUseSecondaryRole() {
-		sql := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+		sql := getSqlForRoleIDsOfUserForRuleCache(int(tenant.GetUserID()))
 		bh.ClearExecResultSet()
 		if err := bh.Exec(ctx, sql); err != nil {
 			return nil, err
@@ -211,7 +259,7 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 	}
 
 	for i := 0; i < len(roleQueue); i++ {
-		sql := getSqlForInheritedRoleIdOfRoleId(roleQueue[i])
+		sql := getSqlForInheritedRoleIDsForRuleCache(roleQueue[i])
 		bh.ClearExecResultSet()
 		if err := bh.Exec(ctx, sql); err != nil {
 			return nil, err
@@ -234,14 +282,15 @@ func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenan
 		}
 	}
 
-	roleIDs := make([]int64, 0, len(roleSet))
-	for roleID := range roleSet {
-		roleIDs = append(roleIDs, roleID)
-	}
-	sort.Slice(roleIDs, func(i, j int) bool {
-		return roleIDs[i] < roleIDs[j]
-	})
-	return roleIDs, nil
+	return roleQueue, nil
+}
+
+func getSqlForRoleIDsOfUserForRuleCache(userID int) string {
+	return fmt.Sprintf("select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d order by granted_time asc, role_id asc;", userID)
+}
+
+func getSqlForInheritedRoleIDsForRuleCache(roleID int64) string {
+	return fmt.Sprintf("select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d order by granted_time asc, granted_id asc;", roleID)
 }
 
 func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
@@ -252,26 +301,32 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 		}
 		builder.WriteString(strconv.FormatInt(roleID, 10))
 	}
-	return fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id in (%s) order by role_id, rule_name",
+	return fmt.Sprintf("select role_id, rule_name, `rule` from %s.%s where role_id in (%s) order by role_id, rule_name",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
-func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) string {
+func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string, error) {
 	leftRule = trimRewriteRuleForUnion(leftRule)
 	rightRule = trimRewriteRuleForUnion(rightRule)
 
-	leftColumns, ok := rewriteRuleOutputColumns(ctx, leftRule)
-	if !ok {
-		return rightRule
+	leftColumns, ok, err := rewriteRuleOutputColumns(ctx, leftRule)
+	if err != nil {
+		return "", err
 	}
-	rightColumns, ok := rewriteRuleOutputColumns(ctx, rightRule)
 	if !ok {
-		return rightRule
+		return rightRule, nil
+	}
+	rightColumns, ok, err := rewriteRuleOutputColumns(ctx, rightRule)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return rightRule, nil
 	}
 	if !sameRewriteOutputColumns(leftColumns, rightColumns) {
-		return rightRule
+		return rightRule, nil
 	}
-	return fmt.Sprintf("(%s) union distinct (%s)", leftRule, rightRule)
+	return fmt.Sprintf("(%s) union distinct (%s)", leftRule, rightRule), nil
 }
 
 func trimRewriteRuleForUnion(rule string) string {
@@ -282,12 +337,13 @@ func trimRewriteRuleForUnion(rule string) string {
 	return rule
 }
 
-func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]string, bool) {
+func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]string, bool, error) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
 	if err != nil {
-		return nil, false
+		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
-	return outputColumnsFromRewriteStatement(stmt)
+	columns, ok := outputColumnsFromRewriteStatement(stmt)
+	return columns, ok, nil
 }
 
 func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]string, bool) {
@@ -332,7 +388,7 @@ func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]strin
 
 func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (string, bool) {
 	if expr.As != nil && !expr.As.Empty() {
-		return expr.As.Compare(), true
+		return normalizeRewriteOutputColumn(expr.As.Compare()), true
 	}
 
 	switch e := expr.Expr.(type) {
@@ -342,10 +398,14 @@ func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (string, bool) {
 		if e.Star {
 			return "", false
 		}
-		return e.ColName(), true
+		return normalizeRewriteOutputColumn(e.ColName()), true
 	default:
-		return strings.ToLower(tree.String(expr.Expr, dialect.MYSQL)), true
+		return normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)), true
 	}
+}
+
+func normalizeRewriteOutputColumn(column string) string {
+	return strings.ToLower(strings.TrimSpace(column))
 }
 
 func sameRewriteOutputColumns(leftColumns, rightColumns []string) bool {

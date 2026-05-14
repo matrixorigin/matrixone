@@ -3515,8 +3515,10 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 				return err
 			}
 			account.SetUseSecondaryRole(true)
+			ses.InvalidatePrivilegeCache()
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
+			ses.InvalidatePrivilegeCache()
 		}
 	} else if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)

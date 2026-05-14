@@ -3,11 +3,14 @@ set global enable_privilege_cache = off;
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
+drop user if exists test_rule_user_inherit;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
 drop role if exists test_rule_role_multi_c;
 drop role if exists test_rule_role_multi_d;
+drop role if exists test_rule_role_inherit_a;
+drop role if exists test_rule_role_inherit_b;
 drop database if exists db1;
 drop database if exists db2;
 create database db1;
@@ -74,9 +77,12 @@ grant select on table db2.t2 to test_rule_role_multi_b;
 grant test_rule_role_multi_b to test_rule_user_multi;
 -- @session:id=2&user=sys:test_rule_user_multi:test_rule_role_multi_a&password=123456
 set enable_remap_hint = 1;
+select * from db1.t1 order by a;
 set secondary role all;
 select * from db1.t1 order by a;
 select * from db2.t2 order by a;
+set secondary role none;
+select * from db1.t1 order by a;
 -- @session
 
 -- 12. Same-table rules with different output columns use the last encountered rule
@@ -95,15 +101,31 @@ set secondary role all;
 select * from db1.t1 order by a;
 -- @session
 
+-- 13. Inherited roles contribute rewrite rules
+create role test_rule_role_inherit_a;
+create role test_rule_role_inherit_b;
+alter role test_rule_role_inherit_b add rule "select a, age from db2.t2 where age > 30" on table db2.t2;
+create user test_rule_user_inherit identified by '123456' default role test_rule_role_inherit_a;
+grant connect on account * to test_rule_role_inherit_a;
+grant select on table db2.t2 to test_rule_role_inherit_b;
+grant test_rule_role_inherit_b to test_rule_role_inherit_a;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+set enable_remap_hint = 1;
+select * from db2.t2 order by a;
+-- @session
+
 -- cleanup all test resources
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
+drop user if exists test_rule_user_inherit;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
 drop role if exists test_rule_role_multi_c;
 drop role if exists test_rule_role_multi_d;
+drop role if exists test_rule_role_inherit_a;
+drop role if exists test_rule_role_inherit_b;
 drop database if exists db1;
 drop database if exists db2;
 set global enable_privilege_cache = on;

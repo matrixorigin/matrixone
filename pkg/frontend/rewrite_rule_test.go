@@ -448,29 +448,95 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	tenant.SetUseSecondaryRole(true)
 	ses.SetTenantInfo(tenant)
 
-	bh.sql2result[getSqlForRoleIdOfUserId(42)] = newMrsForRoleIdOfUserId([][]interface{}{
+	bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId([][]interface{}{
 		{20, false},
 		{30, false},
 	})
-	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
 		{40, false},
 	})
-	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20, 30, 40})] = newMrsForRewriteRules([][]interface{}{
-		{"db1.t1", "select a, age from db1.t1 where age > 28"},
-		{"db1.t1", "select a, age from db1.t1 where age < 3"},
-		{"db2.t2", "select * from db2.t2 where age > 30"},
-		{"db2.t2", "select a from db2.t2 where a = 20"},
+		{30, "db1.t1", "select a, age from db1.t1 where age < 3"},
+		{20, "db1.t1", "select A, Age from db1.t1 where age > 28"},
+		{30, "db2.t2", "select a from db2.t2 where a = 20"},
+		{20, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "(select a, age from db1.t1 where age > 28) union distinct (select a, age from db1.t1 where age < 3)",
+		"db1.t1": "(select A, Age from db1.t1 where age > 28) union distinct (select a, age from db1.t1 where age < 3)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
+}
+
+func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+		{10, "db1.t1", "select a from db1.t1"},
+		{10, "db1.t1", "select a from"},
+	})
+
+	_, err := loadRuleCache(context.Background(), ses)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to parse rewrite rule")
+}
+
+func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	ses.rewriteEnabled.Store(true)
+
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+		{10, "db1.t1", "select a from db1.t1"},
+		{10, "db1.t1", "select a from"},
+	})
+
+	sql := "select * from db1.t1"
+	rewritten, err := rewriteSQL(context.Background(), ses, sql)
+	require.Error(t, err)
+	require.Equal(t, sql, rewritten)
 }
 
 func TestMergeRewriteRules(t *testing.T) {
@@ -478,41 +544,57 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	left := "select a from db1.t1 where a = 1"
 	right := "select a from db1.t1 where a = 2"
-	merged := mergeRewriteRules(ctx, left, right)
+	merged, err := mergeRewriteRules(ctx, left, right)
+	require.NoError(t, err)
 	require.Equal(t, "(select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)", merged)
 
-	merged = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
+	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
+	require.NoError(t, err)
 	require.Equal(t, "((select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)) union distinct (select a from db1.t1 where a = 3)", merged)
 
+	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2")
+	require.NoError(t, err)
 	require.Equal(t,
 		"select a from db1.t1 where a = 2",
-		mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2"),
+		merged,
 	)
 
+	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3")
+	require.NoError(t, err)
 	require.Equal(t,
 		"select * from db1.t1 where age < 3",
-		mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3"),
+		merged,
 	)
 
+	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3")
+	require.NoError(t, err)
 	require.Equal(t,
 		"select t.* from db1.t1 as t where age < 3",
-		mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3"),
+		merged,
 	)
+
+	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
+	require.Error(t, err)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
 	col1 := &MysqlColumn{}
-	col1.SetName("rule_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	col2 := &MysqlColumn{}
-	col2.SetName("rule")
+	col2.SetName("rule_name")
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("rule")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
