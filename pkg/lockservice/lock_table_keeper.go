@@ -121,7 +121,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		version   uint64
 	}
 
-	allBinds := make([]pb.LockTable, 0, len(binds))
+	allBinds := make([]pb.LockTable, 0, cap(binds))
 	binds = binds[:0]
 	futures = futures[:0]
 	checkedBinds := make(map[bindKey]struct{})
