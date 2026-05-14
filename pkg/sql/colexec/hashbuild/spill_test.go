@@ -750,10 +750,8 @@ func TestProcessMemoryOverBudget(t *testing.T) {
 }
 
 func TestProcessMemoryOverBudgetWithStats(t *testing.T) {
-	require.True(t, processMemoryOverBudgetWithStats(7, 9, false, 0, 0))
-	require.True(t, processMemoryOverBudgetWithStats(1, 9, true, 8, 8))
-	require.False(t, processMemoryOverBudgetWithStats(1, 9, true, 0, 8))
-	require.False(t, processMemoryOverBudgetWithStats(1, 9, false, 8, 8))
+	require.True(t, processMemoryOverBudgetWithStats(7, 9))
+	require.False(t, processMemoryOverBudgetWithStats(1, 9))
 }
 
 func TestShouldSpillBatchesReachesProcessMemory(t *testing.T) {

@@ -301,28 +301,14 @@ func processMemoryOverBudget() bool {
 	return processMemoryOverBudgetWithStats(
 		mpool.GlobalUsedWithPending(),
 		mpool.GlobalCap(),
-		system.HasCgroupMemLimit(),
-		system.MemoryTotal(),
-		system.WorkingSet(),
 	)
 }
 
 func processMemoryOverBudgetWithStats(
 	curr int64,
 	globalCap int64,
-	hasCgroupMemLimit bool,
-	total uint64,
-	workingSet uint64,
 ) bool {
-	if curr > globalCap*2/3 {
-		return true
-	}
-	if hasCgroupMemLimit {
-		if total > 0 {
-			return workingSet > total*7/8
-		}
-	}
-	return false
+	return curr > globalCap*2/3
 }
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
