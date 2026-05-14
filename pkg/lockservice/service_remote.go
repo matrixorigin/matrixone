@@ -230,6 +230,7 @@ func (s *service) handleRemoteLock(
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
+	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	defer func() {
@@ -247,6 +248,12 @@ func (s *service) handleRemoteLock(
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
+			if err == nil {
+				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+					result = pb.Result{}
+					err = e
+				}
+			}
 			lockErr = err
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
@@ -307,6 +314,7 @@ func (s *service) handleForwardLock(
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
+	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
 	defer func() {
@@ -324,6 +332,12 @@ func (s *service) handleForwardLock(
 		req.Lock.Rows,
 		LockOptions{LockOptions: req.Lock.Options, async: true},
 		func(result pb.Result, err error) {
+			if err == nil {
+				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+					result = pb.Result{}
+					err = e
+				}
+			}
 			lockErr = err
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
