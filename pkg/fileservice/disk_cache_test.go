@@ -698,6 +698,41 @@ func TestDiskCacheSetFromFile(t *testing.T) {
 	require.True(t, written)
 }
 
+func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.Nil(t, err)
+	defer cache.Close(ctx)
+
+	dataCache := new(countingDataCache)
+	cache.memoryCache = dataCache
+
+	err = cache.Update(ctx, &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset: 0,
+			Size:   3,
+			Data:   []byte("foo"),
+		}},
+	}, false)
+	require.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:      0,
+			Size:        3,
+			ToCacheData: CacheOriginalData,
+		}},
+	}
+	err = cache.Read(ctx, vec)
+	require.Nil(t, err)
+	require.Equal(t, 1, dataCache.ensureCalls)
+	require.Equal(t, 3, dataCache.ensureBytes)
+	require.True(t, vec.Entries[0].done)
+	require.NotNil(t, vec.Entries[0].CachedData)
+}
+
 func TestDiskCacheQuotaExceeded(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(3), nil, false, nil, "")
@@ -713,3 +748,33 @@ func TestDiskCacheQuotaExceeded(t *testing.T) {
 	)
 
 }
+
+type countingDataCache struct {
+	ensureCalls int
+	ensureBytes int
+}
+
+func (c *countingDataCache) EnsureNBytes(_ context.Context, want int) {
+	c.ensureCalls++
+	c.ensureBytes += want
+}
+
+func (*countingDataCache) Capacity() int64 { return 0 }
+
+func (*countingDataCache) Used() int64 { return 0 }
+
+func (*countingDataCache) Available() int64 { return 0 }
+
+func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, bool) {
+	return nil, false
+}
+
+func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
+	return nil
+}
+
+func (*countingDataCache) DeletePaths(context.Context, []string) {}
+
+func (*countingDataCache) Flush(context.Context) {}
+
+func (*countingDataCache) Evict(context.Context, chan int64) {}

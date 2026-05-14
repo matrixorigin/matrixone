@@ -41,6 +41,7 @@ import (
 type DiskCache struct {
 	path               string
 	cacheDataAllocator CacheDataAllocator
+	memoryCache        fscache.DataCache
 	perfCounterSets    []*perfcounter.CounterSet
 
 	updatingPaths struct {
@@ -367,6 +368,9 @@ func (d *DiskCache) Read(
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
+		if entry.ToCacheData != nil && d.memoryCache != nil {
+			d.memoryCache.EnsureNBytes(ctx, int(entry.Size))
+		}
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
 		}
