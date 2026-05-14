@@ -24,6 +24,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestShouldBailoutOnChangedObjects(t *testing.T) {
+	assert.False(t, shouldBailoutOnChangedObjects(0))
+	assert.False(t, shouldBailoutOnChangedObjects(64))
+	assert.True(t, shouldBailoutOnChangedObjects(65))
+	assert.True(t, shouldBailoutOnChangedObjects(1000))
+}
+
+func TestShouldBailoutOnCandidateBlocks(t *testing.T) {
+	assert.False(t, shouldBailoutOnCandidateBlocks(0))
+	assert.False(t, shouldBailoutOnCandidateBlocks(32))
+	assert.True(t, shouldBailoutOnCandidateBlocks(33))
+	assert.True(t, shouldBailoutOnCandidateBlocks(1000))
+}
+
 func TestPkCheckSemaphore_LimitsConcurrency(t *testing.T) {
 	// Verify the semaphore actually limits concurrent goroutines.
 	const workers = 100
