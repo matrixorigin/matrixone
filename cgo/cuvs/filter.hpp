@@ -568,6 +568,28 @@ inline PredOp parse_one_pred(const std::string& s, size_t& i) {
 
 }  // namespace detail
 
+// Inverse of parse_filter_col_meta — emits the same JSON shape from a
+// FilterColMeta vector. Returns "" for an empty column list (caller
+// treats as "no INCLUDE columns on this index"). Names are *not* escaped
+// because parse_filter_col_meta likewise doesn't unescape; INCLUDE column
+// names are SQL identifiers and never contain quote / backslash.
+inline std::string format_filter_col_meta(const std::vector<FilterColMeta>& cols) {
+    if (cols.empty()) return std::string();
+    std::string out;
+    out.reserve(cols.size() * 32);
+    out.push_back('[');
+    for (size_t i = 0; i < cols.size(); ++i) {
+        if (i) out.push_back(',');
+        out.append("{\"name\":\"");
+        out.append(cols[i].name);
+        out.append("\",\"type\":");
+        out.append(std::to_string(static_cast<int>(cols[i].type)));
+        out.push_back('}');
+    }
+    out.push_back(']');
+    return out;
+}
+
 // Parses column metadata JSON emitted by the SQL layer:
 //   [{"name":"price","type":2},{"name":"cat","type":1}]
 // where `type` is a FilterColType enum value (0=int32, 1=int64, 2=float32,

@@ -132,6 +132,12 @@ uint64_t gpu_cagra_len(gpu_cagra_c index_c);
 // Returns info about the index as a JSON string
 char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg);
 
+// Returns a heap-allocated NUL-terminated JSON string of the index's
+// INCLUDE column metadata in the same shape gpu_cagra_set_filter_columns
+// consumes. Returns "" for indexes built without INCLUDE columns. Caller
+// frees with free().
+char* gpu_cagra_get_filter_col_meta_json(gpu_cagra_c index_c, void* errmsg);
+
 // Extend function
 // new_ids may be NULL to auto-assign sequential IDs starting from current index size
 void gpu_cagra_extend(gpu_cagra_c index_c, const void* additional_data, uint64_t num_vectors,

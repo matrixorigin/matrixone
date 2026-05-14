@@ -128,23 +128,34 @@ func (gb *GpuBruteForce[T]) Build() error {
 }
 
 // AddChunk adds a chunk of data to the pre-allocated buffer.
-func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64) error {
+// If ids is non-nil it must have length chunkCount and supplies external int64
+// ids (e.g. pkids) that the brute-force search will return in `neighbors`
+// instead of the internal 0..N-1 row index.
+func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
 	if gb.cIndex == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(chunk) == 0 || chunkCount == 0 {
 		return nil
 	}
+	if ids != nil && uint64(len(ids)) != chunkCount {
+		return moerr.NewInternalErrorNoCtx("ids length does not match chunkCount")
+	}
 
 	var errmsg *C.char
+	var idsPtr *C.int64_t
+	if ids != nil {
+		idsPtr = (*C.int64_t)(&ids[0])
+	}
 	C.gpu_brute_force_add_chunk(
 		gb.cIndex,
 		unsafe.Pointer(&chunk[0]),
 		C.uint64_t(chunkCount),
-		nil,
+		idsPtr,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -155,23 +166,32 @@ func (gb *GpuBruteForce[T]) AddChunk(chunk []T, chunkCount uint64) error {
 }
 
 // AddChunkFloat adds a chunk of float32 data, performing on-the-fly conversion if needed.
-func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64) error {
+// See AddChunk for the meaning of ids.
+func (gb *GpuBruteForce[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
 	if gb.cIndex == nil {
 		return moerr.NewInternalErrorNoCtx("GpuBruteForce is not initialized")
 	}
 	if len(chunk) == 0 || chunkCount == 0 {
 		return nil
 	}
+	if ids != nil && uint64(len(ids)) != chunkCount {
+		return moerr.NewInternalErrorNoCtx("ids length does not match chunkCount")
+	}
 
 	var errmsg *C.char
+	var idsPtr *C.int64_t
+	if ids != nil {
+		idsPtr = (*C.int64_t)(&ids[0])
+	}
 	C.gpu_brute_force_add_chunk_float(
 		gb.cIndex,
 		(*C.float)(&chunk[0]),
 		C.uint64_t(chunkCount),
-		nil,
+		idsPtr,
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
+	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)

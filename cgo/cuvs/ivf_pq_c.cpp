@@ -603,6 +603,29 @@ uint64_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c) {
     }
 }
 
+// Returns a heap-allocated, NUL-terminated JSON string of the index's
+// INCLUDE column metadata in the same shape gpu_ivf_pq_set_filter_columns
+// consumes. Returns "" for indexes with no INCLUDE columns. Free with free().
+char* gpu_ivf_pq_get_filter_col_meta_json(gpu_ivf_pq_c index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (!index_c) return strdup("");
+    try {
+        auto* any = static_cast<gpu_ivf_pq_any_t*>(index_c);
+        std::string json;
+        switch (any->qtype) {
+            case Quantization_F32:   json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<float>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_F16:   json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<half>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_INT8:  json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<int8_t>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_UINT8: json = matrixone::format_filter_col_meta(static_cast<gpu_ivf_pq_t<uint8_t>*>(any->ptr)->filter_host_.columns); break;
+            default: return strdup("");
+        }
+        return strdup(json.c_str());
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_get_filter_col_meta_json", e.what());
+        return strdup("");
+    }
+}
+
 char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     if (!index_c) return nullptr;

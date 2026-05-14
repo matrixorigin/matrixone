@@ -535,6 +535,32 @@ uint64_t gpu_cagra_len(gpu_cagra_c index_c) {
     }
 }
 
+// Returns a heap-allocated, NUL-terminated JSON string of the index's
+// INCLUDE column metadata in the same shape gpu_cagra_set_filter_columns
+// consumes:
+//   [{"name":"price","type":2},{"name":"cat","type":1}]
+// Returns an empty string for indexes built without INCLUDE columns; never
+// returns NULL on success. Caller frees with free().
+char* gpu_cagra_get_filter_col_meta_json(gpu_cagra_c index_c, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    if (!index_c) return strdup("");
+    try {
+        auto* any = static_cast<gpu_cagra_any_t*>(index_c);
+        std::string json;
+        switch (any->qtype) {
+            case Quantization_F32:   json = matrixone::format_filter_col_meta(static_cast<gpu_cagra_t<float>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_F16:   json = matrixone::format_filter_col_meta(static_cast<gpu_cagra_t<half>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_INT8:  json = matrixone::format_filter_col_meta(static_cast<gpu_cagra_t<int8_t>*>(any->ptr)->filter_host_.columns); break;
+            case Quantization_UINT8: json = matrixone::format_filter_col_meta(static_cast<gpu_cagra_t<uint8_t>*>(any->ptr)->filter_host_.columns); break;
+            default: return strdup("");
+        }
+        return strdup(json.c_str());
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_cagra_get_filter_col_meta_json", e.what());
+        return strdup("");
+    }
+}
+
 char* gpu_cagra_info(gpu_cagra_c index_c, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     if (!index_c) return nullptr;

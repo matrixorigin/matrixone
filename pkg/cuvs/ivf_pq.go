@@ -667,6 +667,17 @@ func (gi *GpuIvfPq[T]) DeleteId(id int64) error {
 	return nil
 }
 
+// DeleteIds applies DeleteId in a loop. See cagra.GpuCagra.DeleteIds for
+// the rationale.
+func (gi *GpuIvfPq[T]) DeleteIds(ids []int64) error {
+	for _, id := range ids {
+		if err := gi.DeleteId(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Search performs a K-Nearest Neighbor search
 func (gi *GpuIvfPq[T]) Search(queries []T, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
@@ -896,6 +907,26 @@ func (gi *GpuIvfPq[T]) Len() uint64 {
 		return 0
 	}
 	return uint64(C.gpu_ivf_pq_len(gi.cIvfPq))
+}
+
+// GetFilterColMetaJSON returns the INCLUDE-column metadata of the loaded
+// index as a JSON string ready to be re-fed into SetFilterColumns. Returns
+// "" for indexes that were built without INCLUDE columns.
+func (gi *GpuIvfPq[T]) GetFilterColMetaJSON() string {
+	if gi.cIvfPq == nil {
+		return ""
+	}
+	var errmsg *C.char
+	jsonPtr := C.gpu_ivf_pq_get_filter_col_meta_json(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		C.free(unsafe.Pointer(errmsg))
+	}
+	if jsonPtr == nil {
+		return ""
+	}
+	out := C.GoString(jsonPtr)
+	C.free(unsafe.Pointer(jsonPtr))
+	return out
 }
 
 // Info returns detailed information about the index as a JSON string.

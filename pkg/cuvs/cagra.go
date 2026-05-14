@@ -601,6 +601,19 @@ func (gi *GpuCagra[T]) DeleteId(id int64) error {
 	return nil
 }
 
+// DeleteIds applies DeleteId in a loop. Used by the LoadIndex CDC replay
+// path; if profiling shows the cgo crossing dominates we can swap to a
+// single batched cgo entry (the C++ side already does the host-side
+// id_to_index_ lookup; the loop is per-id).
+func (gi *GpuCagra[T]) DeleteIds(ids []int64) error {
+	for _, id := range ids {
+		if err := gi.DeleteId(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (gi *GpuCagra[T]) adjustSearchParams(sp CagraSearchParams, limit uint32) CagraSearchParams {
 	qtype := GetQuantization[T]()
 	isByteType := (qtype == INT8 || qtype == UINT8)
@@ -859,6 +872,26 @@ func (gi *GpuCagra[T]) Len() uint64 {
 		return 0
 	}
 	return uint64(C.gpu_cagra_len(gi.cCagra))
+}
+
+// GetFilterColMetaJSON returns the INCLUDE-column metadata of the loaded
+// index as a JSON string ready to be re-fed into SetFilterColumns. Returns
+// "" for indexes that were built without INCLUDE columns.
+func (gi *GpuCagra[T]) GetFilterColMetaJSON() string {
+	if gi.cCagra == nil {
+		return ""
+	}
+	var errmsg *C.char
+	jsonPtr := C.gpu_cagra_get_filter_col_meta_json(gi.cCagra, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		C.free(unsafe.Pointer(errmsg))
+	}
+	if jsonPtr == nil {
+		return ""
+	}
+	out := C.GoString(jsonPtr)
+	C.free(unsafe.Pointer(jsonPtr))
+	return out
 }
 
 // Info returns detailed information about the index as a JSON string.

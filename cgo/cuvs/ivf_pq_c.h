@@ -147,6 +147,12 @@ uint64_t gpu_ivf_pq_len(gpu_ivf_pq_c index_c);
 // Returns info about the index as a JSON string
 char* gpu_ivf_pq_info(gpu_ivf_pq_c index_c, void* errmsg);
 
+// Returns a heap-allocated NUL-terminated JSON string of the index's
+// INCLUDE column metadata in the same shape gpu_ivf_pq_set_filter_columns
+// consumes. Returns "" for indexes built without INCLUDE columns. Caller
+// frees with free().
+char* gpu_ivf_pq_get_filter_col_meta_json(gpu_ivf_pq_c index_c, void* errmsg);
+
 // Gets the trained centroids. `count` is the number of elements the caller's
 // `centers` buffer can hold; the copy is clamped to it (the index has
 // n_lists * rot_dim center coords — size it with gpu_ivf_pq_get_n_list /
