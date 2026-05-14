@@ -448,27 +448,30 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	tenant.SetUseSecondaryRole(true)
 	ses.SetTenantInfo(tenant)
 
+	// Granted-role result order represents grant-time priority. It is
+	// intentionally opposite of role_id order to ensure rewrite conflict
+	// resolution does not depend on internal role ids.
 	bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId([][]interface{}{
-		{20, false},
 		{30, false},
+		{20, false},
 	})
 	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
 		{40, false},
 	})
-	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
-	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20, 30, 40})] = newMrsForRewriteRules([][]interface{}{
-		{30, "db1.t1", "select a, age from db1.t1 where age < 3"},
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 30, 20, 40})] = newMrsForRewriteRules([][]interface{}{
 		{20, "db1.t1", "select A, Age from db1.t1 where age > 28"},
-		{30, "db2.t2", "select a from db2.t2 where a = 20"},
-		{20, "db2.t2", "select * from db2.t2 where age > 30"},
+		{30, "db1.t1", "select a, age from db1.t1 where age < 3"},
+		{20, "db2.t2", "select a from db2.t2 where a = 20"},
+		{30, "db2.t2", "select * from db2.t2 where age > 30"},
 	})
 
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "(select A, Age from db1.t1 where age > 28) union distinct (select a, age from db1.t1 where age < 3)",
+		"db1.t1": "(select a, age from db1.t1 where age < 3) union distinct (select A, Age from db1.t1 where age > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
 }
