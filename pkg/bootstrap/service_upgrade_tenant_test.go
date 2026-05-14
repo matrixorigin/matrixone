@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -86,6 +87,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 		sid,
 		func(rt runtime.Runtime) {
 			var finalized atomic.Bool
+			var deletedTasksReconciled atomic.Bool
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
 			defer cancel()
 
@@ -101,8 +103,15 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 					return buildUpgradeTenantAccountRows(nil, nil), nil
 				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 13"):
 					return buildUpgradeTenantTaskRows(nil, nil, nil), nil
+				case strings.Contains(sql, "select 1 from mo_upgrade_tenant where upgrade_id = 100 and ready = 0"):
+					if deletedTasksReconciled.Load() {
+						return executor.Result{}, nil
+					}
+					return buildExistsResult(), nil
 				case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1") &&
-					strings.Contains(sql, "where upgrade_id = 100"):
+					strings.Contains(sql, "where upgrade_id = 100") &&
+					strings.Contains(sql, "not exists"):
+					deletedTasksReconciled.Store(true)
 					return executor.Result{AffectedRows: 1}, nil
 				case strings.Contains(sql, "from mo_upgrade") &&
 					strings.Contains(sql, "where id = 100 for update"):
@@ -113,7 +122,7 @@ func Test_asyncUpgradeTenantTask_AutoCompletesDeletedTenantTasks(t *testing.T) {
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
 				default:
-					return executor.Result{}, nil
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 				}
 			})
 
@@ -172,7 +181,7 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 					cancel()
 					return executor.Result{AffectedRows: 1}, nil
 				default:
-					return executor.Result{}, nil
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 				}
 			})
 
@@ -217,10 +226,10 @@ func buildUpgradeVersionResult(
 			types.New(types.T_varchar, 50, 0),
 			types.New(types.T_varchar, 50, 0),
 			types.New(types.T_uint32, 32, 0),
-			types.New(types.T_int32, 64, 0),
-			types.New(types.T_int32, 64, 0),
-			types.New(types.T_int32, 64, 0),
-			types.New(types.T_int32, 64, 0),
+			types.New(types.T_int32, 32, 0),
+			types.New(types.T_int32, 32, 0),
+			types.New(types.T_int32, 32, 0),
+			types.New(types.T_int32, 32, 0),
 			types.New(types.T_int32, 32, 0),
 			types.New(types.T_int32, 32, 0),
 		},
@@ -274,5 +283,17 @@ func buildUpgradeTenantAccountRows(tenantIDs []int32, createVersions []string) e
 	memRes.NewBatchWithRowCount(len(tenantIDs))
 	executor.AppendFixedRows(memRes, 0, tenantIDs)
 	executor.AppendStringRows(memRes, 1, createVersions)
+	return memRes.GetResult()
+}
+
+func buildExistsResult() executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{
+			types.New(types.T_int32, 32, 0),
+		},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(1)
+	executor.AppendFixedRows(memRes, 0, []int32{1})
 	return memRes.GetResult()
 }
