@@ -4293,6 +4293,55 @@ func TestBindChangedFencesActiveTxnAfterOldTableRemoved(t *testing.T) {
 	)
 }
 
+func TestBindChangedBeforeLockSuccessReturnsBindChanged(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("txn1")
+			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
+			fenceDone := make(chan struct{})
+			var once sync.Once
+			txn.beforeLockAdded = func([]byte, [][]byte) error {
+				once.Do(func() {
+					oldBind := s.tableGroups.get(0, 0).getBind()
+					newBind := oldBind
+					newBind.Version++
+					newBind.ServiceID = "new-service"
+					go func() {
+						s.handleBindChanged(newBind)
+						close(fenceDone)
+					}()
+					require.Eventually(t, func() bool {
+						if s.bindChangeMu.TryRLock() {
+							s.bindChangeMu.RUnlock()
+							return false
+						}
+						return true
+					}, time.Second, time.Millisecond)
+				})
+				return nil
+			}
+
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.Eventually(t, func() bool {
+				select {
+				case <-fenceDone:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, time.Millisecond)
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestLeakWaiterForErr(t *testing.T) {
 	runLockServiceTests(
 		t,
