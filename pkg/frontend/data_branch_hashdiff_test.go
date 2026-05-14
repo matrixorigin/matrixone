@@ -181,7 +181,6 @@ func TestDiffDataHelper_Basic(t *testing.T) {
 	err := diffDataHelper(
 		context.Background(),
 		ses,
-		0,
 		compositeOption{},
 		tblStuff,
 		func(w batchWithKind) (bool, error) {
@@ -239,7 +238,6 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	err := diffDataHelper(
 		context.Background(),
 		ses,
-		0,
 		compositeOption{
 			conflictOpt:  &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT},
 			expandUpdate: true,
@@ -659,7 +657,7 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 		ses,
 		nil,
 		tblStuff,
-		branchMetaInfo{lcaType: lcaEmpty},
+		branchMetaInfo{},
 		compositeOption{},
 		func(w batchWithKind) (bool, error) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)

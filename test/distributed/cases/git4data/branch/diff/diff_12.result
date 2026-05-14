@@ -1,0 +1,869 @@
+drop database if exists test_chain_diff;
+create database test_chain_diff;
+use test_chain_diff;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2), (3, 3);
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+insert into t2 values (4, 4), (5, 5);
+update t2 set b = b + 100 where a = 1;
+delete from t2 where a = 2;
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2 against t0 output count;
+COUNT(*)
+4
+data branch diff t2 against t0;
+diff t2 against t0    flag    a    b
+t2    UPDATE    1    101
+t2    DELETE    2    2
+t2    INSERT    4    4
+t2    INSERT    5    5
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2 against t1 output count;
+COUNT(*)
+4
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    101
+t2    DELETE    2    2
+t2    INSERT    4    4
+t2    INSERT    5    5
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    0    0
+DELETED    0    0
+UPDATED    0    0
+data branch diff t0 against t2 output summary;
+metric    t0    t2
+INSERTED    0    2
+DELETED    0    1
+UPDATED    0    1
+data branch diff t0 against t2 output count;
+COUNT(*)
+4
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 10), (2, 20), (3, 30);
+data branch create table t1 from t0;
+insert into t1 values (4, 40);
+data branch create table t2 from t1;
+update t1 set b = b + 1 where a = 2;
+insert into t1 values (5, 50);
+delete from t1 where a = 3;
+update t2 set b = b + 100 where a = 1;
+insert into t2 values (7, 70);
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    2    0
+DELETED    0    0
+UPDATED    1    0
+data branch diff t2 against t0 output count;
+COUNT(*)
+3
+data branch diff t2 against t0;
+diff t2 against t0    flag    a    b
+t2    UPDATE    1    110
+t2    INSERT    4    40
+t2    INSERT    7    70
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    1
+DELETED    0    1
+UPDATED    1    1
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    110
+t1    UPDATE    2    21
+t1    DELETE    3    30
+t1    INSERT    5    50
+t2    INSERT    7    70
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t1 against t0 output count;
+COUNT(*)
+4
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2), (3, 3);
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+update t0 set b = b + 1000 where a = 1;
+insert into t0 values (10, 10);
+delete from t0 where a = 3;
+update t2 set b = b - 1 where a = 2;
+insert into t2 values (20, 20);
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    1    1
+DELETED    0    1
+UPDATED    1    1
+data branch diff t2 against t0 output count;
+COUNT(*)
+5
+data branch diff t2 against t0;
+diff t2 against t0    flag    a    b
+t0    UPDATE    1    1001
+t2    UPDATE    2    1
+t0    DELETE    3    3
+t0    INSERT    10    10
+t2    INSERT    20    20
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    0    1
+DELETED    0    1
+UPDATED    0    1
+data branch diff t0 against t1 output summary;
+metric    t0    t1
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    0
+DELETED    0    0
+UPDATED    1    0
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    2    1
+t2    INSERT    20    20
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int, tag varchar(16));
+insert into t0 values (1, 1, 't0'), (2, 2, 't0'), (3, 3, 't0');
+drop snapshot if exists c4_t0_sp0;
+create snapshot c4_t0_sp0 for table test_chain_diff t0;
+data branch create table t1 from t0{snapshot="c4_t0_sp0"};
+insert into t1 values (4, 4, 't1');
+update t1 set tag = 't1-u' where a = 1;
+drop snapshot if exists c4_t1_sp0;
+create snapshot c4_t1_sp0 for table test_chain_diff t1;
+data branch create table t2 from t1{snapshot="c4_t1_sp0"};
+insert into t2 values (5, 5, 't2');
+update t2 set tag = 't2-u' where a = 2;
+delete from t2 where a = 3;
+drop snapshot if exists c4_t2_sp0;
+create snapshot c4_t2_sp0 for table test_chain_diff t2;
+update t1 set tag = 't1-u2' where a = 4;
+insert into t1 values (6, 6, 't1');
+drop snapshot if exists c4_t1_sp1;
+create snapshot c4_t1_sp1 for table test_chain_diff t1;
+update t0 set tag = 't0-u' where a = 2;
+insert into t0 values (7, 7, 't0');
+drop snapshot if exists c4_t0_sp1;
+create snapshot c4_t0_sp1 for table test_chain_diff t0;
+update t2 set tag = 't2-u2' where a = 4;
+insert into t2 values (8, 8, 't2');
+drop snapshot if exists c4_t2_sp1;
+create snapshot c4_t2_sp1 for table test_chain_diff t2;
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    3    1
+DELETED    1    0
+UPDATED    2    1
+data branch diff t2 against t0 output count;
+COUNT(*)
+8
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    1
+DELETED    1    0
+UPDATED    2    1
+data branch diff t2 against t1 output count;
+COUNT(*)
+7
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    2    1
+DELETED    0    0
+UPDATED    1    1
+data branch diff t1 against t0 output count;
+COUNT(*)
+5
+data branch diff t0 against t2 output summary;
+metric    t0    t2
+INSERTED    1    3
+DELETED    0    1
+UPDATED    1    2
+data branch diff t1 against t2 output summary;
+metric    t1    t2
+INSERTED    1    2
+DELETED    0    1
+UPDATED    1    2
+data branch diff t2{snapshot="c4_t2_sp0"} against t0{snapshot="c4_t0_sp0"} output summary;
+metric    t2{snapshot = 'c4_t2_sp0'}    t0{snapshot = 'c4_t0_sp0'}
+INSERTED    2    0
+DELETED    1    0
+UPDATED    2    0
+data branch diff t2{snapshot="c4_t2_sp0"} against t0{snapshot="c4_t0_sp0"} output count;
+COUNT(*)
+5
+data branch diff t2{snapshot="c4_t2_sp0"} against t1{snapshot="c4_t1_sp0"} output summary;
+metric    t2{snapshot = 'c4_t2_sp0'}    t1{snapshot = 'c4_t1_sp0'}
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2{snapshot="c4_t2_sp1"} against t0{snapshot="c4_t0_sp1"} output summary;
+metric    t2{snapshot = 'c4_t2_sp1'}    t0{snapshot = 'c4_t0_sp1'}
+INSERTED    3    1
+DELETED    1    0
+UPDATED    2    1
+data branch diff t2{snapshot="c4_t2_sp1"} against t0{snapshot="c4_t0_sp0"} output summary;
+metric    t2{snapshot = 'c4_t2_sp1'}    t0{snapshot = 'c4_t0_sp0'}
+INSERTED    3    0
+DELETED    1    0
+UPDATED    2    0
+data branch diff t2{snapshot="c4_t2_sp1"} against t0{snapshot="c4_t0_sp0"} output count;
+COUNT(*)
+6
+drop snapshot c4_t0_sp0;
+drop snapshot c4_t0_sp1;
+drop snapshot c4_t1_sp0;
+drop snapshot c4_t1_sp1;
+drop snapshot c4_t2_sp0;
+drop snapshot c4_t2_sp1;
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2);
+data branch create table t1 from t0;
+insert into t1 values (3, 3);
+data branch create table t2 from t1;
+insert into t2 values (4, 4);
+update t2 set b = b + 100 where a = 1;
+data branch create table t3 from t2;
+insert into t3 values (5, 5);
+delete from t3 where a = 2;
+update t3 set b = b + 1000 where a = 4;
+data branch diff t3 against t0 output summary;
+metric    t3    t0
+INSERTED    3    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t3 against t0 output count;
+COUNT(*)
+5
+data branch diff t3 against t0;
+diff t3 against t0    flag    a    b
+t3    UPDATE    1    101
+t3    DELETE    2    2
+t3    INSERT    3    3
+t3    INSERT    4    1004
+t3    INSERT    5    5
+data branch diff t3 against t1 output summary;
+metric    t3    t1
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t3 against t1 output count;
+COUNT(*)
+4
+data branch diff t3 against t2 output summary;
+metric    t3    t2
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t3 against t2;
+diff t3 against t2    flag    a    b
+t3    DELETE    2    2
+t3    UPDATE    4    1004
+t3    INSERT    5    5
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    2    0
+DELETED    0    0
+UPDATED    1    0
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    0
+DELETED    0    0
+UPDATED    1    0
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    1    0
+DELETED    0    0
+UPDATED    0    0
+data branch diff t0 against t3 output summary;
+metric    t0    t3
+INSERTED    0    3
+DELETED    0    1
+UPDATED    0    1
+data branch diff t0 against t3 output count;
+COUNT(*)
+5
+drop table t3;
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int, b int);
+insert into t0 select *, * from generate_series(1, 50) g;
+data branch create table t1 from t0;
+insert into t1 values (51, 51), (52, 52);
+data branch create table t2 from t1;
+update t2 set b = b + 1 where a in (1, 10, 20, 30, 40, 51);
+insert into t2 values (53, 53);
+delete from t2 where a in (2, 3);
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    3    0
+DELETED    2    0
+UPDATED    5    0
+data branch diff t2 against t0 output count;
+COUNT(*)
+10
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    0
+DELETED    2    0
+UPDATED    6    0
+data branch diff t2 against t1 output count;
+COUNT(*)
+9
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    2    0
+DELETED    0    0
+UPDATED    0    0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 select *, * from generate_series(1, 2000) g;
+data branch create table t1 from t0;
+update t1 set b = b + 1 where a mod 337 = 0;
+insert into t1 values (2001, 2001);
+data branch create table t2 from t1;
+update t2 set b = b + 2 where a mod 191 = 0;
+delete from t2 where a in (7, 77, 777);
+insert into t2 values (2002, 2002);
+select mo_ctl('dn', 'flush', 'test_chain_diff.t0');
+mo_ctl(dn, flush, test_chain_diff.t0)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'test_chain_diff.t1');
+mo_ctl(dn, flush, test_chain_diff.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'test_chain_diff.t2');
+mo_ctl(dn, flush, test_chain_diff.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'globalcheckpoint', '');
+mo_ctl(dn, globalcheckpoint, )
+{\n  "method": "GlobalCheckpoint",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    2    0
+DELETED    3    0
+UPDATED    15    0
+data branch diff t2 against t0 output count;
+COUNT(*)
+20
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    0
+DELETED    3    0
+UPDATED    10    0
+data branch diff t1 against t0 output summary;
+metric    t1    t0
+INSERTED    1    0
+DELETED    0    0
+UPDATED    5    0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(region varchar(4), k int, v int, primary key (region, k));
+insert into t0 values ('eu', 1, 10), ('eu', 2, 20), ('us', 1, 100);
+drop snapshot if exists c8_t0_sp0;
+create snapshot c8_t0_sp0 for table test_chain_diff t0;
+data branch create table t1 from t0;
+update t1 set v = v + 1 where region = 'eu' and k = 1;
+insert into t1 values ('us', 2, 200);
+drop snapshot if exists c8_t1_sp0;
+create snapshot c8_t1_sp0 for table test_chain_diff t1;
+data branch create table t2 from t1;
+delete from t2 where region = 'eu' and k = 2;
+update t2 set v = v + 100 where region = 'us' and k = 1;
+insert into t2 values ('ap', 1, 999);
+drop snapshot if exists c8_t2_sp0;
+create snapshot c8_t2_sp0 for table test_chain_diff t2;
+data branch diff t2 against t0 output summary;
+metric    t2    t0
+INSERTED    2    0
+DELETED    1    0
+UPDATED    2    0
+data branch diff t2 against t0;
+diff t2 against t0    flag    region    k    v
+t2    INSERT    ap    1    999
+t2    UPDATE    eu    1    11
+t2    DELETE    eu    2    20
+t2    UPDATE    us    1    200
+t2    INSERT    us    2    200
+data branch diff t2{snapshot="c8_t2_sp0"} against t0{snapshot="c8_t0_sp0"} output summary;
+metric    t2{snapshot = 'c8_t2_sp0'}    t0{snapshot = 'c8_t0_sp0'}
+INSERTED    2    0
+DELETED    1    0
+UPDATED    2    0
+data branch diff t2{snapshot="c8_t2_sp0"} against t0{snapshot="c8_t0_sp0"} output count;
+COUNT(*)
+5
+data branch diff t2{snapshot="c8_t2_sp0"} against t1{snapshot="c8_t1_sp0"} output summary;
+metric    t2{snapshot = 'c8_t2_sp0'}    t1{snapshot = 'c8_t1_sp0'}
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+drop snapshot c8_t0_sp0;
+drop snapshot c8_t1_sp0;
+drop snapshot c8_t2_sp0;
+drop table t2;
+drop table t1;
+drop table t0;
+create table t1(a int primary key, b int);
+insert into t1 values (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+data branch create table t2 from t1;
+update t2 set b = b + 10 where a = 1;
+insert into t2 values (6, 6), (7, 7);
+delete from t2 where a = 2;
+data branch create table t3 from t2;
+update t3 set b = b + 100 where a in (3, 6);
+insert into t3 values (8, 8), (9, 9);
+delete from t3 where a in (4, 7);
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2 against t1 output count;
+COUNT(*)
+4
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    11
+t2    DELETE    2    2
+t2    INSERT    6    6
+t2    INSERT    7    7
+data branch diff t3 against t2 output summary;
+metric    t3    t2
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
+data branch diff t3 against t2 output count;
+COUNT(*)
+6
+data branch diff t3 against t2;
+diff t3 against t2    flag    a    b
+t3    UPDATE    3    103
+t3    DELETE    4    4
+t3    UPDATE    6    106
+t3    DELETE    7    7
+t3    INSERT    8    8
+t3    INSERT    9    9
+data branch diff t3 against t1 output summary;
+metric    t3    t1
+INSERTED    3    0
+DELETED    2    0
+UPDATED    2    0
+data branch diff t3 against t1 output count;
+COUNT(*)
+7
+data branch diff t3 against t1;
+diff t3 against t1    flag    a    b
+t3    UPDATE    1    11
+t3    DELETE    2    2
+t3    UPDATE    3    103
+t3    DELETE    4    4
+t3    INSERT    6    106
+t3    INSERT    8    8
+t3    INSERT    9    9
+data branch diff t1 against t3 output summary;
+metric    t1    t3
+INSERTED    0    3
+DELETED    0    2
+UPDATED    0    2
+data branch diff t1 against t3 output count;
+COUNT(*)
+7
+data branch diff t1 against t3;
+diff t1 against t3    flag    a    b
+t3    UPDATE    1    11
+t3    DELETE    2    2
+t3    UPDATE    3    103
+t3    DELETE    4    4
+t3    INSERT    6    106
+t3    INSERT    8    8
+t3    INSERT    9    9
+data branch diff t1 against t2 output summary;
+metric    t1    t2
+INSERTED    0    2
+DELETED    0    1
+UPDATED    0    1
+update t1 set b = b + 1000 where a = 5;
+insert into t1 values (10, 10);
+delete from t1 where a = 1;
+data branch diff t3 against t1 output summary;
+metric    t3    t1
+INSERTED    3    1
+DELETED    2    1
+UPDATED    2    1
+data branch diff t3 against t1 output count;
+COUNT(*)
+10
+data branch diff t3 against t1;
+diff t3 against t1    flag    a    b
+t3    UPDATE    1    11
+t1    DELETE    1    1
+t3    DELETE    2    2
+t3    UPDATE    3    103
+t3    DELETE    4    4
+t1    UPDATE    5    1005
+t3    INSERT    6    106
+t3    INSERT    8    8
+t3    INSERT    9    9
+t1    INSERT    10    10
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    1
+DELETED    1    1
+UPDATED    1    1
+data branch diff t2 against t1 output count;
+COUNT(*)
+7
+insert into t2 values (20, 20);
+update t2 set b = b + 5 where a = 6;
+delete from t2 where a = 7;
+data branch diff t3 against t2 output summary;
+metric    t3    t2
+INSERTED    2    1
+DELETED    1    0
+UPDATED    2    1
+data branch diff t3 against t1 output summary;
+metric    t3    t1
+INSERTED    3    1
+DELETED    2    1
+UPDATED    2    1
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    1
+DELETED    1    1
+UPDATED    1    1
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    11
+t1    DELETE    1    1
+t2    DELETE    2    2
+t1    UPDATE    5    1005
+t2    INSERT    6    11
+t1    INSERT    10    10
+t2    INSERT    20    20
+drop table t3;
+drop table t2;
+drop table t1;
+create table t1(region varchar(4), k int, v int, primary key (region, k));
+insert into t1 values ('eu', 1, 10), ('eu', 2, 20), ('us', 1, 100), ('us', 2, 200);
+drop snapshot if exists c10_t1_sp0;
+create snapshot c10_t1_sp0 for table test_chain_diff t1;
+data branch create table t2 from t1{snapshot="c10_t1_sp0"};
+update t2 set v = v + 1 where region = 'eu' and k = 1;
+insert into t2 values ('ap', 1, 999);
+delete from t2 where region = 'us' and k = 2;
+drop snapshot if exists c10_t2_sp0;
+create snapshot c10_t2_sp0 for table test_chain_diff t2;
+data branch create table t3 from t2{snapshot="c10_t2_sp0"};
+update t3 set v = v + 2 where region = 'eu' and k = 2;
+insert into t3 values ('sa', 1, 777);
+delete from t3 where region = 'us' and k = 1;
+drop snapshot if exists c10_t3_sp0;
+create snapshot c10_t3_sp0 for table test_chain_diff t3;
+data branch create table t4 from t3{snapshot="c10_t3_sp0"};
+update t4 set v = v + 3 where region = 'ap' and k = 1;
+insert into t4 values ('na', 1, 555);
+delete from t4 where region = 'eu' and k = 1;
+drop snapshot if exists c10_t4_sp0;
+create snapshot c10_t4_sp0 for table test_chain_diff t4;
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t3 against t2 output summary;
+metric    t3    t2
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t4 against t3 output summary;
+metric    t4    t3
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t3 against t1 output summary;
+metric    t3    t1
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
+data branch diff t3 against t1 output count;
+COUNT(*)
+6
+data branch diff t3 against t1;
+diff t3 against t1    flag    region    k    v
+t3    INSERT    ap    1    999
+t3    UPDATE    eu    1    11
+t3    UPDATE    eu    2    22
+t3    INSERT    sa    1    777
+t3    DELETE    us    1    100
+t3    DELETE    us    2    200
+data branch diff t4 against t2 output summary;
+metric    t4    t2
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
+data branch diff t4 against t2 output count;
+COUNT(*)
+6
+data branch diff t4 against t2;
+diff t4 against t2    flag    region    k    v
+t4    UPDATE    ap    1    1002
+t4    DELETE    eu    1    11
+t4    UPDATE    eu    2    22
+t4    INSERT    na    1    555
+t4    INSERT    sa    1    777
+t4    DELETE    us    1    100
+data branch diff t4 against t1 output summary;
+metric    t4    t1
+INSERTED    3    0
+DELETED    3    0
+UPDATED    1    0
+data branch diff t4 against t1 output count;
+COUNT(*)
+7
+data branch diff t4 against t1;
+diff t4 against t1    flag    region    k    v
+t4    INSERT    ap    1    1002
+t4    DELETE    eu    1    10
+t4    UPDATE    eu    2    22
+t4    INSERT    na    1    555
+t4    INSERT    sa    1    777
+t4    DELETE    us    1    100
+t4    DELETE    us    2    200
+data branch diff t1 against t4 output summary;
+metric    t1    t4
+INSERTED    0    3
+DELETED    0    3
+UPDATED    0    1
+data branch diff t1 against t4 output count;
+COUNT(*)
+7
+data branch diff t4{snapshot="c10_t4_sp0"} against t1{snapshot="c10_t1_sp0"} output summary;
+metric    t4{snapshot = 'c10_t4_sp0'}    t1{snapshot = 'c10_t1_sp0'}
+INSERTED    3    0
+DELETED    3    0
+UPDATED    1    0
+data branch diff t4{snapshot="c10_t4_sp0"} against t1{snapshot="c10_t1_sp0"} output count;
+COUNT(*)
+7
+data branch diff t4{snapshot="c10_t4_sp0"} against t2{snapshot="c10_t2_sp0"} output summary;
+metric    t4{snapshot = 'c10_t4_sp0'}    t2{snapshot = 'c10_t2_sp0'}
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
+data branch diff t3{snapshot="c10_t3_sp0"} against t1{snapshot="c10_t1_sp0"} output summary;
+metric    t3{snapshot = 'c10_t3_sp0'}    t1{snapshot = 'c10_t1_sp0'}
+INSERTED    2    0
+DELETED    2    0
+UPDATED    2    0
+insert into t1 values ('af', 1, 888);
+update t1 set v = v + 10000 where region = 'us' and k = 1;
+insert into t2 values ('af', 2, 889);
+delete from t2 where region = 'ap' and k = 1;
+update t3 set v = v + 20000 where region = 'eu' and k = 2;
+data branch diff t4 against t1 output summary;
+metric    t4    t1
+INSERTED    3    1
+DELETED    3    0
+UPDATED    1    1
+data branch diff t4 against t2 output summary;
+metric    t4    t2
+INSERTED    2    1
+DELETED    2    1
+UPDATED    2    0
+data branch diff t4 against t3 output summary;
+metric    t4    t3
+INSERTED    1    0
+DELETED    1    0
+UPDATED    1    1
+data branch diff t4{snapshot="c10_t4_sp0"} against t1{snapshot="c10_t1_sp0"} output summary;
+metric    t4{snapshot = 'c10_t4_sp0'}    t1{snapshot = 'c10_t1_sp0'}
+INSERTED    3    0
+DELETED    3    0
+UPDATED    1    0
+drop snapshot c10_t1_sp0;
+drop snapshot c10_t2_sp0;
+drop snapshot c10_t3_sp0;
+drop snapshot c10_t4_sp0;
+drop table t4;
+drop table t3;
+drop table t2;
+drop table t1;
+create table t1(a int primary key, b int);
+insert into t1 values (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+data branch create table t2 from t1;
+update t2 set b = b + 10 where a = 1;
+insert into t2 values (6, 6), (7, 7);
+delete from t2 where a = 2;
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    2    0
+DELETED    1    0
+UPDATED    1    0
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    11
+t2    DELETE    2    2
+t2    INSERT    6    6
+t2    INSERT    7    7
+update t1 set b = -1 where a = 1;
+update t1 set b = 222 where a = 2;
+delete from t1 where a = 3;
+update t1 set b = 444 where a = 4;
+delete from t1 where a = 5;
+insert into t1 values (6, 600);
+insert into t1 values (100, 100);
+insert into t1 values (7, 7);
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    2
+DELETED    1    2
+UPDATED    1    3
+data branch diff t2 against t1 output count;
+COUNT(*)
+10
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    11
+t1    UPDATE    1    -1
+t2    DELETE    2    2
+t1    UPDATE    2    222
+t1    DELETE    3    3
+t1    UPDATE    4    444
+t1    DELETE    5    5
+t2    INSERT    6    6
+t1    INSERT    6    600
+t1    INSERT    100    100
+data branch diff t1 against t2 output summary;
+metric    t1    t2
+INSERTED    2    1
+DELETED    2    1
+UPDATED    3    1
+data branch diff t1 against t2 output count;
+COUNT(*)
+10
+data branch diff t1 against t2;
+diff t1 against t2    flag    a    b
+t1    UPDATE    1    -1
+t2    UPDATE    1    11
+t1    UPDATE    2    222
+t2    DELETE    2    2
+t1    DELETE    3    3
+t1    UPDATE    4    444
+t1    DELETE    5    5
+t1    INSERT    6    600
+t2    INSERT    6    6
+t1    INSERT    100    100
+update t1 set b = -2 where a = 1;
+insert into t1 values (8, 800);
+delete from t1 where a = 100;
+update t1 set b = 888 where a = 6;
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    2
+DELETED    1    2
+UPDATED    1    3
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b
+t2    UPDATE    1    11
+t1    UPDATE    1    -2
+t2    DELETE    2    2
+t1    UPDATE    2    222
+t1    DELETE    3    3
+t1    UPDATE    4    444
+t1    DELETE    5    5
+t2    INSERT    6    6
+t1    INSERT    6    888
+t1    INSERT    8    800
+drop table t2;
+drop table t1;
+create table t1(a int primary key, b int, note varchar(16));
+insert into t1 values (1, 1, 'init'), (2, 2, 'init'), (3, 3, 'init'),
+(4, 4, 'init'), (5, 5, 'init');
+data branch create table t2 from t1;
+update t2 set b = 10, note = 't2-A' where a = 1;
+delete from t2 where a = 2;
+insert into t2 values (10, 10, 't2-A');
+update t1 set b = 100, note = 't1-A' where a = 1;
+update t1 set b = 200, note = 't1-A' where a = 2;
+delete from t1 where a = 3;
+insert into t1 values (20, 20, 't1-A');
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    1
+DELETED    1    1
+UPDATED    1    2
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b    note
+t2    UPDATE    1    10    t2-A
+t1    UPDATE    1    100    t1-A
+t2    DELETE    2    2    init
+t1    UPDATE    2    200    t1-A
+t1    DELETE    3    3    init
+t2    INSERT    10    10    t2-A
+t1    INSERT    20    20    t1-A
+update t2 set b = 11, note = 't2-B' where a = 1;
+update t2 set b = 44, note = 't2-B' where a = 4;
+insert into t2 values (11, 11, 't2-B');
+delete from t2 where a = 10;
+update t1 set b = 111, note = 't1-B' where a = 1;
+insert into t1 values (21, 21, 't1-B');
+delete from t1 where a = 20;
+update t1 set b = 5555, note = 't1-B' where a = 5;
+data branch diff t2 against t1 output summary;
+metric    t2    t1
+INSERTED    1    1
+DELETED    1    1
+UPDATED    2    3
+data branch diff t2 against t1 output count;
+COUNT(*)
+9
+data branch diff t2 against t1;
+diff t2 against t1    flag    a    b    note
+t2    UPDATE    1    11    t2-B
+t1    UPDATE    1    111    t1-B
+t2    DELETE    2    2    init
+t1    UPDATE    2    200    t1-A
+t1    DELETE    3    3    init
+t2    UPDATE    4    44    t2-B
+t1    UPDATE    5    5555    t1-B
+t2    INSERT    11    11    t2-B
+t1    INSERT    21    21    t1-B
+data branch diff t1 against t2 output summary;
+metric    t1    t2
+INSERTED    1    1
+DELETED    1    1
+UPDATED    3    2
+data branch diff t1 against t2 output count;
+COUNT(*)
+9
+drop table t2;
+drop table t1;
+drop database test_chain_diff;
