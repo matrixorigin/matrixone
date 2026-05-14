@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1345,13 +1346,13 @@ func dedupLockRows(rows [][]byte) [][]byte {
 	if len(rows) <= 1 {
 		return rows
 	}
-	seen := make(map[string]struct{}, len(rows))
-	deduped := rows[:0]
-	for _, r := range rows {
-		k := string(r)
-		if _, exists := seen[k]; !exists {
-			seen[k] = struct{}{}
-			deduped = append(deduped, r)
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i], rows[j]) < 0
+	})
+	deduped := rows[:1]
+	for i := 1; i < len(rows); i++ {
+		if !bytes.Equal(rows[i], rows[i-1]) {
+			deduped = append(deduped, rows[i])
 		}
 	}
 	return deduped

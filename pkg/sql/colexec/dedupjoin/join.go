@@ -742,9 +742,16 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-// unionSelsByBatch groups sels by their build-batch index and performs one
-// batch Union call per group, avoiding per-row UnionOne overhead.
 func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
+	if len(sels) <= 16 {
+		for _, sel := range sels {
+			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+			if err := dst.UnionOne(batches[idx1].Vecs[colPos], int64(idx2), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	offsets := make([]int64, 0, len(sels))
 	prevIdx := int32(-1)
 	for _, sel := range sels {

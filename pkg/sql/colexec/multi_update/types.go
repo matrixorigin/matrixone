@@ -85,9 +85,11 @@ type MultiUpdate struct {
 }
 
 type updateCtxInfo struct {
-	Source      engine.Relation
-	tableType   UpdateTableType
-	insertAttrs []string
+	Source       engine.Relation
+	tableType    UpdateTableType
+	insertAttrs  []string
+	isContiguous bool
+	refBatch     *batch.Batch
 }
 
 type container struct {

@@ -137,17 +137,18 @@ func (update *MultiUpdate) insert_table(
 		return
 	}
 
-	// Fast path: when InsertCols form a contiguous 0-based sequence matching
-	// the insertBatch layout, we can build a zero-copy reference batch that
-	// shares the input vectors directly, avoiding UnionBatch memcpy overhead.
+	info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
 	writeBatch := insertBatch
-	if isContiguousMapping(updateCtx.InsertCols) {
-		writeBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
-		for insertIdx, inputIdx := range updateCtx.InsertCols {
-			writeBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
+	if info.isContiguous {
+		if info.refBatch == nil {
+			info.refBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+			info.refBatch.SetAttributes(insertBatch.Attrs)
 		}
-		writeBatch.SetAttributes(insertBatch.Attrs)
-		writeBatch.SetRowCount(rowCount)
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			info.refBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
+		}
+		info.refBatch.SetRowCount(rowCount)
+		writeBatch = info.refBatch
 	} else {
 		insertBatch.CleanOnlyData()
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
@@ -159,13 +160,11 @@ func (update *MultiUpdate) insert_table(
 		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
 	}
 
-	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-	update.addInsertAffectRows(tableType, uint64(writeBatch.RowCount()))
-	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	err = source.Write(newCtx, writeBatch)
+	err = info.Source.Write(newCtx, writeBatch)
 	if err != nil {
 		return err
 	}
