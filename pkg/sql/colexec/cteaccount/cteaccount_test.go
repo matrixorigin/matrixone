@@ -261,3 +261,85 @@ func TestSetBaselineResetsResolution(t *testing.T) {
 	require.Equal(t, int64(123), a.TotalBytes())
 	require.False(t, a.Resolved(), "SetBaseline must force re-resolution on next Account call")
 }
+
+func TestReleaseSubtractsFromTotal(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+
+	var a Accountant
+	require.NoError(t, a.Account(proc, bat, nil))
+	before := a.TotalBytes()
+	require.Greater(t, before, int64(0))
+
+	a.Release(bat)
+	require.Equal(t, int64(0), a.TotalBytes(),
+		"Release must subtract the full batch size, bringing total back to zero")
+}
+
+func TestReleaseNilOrSentinelIsNoop(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+
+	var a Accountant
+	require.NoError(t, a.Account(proc, bat, nil))
+	before := a.TotalBytes()
+	require.Greater(t, before, int64(0))
+
+	// Release nil
+	a.Release(nil)
+	require.Equal(t, before, a.TotalBytes())
+
+	// Release sentinel
+	sentinel := colexec.MakeMockBatchs(proc.Mp())
+	defer sentinel.Clean(proc.Mp())
+	sentinel.SetLast()
+	a.Release(sentinel)
+	require.Equal(t, before, a.TotalBytes())
+}
+
+func TestReleaseUnderflowClamp(t *testing.T) {
+	// If Release is called twice (or on an unaccounted batch), totalBytes must
+	// not go negative — it undermines the quota enforcement.
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+
+	var a Accountant
+	require.NoError(t, a.Account(proc, bat, nil))
+	require.Greater(t, a.TotalBytes(), int64(0))
+
+	// First Release: should zero out
+	a.Release(bat)
+	require.Equal(t, int64(0), a.TotalBytes())
+
+	// Second Release: must clamp to 0, not go negative
+	a.Release(bat)
+	require.Equal(t, int64(0), a.TotalBytes(),
+		"Release must clamp totalBytes to zero, not go negative")
+}
