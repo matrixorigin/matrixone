@@ -488,6 +488,16 @@ func TestMergeRewriteRules(t *testing.T) {
 		"select a from db1.t1 where a = 2",
 		mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2"),
 	)
+
+	require.Equal(t,
+		"select * from db1.t1 where age < 3",
+		mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3"),
+	)
+
+	require.Equal(t,
+		"select t.* from db1.t1 as t where age < 3",
+		mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3"),
+	)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {

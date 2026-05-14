@@ -336,9 +336,11 @@ func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (string, bool) {
 	}
 
 	switch e := expr.Expr.(type) {
+	case tree.UnqualifiedStar:
+		return "", false
 	case *tree.UnresolvedName:
 		if e.Star {
-			return strings.ToLower(tree.String(e, dialect.MYSQL)), true
+			return "", false
 		}
 		return e.ColName(), true
 	default:
