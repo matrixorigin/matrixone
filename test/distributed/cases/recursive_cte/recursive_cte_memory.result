@@ -43,6 +43,20 @@ select v+1 from seq2 where v < 100
 ) select count(*) from seq2;
 count(*)
 100
+set cte_max_memory_bytes = 33554432;
+with recursive seqA(v) as (
+select 1
+union all
+select v+1 from seqA where v < 200
+),
+seqB(v) as (
+select 1
+union all
+select v+1 from seqB where v < 200
+)
+select (select count(*) from seqA) + (select count(*) from seqB) as total;
+total
+400
 drop table if exists product_q;
 set cte_max_memory_bytes = 1073741824;
 set cte_max_recursion_depth = 1000;
