@@ -218,32 +218,11 @@ func runSql(
 	return sqlRet, nil
 }
 
-// shouldUseLCAReaderFallback returns true only for recoverable snapshot-read
-// failures where an engine reader based fallback can preserve LCA semantics.
-// After GC, time travelling by account/db/table name can fail if no snapshot or
-// PITR history was created for the corresponding account/db/table and the
-// historical catalog can no longer resolve that name. In that case, branch diff
-// should fall back to table-id based readers.
-//
-// ErrParseError is included because the SQL compiler emits it as
-// "table X does not exist" when getRelation() returns nil after catalog
-// name lookup fails at an old snapshot (the original ErrNoSuchTable is
-// swallowed in sql_executor_context.getRelation).
-func shouldUseLCAReaderFallback(err error) bool {
-	if err == nil {
-		return false
-	}
-	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
-		moerr.IsMoErrCode(err, moerr.ErrStaleRead) ||
-		moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-		moerr.IsMoErrCode(err, moerr.ErrParseError)
-}
-
 // shouldFallbackToFullScan returns true when CollectChanges or hashDiff fails
 // with an error that makes incremental change tracking unreliable, but a
 // full-table-scan comparison of the two tables' current states can still
-// produce correct results.
+// produce correct results. Callers must only use this for no-LCA diffs; once
+// branch ancestry exists, current-state comparison loses LCA semantics.
 //
 // Two classes of failure trigger this fallback:
 //   - ErrNoCommitTSColumn: TN merge objects on 3.0-dev lack per-row commit-ts,

@@ -140,15 +140,19 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 
 	if retBatchPool.dataVecCnt == 0 {
 		retBatchPool.dataVecCnt = len(tblStuff.def.colNames)
-		retBatchPool.tombVecCnt = 1
+		retBatchPool.tombVecCnt = 3
 		retBatchPool.dataTypes = tblStuff.def.colTypes
 		retBatchPool.tombstoneType = tblStuff.def.colTypes[tblStuff.def.pkColIdx]
+		retBatchPool.tombRowIDType = types.T_Rowid.ToType()
+		retBatchPool.tombKeyType = types.T_varbinary.ToType()
 	}
 
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
 			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
+			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType)
+			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType)
 			goto done
 		}
 
@@ -160,6 +164,12 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 		}
 		if !typeMatched(bat.Vecs[0], retBatchPool.tombstoneType) {
 			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone vec type mismatch, got %v expect %v", bat.Vecs[0].GetType(), retBatchPool.tombstoneType))
+		}
+		if !typeMatched(bat.Vecs[1], retBatchPool.tombRowIDType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone rowid vec type mismatch, got %v expect %v", bat.Vecs[1].GetType(), retBatchPool.tombRowIDType))
+		}
+		if !typeMatched(bat.Vecs[2], retBatchPool.tombKeyType) {
+			panic(moerr.NewInternalErrorNoCtxf("retBatchPool: tombstone key vec type mismatch, got %v expect %v", bat.Vecs[2].GetType(), retBatchPool.tombKeyType))
 		}
 
 		bat.CleanOnlyData()
@@ -978,7 +988,6 @@ func getTableStuff(
 		},
 	}
 	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
-	tblStuff.lcaReaderProbeMode = &atomic.Bool{}
 
 	return
 
@@ -1049,7 +1058,7 @@ func diffOnBase(
 	if tarHandle, baseHandle, err = constructChangeHandle(
 		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
 	); err != nil {
-		if shouldFallbackToFullScan(err) {
+		if !dagInfo.hasLCA() && shouldFallbackToFullScan(err) {
 			logutil.Info("DataBranch-DiffOnBase falling back to full-table-scan",
 				zap.Uint64("target-id", tblStuff.tarRel.GetTableID(ctx)),
 				zap.Uint64("base-id", tblStuff.baseRel.GetTableID(ctx)),
@@ -1065,7 +1074,7 @@ func diffOnBase(
 		ctx, ses, bh, tblStuff, dagInfo,
 		copt, emit, tarHandle, baseHandle, pickKeyHashmap,
 	); err != nil {
-		if shouldFallbackToFullScan(err) {
+		if !dagInfo.hasLCA() && shouldFallbackToFullScan(err) {
 			logutil.Info("DataBranch-HashDiff falling back to full-table-scan",
 				zap.Uint64("target-id", tblStuff.tarRel.GetTableID(ctx)),
 				zap.Uint64("base-id", tblStuff.baseRel.GetTableID(ctx)),
@@ -1746,10 +1755,10 @@ func buildSideCollectRange(
 	return
 }
 
-// getTablesCreationCommitTS resolves the creation commit timestamp for
-// both tar and base tables.  It tries CollectChanges first (fast,
-// preserves real commit_ts from partition state), falling back to the
-// Reader-based snapshot scan when partition state is unavailable.
+// getTablesCreationCommitTS resolves the creation commit timestamp for both
+// tar and base tables. It tries CollectChanges first, then uses the catalog
+// cache because checkpoint-loaded catalog entries keep the table commit TS
+// after GC.
 func getTablesCreationCommitTS(
 	ctx context.Context,
 	ses *Session,

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -28,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -264,97 +263,106 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	require.Equal(t, [][]any{{int64(7), "before", "base"}}, got["DELETE-2"])
 }
 
-func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
+func TestRetBatchList_TombstoneBatchesHaveRowIDAndKeyVectors(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	tblStuff := newTestFullScanTableStuff(ctrl)
-	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+	tombBat := tblStuff.retPool.acquireRetBatch(tblStuff, true)
+	require.Equal(t, 3, tombBat.VectorCount())
+	require.Equal(t, types.T_int64, tombBat.Vecs[0].GetType().Oid)
+	require.Equal(t, types.T_Rowid, tombBat.Vecs[1].GetType().Oid)
+	require.Equal(t, types.T_varbinary, tombBat.Vecs[2].GetType().Oid)
 
-	t.Run("nil batch", func(t *testing.T) {
-		ret, err := runLCAProbeWithReaderFallback(
-			context.Background(),
-			ses,
-			nil,
-			tblStuff,
-			types.BuildTS(10, 0),
-		)
-		require.NoError(t, err)
-		require.Nil(t, ret.Batches)
-	})
+	rowID := testHashDiffRowid(11)
+	require.NoError(t, vector.AppendFixed(tombBat.Vecs[0], int64(7), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(tombBat.Vecs[1], rowID, false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(tombBat.Vecs[2], []byte("encoded-key"), false, ses.proc.Mp()))
+	tombBat.SetRowCount(1)
+	tblStuff.retPool.releaseRetBatch(tombBat, true)
 
-	t.Run("empty batch", func(t *testing.T) {
-		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		defer tBat.Clean(ses.proc.Mp())
-
-		ret, err := runLCAProbeWithReaderFallback(
-			context.Background(),
-			ses,
-			tBat,
-			tblStuff,
-			types.BuildTS(10, 0),
-		)
-		require.NoError(t, err)
-		require.Len(t, ret.Batches, 1)
-		require.Equal(t, 0, ret.Batches[0].RowCount())
-		ret.Close()
-	})
+	reused := tblStuff.retPool.acquireRetBatch(tblStuff, true)
+	defer tblStuff.retPool.releaseRetBatch(reused, true)
+	require.Equal(t, 0, reused.RowCount())
+	require.Equal(t, 0, reused.Vecs[0].Length())
+	require.Equal(t, 0, reused.Vecs[1].Length())
+	require.Equal(t, 0, reused.Vecs[2].Length())
 }
 
-func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing.T) {
+func TestValidateLeadingRowIDAndSamples(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	valid := buildHashDiffDataBatch(t, mp, [][]any{
+		{testHashDiffRowid(1), int64(1), "alice", "h1", commitTSBytes(types.BuildTS(10, 0))},
+	})
+	defer valid.Clean(mp)
+	require.NoError(t, validateLeadingRowID("target", "tbl", false, valid))
+	samples := batchSampleRowsForLog(valid, 1)
+	require.Len(t, samples, 1)
+	require.NotEmpty(t, samples[0])
+
+	missing := batch.NewWithSize(0)
+	missing.SetRowCount(1)
+	require.Error(t, validateLeadingRowID("target", "tbl", false, missing))
+
+	wrongType := batch.NewWithSize(1)
+	wrongType.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(wrongType.Vecs[0], int64(1), false, mp))
+	wrongType.SetRowCount(1)
+	require.Error(t, validateLeadingRowID("target", "tbl", false, wrongType))
+	wrongType.Clean(mp)
+
+	nullRowID := batch.NewWithSize(1)
+	nullRowID.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendAny(nullRowID.Vecs[0], nil, true, mp))
+	nullRowID.SetRowCount(1)
+	require.Error(t, validateLeadingRowID("target", "tbl", false, nullRowID))
+	nullRowID.Clean(mp)
+
+	emptyRowID := batch.NewWithSize(1)
+	emptyRowID.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixed(emptyRowID.Vecs[0], types.EmptyRowid, false, mp))
+	emptyRowID.SetRowCount(1)
+	require.Error(t, validateLeadingRowID("target", "tbl", false, emptyRowID))
+	emptyRowID.Clean(mp)
+}
+
+func TestTupleHelpersForPrune(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
-
-	eng := mock_frontend.NewMockEngine(ctrl)
-	rangeRel := mock_frontend.NewMockRelation(ctrl)
-	rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
-		Return(readutil.NewBlockListRelationData(0), nil).
-		Times(1)
-	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(77)).
-		Return("db1", "lca_tbl", rangeRel, nil).
-		Times(1)
-
-	ses.txnHandler = &TxnHandler{
-		storage: eng,
-		txnOp:   txnOp,
-	}
-
 	tblStuff := newTestFullScanTableStuff(ctrl)
-	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-	lcaDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "lca_tbl",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
-	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
-	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tuple := types.Tuple{int64(7), []byte("alice"), []byte("h1")}
+	probeBat := tblStuff.retPool.acquireRetBatch(tblStuff, true)
+	defer tblStuff.retPool.releaseRetBatch(probeBat, true)
 
-	tBat := batch.NewWithSize(1)
-	tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
-	require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(2), false, ses.proc.Mp()))
-	tBat.SetRowCount(2)
-	defer tBat.Clean(ses.proc.Mp())
+	require.NoError(t, appendPruneProbeRow(ses, tblStuff, probeBat, []byte("key-7"), tuple))
+	require.Equal(t, 1, probeBat.RowCount())
+	require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](probeBat.Vecs[0])[0])
+	require.Equal(t, []byte("key-7"), probeBat.Vecs[2].GetBytesAt(0))
 
-	ret, err := runLCAProbeWithReaderFallback(
-		context.Background(),
-		ses,
-		tBat,
-		tblStuff,
-		types.BuildTS(10, 0),
-	)
+	lcaBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	defer tblStuff.retPool.releaseRetBatch(lcaBat, false)
+	require.NoError(t, appendTupleToBat(ses, lcaBat, tuple, tblStuff))
+	equal, err := visibleTupleEqualBatchRow(tuple, lcaBat, 0, tblStuff)
+	require.NoError(t, err)
+	require.True(t, equal)
+
+	equal, err = visibleTupleEqualBatchRow(types.Tuple{int64(7), []byte("bob"), []byte("h1")}, lcaBat, 0, tblStuff)
+	require.NoError(t, err)
+	require.False(t, equal)
+
+	require.True(t, tupleValueEqualVector([]byte("alice"), lcaBat.Vecs[1], 0))
+	require.False(t, tupleValueEqualVector([]byte("bob"), lcaBat.Vecs[1], 0))
+	require.Equal(t, []int{1, 2}, visibleTupleKeyIdxes(tblStuff))
+
+	_, err = getTupleColumnValue(tuple, tblStuff, -1)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "snapshot scan requires disttae relation")
-	ret.Close()
+	_, err = getTupleColumnValue(types.Tuple{int64(1)}, tblStuff, 0)
+	require.Error(t, err)
 }
 
 func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
@@ -366,7 +374,7 @@ func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
 		tblStuff := newTestFullScanTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 
-		_, err := handleDelsOnLCA(
+		_, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			nil,
@@ -378,36 +386,15 @@ func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
 		require.Contains(t, err.Error(), "invalid branch ts")
 	})
 
-	t.Run("reader probe with empty tombstone batch", func(t *testing.T) {
+	t.Run("empty tombstone batch", func(t *testing.T) {
 		tblStuff := newTestFullScanTableStuff(ctrl)
-		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
-		tblStuff.lcaReaderProbeMode.Store(true)
-
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
-		baseDef := &plan.TableDef{
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
-		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
-		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
-		tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
 
 		tBat := batch.NewWithSize(1)
 		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		tBat.SetRowCount(0)
 		defer tBat.Clean(ses.proc.Mp())
 
-		dBat, err := handleDelsOnLCA(
+		dBat, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			nil,
@@ -462,7 +449,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tBat.SetRowCount(2)
 		defer tBat.Clean(ses.proc.Mp())
 
-		dBat, err := handleDelsOnLCA(
+		dBat, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			bh,
@@ -479,13 +466,12 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.retPool.releaseRetBatch(dBat, false)
 	})
 
-	t.Run("recoverable sql error falls back to reader mode", func(t *testing.T) {
+	t.Run("sql error is propagated", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		tblStuff := newTestFullScanTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
 		lcaDef := &plan.TableDef{
 			DbName: "db1",
 			Name:   "lca_tbl",
@@ -509,10 +495,11 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tBat := batch.NewWithSize(1)
 		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		tBat.SetRowCount(0)
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
 
-		dBat, err := handleDelsOnLCA(
+		_, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			bh,
@@ -520,12 +507,8 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			tblStuff,
 			types.BuildTS(10, 0).ToTimestamp(),
 		)
-		require.NoError(t, err)
-		require.NotNil(t, dBat)
-		require.Equal(t, 0, dBat.RowCount())
-		require.Equal(t, 0, tBat.RowCount())
-		require.True(t, tblStuff.lcaReaderProbeMode.Load())
-		tblStuff.retPool.releaseRetBatch(dBat, false)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
 	})
 
 	t.Run("fake pk sql builder propagates non recoverable error", func(t *testing.T) {
@@ -562,7 +545,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
 
-		_, err := handleDelsOnLCA(
+		_, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			bh,
@@ -614,7 +597,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tBat.SetRowCount(1)
 		defer tBat.Clean(ses.proc.Mp())
 
-		_, err := handleDelsOnLCA(
+		_, _, err := handleDelsOnLCA(
 			context.Background(),
 			ses,
 			bh,
@@ -639,15 +622,18 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	tblStuff.maxTombstoneBatchCnt = 1
 	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 
+	oldRowID := testHashDiffRowid(1)
+	newRowID := testHashDiffRowid(2)
+	baseRowID := testHashDiffRowid(3)
 	tarData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
-		{int64(1), "old", "h1", commitTSBytes(types.BuildTS(5, 0))},
-		{int64(1), "new", "h2", commitTSBytes(types.BuildTS(15, 0))},
+		{oldRowID, int64(1), "old", "h1", commitTSBytes(types.BuildTS(5, 0))},
+		{newRowID, int64(1), "new", "h2", commitTSBytes(types.BuildTS(15, 0))},
 	})
 	tarTombstone := buildHashDiffTombstoneBatch(t, ses.proc.Mp(), [][]any{
-		{int64(1), commitTSBytes(types.BuildTS(10, 0))},
+		{oldRowID, int64(1), commitTSBytes(types.BuildTS(10, 0))},
 	})
 	baseData := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
-		{int64(3), "base-only", "hb", commitTSBytes(types.BuildTS(12, 0))},
+		{baseRowID, int64(3), "base-only", "hb", commitTSBytes(types.BuildTS(12, 0))},
 	})
 
 	var got []capturedBatch
@@ -697,6 +683,219 @@ func TestHashDiff_NoLCAWithStubHandles(t *testing.T) {
 	require.Equal(t, [][]any{{int64(3), "base-only", "hb"}}, got[1].rows)
 }
 
+func TestPruneUnchangedDataOnLCA_RemovesOnlyRowsVisibleAtBothSnapshots(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(81)).AnyTimes()
+	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
+
+	dataHashmap := buildTestBranchHashmap(
+		t,
+		ses.proc.Mp(),
+		tblStuff.def.colTypes,
+		[][]any{{int64(1), "alice", "h1"}},
+	)
+	defer func() { require.NoError(t, dataHashmap.Close()) }()
+	tombstoneHashmap, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tombstoneHashmap.Close()) }()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	gomock.InOrder(
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+	)
+
+	err = pruneUnchangedDataOnLCA(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		"target",
+		types.BuildTS(10, 0),
+		types.BuildTS(5, 0),
+		dataHashmap,
+		tombstoneHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), dataHashmap.ItemCount())
+}
+
+func TestBuildHashmapForTable_UsesRowIDAdjustedPKIndexes(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	pickKeyHashmap := buildTestBranchHashmap(
+		t,
+		ses.proc.Mp(),
+		[]types.Type{types.T_int64.ToType()},
+		[][]any{{int64(2)}, {int64(3)}},
+	)
+	defer func() { require.NoError(t, pickKeyHashmap.Close()) }()
+
+	dataBat := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{testHashDiffRowid(1), int64(1), "filtered-data", "h1", commitTSBytes(types.BuildTS(5, 0))},
+		{testHashDiffRowid(2), int64(2), "kept-data", "h2", commitTSBytes(types.BuildTS(6, 0))},
+	})
+	tombstoneBat := buildHashDiffTombstoneBatch(t, ses.proc.Mp(), [][]any{
+		{testHashDiffRowid(3), int64(3), commitTSBytes(types.BuildTS(7, 0))},
+		{testHashDiffRowid(4), int64(4), commitTSBytes(types.BuildTS(8, 0))},
+	})
+
+	dataHashmap, tombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				data:      dataBat,
+				tombstone: tombstoneBat,
+			}},
+		}},
+		"target",
+		pickKeyHashmap,
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, dataHashmap.Close()) }()
+	defer func() { require.NoError(t, tombstoneHashmap.Close()) }()
+	require.Equal(t, int64(1), dataHashmap.ItemCount())
+	require.Equal(t, int64(1), tombstoneHashmap.ItemCount())
+
+	idVec := vector.NewVec(types.T_int64.ToType())
+	defer idVec.Free(ses.proc.Mp())
+	require.NoError(t, vector.AppendFixed(idVec, int64(2), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendFixed(idVec, int64(3), false, ses.proc.Mp()))
+	results, err := dataHashmap.GetByVectors([]*vector.Vector{idVec})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.False(t, results[1].Exists)
+
+	results, err = tombstoneHashmap.GetByVectors([]*vector.Vector{idVec})
+	require.NoError(t, err)
+	require.False(t, results[0].Exists)
+	require.True(t, results[1].Exists)
+}
+
+func TestFindDeleteAndUpdateBat_RemovesOnlyMatchingRowID(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.maxTombstoneBatchCnt = 10
+	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(82)).AnyTimes()
+	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
+
+	oldRowID := testHashDiffRowid(1)
+	liveRowID := testHashDiffRowid(2)
+	dataBat := buildHashDiffDataBatch(t, ses.proc.Mp(), [][]any{
+		{oldRowID, int64(1), "old", "h1", commitTSBytes(types.BuildTS(5, 0))},
+		{liveRowID, int64(1), "live", "h2", commitTSBytes(types.BuildTS(15, 0))},
+	})
+	defer dataBat.Clean(ses.proc.Mp())
+	dataHashmap, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, dataHashmap.Close()) }()
+	require.NoError(t, dataHashmap.PutByVectors(dataBat.Vecs, []int{1}))
+
+	tombstoneBat := buildHashDiffTombstoneBatch(t, ses.proc.Mp(), [][]any{
+		{oldRowID, int64(1), commitTSBytes(types.BuildTS(10, 0))},
+	})
+	defer tombstoneBat.Clean(ses.proc.Mp())
+	tombstoneHashmap, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tombstoneHashmap.Close()) }()
+	require.NoError(t, tombstoneHashmap.PutByVectors(tombstoneBat.Vecs, []int{1}))
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetFromRows([]interface{}{int64(0), nil, nil, nil}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	tmpCh := make(chan batchWithKind, 2)
+	err = findDeleteAndUpdateBat(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		"target",
+		diffSideTarget,
+		tmpCh,
+		types.BuildTS(10, 0),
+		false,
+		dataHashmap,
+		tombstoneHashmap,
+	)
+	require.NoError(t, err)
+	require.Len(t, tmpCh, 0)
+
+	idVec := vector.NewVec(types.T_int64.ToType())
+	defer idVec.Free(ses.proc.Mp())
+	require.NoError(t, vector.AppendFixed(idVec, int64(1), false, ses.proc.Mp()))
+	results, err := dataHashmap.GetByVectors([]*vector.Vector{idVec})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+	tuple, _, err := dataHashmap.DecodeRow(results[0].Rows[0])
+	require.NoError(t, err)
+	gotRowID := types.DecodeFixed[types.Rowid](tuple[0].([]byte))
+	require.Equal(t, liveRowID, gotRowID)
+}
+
 func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
@@ -715,6 +914,13 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 }
 
 func buildLCAProbeResultSet() *MysqlResultSet {
+	return buildLCAProbeResultSetFromRows(
+		[]interface{}{int64(0), int64(1), "alice", "h1"},
+		[]interface{}{int64(1), nil, nil, nil},
+	)
+}
+
+func buildLCAProbeResultSetFromRows(rows ...[]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	for _, col := range []struct {
 		name string
@@ -731,8 +937,9 @@ func buildLCAProbeResultSet() *MysqlResultSet {
 		mrs.AddColumn(mysqlCol)
 	}
 
-	mrs.AddRow([]interface{}{int64(0), int64(1), "alice", "h1"})
-	mrs.AddRow([]interface{}{int64(1), nil, nil, nil})
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
 	return mrs
 }
 
@@ -764,15 +971,16 @@ func (s *stubEngineChangesHandle) Close() error {
 func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
-	bat := batch.NewWithSize(4)
-	bat.SetAttributes([]string{"id", "name", "hidden", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat := batch.NewWithSize(5)
+	bat.SetAttributes([]string{"__rowid", "id", "name", "hidden", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
 
 	for _, row := range rows {
-		require.Len(t, row, 4)
+		require.Len(t, row, 5)
 		for i, val := range row {
 			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
 		}
@@ -784,19 +992,26 @@ func buildHashDiffDataBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.
 func buildHashDiffTombstoneBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
 	t.Helper()
 
-	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"id", "__commit_ts"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{"__rowid", "id", "__commit_ts"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
 	for _, row := range rows {
-		require.Len(t, row, 2)
+		require.Len(t, row, 3)
 		for i, val := range row {
 			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
 		}
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+func testHashDiffRowid(offset uint32) types.Rowid {
+	var blk types.Blockid
+	copy(blk[:], []byte("hashdiff-test-block-id"))
+	return types.NewRowid(&blk, offset)
 }
 
 func commitTSBytes(ts types.TS) []byte {
@@ -819,9 +1034,16 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 		{name: "uint64", typ: types.T_uint64.ToType(), want: "BIGINT UNSIGNED", ok: true},
 		{name: "float32", typ: types.T_float32.ToType(), want: "FLOAT", ok: true},
 		{name: "float64", typ: types.T_float64.ToType(), want: "DOUBLE", ok: true},
+		{name: "char", typ: types.T_char.ToType(), want: "VARCHAR", ok: true},
 		{name: "varchar", typ: types.T_varchar.ToType(), want: "VARCHAR", ok: true},
+		{name: "text", typ: types.T_text.ToType(), want: "VARCHAR", ok: true},
+		{name: "binary", typ: types.T_binary.ToType(), want: "VARBINARY", ok: true},
 		{name: "varbinary", typ: types.T_varbinary.ToType(), want: "VARBINARY", ok: true},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 12, 2), want: types.New(types.T_decimal64, 12, 2).DescString(), ok: true},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 18, 4), want: types.New(types.T_decimal128, 18, 4).DescString(), ok: true},
+		{name: "date", typ: types.T_date.ToType(), want: types.T_date.ToType().String(), ok: true},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), want: types.New(types.T_datetime, 0, 6).String(), ok: true},
+		{name: "time", typ: types.New(types.T_time, 0, 6), want: types.New(types.T_time, 0, 6).String(), ok: true},
 		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 6), want: types.New(types.T_timestamp, 0, 6).String(), ok: true},
 		{name: "unsupported", typ: types.T_bool.ToType(), want: "", ok: false},
 	}
