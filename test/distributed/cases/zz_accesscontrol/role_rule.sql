@@ -2,9 +2,12 @@ set global enable_privilege_cache = off;
 -- cleanup residual resources
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
+drop user if exists test_rule_user_multi_diff;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
+drop role if exists test_rule_role_multi_c;
+drop role if exists test_rule_role_multi_d;
 drop database if exists db1;
 drop database if exists db2;
 create database db1;
@@ -61,10 +64,12 @@ insert into db2.t2 values (10,10),(20,35),(200,60);
 create role test_rule_role_multi_a;
 create role test_rule_role_multi_b;
 alter role test_rule_role_multi_a add rule "select * from db1.t1 where age > 28" on table db1.t1;
+alter role test_rule_role_multi_b add rule "select * from db1.t1 where age < 3" on table db1.t1;
 alter role test_rule_role_multi_b add rule "select * from db2.t2 where age > 30" on table db2.t2;
 create user test_rule_user_multi identified by '123456' default role test_rule_role_multi_a;
 grant connect on account * to test_rule_role_multi_a;
 grant select on table db1.t1 to test_rule_role_multi_a;
+grant select on table db1.t1 to test_rule_role_multi_b;
 grant select on table db2.t2 to test_rule_role_multi_b;
 grant test_rule_role_multi_b to test_rule_user_multi;
 -- @session:id=2&user=sys:test_rule_user_multi:test_rule_role_multi_a&password=123456
@@ -74,12 +79,31 @@ select * from db1.t1 order by a;
 select * from db2.t2 order by a;
 -- @session
 
+-- 12. Same-table rules with different output columns use the last encountered rule
+create role test_rule_role_multi_c;
+create role test_rule_role_multi_d;
+alter role test_rule_role_multi_c add rule "select * from db1.t1 where age > 28" on table db1.t1;
+alter role test_rule_role_multi_d add rule "select a from db1.t1 where a = 2" on table db1.t1;
+create user test_rule_user_multi_diff identified by '123456' default role test_rule_role_multi_c;
+grant connect on account * to test_rule_role_multi_c;
+grant select on table db1.t1 to test_rule_role_multi_c;
+grant select on table db1.t1 to test_rule_role_multi_d;
+grant test_rule_role_multi_d to test_rule_user_multi_diff;
+-- @session:id=3&user=sys:test_rule_user_multi_diff:test_rule_role_multi_c&password=123456
+set enable_remap_hint = 1;
+set secondary role all;
+select * from db1.t1 order by a;
+-- @session
+
 -- cleanup all test resources
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
+drop user if exists test_rule_user_multi_diff;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
+drop role if exists test_rule_role_multi_c;
+drop role if exists test_rule_role_multi_d;
 drop database if exists db1;
 drop database if exists db2;
 set global enable_privilege_cache = on;

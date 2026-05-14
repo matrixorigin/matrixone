@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -160,7 +162,11 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 		if err != nil {
 			return nil, err
 		}
-		rules[ruleName] = rule
+		if existingRule, ok := rules[ruleName]; ok {
+			rules[ruleName] = mergeRewriteRules(ctx, existingRule, rule)
+		} else {
+			rules[ruleName] = rule
+		}
 	}
 
 	return rules, nil
@@ -248,6 +254,108 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 	}
 	return fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id in (%s) order by role_id, rule_name",
 		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
+}
+
+func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) string {
+	leftRule = trimRewriteRuleForUnion(leftRule)
+	rightRule = trimRewriteRuleForUnion(rightRule)
+
+	leftColumns, ok := rewriteRuleOutputColumns(ctx, leftRule)
+	if !ok {
+		return rightRule
+	}
+	rightColumns, ok := rewriteRuleOutputColumns(ctx, rightRule)
+	if !ok {
+		return rightRule
+	}
+	if !sameRewriteOutputColumns(leftColumns, rightColumns) {
+		return rightRule
+	}
+	return fmt.Sprintf("(%s) union distinct (%s)", leftRule, rightRule)
+}
+
+func trimRewriteRuleForUnion(rule string) string {
+	rule = strings.TrimSpace(rule)
+	for strings.HasSuffix(rule, ";") {
+		rule = strings.TrimSpace(strings.TrimSuffix(rule, ";"))
+	}
+	return rule
+}
+
+func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]string, bool) {
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	if err != nil {
+		return nil, false
+	}
+	return outputColumnsFromRewriteStatement(stmt)
+}
+
+func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]string, bool) {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return outputColumnsFromRewriteSelectStatement(s.Select)
+	case *tree.ParenSelect:
+		if s.Select == nil {
+			return nil, false
+		}
+		return outputColumnsFromRewriteStatement(s.Select)
+	default:
+		return nil, false
+	}
+}
+
+func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]string, bool) {
+	switch s := stmt.(type) {
+	case *tree.SelectClause:
+		columns := make([]string, 0, len(s.Exprs))
+		for _, expr := range s.Exprs {
+			column, ok := outputColumnFromRewriteSelectExpr(expr)
+			if !ok {
+				return nil, false
+			}
+			columns = append(columns, column)
+		}
+		return columns, true
+	case *tree.UnionClause:
+		return outputColumnsFromRewriteSelectStatement(s.Left)
+	case *tree.ParenSelect:
+		if s.Select == nil {
+			return nil, false
+		}
+		return outputColumnsFromRewriteStatement(s.Select)
+	case *tree.Select:
+		return outputColumnsFromRewriteSelectStatement(s.Select)
+	default:
+		return nil, false
+	}
+}
+
+func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (string, bool) {
+	if expr.As != nil && !expr.As.Empty() {
+		return expr.As.Compare(), true
+	}
+
+	switch e := expr.Expr.(type) {
+	case *tree.UnresolvedName:
+		if e.Star {
+			return strings.ToLower(tree.String(e, dialect.MYSQL)), true
+		}
+		return e.ColName(), true
+	default:
+		return strings.ToLower(tree.String(expr.Expr, dialect.MYSQL)), true
+	}
+}
+
+func sameRewriteOutputColumns(leftColumns, rightColumns []string) bool {
+	if len(leftColumns) != len(rightColumns) {
+		return false
+	}
+	for i := range leftColumns {
+		if leftColumns[i] != rightColumns[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.

@@ -459,18 +459,35 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20, 30, 40})] = newMrsForRewriteRules([][]interface{}{
-		{"db1.t1", "select * from db1.t1 where age > 28"},
+		{"db1.t1", "select a, age from db1.t1 where age > 28"},
+		{"db1.t1", "select a, age from db1.t1 where age < 3"},
 		{"db2.t2", "select * from db2.t2 where age > 30"},
-		{"db3.t3", "select * from db3.t3 where age > 40"},
+		{"db2.t2", "select a from db2.t2 where a = 20"},
 	})
 
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "select * from db1.t1 where age > 28",
-		"db2.t2": "select * from db2.t2 where age > 30",
-		"db3.t3": "select * from db3.t3 where age > 40",
+		"db1.t1": "(select a, age from db1.t1 where age > 28) union distinct (select a, age from db1.t1 where age < 3)",
+		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
+}
+
+func TestMergeRewriteRules(t *testing.T) {
+	ctx := context.Background()
+
+	left := "select a from db1.t1 where a = 1"
+	right := "select a from db1.t1 where a = 2"
+	merged := mergeRewriteRules(ctx, left, right)
+	require.Equal(t, "(select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)", merged)
+
+	merged = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
+	require.Equal(t, "((select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)) union distinct (select a from db1.t1 where a = 3)", merged)
+
+	require.Equal(t,
+		"select a from db1.t1 where a = 2",
+		mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2"),
+	)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
