@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -499,6 +500,31 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 	// Test 4: Verify cache is used on subsequent calls (no recomputation)
 	// We can't easily test this without mocking, but the atomic load in checkDivisionByZeroBehavior
 	// will return early if cache is set, which we've verified above
+}
+
+func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", nil
+		}
+		return nil, nil
+	})
+
+	stmtProfile := &process.StmtProfile{}
+	proc.SetStmtProfile(stmtProfile)
+	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, true)
+
+	require.False(t, checkDivisionByZeroBehavior(proc, nil), "INSERT IGNORE should return NULL for division by zero")
+	require.Equal(t, int32(0), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+
+	stmtProfile = &process.StmtProfile{}
+	proc.SetStmtProfile(stmtProfile)
+	stmtProfile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
+
+	require.True(t, checkDivisionByZeroBehavior(proc, nil), "plain INSERT should still error in strict mode")
+	require.Equal(t, int32(1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 }
 
 // TestIntegerDivConstantVector tests DIV with constant vectors (column DIV constant, constant DIV column)
