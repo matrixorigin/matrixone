@@ -90,6 +90,9 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	// MergeCTE retains freeBats across Reset cycles because the recursive
+	// arm re-reads accumulated batches. This differs from MergeRecursive
+	// which streams output and cleans everything on Reset.
 	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
 	mergeCTE.ctr.i = 0
