@@ -161,7 +161,7 @@ func TestAccountForRetainedBatchSurfacesQuotaError(t *testing.T) {
 func TestSentinelPromotionReleasesAccountedBytes(t *testing.T) {
 	// Reproduces the totalBytes drift when a data batch slot is promoted to
 	// a sentinel and then Reset is called. With the fix (Release +
-	// CleanOnlyData before SetLast), Reset must seed baseline correctly
+	// Clean + makeRecursiveBatch), Reset must seed baseline correctly
 	// without counting the sentinel's released bytes.
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer func() {
@@ -190,18 +190,21 @@ func TestSentinelPromotionReleasesAccountedBytes(t *testing.T) {
 	// Simulate sendLastTag: promote the data slot to a sentinel
 	// This is the exact sendLastTag path from mergecte.go
 	arg.ctr.memAcct.Release(arg.ctr.freeBats[arg.ctr.i])
-	arg.ctr.freeBats[arg.ctr.i].CleanOnlyData()
-	arg.ctr.freeBats[arg.ctr.i].SetLast()
+	arg.ctr.freeBats[arg.ctr.i].Clean(proc.Mp())
+	arg.ctr.freeBats[arg.ctr.i] = makeRecursiveBatch(proc)
 	arg.ctr.i++
 
 	// After Release, totalBytes must drop by the data batch size
 	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes(),
 		"Release must zero out accounted bytes of promoted batch")
 
-	// Verify the sentinel is in freeBats and can be distinguished
+	// Verify the sentinel is in freeBats and can be distinguished.
+	// makeRecursiveBatch guarantees consistent structure (attrs, vectors).
 	promotedIdx := arg.ctr.i - 1
 	require.True(t, arg.ctr.freeBats[promotedIdx].Last(),
 		"promoted slot must be a sentinel (Last() == true)")
+	require.Equal(t, []string{"recursive_col"}, arg.ctr.freeBats[promotedIdx].Attrs,
+		"sentinel must have the same attrs as makeRecursiveBatch")
 
 	// Reset must exclude the sentinel and keep baseline at 0
 	arg.Reset(proc, false, nil)

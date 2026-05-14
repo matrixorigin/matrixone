@@ -96,13 +96,15 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if mergeCTE.ctr.status == sendLastTag {
 			mergeCTE.ctr.status = sendRecursive
 			if len(ctr.freeBats) > ctr.i {
-				// Release accounted bytes, free data, then mark as sentinel.
-				// SetLast alone only flips a flag; without Release the previous
-				// Account still counts the data → Reset drops those bytes →
-				// totalBytes drifts low across operator pool reuse.
+				// Release accounted bytes, clean the old data batch, then
+				// replace it with a fresh makeRecursiveBatch sentinel.
+				// CleanOnlyData+SetLast on the existing slot produces a
+				// sentinel with stale attrs/vectors (rowCount=0) that
+				// differs from makeRecursiveBatch.  Replacing the slot
+				// guarantees identical sentinel structure.
 				ctr.memAcct.Release(ctr.freeBats[ctr.i])
-				ctr.freeBats[ctr.i].CleanOnlyData()
-				ctr.freeBats[ctr.i].SetLast()
+				ctr.freeBats[ctr.i].Clean(proc.Mp())
+				ctr.freeBats[ctr.i] = makeRecursiveBatch(proc)
 			} else {
 				ctr.freeBats = append(ctr.freeBats, makeRecursiveBatch(proc))
 			}
