@@ -32,6 +32,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+func TestGetTenantCreateVersionForUpdate(t *testing.T) {
+	prefixMatchSQL := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", catalog.System_Account)
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.EqualFold(sql, prefixMatchSQL) {
+					return buildTenantVersionRows([]string{"1.2.3"}), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			_, err := GetTenantCreateVersionForUpdate(int32(catalog.System_Account), exec)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestGetTenantVersion(t *testing.T) {
+	prefixMatchSQL := fmt.Sprintf("select create_version from mo_account where account_id = %d", catalog.System_Account)
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.EqualFold(sql, prefixMatchSQL) {
+					return buildTenantVersionRows([]string{"1.2.3"}), nil
+				}
+				return executor.Result{}, nil
+			}, txnOperator)
+			_, err := GetTenantVersion(int32(catalog.System_Account), exec)
+			require.NoError(t, err)
+		},
+	)
+}
+
 func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -62,10 +106,10 @@ func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 				}
 			}, txnOperator)
 
-			taskID, tenants, createVersions, hasDeletedTenants, hasConflictTenants, err := GetUpgradeTenantTasks(10, exec)
+			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
 			require.NoError(t, err)
-			require.True(t, hasDeletedTenants)
-			require.False(t, hasConflictTenants)
+			require.True(t, hasDeletedTenantTasks)
+			require.False(t, hasConflictTenantTasks)
 			require.Equal(t, uint64(200), taskID)
 			require.Equal(t, []int32{10, 12}, tenants)
 			require.Equal(t, []string{"3.0.0", "3.0.0"}, createVersions)
@@ -107,15 +151,30 @@ func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
 				}
 			}, txnOperator)
 
-			taskID, tenants, createVersions, hasDeletedTenants, hasConflictTenants, err := GetUpgradeTenantTasks(10, exec)
+			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
 			require.NoError(t, err)
-			require.True(t, hasDeletedTenants)
-			require.True(t, hasConflictTenants)
+			require.True(t, hasDeletedTenantTasks)
+			require.True(t, hasConflictTenantTasks)
 			require.Zero(t, taskID)
 			require.Nil(t, tenants)
 			require.Nil(t, createVersions)
 		},
 	)
+}
+
+func buildTenantVersionRows(versions []string) executor.Result {
+	if len(versions) == 0 {
+		return executor.Result{}
+	}
+	memRes := executor.NewMemResult(
+		[]types.Type{
+			types.New(types.T_varchar, 50, 0),
+		},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(len(versions))
+	executor.AppendStringRows(memRes, 0, versions)
+	return memRes.GetResult()
 }
 
 func buildUpgradeTenantTaskResult(taskIDs []uint64, fromIDs, toIDs []int32) executor.Result {

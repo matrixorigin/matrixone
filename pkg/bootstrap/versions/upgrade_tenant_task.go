@@ -68,21 +68,28 @@ func UpdateUpgradeTenantTaskState(
 	return nil
 }
 
-func UpdateUpgradeTenantTasksStateByUpgradeID(
+func ReconcileDeletedUpgradeTenantTasks(
 	upgradeID uint64,
-	state int32,
-	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set ready = %d, update_at = current_timestamp() where upgrade_id = %d and ready != %d",
+	txn executor.TxnExecutor) (int64, error) {
+	sql := fmt.Sprintf(`update %s set ready = %d, update_at = current_timestamp()
+		where upgrade_id = %d and ready != %d
+		and not exists (
+			select 1 from mo_account
+			where account_id >= %s.from_account_id
+			  and account_id <= %s.to_account_id
+		)`,
 		catalog.MOUpgradeTenantTable,
-		state,
+		Yes,
 		upgradeID,
-		state)
+		Yes,
+		catalog.MOUpgradeTenantTable,
+		catalog.MOUpgradeTenantTable)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	res.Close()
-	return nil
+	return int64(res.AffectedRows), nil
 }
 
 func HasUnreadyUpgradeTenantTasks(
@@ -100,7 +107,7 @@ func HasUnreadyUpgradeTenantTasks(
 
 	hasUnready := false
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		hasUnready = rows > 0
+		hasUnready = true
 		return false
 	})
 	return hasUnready, nil
@@ -113,8 +120,8 @@ func GetUpgradeTenantTasks(
 	tenants := make([]int32, 0)
 	versions := make([]string, 0)
 	after := int32(0)
-	hasStaleTasks := false
-	hasConflictTasks := false
+	hasDeletedTenantTasks := false
+	hasConflictTenantTasks := false
 	for {
 		sql := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 			catalog.MOUpgradeTenantTable,
@@ -123,7 +130,7 @@ func GetUpgradeTenantTasks(
 			No)
 		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
-			return 0, nil, nil, false, false, err
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
 		}
 		from := int32(-1)
 		to := int32(-1)
@@ -135,7 +142,7 @@ func GetUpgradeTenantTasks(
 		})
 		res.Close()
 		if from == -1 {
-			return 0, nil, nil, hasStaleTasks, hasConflictTasks, nil
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
 		}
 
 		tenants = tenants[:0]
@@ -145,11 +152,15 @@ func GetUpgradeTenantTasks(
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
 			if isConflictError(err) {
-				hasConflictTasks = true
-				after = to + 1
+				hasConflictTenantTasks = true
+				next, ok := nextUpgradeTenantTaskAfter(to)
+				if !ok {
+					return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+				}
+				after = next
 				continue
 			}
-			return 0, nil, nil, false, false, err
+			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
@@ -160,12 +171,24 @@ func GetUpgradeTenantTasks(
 		})
 		res.Close()
 		if len(tenants) == 0 {
-			hasStaleTasks = true
-			after = to + 1
+			hasDeletedTenantTasks = true
+			next, ok := nextUpgradeTenantTaskAfter(to)
+			if !ok {
+				return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+			}
+			after = next
 			continue
 		}
-		return taskID, tenants, versions, hasStaleTasks, hasConflictTasks, nil
+		return taskID, tenants, versions, hasDeletedTenantTasks, hasConflictTenantTasks, nil
 	}
+}
+
+func nextUpgradeTenantTaskAfter(accountID int32) (int32, bool) {
+	const maxInt32 = int32(^uint32(0) >> 1)
+	if accountID == maxInt32 {
+		return 0, false
+	}
+	return accountID + 1, true
 }
 
 func GetTenantCreateVersionForUpdate(
