@@ -238,15 +238,15 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	buildArg := &hashbuild.HashBuild{
-		NeedHashMap:      true,
-		NeedBatches:      true,
-		Conditions:       conditions[1],
-		IsDedup:          true,
-		DelColIdx:        -1,
-		JoinMapTag:       curTag,
-		JoinMapRefCnt:    1,
+		NeedHashMap:       true,
+		NeedBatches:       true,
+		Conditions:        conditions[1],
+		IsDedup:           true,
+		DelColIdx:         -1,
+		JoinMapTag:        curTag,
+		JoinMapRefCnt:     1,
 		OnDuplicateAction: plan.Node_IGNORE,
-		OperatorBase:     vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 
 	out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
