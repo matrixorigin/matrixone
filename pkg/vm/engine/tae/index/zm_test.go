@@ -569,3 +569,126 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 		}
 	})
 }
+
+func TestZMYear(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(1999)
+	y2 := types.MoYear(2024)
+	y3 := types.MoYear(2155)
+	UpdateZM(zm, types.EncodeMoYear(&y2))
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y3))
+	require.Equal(t, y1, types.DecodeMoYear(zm.GetMinBuf()))
+	require.Equal(t, y3, types.DecodeMoYear(zm.GetMaxBuf()))
+	require.Equal(t, any(y1), zm.GetMin())
+	require.Equal(t, any(y3), zm.GetMax())
+}
+
+func TestZMDecimal256Skipped(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	d, err := types.ParseDecimal256("12345.6789", 65, 4)
+	require.NoError(t, err)
+
+	// UpdateZM should be a no-op for decimal256 — the ZM stays uninitialized
+	// and the payload buffers stay empty. Without the skip, this would panic
+	// because the 64-byte decimal256 payload does not fit the 32-byte ZM min/max
+	// slots.
+	UpdateZM(zm, types.EncodeDecimal256(&d))
+	require.False(t, zm.IsInited())
+
+	// BatchUpdateZM on a decimal256 vector must also be a no-op.
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 4))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, d, false, mp))
+	require.NoError(t, BatchUpdateZM(zm, vec))
+	require.False(t, zm.IsInited())
+
+	// BuildZM must also skip doInit for T_decimal256; otherwise a 32-byte
+	// payload would overwrite the length byte at offset 30 inside the fixed
+	// 64-byte ZM buffer. The returned ZM is typed but uninitialized.
+	built := BuildZM(types.T_decimal256, types.EncodeDecimal256(&d))
+	require.Equal(t, types.T_decimal256, built.GetType())
+	require.False(t, built.IsInited())
+}
+
+func TestZMYearAnyIn(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(1999)
+	y2 := types.MoYear(2024)
+	y3 := types.MoYear(2155)
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y3))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, y1, false, mp))
+	require.NoError(t, vector.AppendFixed(vec, y2, false, mp))
+	vec.InplaceSort()
+
+	require.True(t, zm.AnyIn(vec))
+
+	// Vector fully outside range
+	vec2 := vector.NewVec(types.T_year.ToType())
+	defer vec2.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec2, types.MoYear(1900), false, mp))
+	require.False(t, zm.AnyIn(vec2))
+}
+
+func TestZMYearSubVecIn(t *testing.T) {
+	zm := NewZM(types.T_year, 0)
+	y1 := types.MoYear(2000)
+	y2 := types.MoYear(2020)
+	UpdateZM(zm, types.EncodeMoYear(&y1))
+	UpdateZM(zm, types.EncodeMoYear(&y2))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_year.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(1990), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2005), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2010), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.MoYear(2025), false, mp))
+	vec.InplaceSort()
+
+	lo, hi := zm.SubVecIn(vec)
+	require.Equal(t, 1, lo)
+	require.Equal(t, 3, hi)
+}
+
+func TestZMDecimal256Pruning(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	d, err := types.ParseDecimal256("99999.9999", 65, 4)
+	require.NoError(t, err)
+	UpdateZM(zm, types.EncodeDecimal256(&d))
+	require.False(t, zm.IsInited())
+
+	k := types.EncodeDecimal256(&d)
+
+	require.True(t, zm.Contains(d))
+	require.True(t, zm.ContainsKey(k))
+	require.True(t, zm.AnyLTByValue(k))
+	require.True(t, zm.AnyGTByValue(k))
+	require.True(t, zm.AnyGEByValue(k))
+	require.True(t, zm.AnyLEByValue(k))
+
+	zm2 := NewZM(types.T_decimal256, 4)
+	require.True(t, zm.FastIntersect(zm2))
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal256, 65, 4))
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, d, false, mp))
+	vec.InplaceSort()
+	require.True(t, zm.FastContainsAny(vec))
+
+	zm3 := NewZM(types.T_int32, 0)
+	zm3.Update(int32(1))
+	zm3.Update(int32(10))
+	require.True(t, zm.FastIntersect(zm3))
+	require.True(t, zm3.FastIntersect(zm))
+
+	zmInt := NewZM(types.T_int32, 0)
+	require.False(t, zmInt.FastIntersect(zm3))
+}

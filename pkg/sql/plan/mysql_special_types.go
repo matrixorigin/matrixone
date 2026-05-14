@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func isEnumPlanType(typ *plan.Type) bool {
@@ -72,4 +74,44 @@ func normalizeGeometrySubtype(subtype string) string {
 	default:
 		return ""
 	}
+}
+
+func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if !isGeometryPlanType(&targetType) {
+		return expr, nil
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
+	if types.T(expr.Typ.Id) == types.T_any || isGeometryNullLiteralExpr(expr) {
+		expr.Typ = targetType
+		return expr, nil
+	}
+	targetMetadata := targetType.Enumvalues
+	if isGeometryPlanType(&expr.Typ) && expr.Typ.GetEnumvalues() == targetMetadata {
+		expr.Typ = targetType
+		return expr, nil
+	}
+
+	args := make([]*Expr, 2)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	targetSubtypeExpr, err := binder.BindExpr(tree.NewNumVal(targetMetadata, targetMetadata, false, tree.P_char), 0, false)
+	if err != nil {
+		return nil, err
+	}
+	args[0] = targetSubtypeExpr
+	args[1] = expr
+
+	castedExpr, err := BindFuncExprImplByPlanExpr(ctx, moGeometryCastToSubtypeFun, args)
+	if err != nil {
+		return nil, err
+	}
+	castedExpr.Typ = targetType
+	return castedExpr, nil
+}
+
+func isGeometryNullLiteralExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	lit, ok := expr.Expr.(*plan.Expr_Lit)
+	return ok && lit.Lit != nil && lit.Lit.Isnull
 }

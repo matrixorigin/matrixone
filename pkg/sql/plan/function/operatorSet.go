@@ -535,6 +535,24 @@ func operatorUnaryMinusDecimal128(parameters []*vector.Vector, result vector.Fun
 	return nil
 }
 
+func operatorUnaryMinusDecimal256(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](parameters[0])
+	rs := vector.MustFunctionResult[types.Decimal256](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(v, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v.Minus(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func funcBitInversion[T constraints.Integer](x T) uint64 {
 	if x > 0 {
 		n := uint64(x)

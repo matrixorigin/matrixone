@@ -1,0 +1,36 @@
+drop account if exists acc_protect_child;
+drop database if exists protect_db10_src;
+drop snapshot if exists sp_protect_db10;
+create account acc_protect_child admin_name "root1" identified by "111";
+create database protect_db10_src;
+use protect_db10_src;
+create table t1(a int primary key);
+insert into t1 values (1);
+create snapshot sp_protect_db10 for table protect_db10_src t1;
+create database protect_db10_dst;
+data branch create table protect_db10_dst.t2 from protect_db10_src.t1{snapshot="sp_protect_db10"} to account acc_protect_child;
+set @child_acc_id = (select account_id from mo_catalog.mo_account where account_name = 'acc_protect_child');
+set @t2_tid = (select rel_id from mo_catalog.mo_tables
+where account_id = @child_acc_id and reldatabase='protect_db10_dst' and relname='t2');
+set @t1_tid = (select rel_id from mo_catalog.mo_tables
+where account_id = 0 and reldatabase='protect_db10_src' and relname='t1');
+set @t2_sname = concat('__mo_branch_', cast(@t2_tid as char));
+select level, database_name, table_name, account_name,
+obj_id = @t1_tid as obj_id_matches_parent
+from mo_catalog.mo_snapshots
+where sname = @t2_sname and sname like '__mo_branch_%';
+level    database_name    table_name    account_name    obj_id_matches_parent
+table    protect_db10_src    t1    sys    1
+drop table protect_db10_dst.t2;
+select count(*) as branch_row_after_child_drop
+from mo_catalog.mo_snapshots
+where sname = @t2_sname and sname like '__mo_branch_%';
+branch_row_after_child_drop
+0
+select table_deleted from mo_catalog.mo_branch_metadata where table_id = @t2_tid;
+table_deleted
+1
+drop database protect_db10_dst;
+drop snapshot sp_protect_db10;
+drop database protect_db10_src;
+drop account if exists acc_protect_child;

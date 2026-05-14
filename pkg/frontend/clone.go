@@ -62,6 +62,13 @@ type cloneReceipt struct {
 	opAccount  uint32
 	toAccount  uint32
 	srcAccount uint32
+
+	// Resolved identifiers used by branch bookkeeping. They are populated by
+	// updateBranchMetaTable so the matching branch-protect snapshot insert can
+	// reuse them without a second catalog round-trip.
+	srcTableID     uint64
+	dstTableID     uint64
+	srcAccountName string
 }
 
 func getBackExecutor(
@@ -618,7 +625,7 @@ func updateBranchMetaTable(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	receipt cloneReceipt,
+	receipt *cloneReceipt,
 ) (err error) {
 
 	var (
@@ -674,6 +681,11 @@ func updateBranchMetaTable(
 	if receipt.snapshot != nil {
 		receipt.snapshotTS = receipt.snapshot.TS.PhysicalTime
 	}
+
+	// Persist the resolved ids so the branch-protect snapshot insert (and any
+	// other downstream bookkeeping) can avoid re-resolving them.
+	receipt.srcTableID = srcTblDef.TblId
+	receipt.dstTableID = dstTblDef.TblId
 
 	// write branch info into branch_metadata table
 	updateMetadataSql := fmt.Sprintf(
