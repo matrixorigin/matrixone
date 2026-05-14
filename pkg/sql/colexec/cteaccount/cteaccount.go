@@ -35,6 +35,18 @@ const QuotaVarName = "cte_max_memory_bytes"
 // instance. The quota is resolved lazily on the first Account call and cached
 // for the operator's lifetime, so a SET of @@cte_max_memory_bytes mid-query
 // takes effect only at the next Reset.
+//
+// Concurrency: the recursive CTE merge operator funnels parallel feeders through
+// a single-threaded Call, so no mutex is needed. A future refactor that lifts
+// the merge must introduce synchronization.
+//
+// Accuracy: Vector.Size() is approximate for variable-width types and aliased
+// buffers (see vector.go:188), so the quota is approximate-only — sufficient
+// for OOM prevention but not for byte-precise accounting.
+//
+// Scoping: quota is per-operator, per-CN. Two CTEs in one query each have an
+// independent Accountant. With N CNs the cluster-wide bound is
+// N × cte_max_memory_bytes.
 type Accountant struct {
 	totalBytes    int64
 	memQuotaBytes int64
@@ -94,6 +106,16 @@ func (a *Accountant) SetBaseline(bytes int64) {
 	a.totalBytes = bytes
 	a.memQuotaBytes = 0
 	a.resolved = false
+}
+
+// Release subtracts the pre-clean size of bat from totalBytes. Callers must
+// call Release before freeing the data (CleanOnlyData / Clean) so totalBytes
+// stays consistent. Sentinels and nil batches are no-ops.
+func (a *Accountant) Release(bat *batch.Batch) {
+	if bat == nil || bat.Last() {
+		return
+	}
+	a.totalBytes -= int64(bat.Size())
 }
 
 func (a *Accountant) TotalBytes() int64 { return a.totalBytes }
