@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	goruntime "runtime"
 	"sync/atomic"
 	"time"
 
@@ -35,7 +36,18 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
-var flushSemaphore = make(chan struct{}, 4)
+var flushSemaphore = make(chan struct{}, flushConcurrency())
+
+func flushConcurrency() int {
+	n := goruntime.GOMAXPROCS(0) / 2
+	if n < 4 {
+		n = 4
+	}
+	if n > 16 {
+		n = 16
+	}
+	return n
+}
 
 const opName = "insert"
 
@@ -282,12 +294,19 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 
 	// Limit concurrent flushes to avoid thundering-herd OOM when many
 	// workers are denied memory and all flush simultaneously.
+	// Use a timeout so workers don't hold buffers indefinitely while queued.
+	acquired := false
 	select {
 	case flushSemaphore <- struct{}{}:
+		acquired = true
+	case <-time.After(200 * time.Millisecond):
+		// Timeout: proceed without semaphore to avoid convoy-induced RSS growth.
 	case <-proc.Ctx.Done():
 		return proc.Ctx.Err()
 	}
-	defer func() { <-flushSemaphore }()
+	if acquired {
+		defer func() { <-flushSemaphore }()
+	}
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
