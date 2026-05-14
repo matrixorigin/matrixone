@@ -343,3 +343,58 @@ func TestReleaseUnderflowClamp(t *testing.T) {
 	require.Equal(t, int64(0), a.TotalBytes(),
 		"Release must clamp totalBytes to zero, not go negative")
 }
+
+func TestTwoAccountantsAreIndependent(t *testing.T) {
+	// Two CTE operators in one query each have their own Accountant
+	// embedded via struct composition. They must not share state:
+	// charging one must not affect the other's totalBytes or quota.
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == QuotaVarName {
+			return int64(4096), nil
+		}
+		return int64(0), nil
+	})
+
+	bat := colexec.MakeMockBatchs(proc.Mp())
+	defer bat.Clean(proc.Mp())
+	batSize := int64(bat.Size())
+	require.Greater(t, batSize, int64(0))
+
+	var acc1, acc2 Accountant
+
+	// Charge acc1 — must not affect acc2
+	require.NoError(t, acc1.Account(proc, bat, nil))
+	require.Equal(t, batSize, acc1.TotalBytes())
+	require.Equal(t, int64(0), acc2.TotalBytes(),
+		"charging acc1 must not affect acc2 TotalBytes")
+
+	// acc2 should resolve its own quota independently
+	require.NoError(t, acc2.Account(proc, bat, nil))
+	require.Equal(t, batSize, acc2.TotalBytes())
+	require.Equal(t, int64(4096), acc2.QuotaBytes())
+
+	// Verify acc1's state is undisturbed by acc2's operations
+	require.Equal(t, batSize, acc1.TotalBytes())
+	require.Equal(t, int64(4096), acc1.QuotaBytes())
+	require.True(t, acc1.Resolved())
+	require.True(t, acc2.Resolved())
+
+	// Release on acc1 must not affect acc2
+	acc1.Release(bat)
+	require.Equal(t, int64(0), acc1.TotalBytes())
+	require.Equal(t, batSize, acc2.TotalBytes(),
+		"Release on acc1 must not affect acc2 TotalBytes")
+
+	// SetBaseline on acc2 must not affect acc1
+	acc2.SetBaseline(999)
+	require.Equal(t, int64(0), acc1.TotalBytes(),
+		"SetBaseline on acc2 must not affect acc1 TotalBytes")
+	require.Equal(t, int64(999), acc2.TotalBytes())
+	require.False(t, acc2.Resolved(),
+		"SetBaseline must reset acc2 resolution independently")
+}
