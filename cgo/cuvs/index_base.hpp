@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <numeric>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -1528,6 +1529,100 @@ protected:
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
     std::mutex extend_mutex_;
+
+    // Common scaffolding for extend / extend_float in IVF-Flat, IVF-PQ, and
+    // CAGRA. Caller supplies a dispatch_fn that performs the per-device GPU
+    // work via this->extend_internal[_float]. The helper owns the
+    // CLAUDE.md-rule-4 contract — `set_ids_internal`, `count`, and
+    // `current_offset_` are always updated together under the same
+    // unique_lock — and the dist_mode-specific worker dispatch:
+    //
+    //   - pre-extend `is_loaded_` / `n_rows == 0` check (unique_lock)
+    //   - snapshot `old_count`
+    //   - acquire `extend_mutex_` to serialize concurrent extends
+    //   - generate sequential IDs, dispatch per dist_mode
+    //   - post-extend `set_ids_internal` + count / current_offset_ /
+    //     shard_sizes_ update (unique_lock)
+    //
+    // dispatch_fn signature:
+    //   void(raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n_rows)
+    //
+    // `support_sharded` is checked at runtime — CAGRA passes false because
+    // cuVS does not support SHARDED CAGRA extend. `fn_name` is used only to
+    // format error messages.
+    template <typename DispatchFn>
+    void run_extend(const char* fn_name,
+                    uint64_t n_rows,
+                    const IdT* new_ids,
+                    bool support_sharded,
+                    DispatchFn&& dispatch_fn) {
+        uint64_t old_count;
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_) {
+                throw std::runtime_error(std::string(fn_name) + ": index not built");
+            }
+            if (n_rows == 0) return;
+            old_count = this->count;
+        }
+
+        // Serialize concurrent extends — callers queue here rather than race
+        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_count));
+            this->worker->submit_all_devices(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            if (!support_sharded) {
+                throw std::runtime_error(std::string(fn_name) +
+                                         ": SHARDED mode not supported");
+            }
+            // Extend the last shard only. Compute shard-local seq_ids.
+            const int num_shards = static_cast<int>(this->devices_.size());
+            uint64_t last_shard_offset = 0;
+            for (int r = 0; r < num_shards - 1; ++r) {
+                last_shard_offset += this->shard_sizes_[r];
+            }
+            const uint64_t old_shard_size = old_count - last_shard_offset;
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_shard_size));
+            const size_t last_rank = static_cast<size_t>(num_shards - 1);
+            uint64_t job_id = this->worker->submit_to_rank(last_rank,
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        } else {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_count));
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        }
+
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (new_ids) {
+                this->set_ids_internal(new_ids, n_rows, old_count);
+            }
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                this->shard_sizes_.back() += n_rows;
+            }
+            this->count          += n_rows;
+            this->current_offset_ += n_rows;
+        }
+    }
 
     // Deferred float chunk buffer for quantizer training (1-byte types only).
     // See class-level comment block above for full description.

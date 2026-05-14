@@ -676,38 +676,17 @@ public:
             }
         }
 
-        if (this->dist_mode == DistributionMode_SHARDED)
-            throw std::runtime_error("extend: SHARDED mode not supported for CAGRA");
-
         if constexpr (std::is_same_v<T, half>) {
             throw std::runtime_error("CAGRA extend is not supported for float16 (half) by cuVS.");
         } else {
-            if (num_vectors == 0) return;
-
-            // Serialize concurrent extends — callers queue here rather than race
-            std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
-
-            if (this->dist_mode == DistributionMode_REPLICATED) {
-                this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal(handle, additional_data, num_vectors);
-                    return std::any();
+            if (!additional_data) return;
+            // CAGRA does not pass seq_ids to extend_internal — cuVS CAGRA
+            // auto-indexes the new rows. The helper still generates seq_ids
+            // for set_ids_internal bookkeeping; the lambda discards them.
+            this->run_extend("extend", num_vectors, new_ids, /*support_sharded=*/false,
+                [&](raft_handle_wrapper_t& handle, const int64_t* /*seq_ids*/, uint64_t n) {
+                    this->extend_internal(handle, additional_data, n);
                 });
-            } else {
-                uint64_t job_id = this->worker->submit_main(
-                    [&](raft_handle_wrapper_t& handle) -> std::any {
-                        this->extend_internal(handle, additional_data, num_vectors);
-                        return std::any();
-                    });
-                auto result = this->worker->wait(job_id).get();
-                if (result.error) std::rethrow_exception(result.error);
-            }
-
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                if (new_ids) this->set_ids_internal(new_ids, num_vectors, static_cast<uint64_t>(this->count));
-                this->count += num_vectors;
-                this->current_offset_ += num_vectors;
-            }
         }
     }
 
