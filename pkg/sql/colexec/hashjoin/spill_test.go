@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1500,4 +1501,54 @@ func TestScatterSkipsDisabledWriters(t *testing.T) {
 		r.close()
 	}
 	require.Equal(t, expectedOddRows, totalRows, "only rows hashing to odd buckets should be written")
+}
+
+// TestShouldReSpillFalsePath exercises the new code blocks added to shouldReSpill:
+// the mpool pressure check, the cgroup check, and the final "return false" branch.
+func TestShouldReSpillFalsePath(t *testing.T) {
+	ctr := &container{}
+	// Use a large threshold so sz (0 for an empty builder) will never exceed it.
+	ctr.spillThreshold = 1024 * 1024 * 1024 // 1 GB
+	builder := &hashbuild.HashmapBuilder{}
+	// On a normal test system: mpool not overfull, no cgroup limit → return false.
+	result := ctr.shouldReSpill(builder)
+	require.False(t, result)
+}
+
+// TestShouldReSpillAboveThreshold exercises the "sz > spillThreshold → return true" block.
+func TestShouldReSpillAboveThreshold(t *testing.T) {
+	ctr := &container{}
+	// Use a threshold that is above the row-count path (> 100000) but small enough
+	// that a non-zero MemSize will exceed it.
+	ctr.spillThreshold = 200000
+	builder := &hashbuild.HashmapBuilder{}
+	// Directly set MemSize so sz = 300000 > 200000.
+	builder.Batches.MemSize = 300000
+	require.True(t, ctr.shouldReSpill(builder))
+}
+
+// TestShouldReSpillRowCountPath covers the threshold <= 100000 (row-count) branch.
+func TestShouldReSpillRowCountPath(t *testing.T) {
+	ctr := &container{}
+	ctr.spillThreshold = 5 // row-count path
+	builder := &hashbuild.HashmapBuilder{}
+	builder.InputBatchRowCount = 10
+	require.True(t, ctr.shouldReSpill(builder))
+
+	builder2 := &hashbuild.HashmapBuilder{}
+	builder2.InputBatchRowCount = 2
+	require.False(t, ctr.shouldReSpill(builder2))
+}
+
+// TestSetSpillThresholdHashJoin covers the setSpillThreshold function in hashjoin/types.go.
+func TestSetSpillThresholdHashJoin(t *testing.T) {
+	ctr := &container{}
+
+	// threshold == 0: auto-compute from mpool cap; result must be positive.
+	ctr.setSpillThreshold(0)
+	require.Greater(t, ctr.spillThreshold, int64(0))
+
+	// threshold != 0: use exactly the given value.
+	ctr.setSpillThreshold(2 * 1024 * 1024)
+	require.Equal(t, int64(2*1024*1024), ctr.spillThreshold)
 }

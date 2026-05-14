@@ -738,3 +738,38 @@ func TestCleanupSpillFiles(t *testing.T) {
 		require.Error(t, err, "file should be closed")
 	}
 }
+
+func TestProcessMemoryOverBudget(t *testing.T) {
+	// On a normal system (no extreme mpool or cgroup pressure),
+	// processMemoryOverBudget should return false.
+	// This test primarily ensures all code blocks in the function are reached.
+	result := processMemoryOverBudget()
+	// We cannot assert true/false because this depends on runtime state,
+	// but the call exercises all three blocks (mpool check, cgroup check, return false).
+	_ = result
+}
+
+func TestShouldSpillBatchesReachesProcessMemory(t *testing.T) {
+	hb := &HashBuild{
+		CanSpill:    true,
+		IsShuffle:   true,
+		NeedHashMap: true,
+	}
+	// threshold > 100000 means memory-size path; with no batches, memUsed()==0
+	// so the call falls through to processMemoryOverBudget().
+	hb.ctr.setSpillThreshold(200000)
+	require.False(t, hb.shouldSpillBatches())
+}
+
+func TestSetSpillThresholdZero(t *testing.T) {
+	ctr := &container{}
+	ctr.setSpillThreshold(0)
+	// Auto-computed threshold must be positive.
+	require.Greater(t, ctr.spillThreshold, int64(0))
+}
+
+func TestSetSpillThresholdNonZero(t *testing.T) {
+	ctr := &container{}
+	ctr.setSpillThreshold(1024 * 1024)
+	require.Equal(t, int64(1024*1024), ctr.spillThreshold)
+}

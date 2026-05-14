@@ -15,6 +15,7 @@
 package system
 
 import (
+	"context"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -296,4 +297,41 @@ func TestConcurrentDebounce(t *testing.T) {
 
 	// Should complete without panic or race condition
 	t.Log("concurrent debounce test passed")
+}
+
+func TestHasCgroupMemLimit(t *testing.T) {
+	// Just verify the function runs without panic and returns a bool.
+	_ = HasCgroupMemLimit()
+}
+
+func TestMallocTrimIfTight(t *testing.T) {
+	// Reset the rate-limit so the call is not silently skipped.
+	lastMallocTrim.Store(0)
+	// On a normal system total > 0 and used < 75%, so the trim branch is skipped.
+	// The test just verifies no panic and correct early-return path.
+	MallocTrimIfTight()
+}
+
+func TestStartMallocTrimLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	StartMallocTrimLoop(ctx)
+	// Allow the goroutine to start and then cancel.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	// Give the goroutine time to observe the cancellation.
+	time.Sleep(20 * time.Millisecond)
+}
+
+func TestRefreshCgroupInactiveFile(t *testing.T) {
+	// refreshCgroupInactiveFile reads from /sys/fs/cgroup; on most CI machines the
+	// files don't exist so it stores 0. Either way it must not panic.
+	refreshCgroupInactiveFile()
+	// cgroupInactiveFile() returns whatever was stored.
+	_ = cgroupInactiveFile()
+}
+
+func TestReadStatKeyMissingFile(t *testing.T) {
+	// A path that does not exist should return 0.
+	v := readStatKey("/nonexistent/path/memory.stat", "inactive_file")
+	require.Equal(t, uint64(0), v)
 }

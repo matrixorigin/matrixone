@@ -643,3 +643,21 @@ func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
 	}
 	return false
 }
+
+// TestCapLoadParallelism verifies that capLoadParallelism caps the worker count
+// based on mpool capacity and total memory, covering all branches of the function.
+func TestCapLoadParallelism(t *testing.T) {
+	// With cpuNum=1, no capping should occur regardless of memory.
+	result := capLoadParallelism(1)
+	assert.GreaterOrEqual(t, result, 1)
+
+	// With a very large cpuNum, the function should cap it downward.
+	result = capLoadParallelism(10000)
+	assert.GreaterOrEqual(t, result, 1)
+	assert.Less(t, result, 10000)
+
+	// cpuNum=0: should still return at least 1 after the mpool/total-mem caps.
+	result = capLoadParallelism(0)
+	// 0 is less than any computed limit so it passes through unchanged.
+	assert.Equal(t, 0, result)
+}

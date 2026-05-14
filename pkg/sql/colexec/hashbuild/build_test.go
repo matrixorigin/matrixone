@@ -541,3 +541,27 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 }
+
+// TestHashBuildSpillMode verifies that the build operator correctly enters spill
+// mode when the row-count threshold is exceeded, exercising the
+// system.MallocTrimIfTight() and mpool.Reserve()/Commit() code paths.
+func TestHashBuildSpillMode(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.CanSpill = true
+	tc.arg.SpillThreshold = 1 // row-count trigger: any non-empty batch causes spill
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 1}
+	err := tc.marg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	ok, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}

@@ -14,16 +14,27 @@
 
 package fileservice
 
-import "github.com/matrixorigin/matrixone/pkg/common/system"
+import (
+	"testing"
 
-func memoryTight() bool {
-	return isMemoryTight(system.MemoryTotal(), system.MemoryUsed())
+	"github.com/stretchr/testify/require"
+)
+
+func TestIsMemoryTight(t *testing.T) {
+	// total == 0: always false regardless of used
+	require.False(t, isMemoryTight(0, 0))
+	require.False(t, isMemoryTight(0, 1000))
+
+	// used <= 75%: not tight
+	require.False(t, isMemoryTight(100, 0))
+	require.False(t, isMemoryTight(100, 75))
+
+	// used > 75%: tight
+	require.True(t, isMemoryTight(100, 76))
+	require.True(t, isMemoryTight(1000, 900))
 }
 
-// isMemoryTight returns true when used > 75% of total. Extracted for testing.
-func isMemoryTight(total, used uint64) bool {
-	if total == 0 {
-		return false
-	}
-	return used > total*3/4
+func TestMemoryTight(t *testing.T) {
+	// Just verify the function runs without panic on a real system.
+	_ = memoryTight()
 }
