@@ -1531,3 +1531,107 @@ func Test_bind_delete(t *testing.T) {
 	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
 	assert.Error(t, err)
 }
+
+// findDedupJoinCaptureList walks the plan looking for the DEDUP JOIN whose
+// build side carries the OldColCaptureList — there is at most one in a
+// REPLACE plan that took the merged-main-scan path.
+func findDedupJoinCaptureList(t *testing.T, query *plan.Query) []plan.OldColCapture {
+	t.Helper()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_DEDUP {
+			continue
+		}
+		if node.DedupJoinCtx == nil {
+			continue
+		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			return node.DedupJoinCtx.OldColCaptureList
+		}
+	}
+	return nil
+}
+
+// TestReplaceCaptureListNarrowed pins the merged-main-scan capture list to
+// exactly the columns MULTI_UPDATE actually consumes — Row_ID + PK + (per
+// non-serialized index, the leading part column). If the narrowing in
+// appendDedupAndMultiUpdateNodesForBindReplace regresses to "capture every
+// main-table column", this test will catch it.
+//
+// We assert by total count rather than by exact ColPos, because the build-side
+// projection list may have leading slots prepended before main-table cols
+// (cluster keys, etc.) — so absolute positions are layout-sensitive but the
+// count formula is not.
+func TestReplaceCaptureListNarrowed(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// self_ref: id PK + parent_id + name + Row_ID; zero indexes.
+	// requiredOldCols = {Row_ID, id} ⇒ capture list length == 2.
+	// Pre-narrowing the planner emitted one capture per main-table column
+	// (length == 4), which is the regression this test guards against.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO self_ref VALUES (1, NULL, 'root')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	captureList := findDedupJoinCaptureList(t, query)
+	assert.NotNil(t, captureList,
+		"self_ref REPLACE should take the merged-main-scan capture path")
+
+	const totalCols = 4 // 3 user cols + Row_ID
+	assert.Less(t, len(captureList), totalCols,
+		"capture list must be narrower than the full main-table col set")
+	assert.Len(t, captureList, 2,
+		"expected Row_ID + PK only; if this changes the formula 1+1+#single_part_idx is wrong")
+
+	relPos := captureList[0].BuildPlaceholder.RelPos
+	seen := map[int32]bool{}
+	for _, c := range captureList {
+		assert.Equal(t, relPos, c.BuildPlaceholder.RelPos,
+			"all captures must share one build-side bind tag")
+		assert.False(t, seen[c.BuildPlaceholder.ColPos],
+			"capture positions must be distinct, got duplicate ColPos=%d",
+			c.BuildPlaceholder.ColPos)
+		seen[c.BuildPlaceholder.ColPos] = true
+	}
+}
+
+// TestReplaceCaptureList_NotEmittedWhenMergedScanDisabled documents the
+// negative side: tables that fail the useMergedMainScan guard
+// (fake PK or any multi-part index) must produce an empty capture list. This
+// guards against accidentally enabling capture on a path the optimizer
+// can't yet feed correctly.
+func TestReplaceCaptureList_NotEmittedWhenMergedScanDisabled(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	cases := []struct {
+		name string
+		sql  string
+		why  string
+	}{
+		{
+			name: "dept_has_multi_part_idx",
+			sql:  "REPLACE INTO dept VALUES (1, 'Sales', 'NY')",
+			why:  "dept has a (loc, dname) index → hasMultiPartIdx=true",
+		},
+		{
+			name: "fake_pk_t",
+			sql:  "REPLACE INTO fake_pk_t VALUES (1, 'hello')",
+			why:  "fake_pk_t has no real PK → isFakePK=true",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, c.sql)
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
+			query := logicPlan.GetQuery()
+			assert.NotNil(t, query)
+			assert.Nil(t, findDedupJoinCaptureList(t, query),
+				"%s: %s, no DEDUP JOIN should carry a capture list", c.name, c.why)
+		})
+	}
+}
