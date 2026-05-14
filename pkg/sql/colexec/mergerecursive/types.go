@@ -81,7 +81,9 @@ func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFaile
 	mergeRecursive.ctr.last = false
 	mergeRecursive.ctr.i = 0
 	for _, bat := range mergeRecursive.ctr.freeBats {
-		bat.Clean(proc.Mp())
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
 	}
 	mergeRecursive.ctr.freeBats = nil
 	mergeRecursive.ctr.bats = nil

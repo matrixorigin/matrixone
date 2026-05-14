@@ -177,15 +177,13 @@ func TestSentinelPromotionReleasesAccountedBytes(t *testing.T) {
 
 	// Simulate sendInitial: account and store a data batch in freeBats
 	bat := colexec.MakeMockBatchs(proc.Mp())
-	defer bat.Clean(proc.Mp())
 	require.NoError(t, arg.ctr.memAcct.AccountSlot(proc, arg.ctr.freeBats, arg.ctr.i, bat))
 	dataSize := int64(bat.Size())
 	require.Greater(t, dataSize, int64(0))
 	require.Equal(t, dataSize, arg.ctr.memAcct.TotalBytes())
 
-	dup, err := bat.Dup(proc.Mp())
-	require.NoError(t, err)
-	arg.ctr.freeBats = append(arg.ctr.freeBats, dup)
+	// Store the batch in freeBats, mirroring the sendInitial path
+	arg.ctr.freeBats = append(arg.ctr.freeBats, bat)
 
 	// Simulate sendLastTag: promote the data slot to a sentinel
 	// This is the exact sendLastTag path from mergecte.go
