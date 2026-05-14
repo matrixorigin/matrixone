@@ -21,6 +21,7 @@ package cuvs
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -160,4 +161,82 @@ func Unpack(inputPath string, dirPath string) (string, error) {
 	logutil.Infof("Unpack manifest: %s", string(manifestBytes))
 
 	return string(manifestBytes), nil
+}
+
+// ---------------------------------------------------------------------------
+// SHARDED load-time device-list sizing
+//
+// In Sharded mode the C++ index uses one shard per device in the supplied
+// list. Build-time callers just pass the devices they want sharded over —
+// len(devices) is the shard count.
+//
+// Load-time is asymmetric: the saved index already has a fixed shard count
+// baked into manifest.json, but the caller doesn't necessarily know that
+// count when picking how many devices to pass. PeekManifestNShards lets the
+// FromDataDirectory wrappers size their device list to match before
+// constructing the C++ index, so worker threads + RMM pools are only
+// allocated on devices that will actually host a shard.
+// ---------------------------------------------------------------------------
+
+// manifestPeek is the minimal JSON shape we need to read off disk to learn
+// the saved shard count. Everything else in the manifest is consumed by
+// the C++ load_dir.
+type manifestPeek struct {
+	BuildParams struct {
+		ShardSizes []uint64 `json:"shard_sizes"`
+	} `json:"build_params"`
+	Components struct {
+		Shards []string `json:"shards"`
+	} `json:"components"`
+}
+
+// PeekManifestNShards reads <dir>/manifest.json and returns the number of
+// shards the saved index has. For non-SHARDED indexes the manifest has no
+// shard_sizes / shards entries and this returns 0.
+//
+// Used by NewGpu*FromDataDirectory wrappers to size the caller-supplied
+// devices list before constructing the C++ index, so worker threads and
+// RMM pools are only spawned on the devices the SHARDED index actually
+// uses.
+func PeekManifestNShards(dir string) (uint32, error) {
+	path := filepath.Join(dir, "manifest.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, moerr.NewInternalErrorNoCtx(
+			fmt.Sprintf("failed to read %s: %v", path, err))
+	}
+	var m manifestPeek
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return 0, moerr.NewInternalErrorNoCtx(
+			fmt.Sprintf("failed to parse %s: %v", path, err))
+	}
+	// shard_sizes is authoritative; fall back to components.shards if missing.
+	if n := len(m.BuildParams.ShardSizes); n > 0 {
+		return uint32(n), nil
+	}
+	return uint32(len(m.Components.Shards)), nil
+}
+
+// devicesForLoad returns the slice of devices to pass to the C constructor
+// when loading from disk. It peeks the manifest at `dir` to learn the saved
+// shard count, then trims devices to that count for SHARDED loads. For
+// non-SHARDED loads (or when the manifest has no shard count) it returns
+// devices unchanged. Errors if the saved index has more shards than the
+// caller supplied devices.
+func devicesForLoad(devices []int, mode DistributionMode, dir string) ([]int, error) {
+	if mode != Sharded {
+		return devices, nil
+	}
+	savedN, err := PeekManifestNShards(dir)
+	if err != nil {
+		return nil, err
+	}
+	if savedN == 0 {
+		return devices, nil
+	}
+	if int(savedN) > len(devices) {
+		return nil, moerr.NewInternalErrorNoCtx(
+			fmt.Sprintf("saved index has %d shards but only %d devices supplied", savedN, len(devices)))
+	}
+	return devices[:savedN], nil
 }

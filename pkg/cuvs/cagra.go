@@ -193,10 +193,19 @@ func NewGpuCagraFromFile[T VectorType](filename string, dimension uint32, metric
 }
 
 // NewGpuCagraFromDataDirectory loads a GpuCagra index from a directory written by save_dir.
+// For Sharded loads we peek manifest.json to learn the saved shard count and
+// truncate `devices` to that count, so the C++ worker only spawns threads /
+// RMM pools on devices that will actually host a shard.
 func NewGpuCagraFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
 	bp CagraBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuCagra[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	var err error
+	devices, err = devicesForLoad(devices, mode, dir)
+	if err != nil {
+		return nil, err
 	}
 
 	qtype := GetQuantization[T]()
