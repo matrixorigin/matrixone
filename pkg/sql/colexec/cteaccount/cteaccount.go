@@ -116,6 +116,9 @@ func (a *Accountant) Release(bat *batch.Batch) {
 		return
 	}
 	a.totalBytes -= int64(bat.Size())
+	if a.totalBytes < 0 {
+		a.totalBytes = 0
+	}
 }
 
 func (a *Accountant) TotalBytes() int64 { return a.totalBytes }
