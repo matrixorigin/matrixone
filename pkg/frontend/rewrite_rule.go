@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -113,19 +115,25 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 }
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
-// associated with the current user's active role and returns them as a map.
+// associated with the current user's active roles and returns them as a map.
 func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error) {
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		return map[string]string{}, nil
 	}
-	roleID := tenant.GetDefaultRoleID()
-
-	sql := fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id = %d",
-		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, roleID)
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
+	if err != nil {
+		return nil, err
+	}
+	if len(roleIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	sql := getSqlForRoleRulesOfRoleIDs(roleIDs)
 
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, sql); err != nil {
@@ -156,6 +164,90 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	}
 
 	return rules, nil
+}
+
+func loadActiveRoleIDsForRuleCache(ctx context.Context, bh BackgroundExec, tenant *TenantInfo) ([]int64, error) {
+	roleSet := make(map[int64]struct{})
+	roleQueue := make([]int64, 0, 1)
+
+	addRoleID := func(roleID int64) {
+		if _, ok := roleSet[roleID]; ok {
+			return
+		}
+		roleSet[roleID] = struct{}{}
+		roleQueue = append(roleQueue, roleID)
+	}
+
+	addRoleID(int64(tenant.GetDefaultRoleID()))
+
+	if tenant.GetUseSecondaryRole() {
+		sql := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+		bh.ClearExecResultSet()
+		if err := bh.Exec(ctx, sql); err != nil {
+			return nil, err
+		}
+
+		erArray, err := getResultSet(ctx, bh)
+		if err != nil {
+			return nil, err
+		}
+
+		if execResultArrayHasData(erArray) {
+			rowCount := erArray[0].GetRowCount()
+			for i := uint64(0); i < rowCount; i++ {
+				roleID, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return nil, err
+				}
+				addRoleID(roleID)
+			}
+		}
+	}
+
+	for i := 0; i < len(roleQueue); i++ {
+		sql := getSqlForInheritedRoleIdOfRoleId(roleQueue[i])
+		bh.ClearExecResultSet()
+		if err := bh.Exec(ctx, sql); err != nil {
+			return nil, err
+		}
+
+		erArray, err := getResultSet(ctx, bh)
+		if err != nil {
+			return nil, err
+		}
+
+		if execResultArrayHasData(erArray) {
+			rowCount := erArray[0].GetRowCount()
+			for j := uint64(0); j < rowCount; j++ {
+				roleID, err := erArray[0].GetInt64(ctx, j, 0)
+				if err != nil {
+					return nil, err
+				}
+				addRoleID(roleID)
+			}
+		}
+	}
+
+	roleIDs := make([]int64, 0, len(roleSet))
+	for roleID := range roleSet {
+		roleIDs = append(roleIDs, roleID)
+	}
+	sort.Slice(roleIDs, func(i, j int) bool {
+		return roleIDs[i] < roleIDs[j]
+	})
+	return roleIDs, nil
+}
+
+func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
+	var builder strings.Builder
+	for i, roleID := range roleIDs {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(strconv.FormatInt(roleID, 10))
+	}
+	return fmt.Sprintf("select rule_name, `rule` from %s.%s where role_id in (%s) order by role_id, rule_name",
+		catalog.MO_CATALOG, catalog.MO_ROLE_RULE, builder.String())
 }
 
 // escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.

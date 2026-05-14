@@ -22,6 +22,12 @@ import (
 	"testing"
 	"testing/quick"
 	"unicode/utf8"
+
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
@@ -418,4 +424,72 @@ func TestRuleCacheDoubleCheckLocking(t *testing.T) {
 	// This is tested indirectly through the existing property-based tests
 	// and the concurrent access test above.
 	t.Skip("Double-check locking test requires complex mocking - covered by integration tests")
+}
+
+func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	tenant.SetUseSecondaryRole(true)
+	ses.SetTenantInfo(tenant)
+
+	bh.sql2result[getSqlForRoleIdOfUserId(42)] = newMrsForRoleIdOfUserId([][]interface{}{
+		{20, false},
+		{30, false},
+	})
+	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+		{40, false},
+	})
+	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIdOfRoleId(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 20, 30, 40})] = newMrsForRewriteRules([][]interface{}{
+		{"db1.t1", "select * from db1.t1 where age > 28"},
+		{"db2.t2", "select * from db2.t2 where age > 30"},
+		{"db3.t3", "select * from db3.t3 where age > 40"},
+	})
+
+	rules, err := loadRuleCache(context.Background(), ses)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"db1.t1": "select * from db1.t1 where age > 28",
+		"db2.t2": "select * from db2.t2 where age > 30",
+		"db3.t3": "select * from db3.t3 where age > 40",
+	}, rules)
+}
+
+func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("rule_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("rule")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
 }

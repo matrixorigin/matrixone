@@ -3511,7 +3511,9 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// use secondary role all or none
 		switch sr.SecondaryRoleType {
 		case tree.SecondaryRoleTypeAll:
-			doSetSecondaryRoleAll(ctx, ses)
+			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
+				return err
+			}
 			account.SetUseSecondaryRole(true)
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
