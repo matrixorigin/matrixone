@@ -597,16 +597,10 @@ public:
     void extend_internal(raft_handle_wrapper_t& handle, const T* new_data, uint64_t n_rows,
                          const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
-        auto stream = raft::resource::get_cuda_stream(*res);
 
-        // Pool-bypass: extend's upload buffer is one-shot, freed on return — keep
-        // it off the per-device pool so its footprint doesn't pin the high-water mark.
-        rmm::device_uvector<T> new_vecs_storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+        auto new_vecs_storage = this->upload_T_matrix(handle, new_data, n_rows);
+        auto new_vecs_device  = raft::make_device_matrix_view<T, int64_t>(
             new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-        raft::copy(*res, new_vecs_device,
-                   raft::make_host_matrix_view<const T, int64_t>(new_data, n_rows, this->dimension));
 
         auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
         raft::copy(*res, ids_device.view(),
@@ -661,31 +655,10 @@ public:
     void extend_internal_float(raft_handle_wrapper_t& handle, const float* new_data, uint64_t n_rows,
                                const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
-        auto stream = raft::resource::get_cuda_stream(*res);
 
-        // Pool-bypass: transient extend buffers — see extend_internal.
-        rmm::device_uvector<T> new_vecs_storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+        auto new_vecs_storage = this->upload_float_matrix_as_T(handle, new_data, n_rows);
+        auto new_vecs_device  = raft::make_device_matrix_view<T, int64_t>(
             new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-        if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, new_vecs_device,
-                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
-        } else {
-            rmm::device_uvector<float> new_vecs_float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-            auto new_vecs_float = raft::make_device_matrix_view<float, int64_t>(
-                new_vecs_float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-            raft::copy(*res, new_vecs_float,
-                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
-            if constexpr (sizeof(T) == 1) {
-                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained for extend_float");
-                this->quantizer_.template transform<T>(*res, new_vecs_float, new_vecs_device.data_handle(), true);
-            } else {
-                // T is half
-                raft::copy(*res, new_vecs_device, new_vecs_float);
-            }
-        }
 
         auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
         raft::copy(*res, ids_device.view(),

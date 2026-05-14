@@ -1624,6 +1624,66 @@ protected:
         }
     }
 
+    // Upload a [n_rows x dimension] T host matrix to a transient T device
+    // buffer on raw_device_mr (pool-bypass — extend's upload buffer is
+    // one-shot, freed on return). Returns the storage; caller takes a
+    // device_matrix_view over storage.data() for the cuvs::extend call.
+    // Does NOT sync — caller pairs with sync_stream() / handle.sync()
+    // before the host-side input goes out of scope.
+    rmm::device_uvector<T> upload_T_matrix(
+        raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
+        auto res    = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
+        rmm::device_uvector<T> storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto device_view = raft::make_device_matrix_view<T, int64_t>(
+            storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+        raft::copy(*res, device_view,
+                   raft::make_host_matrix_view<const T, int64_t>(
+                       host_data, n_rows, this->dimension));
+        return storage;
+    }
+
+    // Upload a [n_rows x dimension] float host matrix to a transient T
+    // device buffer on raw_device_mr. If T is float, copies directly;
+    // otherwise stages through a float device buffer and quantizes (1-byte
+    // T) or casts (half). Same lifecycle / no-sync contract as
+    // upload_T_matrix above.
+    rmm::device_uvector<T> upload_float_matrix_as_T(
+        raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
+        auto res    = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
+        rmm::device_uvector<T> storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto device_view = raft::make_device_matrix_view<T, int64_t>(
+            storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+        if constexpr (std::is_same_v<T, float>) {
+            raft::copy(*res, device_view,
+                       raft::make_host_matrix_view<const float, int64_t>(
+                           host_data, n_rows, this->dimension));
+        } else {
+            rmm::device_uvector<float> float_storage(
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            auto float_view = raft::make_device_matrix_view<float, int64_t>(
+                float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+            raft::copy(*res, float_view,
+                       raft::make_host_matrix_view<const float, int64_t>(
+                           host_data, n_rows, this->dimension));
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) {
+                    throw std::runtime_error(
+                        "upload_float_matrix_as_T: quantizer not trained");
+                }
+                this->quantizer_.template transform<T>(
+                    *res, float_view, storage.data(), true);
+            } else {
+                // T is half — cast float → half
+                raft::copy(*res, device_view, float_view);
+            }
+        }
+        return storage;
+    }
+
     // Deferred float chunk buffer for quantizer training (1-byte types only).
     // See class-level comment block above for full description.
     struct pending_float_chunk_t {
