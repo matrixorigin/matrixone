@@ -168,7 +168,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				}
 
 				// select task and tenants for update
-				taskID, tenants, createVersions, hasDeletedTenants, hasConflictTenants, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
+				taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := versions.GetUpgradeTenantTasks(upgrade.ID, txn)
 				if err != nil {
 					s.logger.Error("failed to load upgrade tenants",
 						zap.String("upgrade", upgrade.String()),
@@ -187,30 +187,53 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 							zap.Error(err))
 						return err
 					}
-					if hasUnreadyTasks && (!hasDeletedTenants || hasConflictTenants) {
+					if hasConflictTenantTasks {
 						return nil
 					}
+
+					reconciledDeletedTaskCount := int64(0)
 					if hasUnreadyTasks {
-						if err = versions.UpdateUpgradeTenantTasksStateByUpgradeID(upgrade.ID, versions.Yes, txn); err != nil {
-							s.logger.Error("failed to mark deleted tenant tasks ready",
+						reconciledDeletedTaskCount, err = versions.ReconcileDeletedUpgradeTenantTasks(upgrade.ID, txn)
+						if err != nil {
+							s.logger.Error("failed to reconcile deleted tenant upgrade tasks",
 								zap.String("upgrade", upgrade.String()),
 								zap.Error(err))
 							return err
 						}
+						hasUnreadyTasks, err = versions.HasUnreadyUpgradeTenantTasks(upgrade.ID, txn)
+						if err != nil {
+							s.logger.Error("failed to recheck remaining tenant upgrade tasks",
+								zap.String("upgrade", upgrade.String()),
+								zap.Error(err))
+							return err
+						}
+						if hasUnreadyTasks {
+							return nil
+						}
 					}
-					upgrade, err = versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
+
+					reloadedUpgrade, err := versions.GetUpgradeVersionForUpdateByID(upgrade.ID, txn)
 					if err != nil {
 						s.logger.Error("failed to reload upgrade after tenant task reconciliation",
 							zap.String("upgrade", upgrade.String()),
 							zap.Error(err))
 						return err
 					}
-					upgrade.ReadyTenant = upgrade.TotalTenant
-					s.logger.Warn("tenant upgrade task counters reconciled to current tenants",
-						zap.String("upgrade", upgrade.String()),
-						zap.Bool("remaining_unready_tasks", hasUnreadyTasks),
-						zap.Bool("deleted_tenant_tasks_detected", hasDeletedTenants))
-					return versions.UpdateVersionUpgradeTasks(upgrade, txn)
+					if reloadedUpgrade.ReadyTenant >= reloadedUpgrade.TotalTenant {
+						return nil
+					}
+					reloadedUpgrade.ReadyTenant = reloadedUpgrade.TotalTenant
+					fields := []zap.Field{
+						zap.String("upgrade", reloadedUpgrade.String()),
+						zap.Int64("reconciled-deleted-task-count", reconciledDeletedTaskCount),
+						zap.Bool("deleted-tenant-tasks-detected", hasDeletedTenantTasks),
+					}
+					if reconciledDeletedTaskCount > 0 {
+						s.logger.Warn("tenant upgrade task counters reconciled to current tenants", fields...)
+					} else {
+						s.logger.Info("tenant upgrade task counters reconciled to current tenants", fields...)
+					}
+					return versions.UpdateVersionUpgradeTasks(reloadedUpgrade, txn)
 				}
 
 				hasUpgradeTenants = true
