@@ -85,6 +85,35 @@ func shouldBailoutOnCandidateBlocks(cnt int) bool {
 	return cnt > maxCandidateBlksForIO
 }
 
+func pkCheckBailoutOnChangedObjects(cnt int) bool {
+	if !shouldBailoutOnChangedObjects(cnt) {
+		return false
+	}
+	v2.TxnPKChangeCheckBailoutCounter.Inc()
+	return true
+}
+
+func pkCheckBailoutOnCandidateBlocks(cnt int) bool {
+	if !shouldBailoutOnCandidateBlocks(cnt) {
+		return false
+	}
+	v2.TxnPKChangeCheckBailoutCounter.Inc()
+	return true
+}
+
+func acquirePKCheckSemaphore(ctx context.Context) error {
+	select {
+	case pkCheckSemaphore <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releasePKCheckSemaphore() {
+	<-pkCheckSemaphore
+}
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -2500,8 +2529,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 
-	if shouldBailoutOnChangedObjects(len(cObjs)) {
-		v2.TxnPKChangeCheckBailoutCounter.Inc()
+	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
 		return true, nil
 	}
 
@@ -2615,8 +2643,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 	}
 
-	if shouldBailoutOnCandidateBlocks(len(candidateBlks)) {
-		v2.TxnPKChangeCheckBailoutCounter.Inc()
+	if pkCheckBailoutOnCandidateBlocks(len(candidateBlks)) {
 		return true, nil
 	}
 
@@ -2629,10 +2656,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		// This prevents 1000 goroutines from simultaneously reading blocks and
 		// exhausting mpool capacity. Scoped to the block loop only — tombstone
 		// checking below is not rate-limited by this semaphore.
-		select {
-		case pkCheckSemaphore <- struct{}{}:
-		case <-ctx.Done():
-			return false, ctx.Err()
+		if err := acquirePKCheckSemaphore(ctx); err != nil {
+			return false, err
 		}
 
 		v2.TxnPKChangeCheckIOCounter.Inc()
@@ -2649,7 +2674,7 @@ func (tbl *txnTable) PKPersistedBetween(
 				fileservice.Policy(0),
 			)
 			if err != nil {
-				<-pkCheckSemaphore
+				releasePKCheckSemaphore()
 				return true, err
 			}
 
@@ -2661,11 +2686,11 @@ func (tbl *txnTable) PKPersistedBetween(
 			sels := searchFunc(cacheVectors)
 			release()
 			if len(sels) > 0 {
-				<-pkCheckSemaphore
+				releasePKCheckSemaphore()
 				return true, nil
 			}
 		}
-		<-pkCheckSemaphore
+		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]

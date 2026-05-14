@@ -38,6 +38,38 @@ func TestShouldBailoutOnCandidateBlocks(t *testing.T) {
 	assert.True(t, shouldBailoutOnCandidateBlocks(1000))
 }
 
+func TestPkCheckBailoutOnChangedObjects(t *testing.T) {
+	assert.False(t, pkCheckBailoutOnChangedObjects(maxChangedObjectsForIO))
+	assert.True(t, pkCheckBailoutOnChangedObjects(maxChangedObjectsForIO+1))
+}
+
+func TestPkCheckBailoutOnCandidateBlocks(t *testing.T) {
+	assert.False(t, pkCheckBailoutOnCandidateBlocks(maxCandidateBlksForIO))
+	assert.True(t, pkCheckBailoutOnCandidateBlocks(maxCandidateBlksForIO+1))
+}
+
+func TestAcquirePKCheckSemaphore(t *testing.T) {
+	ctx := context.Background()
+	assert.NoError(t, acquirePKCheckSemaphore(ctx))
+	releasePKCheckSemaphore()
+}
+
+func TestAcquirePKCheckSemaphore_ContextCancelled(t *testing.T) {
+	for i := 0; i < cap(pkCheckSemaphore); i++ {
+		pkCheckSemaphore <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(pkCheckSemaphore); i++ {
+			releasePKCheckSemaphore()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.ErrorIs(t, acquirePKCheckSemaphore(ctx), context.Canceled)
+}
+
 func TestPkCheckSemaphore_LimitsConcurrency(t *testing.T) {
 	// Verify the semaphore actually limits concurrent goroutines.
 	const workers = 100
