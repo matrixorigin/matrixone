@@ -55,12 +55,12 @@ func TestIsContiguousMapping(t *testing.T) {
 // insertTableHarness wires up just enough of MultiUpdate state for
 // insert_table to run, capturing every batch that Source.Write receives.
 type insertTableHarness struct {
-	op         *MultiUpdate
-	updateCtx  *MultiUpdateCtx
-	info       *updateCtxInfo
-	written    []*batch.Batch // captured batches passed to Source.Write
-	insertBuf  *batch.Batch   // pre-allocated buffer (used by non-contiguous path)
-	tableName  string
+	op        *MultiUpdate
+	updateCtx *MultiUpdateCtx
+	info      *updateCtxInfo
+	written   []*batch.Batch // captured batches passed to Source.Write
+	insertBuf *batch.Batch   // pre-allocated buffer (used by non-contiguous path)
+	tableName string
 }
 
 func newInsertTableHarness(
