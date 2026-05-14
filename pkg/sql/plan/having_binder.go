@@ -295,34 +295,6 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 	return nil
 }
 
-func getFrame(ws *tree.WindowSpec) *plan.FrameClause {
-
-	f := &tree.FrameClause{Type: tree.Range}
-
-	if ws.OrderBy == nil {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
-	} else {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.CurrentRow}
-	}
-
-	ws.HasFrame = false
-	ws.Frame = f
-
-	return &plan.FrameClause{
-		Type: plan.FrameClause_FrameType(ws.Frame.Type),
-		Start: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.Start.Type),
-			UnBounded: ws.Frame.Start.UnBounded,
-		},
-		End: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.End.Type),
-			UnBounded: ws.Frame.End.UnBounded,
-		},
-	}
-}
-
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
