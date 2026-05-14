@@ -1,6 +1,16 @@
 -- BVT for cte_max_memory_bytes (Issue #11297)
 -- Verifies that data-driven exponential recursive CTEs are stopped by the
 -- memory quota with a clear query-level error instead of node OOM.
+--
+-- Scoping notes (not testable in single-CN BVT):
+--   - The quota is per-operator, per-CN. Two CTEs in one query each have
+--     an independent Accountant. With N CN nodes the cluster-wide bound is
+--     N x cte_max_memory_bytes. The error message says "on this node" to
+--     reflect this.
+--   - Vector.Size() is approximate (see pkg/container/vector/vector.go).
+--     The quota is an OOM defense, not byte-precise accounting.
+--   - The Accountant is not mutex-protected; safe because the merge
+--     operator funnels parallel feeders through a single-threaded Call.
 
 -- recursive_cte.sql leaves cte_max_recursion_depth = 100 in this session;
 -- restore the default so the recursion-depth gate doesn't preempt the
