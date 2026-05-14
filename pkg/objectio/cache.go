@@ -78,7 +78,9 @@ var onceInit sync.Once
 
 // metaLoadGroup deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
-var metaLoadGroup sync.Map // mataCacheKey -> *loadCall
+// Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
+var metaLoadMu sync.Mutex
+var metaLoadCalls = make(map[mataCacheKey]*loadCall)
 
 type loadCall struct {
 	done chan struct{}
@@ -240,23 +242,40 @@ func LoadBFWithMeta(
 // dedupLoad ensures that for a given cache key, only one goroutine performs
 // the actual I/O load. Other concurrent callers for the same key wait and
 // share the result. This prevents cache stampede under high concurrency.
+//
+// Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
+// deleted. Each waiter copies the result to avoid holding a shared reference
+// that delays GC of the loaded buffer.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	call := &loadCall{done: make(chan struct{})}
-	if actual, loaded := metaLoadGroup.LoadOrStore(key, call); loaded {
-		existing := actual.(*loadCall)
+	metaLoadMu.Lock()
+	if call, ok := metaLoadCalls[key]; ok {
+		metaLoadMu.Unlock()
 		select {
-		case <-existing.done:
-			return existing.val, existing.err
+		case <-call.done:
+			if call.err != nil {
+				return nil, call.err
+			}
+			dst := make([]byte, len(call.val))
+			copy(dst, call.val)
+			return dst, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	defer metaLoadGroup.Delete(key)
+	call := &loadCall{done: make(chan struct{})}
+	metaLoadCalls[key] = call
+	metaLoadMu.Unlock()
+
 	call.val, call.err = load()
 	if call.err == nil {
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
 	close(call.done)
+
+	metaLoadMu.Lock()
+	delete(metaLoadCalls, key)
+	metaLoadMu.Unlock()
+
 	return call.val, call.err
 }
 
