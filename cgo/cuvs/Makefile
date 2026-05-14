@@ -67,7 +67,7 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb
 
 release: all
 
@@ -123,7 +123,15 @@ test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Standalone reproducer for the cuvs::neighbors::dynamic_batching deadlock
+# (conservative_dispatch=true). Intentionally depends on nothing in this
+# project — links only against the cuVS / RAFT / RMM libraries we already
+# pass via $(LIBS) — so it can be lifted into a cuVS issue as-is.
+test_dynb: obj/test/test_dynb.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb
 	rm -rf obj
