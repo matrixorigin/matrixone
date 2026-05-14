@@ -67,7 +67,7 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
 
 release: all
 
@@ -123,7 +123,23 @@ test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Standalone reproducer for the cuvs::neighbors::dynamic_batching deadlock
+# (conservative_dispatch=true). Intentionally depends on nothing in this
+# project — links only against the cuVS / RAFT / RMM libraries we already
+# pass via $(LIBS) — so it can be lifted into a cuVS issue as-is.
+test_dynb: obj/test/test_dynb.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# Standalone reproducer for the cuvs::neighbors::ivf_pq::search bitset-filter
+# padding quirk: when popcount(filter) < k, IVF-PQ pads the trailing result
+# slots with filter-EXCLUDED rows instead of writing the (-1, +inf) sentinel.
+# Same standalone constraints as test_dynb above — only cuVS / RAFT / RMM.
+test_ivfpq_filter: obj/test/test_ivfpq_filter.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
 	rm -rf obj
