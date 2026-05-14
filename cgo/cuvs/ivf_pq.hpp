@@ -1532,7 +1532,8 @@ public:
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
                 this->current_offset_ = this->count;
 
-                if (this->dist_mode == DistributionMode_SINGLE_GPU) {                    index_ = std::move(local_idx);
+                if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                    index_ = std::move(local_idx);
                 } else {
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
