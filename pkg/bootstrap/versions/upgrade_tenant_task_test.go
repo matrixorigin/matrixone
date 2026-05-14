@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,9 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-func TestGetTenantCreateVersionForUpdate(t *testing.T) {
-	prefixMatchSql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", catalog.System_Account)
-
+func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -41,29 +40,40 @@ func TestGetTenantCreateVersionForUpdate(t *testing.T) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
-			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				if strings.EqualFold(sql, prefixMatchSql) {
-					typs := []types.Type{
-						types.New(types.T_varchar, 50, 0),
-					}
+			firstTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 0, 10, No)
+			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 for update"
+			secondTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 5, 10, No)
+			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 for update"
 
-					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
-					memRes.NewBatchWithRowCount(1)
-
-					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
-					result := memRes.GetResult()
-					return result, nil
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.EqualFold(sql, firstTaskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{100}, []int32{1}, []int32{4}), nil
+				case strings.EqualFold(sql, firstTenantSQL):
+					return buildUpgradeTenantRows(nil, nil), nil
+				case strings.EqualFold(sql, secondTaskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{200}, []int32{10}, []int32{12}), nil
+				case strings.EqualFold(sql, secondTenantSQL):
+					return buildUpgradeTenantRows([]int32{10, 12}, []string{"3.0.0", "3.0.0"}), nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 				}
-				return executor.Result{}, nil
 			}, txnOperator)
-			_, err := GetTenantCreateVersionForUpdate(int32(catalog.System_Account), executor)
+
+			taskID, tenants, createVersions, hasDeletedTenants, hasConflictTenants, err := GetUpgradeTenantTasks(10, exec)
 			require.NoError(t, err)
+			require.True(t, hasDeletedTenants)
+			require.False(t, hasConflictTenants)
+			require.Equal(t, uint64(200), taskID)
+			require.Equal(t, []int32{10, 12}, tenants)
+			require.Equal(t, []string{"3.0.0", "3.0.0"}, createVersions)
 		},
 	)
 }
 
-func TestGetTenantVersion(t *testing.T) {
-	prefixMatchSql := fmt.Sprintf("select create_version from mo_account where account_id = %d", catalog.System_Account)
+func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -71,23 +81,75 @@ func TestGetTenantVersion(t *testing.T) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 
-			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				if strings.EqualFold(sql, prefixMatchSql) {
-					typs := []types.Type{
-						types.New(types.T_varchar, 50, 0),
-					}
+			firstTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 0, 10, No)
+			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 for update"
+			secondTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 5, 10, No)
+			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 for update"
+			finalTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 13, 10, No)
 
-					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
-					memRes.NewBatchWithRowCount(1)
-
-					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
-					result := memRes.GetResult()
-					return result, nil
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.EqualFold(sql, firstTaskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{100}, []int32{1}, []int32{4}), nil
+				case strings.EqualFold(sql, firstTenantSQL):
+					return executor.Result{}, moerr.NewLockConflictNoCtx()
+				case strings.EqualFold(sql, secondTaskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{200}, []int32{10}, []int32{12}), nil
+				case strings.EqualFold(sql, secondTenantSQL):
+					return buildUpgradeTenantRows(nil, nil), nil
+				case strings.EqualFold(sql, finalTaskSQL):
+					return executor.Result{}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 				}
-				return executor.Result{}, nil
 			}, txnOperator)
-			_, err := GetTenantVersion(int32(catalog.System_Account), executor)
+
+			taskID, tenants, createVersions, hasDeletedTenants, hasConflictTenants, err := GetUpgradeTenantTasks(10, exec)
 			require.NoError(t, err)
+			require.True(t, hasDeletedTenants)
+			require.True(t, hasConflictTenants)
+			require.Zero(t, taskID)
+			require.Nil(t, tenants)
+			require.Nil(t, createVersions)
 		},
 	)
+}
+
+func buildUpgradeTenantTaskResult(taskIDs []uint64, fromIDs, toIDs []int32) executor.Result {
+	if len(taskIDs) == 0 {
+		return executor.Result{}
+	}
+	memRes := executor.NewMemResult(
+		[]types.Type{
+			types.New(types.T_uint64, 64, 0),
+			types.New(types.T_int32, 32, 0),
+			types.New(types.T_int32, 32, 0),
+		},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(len(taskIDs))
+	executor.AppendFixedRows(memRes, 0, taskIDs)
+	executor.AppendFixedRows(memRes, 1, fromIDs)
+	executor.AppendFixedRows(memRes, 2, toIDs)
+	return memRes.GetResult()
+}
+
+func buildUpgradeTenantRows(tenantIDs []int32, createVersions []string) executor.Result {
+	if len(tenantIDs) == 0 {
+		return executor.Result{}
+	}
+	memRes := executor.NewMemResult(
+		[]types.Type{
+			types.New(types.T_int32, 32, 0),
+			types.New(types.T_varchar, 50, 0),
+		},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(len(tenantIDs))
+	executor.AppendFixedRows(memRes, 0, tenantIDs)
+	executor.AppendStringRows(memRes, 1, createVersions)
+	return memRes.GetResult()
 }
