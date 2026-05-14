@@ -1670,6 +1670,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("cte_max_recursion_depth", 0, 4294967295, false),
 		Default:           int64(1000),
 	},
+	// Per-operator, per-CN memory quota for recursive CTEs. Two CTEs in
+	// one query each have an independent quota. With N CNs the cluster-wide
+	// maximum is N × cte_max_memory_bytes. 0 disables the quota. Because
+	// Vector.Size() is approximate (variable-width types, aliased buffers),
+	// the quota is approximate-only — sufficient for OOM prevention but not
+	// for byte-precise enforcement.
 	"cte_max_memory_bytes": {
 		Name:              "cte_max_memory_bytes",
 		Scope:             ScopeBoth,
