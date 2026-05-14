@@ -74,6 +74,10 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	// MergeRecursive streams output to the caller and does not need to
+	// retain data across queries. Full cleanup + nil on Reset is correct
+	// here even though MergeCTE.Reset preserves freeBats — the operators
+	// have different semantics.
 	mergeRecursive.ctr.last = false
 	mergeRecursive.ctr.i = 0
 	for _, bat := range mergeRecursive.ctr.freeBats {
