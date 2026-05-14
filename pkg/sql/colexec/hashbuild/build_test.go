@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -564,4 +565,16 @@ func TestHashBuildSpillMode(t *testing.T) {
 	require.Equal(t, vm.ExecStop, ok.Status)
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
+}
+
+func TestFinishBuildBatchReservation(t *testing.T) {
+	before := mpool.GlobalPending()
+	reservation := mpool.Reserve(1024)
+	require.NoError(t, finishBuildBatchReservation(reservation, nil))
+	require.Equal(t, before, mpool.GlobalPending())
+
+	reservation = mpool.Reserve(1024)
+	err := errors.New("copy failed")
+	require.ErrorIs(t, finishBuildBatchReservation(reservation, err), err)
+	require.Equal(t, before, mpool.GlobalPending())
 }

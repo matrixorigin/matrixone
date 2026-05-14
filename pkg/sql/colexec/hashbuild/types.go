@@ -167,16 +167,19 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 		if budget <= 0 || budget >= mpool.PB {
 			budget = int64(system.MemoryTotal())
 		}
-		procs := int64(system.GoMaxProcs())
-		if procs < 1 {
-			procs = 1
-		}
-		mem := budget / procs / 4
-		if mem < common.MiB*64 {
-			mem = common.MiB * 64
-		}
-		ctr.spillThreshold = mem
+		ctr.spillThreshold = spillThresholdFromBudget(budget, int64(system.GoMaxProcs()))
 	} else {
 		ctr.spillThreshold = threshold
 	}
+}
+
+func spillThresholdFromBudget(budget, procs int64) int64 {
+	if procs < 1 {
+		procs = 1
+	}
+	mem := budget / procs / 4
+	if mem < common.MiB*64 {
+		mem = common.MiB * 64
+	}
+	return mem
 }

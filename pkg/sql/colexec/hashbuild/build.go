@@ -179,11 +179,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		// Always store the batch first — never drop it
 		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
-		if err != nil {
-			reservation.Cancel()
+		if err = finishBuildBatchReservation(reservation, err); err != nil {
 			return err
 		}
-		reservation.Commit()
 
 		// Check if we should transition to spill mode
 		shouldSpill := hashBuild.shouldSpillBatches()
@@ -405,5 +403,14 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
 	}
+	return nil
+}
+
+func finishBuildBatchReservation(reservation mpool.Reservation, err error) error {
+	if err != nil {
+		reservation.Cancel()
+		return err
+	}
+	reservation.Commit()
 	return nil
 }

@@ -1858,9 +1858,13 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 // simultaneously load object metadata onto the Go heap faster than GC can
 // reclaim it.
 func capLoadParallelism(cpuNum int) int {
+	return capLoadParallelismWithMemory(cpuNum, mpool.GlobalCap(), int64(system.MemoryTotal()))
+}
+
+func capLoadParallelismWithMemory(cpuNum int, globalCap, totalMem int64) int {
 	// Mpool-based cap: each worker uses adaptive threshold + arena overhead.
 	memPerWorker := int64(colexec.AdaptiveWriteS3Threshold()) + 64*mpool.MB
-	if globalCap := mpool.GlobalCap(); globalCap > 0 && globalCap < mpool.PB {
+	if globalCap > 0 && globalCap < mpool.PB {
 		memLimit := int(globalCap / 3 / memPerWorker)
 		if memLimit < 1 {
 			memLimit = 1
@@ -1874,7 +1878,6 @@ func capLoadParallelism(cpuNum int) int {
 	// dedup (object metadata loads). Estimate ~4GB total footprint per worker
 	// (mpool buffers + Go heap for metadata + GC overhead). Cap at
 	// totalMem/4GB workers to prevent OOM.
-	totalMem := int64(system.MemoryTotal())
 	if totalMem > 0 {
 		maxWorkers := int(totalMem / (4 * mpool.GB))
 		if maxWorkers < 1 {
@@ -1886,6 +1889,16 @@ func capLoadParallelism(cpuNum int) int {
 	}
 
 	return cpuNum
+}
+
+func capLoadMcpu(n, perCNCap int, isS3 bool) int {
+	if isS3 && n > external.S3ParallelMaxnum {
+		n = external.S3ParallelMaxnum
+	}
+	if n > perCNCap {
+		n = perCNCap
+	}
+	return n
 }
 
 type hiveFileShard struct {
@@ -2051,22 +2064,13 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	perCNCap := capLoadParallelism(system.NumCPU())
 	if param.ScanType == tree.S3 {
 		for i := 0; i < len(c.cnList); i++ {
-			n := c.cnList[i].Mcpu
-			if n > external.S3ParallelMaxnum {
-				n = external.S3ParallelMaxnum
-			}
-			if n > perCNCap {
-				n = perCNCap
-			}
+			n := capLoadMcpu(c.cnList[i].Mcpu, perCNCap, true)
 			mcpu += n
 			ID2Addr[i] = n
 		}
 	} else {
 		for i := 0; i < len(c.cnList); i++ {
-			n := c.cnList[i].Mcpu
-			if n > perCNCap {
-				n = perCNCap
-			}
+			n := capLoadMcpu(c.cnList[i].Mcpu, perCNCap, false)
 			mcpu += n
 			ID2Addr[i] = n
 		}

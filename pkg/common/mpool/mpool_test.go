@@ -15,6 +15,8 @@
 package mpool
 
 import (
+	"runtime/debug"
+	"strings"
 	"sync"
 	"testing"
 
@@ -196,6 +198,51 @@ func TestMPoolNoLock(t *testing.T) {
 
 	mp2.Free(bs22)
 	require.Equal(t, int64(0), mp2.CurrNB())
+}
+
+func TestInitCapAutoBranches(t *testing.T) {
+	oldCap := GlobalCap()
+	oldLimit := debug.SetMemoryLimit(-1)
+	defer func() {
+		globalCap.Store(oldCap)
+		debug.SetMemoryLimit(oldLimit)
+	}()
+
+	debug.SetMemoryLimit(32 * GB)
+	InitCapAuto(4 * GB)
+	require.Equal(t, int64(2*GB), GlobalCap())
+
+	debug.SetMemoryLimit(1 * GB)
+	InitCapAuto(3 * GB)
+	require.Equal(t, int64(GB), GlobalCap())
+
+	debug.SetMemoryLimit(1 * GB)
+	InitCapAuto(16 * GB)
+	require.Equal(t, int64(12*GB), GlobalCap())
+}
+
+func TestReportTopPools(t *testing.T) {
+	mp1, err := NewMPool("report-top-a", 0, NoFixed)
+	require.NoError(t, err)
+	mp2, err := NewMPool("report-top-b", 0, NoFixed)
+	require.NoError(t, err)
+	defer func() {
+		mp1.stats.NumCurrBytes.Store(0)
+		mp2.stats.NumCurrBytes.Store(0)
+		DeleteMPool(mp1)
+		DeleteMPool(mp2)
+	}()
+
+	mp1.stats.NumCurrBytes.Store(2 * MB)
+	mp2.stats.NumCurrBytes.Store(3 * MB)
+
+	report := ReportTopPools(2)
+	require.Contains(t, report, "top_pools:")
+	require.Contains(t, report, "report-top-a")
+	require.Contains(t, report, "report-top-b")
+	require.True(t, strings.Index(report, "report-top-b") < strings.Index(report, "report-top-a"))
+
+	require.NotContains(t, ReportTopPools(0), "report-top-a")
 }
 
 // TestCrossPoolFreeOffHeap tests that cross-pool free correctly deallocates offHeap memory.

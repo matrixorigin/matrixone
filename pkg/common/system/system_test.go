@@ -335,3 +335,7 @@ func TestReadStatKeyMissingFile(t *testing.T) {
 	v := readStatKey("/nonexistent/path/memory.stat", "inactive_file")
 	require.Equal(t, uint64(0), v)
 }
+
+func TestFadviseDontNeedInvalidFD(t *testing.T) {
+	FadviseDontNeed(-1)
+}

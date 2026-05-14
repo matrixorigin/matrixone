@@ -1552,3 +1552,8 @@ func TestSetSpillThresholdHashJoin(t *testing.T) {
 	ctr.setSpillThreshold(2 * 1024 * 1024)
 	require.Equal(t, int64(2*1024*1024), ctr.spillThreshold)
 }
+
+func TestSpillThresholdFromBudgetHashJoin(t *testing.T) {
+	require.Equal(t, int64(64*1024*1024), spillThresholdFromBudget(1024, 0))
+	require.Equal(t, int64(128*1024*1024), spillThresholdFromBudget(1024*1024*1024, 2))
+}

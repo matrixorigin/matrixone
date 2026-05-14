@@ -749,6 +749,13 @@ func TestProcessMemoryOverBudget(t *testing.T) {
 	_ = result
 }
 
+func TestProcessMemoryOverBudgetWithStats(t *testing.T) {
+	require.True(t, processMemoryOverBudgetWithStats(7, 9, false, 0, 0))
+	require.True(t, processMemoryOverBudgetWithStats(1, 9, true, 8, 8))
+	require.False(t, processMemoryOverBudgetWithStats(1, 9, true, 0, 8))
+	require.False(t, processMemoryOverBudgetWithStats(1, 9, false, 8, 8))
+}
+
 func TestShouldSpillBatchesReachesProcessMemory(t *testing.T) {
 	hb := &HashBuild{
 		CanSpill:    true,
@@ -759,6 +766,17 @@ func TestShouldSpillBatchesReachesProcessMemory(t *testing.T) {
 	// so the call falls through to processMemoryOverBudget().
 	hb.ctr.setSpillThreshold(200000)
 	require.False(t, hb.shouldSpillBatches())
+}
+
+func TestShouldSpillBatchesMemUsedAboveThreshold(t *testing.T) {
+	hb := &HashBuild{
+		CanSpill:    true,
+		IsShuffle:   true,
+		NeedHashMap: true,
+	}
+	hb.ctr.setSpillThreshold(200000)
+	hb.ctr.hashmapBuilder.Batches.MemSize = 300000
+	require.True(t, hb.shouldSpillBatches())
 }
 
 func TestSetSpillThresholdZero(t *testing.T) {
@@ -772,4 +790,9 @@ func TestSetSpillThresholdNonZero(t *testing.T) {
 	ctr := &container{}
 	ctr.setSpillThreshold(1024 * 1024)
 	require.Equal(t, int64(1024*1024), ctr.spillThreshold)
+}
+
+func TestSpillThresholdFromBudget(t *testing.T) {
+	require.Equal(t, int64(64*1024*1024), spillThresholdFromBudget(1024, 0))
+	require.Equal(t, int64(128*1024*1024), spillThresholdFromBudget(1024*1024*1024, 2))
 }

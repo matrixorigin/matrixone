@@ -298,15 +298,28 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 }
 
 func processMemoryOverBudget() bool {
-	curr := mpool.GlobalUsedWithPending()
-	globalCap := mpool.GlobalCap()
+	return processMemoryOverBudgetWithStats(
+		mpool.GlobalUsedWithPending(),
+		mpool.GlobalCap(),
+		system.HasCgroupMemLimit(),
+		system.MemoryTotal(),
+		system.WorkingSet(),
+	)
+}
+
+func processMemoryOverBudgetWithStats(
+	curr int64,
+	globalCap int64,
+	hasCgroupMemLimit bool,
+	total uint64,
+	workingSet uint64,
+) bool {
 	if curr > globalCap*2/3 {
 		return true
 	}
-	if system.HasCgroupMemLimit() {
-		total := system.MemoryTotal()
+	if hasCgroupMemLimit {
 		if total > 0 {
-			return system.WorkingSet() > total*7/8
+			return workingSet > total*7/8
 		}
 	}
 	return false

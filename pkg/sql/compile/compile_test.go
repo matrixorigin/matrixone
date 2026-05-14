@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -660,4 +661,16 @@ func TestCapLoadParallelism(t *testing.T) {
 	result = capLoadParallelism(0)
 	// 0 is less than any computed limit so it passes through unchanged.
 	assert.Equal(t, 0, result)
+
+	assert.Equal(t, 1, capLoadParallelismWithMemory(8, mpool.MB, 0))
+	assert.Equal(t, 2, capLoadParallelismWithMemory(8, 3*mpool.GB, 8*mpool.GB))
+	assert.Equal(t, 1, capLoadParallelismWithMemory(8, mpool.PB, mpool.GB))
+	assert.Equal(t, 8, capLoadParallelismWithMemory(8, 0, 0))
+}
+
+func TestCapLoadMcpu(t *testing.T) {
+	assert.Equal(t, 4, capLoadMcpu(1000, 4, true))
+	assert.Equal(t, external.S3ParallelMaxnum, capLoadMcpu(1000, 1000, true))
+	assert.Equal(t, 4, capLoadMcpu(8, 4, false))
+	assert.Equal(t, 2, capLoadMcpu(2, 4, false))
 }

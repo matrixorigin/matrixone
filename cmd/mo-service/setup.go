@@ -51,11 +51,7 @@ func setupServiceRuntime(
 	stopper *stopper.Stopper,
 ) error {
 	if int64(cfg.Limit.Memory) >= int64(defaultMemoryLimit) {
-		sysMem := system.MemoryTotal()
-		if cgMem, err := memlimit.FromCgroup(); err == nil && cgMem > 0 && cgMem < sysMem {
-			sysMem = cgMem
-		}
-		mpool.InitCapAuto(sysMem)
+		mpool.InitCapAuto(runtimeMemoryLimit(system.MemoryTotal, memlimit.FromCgroup))
 	} else {
 		mpool.InitCap(int64(cfg.Limit.Memory))
 	}
@@ -69,6 +65,17 @@ func setupServiceRuntime(
 	)
 	catalog.SetupDefines(cfg.mustGetServiceUUID())
 	return nil
+}
+
+func runtimeMemoryLimit(
+	memoryTotal func() uint64,
+	fromCgroup func() (uint64, error),
+) uint64 {
+	sysMem := memoryTotal()
+	if cgMem, err := fromCgroup(); err == nil && cgMem > 0 && cgMem < sysMem {
+		return cgMem
+	}
+	return sysMem
 }
 
 func mustGetRuntime(
