@@ -129,7 +129,14 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if function.GetFunctionIsWinValueFunByName(winName) {
 					continue
 				}
-				ctr.bat.Aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				argTypes := ctr.aggVecs[i].Typ
+				for _, typ := range argTypes {
+					if typ.Oid == types.T_any {
+						argTypes = []types.Type{window.Types[i]}
+						break
+					}
+				}
+				ctr.bat.Aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), argTypes...)
 				if err != nil {
 					return result, err
 				}
