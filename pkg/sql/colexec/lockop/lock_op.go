@@ -58,6 +58,7 @@ var (
 	lockRetryHighMemoryPercent           = uint64(80)
 	lockRetryCriticalMemoryPercent       = uint64(90)
 	getLockRetryMemoryPressureLevel      = defaultLockRetryMemoryPressureLevel
+	lockRetryHighMemorySlots             = make(chan struct{}, 16)
 )
 
 const opName = "lock_op"
@@ -768,6 +769,7 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	useMemoryRetrySlot   bool
 }
 
 func lockWithRetry(
@@ -857,10 +859,28 @@ func canRetryLock(
 		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
 	}
-	return waitToRetryLock(ctx, wait)
+	return waitToRetryLock(ctx, wait, retryState)
 }
 
-func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
+func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
+	if retryState.useMemoryRetrySlot {
+		select {
+		case lockRetryHighMemorySlots <- struct{}{}:
+			defer func() { <-lockRetryHighMemorySlots }()
+		case <-ctx.Done():
+			return false
+		}
+		if !retryState.backendRetryDeadline.IsZero() {
+			remaining := time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			if remaining < wait {
+				wait = remaining
+			}
+		}
+	}
+
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
@@ -875,6 +895,7 @@ func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
 }
 
 func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	retryState.useMemoryRetrySlot = false
 	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
 		return 0, false
 	}
@@ -896,6 +917,7 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 		logLockRetryMemoryPressureStop(err, *retryState)
 		return 0, false
 	case lockRetryMemoryPressureHigh:
+		retryState.useMemoryRetrySlot = true
 		if remaining < lockRetryMemoryBackoff {
 			return remaining, true
 		}
