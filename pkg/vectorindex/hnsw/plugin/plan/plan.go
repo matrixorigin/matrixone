@@ -54,11 +54,15 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 // ApplyForSort rewrites `SELECT … ORDER BY distfn(col, v) LIMIT k` to use
 // the HNSW index. Lifted from applyIndicesForSortUsingHnsw
 // (was pkg/sql/plan/apply_indices_hnsw.go:122).
+//
+// opts.ColRefCnt / IdxColMap are unused by HNSW (only IVF-FLAT's
+// auto-mode rewrite consults them).
 func (Hooks) ApplyForSort(
 	pb vectorplan.PlanBuilder,
 	vecCtx *vectorplan.VectorSortContext,
 	mti *vectorplan.MultiTableIndexRef,
 	nodeID int32,
+	_ vectorplan.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -218,12 +222,20 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncEntriesTable: HNSW uses CDC for index maintenance.
-func (Hooks) DMLSyncEntriesTable() string { return "" }
+// DMLSyncTableTypes: HNSW uses CDC for index maintenance.
+func (Hooks) DMLSyncTableTypes() []string { return nil }
 
-// SupportsSyncDML: HNSW does not participate in
-// buildPreInsertMultiTableIndexes / buildDeleteMultiTableIndexes.
-func (Hooks) SupportsSyncDML() bool { return false }
+// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. HNSW uses CDC
+// (see SyncDescriptor).
+func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
+
+func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
 
 // hnswIndexContext is the per-query HNSW rewrite scratchpad.
 type hnswIndexContext struct {

@@ -75,6 +75,11 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
+// ExperimentalFlag: IVF-PQ is gated by `experimental_ivfpq_index` — the
+// same flag the plugin's HandleCreateIndex checks via
+// CompileContext.IsExperimentalEnabled.
+func (CatalogHooks) ExperimentalFlag() string { return "experimental_ivfpq_index" }
+
 // SupportedOpTypes maps the SQL-visible op_type strings (e.g.
 // "vector_l2_ops") to a stable internal identifier. Used by plan-side
 // op_type validation when matching an ORDER BY distance function against
@@ -87,16 +92,15 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
-// SyncDescriptor: IVF-PQ participates in ISCP CDC; async-ness derives
-// from the index's `async` param. No idxcron action wired in this phase
-// — once Action_Ivfpq_Reindex lands in
-// pkg/vectorindex/idxcron/executor.go, flip IdxcronAction to
-// "ivfpq_reindex".
+// SyncDescriptor: IVF-PQ does not participate in ISCP CDC or idxcron
+// today — its hidden tables are rebuilt synchronously inside
+// HandleCreateIndex / HandleReindex, not maintained out-of-band. Flip
+// UsesCDC to true (with SinkerType: SinkerType_IndexSync, AlwaysAsync
+// per-param or always) when the actual CDC pipeline lands for IVF-PQ.
+// Likewise, set IdxcronAction once Action_Ivfpq_Reindex lands in
+// pkg/vectorindex/idxcron/executor.go.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
-	return catalogplugin.SyncDescriptor{
-		UsesCDC:    true,
-		SinkerType: catalogplugin.SinkerType_IndexSync,
-	}
+	return catalogplugin.SyncDescriptor{}
 }
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's

@@ -34,6 +34,10 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
 
+// CagraIndexFlag is the experimental-feature flag gating CAGRA DDL. Must
+// match the constant in pkg/sql/compile/ddl_index_algo.go.
+const CagraIndexFlag = "experimental_cagra_index"
+
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
 // CAGRA index storage table. Lifted from pkg/sql/compile/util.go:122.
 const insertIntoCagraIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY cagra_create('%s', '%s', %s, %s) AS f;"
@@ -47,6 +51,12 @@ type Hooks struct{}
 // HandleCreateIndex is lifted from Scope.handleVectorCagraIndex
 // (pkg/sql/compile/ddl_index_algo.go:732).
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	if ok, err := ctx.IsExperimentalEnabled(CagraIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
+	}
+
 	if len(indexDefs) != 2 {
 		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
 	}

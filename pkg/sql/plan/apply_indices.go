@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -609,27 +610,31 @@ END_FULLTEXT:
 
 		for _, multiTableIndexKey := range multiTableIndexKeys {
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
+
+			// Plugin-mediated dispatch for every registered vector
+			// algorithm. IVF-FLAT (no plugin yet) falls through to the
+			// inline call below.
+			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+				opts := vectorplan.ApplyForSortOpts{
+					ColRefCnt: colRefCnt,
+					IdxColMap: idxColMap,
+				}
+				newNodeID, applied, err := p.Plan().ApplyForSort(
+					builder, vecCtx.export(), exportMultiTableIndex(multiTableIndex), nodeID, opts)
+				if err != nil {
+					return newNodeID, err
+				}
+				if applied {
+					return newNodeID, nil
+				}
+				continue
+			}
+
+			// IVF-FLAT inline (legacy until its plugin migration).
+			if catalog.IsIvfIndexAlgo(multiTableIndex.IndexAlgo) {
 				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
 				if err != nil || newNodeID != nodeID {
 					return newNodeID, err
-				}
-
-			case catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
-				// Plugin-mediated dispatch. Each algo's plan-rewrite body
-				// lives in pkg/vectorindex/<algo>/plugin/plan; the registry
-				// dispatches. If the plugin isn't registered, the rewrite
-				// is skipped and the query falls through to exact sort.
-				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-					newNodeID, applied, err := p.Plan().ApplyForSort(
-						builder, vecCtx.export(), exportMultiTableIndex(multiTableIndex), nodeID)
-					if err != nil {
-						return newNodeID, err
-					}
-					if applied {
-						return newNodeID, nil
-					}
 				}
 			}
 		}
@@ -843,22 +848,23 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	}
 
 	for _, multi := range multiTableIndexes {
-		switch multi.IndexAlgo {
-		case catalog.MoIndexIvfFlatAlgo.ToString():
+		// Plugin-mediated probe for every registered vector algorithm.
+		// IVF-FLAT (no plugin yet) falls through to the inline call.
+		if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
+			canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
+			if err != nil {
+				return nil
+			}
+			if canApply {
+				return []int32{vecCtx.scanNode.NodeId}
+			}
+			continue
+		}
+		if catalog.IsIvfIndexAlgo(multi.IndexAlgo) {
 			if ctx, err := builder.prepareIvfIndexContext(vecCtx, multi); err == nil && ctx != nil {
 				return []int32{vecCtx.scanNode.NodeId}
 			} else if err != nil {
 				return nil
-			}
-		case catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
-			if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
-				canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
-				if err != nil {
-					return nil
-				}
-				if canApply {
-					return []int32{vecCtx.scanNode.NodeId}
-				}
 			}
 		}
 	}
@@ -872,8 +878,9 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
-			catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo) {
+		// Any vector index — HNSW / CAGRA / IVF-PQ via the plugin
+		// registry, IVF-FLAT inline until its plugin migration.
+		if vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),

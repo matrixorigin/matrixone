@@ -3751,6 +3751,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("cagra_batch_window", 0, 5000000000, false),
 		Default:           int64(0),
 	},
+	"experimental_ivfpq_index": {
+		Name:              "experimental_ivfpq_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_ivfpq_index"),
+		Default:           int8(0),
+	},
 	"ivfpq_threads_build": {
 		Name:              "ivfpq_threads_build",
 		Scope:             ScopeBoth,

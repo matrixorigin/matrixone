@@ -44,6 +44,11 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
+// ExperimentalFlag: HNSW is gated by `experimental_hnsw_index` — the
+// same flag the plugin's HandleCreateIndex checks via
+// CompileContext.IsExperimentalEnabled.
+func (CatalogHooks) ExperimentalFlag() string { return "experimental_hnsw_index" }
+
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))
 	for k, v := range metric.OpTypeToUsearchMetric {

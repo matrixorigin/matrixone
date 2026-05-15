@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 )
 
 // getArgsFromDistFn returns the (vec-col-arg, vec-lit-arg, found) triple
@@ -321,7 +322,10 @@ func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.No
 		return nil
 	}
 	for _, idx := range node.TableDef.Indexes {
-		if catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+		// Any vector index — currently HNSW (via plugin),
+		// CAGRA / IVF-PQ (via plugin), or IVF-FLAT (inline fallback
+		// until its plugin migration).
+		if vectorplugin.IsVectorIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
 			return node
 		}
 	}

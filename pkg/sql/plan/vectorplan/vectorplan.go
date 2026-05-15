@@ -78,6 +78,40 @@ type MultiTableIndexRef struct {
 	IndexDefs       map[string]*plan.IndexDef
 }
 
+// ApplyForSortOpts carries per-call plan-rewrite state a Hooks.ApplyForSort
+// implementation may consult. Today only IVF-FLAT's auto-mode two-scan
+// rewrite uses these maps (to detect index-only opportunities); HNSW /
+// CAGRA / IVF-PQ ignore them. The struct can grow without breaking
+// existing plugins.
+type ApplyForSortOpts struct {
+	// ColRefCnt is the per-(rel,col) reference count from the
+	// optimizer's earlier passes. Empty map is safe.
+	ColRefCnt map[[2]int32]int
+
+	// IdxColMap maps (rel,col) → expression for the optimizer's
+	// index-only column-rewriting pass. Empty map is safe.
+	IdxColMap map[[2]int32]*plan.Expr
+}
+
+// DMLInsertContext is the narrow view of the planner's pre-insert state
+// a Hooks.BuildPreInsertSyncPlan implementation operates against.
+// Implemented by pkg/sql/plan as a thin adapter over its internal types.
+type DMLInsertContext interface {
+	ObjRef() *plan.ObjectRef
+	TableDef() *plan.TableDef
+	SourceStep() int32
+}
+
+// DMLDeleteContext is the narrow view of plan.dmlPlanCtx a
+// Hooks.BuildDeleteSyncPlan implementation operates against.
+type DMLDeleteContext interface {
+	ObjRef() *plan.ObjectRef
+	TableDef() *plan.TableDef
+	// IsUpdate reports whether this DELETE is the delete half of an
+	// UPDATE (i.e. dmlPlanCtx.updateColLength > 0).
+	IsUpdate() bool
+}
+
 // PlanBuilder is the QueryBuilder facade plugins use to construct plan
 // trees. *plan.QueryBuilder satisfies it via methods defined in
 // pkg/sql/plan/plugin_builder.go.

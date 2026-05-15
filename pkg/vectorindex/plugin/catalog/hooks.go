@@ -47,6 +47,19 @@ type Hooks interface {
 	// plan-side op_type validation.
 	SupportedOpTypes() map[string]string
 
+	// ExperimentalFlag returns the experimental-feature flag name that
+	// must be enabled (set to true via SET / system var) for this
+	// algorithm to be usable. Returns "" for non-experimental
+	// algorithms.
+	//
+	// Consumed by pkg/sql/compile/util.go:checkTableWithValidIndexes
+	// during DDL paths that re-validate an existing table's indexes,
+	// and by each plugin's compile.HandleCreateIndex at CREATE INDEX
+	// time. HNSW returns "experimental_hnsw_index", CAGRA returns
+	// "experimental_cagra_index", IVF-PQ returns
+	// "experimental_ivfpq_index".
+	ExperimentalFlag() string
+
 	// SyncDescriptor returns this algorithm's index-sync descriptor,
 	// covering both the ISCP CDC pipeline (event-driven) and the
 	// idxcron scheduler (time-driven). The zero value (SyncDescriptor{})

@@ -789,9 +789,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. FullText index
 					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
 				} else if !indexDef.Unique &&
-					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
-						catalog.IsCagraIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfpqIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. IVF, CAGRA, IVFPQ and HNSW indexDefs are aggregated and handled later
+					(vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfIndexAlgo(indexDef.IndexAlgo)) {
+					// 4. Vector indexes (plugin-registered or IVF-FLAT
+					// inline) are aggregated and handled later.
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -954,12 +954,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 								return err
 							}
 						}
-					case catalog.MoIndexHnswAlgo.ToString():
-					case catalog.MoIndexCagraAlgo.ToString():
-					case catalog.MoIndexIvfpqAlgo.ToString():
-						// PASS
 					default:
-						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+						// Plugin-registered vector indexes (HNSW / CAGRA /
+						// IVF-PQ today) have no online parameter updates
+						// — their Compile.ValidateReindexParams is a
+						// passthrough. Anything else is an invalid algo
+						// for ALTER REINDEX.
+						if !vectorplugin.IsVectorIndexAlgo(catalog.ToLower(indexAlgo)) {
+							return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+						}
 					}
 
 					// 4. Add to multiTableIndexes
@@ -2202,9 +2205,9 @@ func (s *Scope) doCreateIndex(
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique &&
-			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo) ||
-				catalog.IsIvfpqIndexAlgo(indexAlgo) || catalog.IsCagraIndexAlgo(indexAlgo)) {
-			// 4. IVF indexDefs are aggregated and handled later
+			(vectorplugin.IsVectorIndexAlgo(indexAlgo) || catalog.IsIvfIndexAlgo(indexAlgo)) {
+			// 4. Vector indexes (plugin-registered or IVF-FLAT inline)
+			// are aggregated and handled later.
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),

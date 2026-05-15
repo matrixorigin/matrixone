@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -434,18 +435,21 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 			for _, idx := range idxdef.Indexes {
 				if idx.TableExist {
-					// Only check hnswIndexFlag
-					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-						indexflag := hnswIndexFlag
-						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
-							return err
-						} else if !ok {
-							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
+					// Plugin-registered vector indexes contribute their
+					// experimental flag (if any) via
+					// catalog.Hooks.ExperimentalFlag(). Today only HNSW
+					// returns a non-empty flag at this seam; CAGRA and
+					// IVF-PQ have flags defined but not enforced here.
+					if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+						if flag := p.Catalog().ExperimentalFlag(); flag != "" {
+							if ok2, err := s.isExperimentalEnabled(c, flag); err != nil {
+								return err
+							} else if !ok2 {
+								return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", flag))
+							}
 						}
 					}
 				}
-				// TODO: CAGRA AND IVFPQ
-
 			}
 
 			break

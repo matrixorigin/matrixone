@@ -308,17 +308,17 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 func TestApplyIndicesForSortUsingCagra_NilGuards(t *testing.T) {
 	b := newBuilder(t)
 
-	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, nil, &vectorplan.MultiTableIndexRef{}, 7)
+	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, nil, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{}, &vectorplan.MultiTableIndexRef{}, 7)
+	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{SortNode: &pbplan.Node{}}, &vectorplan.MultiTableIndexRef{}, 7)
+	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{SortNode: &pbplan.Node{}}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
@@ -331,7 +331,7 @@ func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
 	v.SortNode = &pbplan.Node{}
 	v.RankOption = &pbplan.RankOption{Mode: "force"}
 
-	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, v, &vectorplan.MultiTableIndexRef{}, 0)
+	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, v, &vectorplan.MultiTableIndexRef{}, 0, vectorplan.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(0), got)
@@ -413,7 +413,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID)
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -573,7 +573,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID)
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -666,7 +666,7 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID)
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 }

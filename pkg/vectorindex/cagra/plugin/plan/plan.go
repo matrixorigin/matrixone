@@ -51,11 +51,15 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 // ApplyForSort rewrites `SELECT … ORDER BY distfn(col, v) LIMIT k` to use
 // the CAGRA index. Lifted from applyIndicesForSortUsingCagra
 // (was pkg/sql/plan/apply_indices_cagra.go:118).
+//
+// opts.ColRefCnt / IdxColMap are unused by CAGRA (only IVF-FLAT's
+// auto-mode rewrite consults them).
 func (Hooks) ApplyForSort(
 	pb vectorplan.PlanBuilder,
 	vecCtx *vectorplan.VectorSortContext,
 	mti *vectorplan.MultiTableIndexRef,
 	nodeID int32,
+	_ vectorplan.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -263,13 +267,21 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncEntriesTable: CAGRA uses CDC for index maintenance, not synchronous
-// plan-time DML sync.
-func (Hooks) DMLSyncEntriesTable() string { return "" }
+// DMLSyncTableTypes: CAGRA uses CDC for index maintenance, not
+// synchronous plan-time DML sync.
+func (Hooks) DMLSyncTableTypes() []string { return nil }
 
-// SupportsSyncDML: CAGRA does not participate in
-// buildPreInsertMultiTableIndexes / buildDeleteMultiTableIndexes.
-func (Hooks) SupportsSyncDML() bool { return false }
+// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. CAGRA uses CDC
+// (see SyncDescriptor).
+func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
+
+func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
 
 // cagraIndexContext is the per-query CAGRA rewrite scratchpad, lifted from
 // pkg/sql/plan/apply_indices_cagra.go. Unexported; tests use the getters

@@ -122,6 +122,9 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 //	err       — non-nil only on hard errors; "cannot apply" is signaled
 //	            via applied=false, not err
 //
+// opts.ColRefCnt / IdxColMap are unused by IVF-PQ (only IVF-FLAT's
+// auto-mode rewrite consults them).
+//
 // What the rewrite does:
 //  1. Resolves the ORDER BY's distance function against the index's
 //     op_type (l2 / inner_product / cosine). Mismatch → applied=false.
@@ -141,6 +144,7 @@ func (Hooks) ApplyForSort(
 	vecCtx *vectorplan.VectorSortContext,
 	mti *vectorplan.MultiTableIndexRef,
 	nodeID int32,
+	_ vectorplan.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -363,21 +367,23 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncEntriesTable returns the hidden-table-type whose IndexTableName
-// must be appended to delNodeInfo.indexTableNames on DML (pkg/sql/plan/
-// build_dml_util.go:1346). Only the algorithm that drives synchronous DML
-// sync — IVF-FLAT, via its entries table — returns a non-empty value;
-// CDC-driven algorithms (HNSW, CAGRA, IVF-PQ) return "".
-//
-// IVF-PQ uses CDC for index maintenance, so this is "".
-func (Hooks) DMLSyncEntriesTable() string { return "" }
+// DMLSyncTableTypes: IVF-PQ uses CDC for index maintenance, not
+// synchronous plan-time DML sync. Returning nil means
+// build_dml_util.go's delete-from-secondary path skips this index.
+func (Hooks) DMLSyncTableTypes() []string { return nil }
 
-// SupportsSyncDML reports whether this algorithm participates in
-// buildPreInsertMultiTableIndexes / buildDeleteMultiTableIndexes. Only
-// IVF-FLAT returns true today; CDC-driven algorithms (HNSW, CAGRA, IVF-PQ)
-// return false because their index tables are updated asynchronously by a
-// separate CDC pipeline.
-func (Hooks) SupportsSyncDML() bool { return false }
+// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. IVF-PQ uses CDC
+// (see SyncDescriptor) — the synchronous DML-sync plan builders are
+// reserved for IVF-FLAT.
+func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
+
+func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
+	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
+	return nil
+}
 
 // ivfpqIndexContext is the per-query IVF-PQ rewrite scratchpad, lifted from
 // pkg/sql/plan/apply_indices_ivfpq.go.

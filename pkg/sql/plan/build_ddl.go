@@ -2881,27 +2881,31 @@ func CreateIndexDef(indexInfo *tree.Index,
 	} else {
 		// default indexInfo.IndexOption values
 		switch indexInfo.KeyType {
-		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MOIndexMasterAlgo:
+		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo, catalog.MOIndexMasterAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		case catalog.MoIndexIvfFlatAlgo:
+			// IVF-FLAT inline (no plugin yet).
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
 			if err != nil {
 				return nil, err
 			}
-		case catalog.MoIndexHnswAlgo:
+		default:
+			// Plugin-registered vector indexes (HNSW / CAGRA / IVF-PQ
+			// today) contribute their default params map. Non-vector
+			// algos fall through with empty params.
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexCagraAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexIvfpqAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
+			if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
+				if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
+					params, err := catalog.IndexParamsMapToJsonString(defaults)
+					if err != nil {
+						return nil, err
+					}
+					indexDef.IndexAlgoParams = params
+				}
+			}
 		}
 
 	}
@@ -2980,26 +2984,26 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
-				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+				if !indexdef.TableExist {
+					continue
+				}
+				if catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) ||
+					catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) ||
+					catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+				} else if vectorplugin.IsVectorIndexAlgo(indexdef.IndexAlgo) {
+					// Plugin-registered vector indexes (HNSW / CAGRA /
+					// IVF-PQ): include every hidden table.
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				} else if catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+					// IVF-FLAT inline (no plugin yet). Only the entries
+					// table is truncated; metadata + centroids preserve
+					// the k-means model. Users are expected to run
+					// ALTER REINDEX after a truncate if they want a
+					// full rebuild.
 					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-						// TODO: check with @feng on how to handle truncate on IVF index
-						// Right now, we are only clearing the entries. Should we empty the centroids and metadata as well?
-						// Ideally, after truncate the user is expected to run re-index.
 						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 					}
-				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsCagraIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsIvfpqIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}

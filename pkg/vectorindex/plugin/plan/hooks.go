@@ -56,23 +56,41 @@ type Hooks interface {
 	//   err       — non-nil only on hard errors; "cannot apply" is
 	//               communicated via applied=false
 	//
+	// opts carries per-call state the algorithm may need; today only
+	// IVF-FLAT's auto-mode rewrite consults ColRefCnt / IdxColMap.
+	//
 	// Replaces apply_indices.go:611 dispatch +
 	// prepare<X>IndexContext + applyIndicesForSortUsing<X>.
 	ApplyForSort(pb vectorplan.PlanBuilder, vctx *vectorplan.VectorSortContext,
-		mti *vectorplan.MultiTableIndexRef, nodeID int32) (newNodeID int32, applied bool, err error)
+		mti *vectorplan.MultiTableIndexRef, nodeID int32,
+		opts vectorplan.ApplyForSortOpts) (newNodeID int32, applied bool, err error)
 
-	// DMLSyncEntriesTable returns the hidden-table type whose IndexTableName
-	// should be appended to delNodeInfo.indexTableNames in
-	// build_dml_util.go's delete-from-secondary path. Returns "" if this
-	// algorithm has no synchronous DML sync (e.g. async / CDC-driven
-	// algorithms like HNSW, CAGRA, IVF-PQ).
+	// DMLSyncTableTypes returns the IndexAlgoTableType strings for the
+	// hidden tables this algorithm syncs SYNCHRONOUSLY during INSERT /
+	// DELETE / UPDATE plan construction (today: only IVF-FLAT's entries
+	// table). Returns an empty slice for algorithms that use CDC
+	// instead (HNSW / CAGRA / IVF-PQ — see
+	// catalog.Hooks.SyncDescriptor().UsesCDC).
 	//
-	// Replaces the IVFFLAT-hardcoded check at build_dml_util.go:1346-1348.
-	DMLSyncEntriesTable() string
+	// Consumed by pkg/sql/plan/build_dml_util.go:1346 to gate which
+	// hidden tables get their IndexTableName appended to
+	// delNodeInfo.indexTableNames during DELETE plan construction.
+	DMLSyncTableTypes() []string
 
-	// SupportsSyncDML reports whether this algorithm participates in the
-	// synchronous secondary-index plan paths
-	// (buildPreInsertMultiTableIndexes / buildDeleteMultiTableIndexes).
-	// Today only IVF-FLAT returns true; HNSW/CAGRA/IVF-PQ are CDC-driven.
-	SupportsSyncDML() bool
+	// BuildPreInsertSyncPlan emits the plan nodes that synchronously
+	// populate the algorithm's hidden tables during INSERT. Called only
+	// when DMLSyncTableTypes() is non-empty AND the index is not async.
+	//
+	// Replaces the IVFFLAT-hardcoded block at
+	// build_dml_util.go:3590-3673. Algorithms without sync DML return
+	// nil here.
+	BuildPreInsertSyncPlan(pb vectorplan.PlanBuilder, ctx vectorplan.BindContext,
+		dml vectorplan.DMLInsertContext, mti *vectorplan.MultiTableIndexRef) error
+
+	// BuildDeleteSyncPlan emits the plan nodes for synchronous delete
+	// from the algorithm's hidden tables. Replaces the IVFFLAT-hardcoded
+	// block at build_dml_util.go:3675-3837. Algorithms without sync DML
+	// return nil here.
+	BuildDeleteSyncPlan(pb vectorplan.PlanBuilder, ctx vectorplan.BindContext,
+		dml vectorplan.DMLDeleteContext, mti *vectorplan.MultiTableIndexRef) error
 }

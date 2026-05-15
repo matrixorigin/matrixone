@@ -50,6 +50,11 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
+// ExperimentalFlag: CAGRA is gated by `experimental_cagra_index` — the
+// same flag the plugin's HandleCreateIndex checks via
+// CompileContext.IsExperimentalEnabled.
+func (CatalogHooks) ExperimentalFlag() string { return "experimental_cagra_index" }
+
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))
 	for k, v := range metric.OpTypeToUsearchMetric {
@@ -58,16 +63,15 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
-// SyncDescriptor: CAGRA participates in ISCP CDC; async-ness derives
-// from the index's `async` param (mirroring IVF-FLAT). No idxcron action
-// wired in this phase — pkg/vectorindex/idxcron/executor.go only knows
-// Action_Ivfflat_Reindex today; once Action_Cagra_Reindex lands there,
-// flip IdxcronAction to "cagra_reindex".
+// SyncDescriptor: CAGRA does not participate in ISCP CDC or idxcron
+// today — its hidden tables are rebuilt synchronously inside
+// HandleCreateIndex / HandleReindex, not maintained out-of-band. Flip
+// UsesCDC to true (with SinkerType: SinkerType_IndexSync, AlwaysAsync
+// per-param or always) when the actual CDC pipeline lands for CAGRA.
+// Likewise, set IdxcronAction once Action_Cagra_Reindex lands in
+// pkg/vectorindex/idxcron/executor.go.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
-	return catalogplugin.SyncDescriptor{
-		UsesCDC:    true,
-		SinkerType: catalogplugin.SinkerType_IndexSync,
-	}
+	return catalogplugin.SyncDescriptor{}
 }
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's

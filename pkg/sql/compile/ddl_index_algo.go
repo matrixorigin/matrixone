@@ -547,6 +547,8 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 	if s.Magic == TableClone {
 		skipFlags := []string{
 			hnswIndexFlag,
+			cagraIndexFlag,
+			ivfpqIndexFlag,
 		}
 
 		// if the scope is a table clone means we are trying to
