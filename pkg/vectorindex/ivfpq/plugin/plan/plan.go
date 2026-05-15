@@ -367,24 +367,6 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncTableTypes: IVF-PQ uses CDC for index maintenance, not
-// synchronous plan-time DML sync. Returning nil means
-// build_dml_util.go's delete-from-secondary path skips this index.
-func (Hooks) DMLSyncTableTypes() []string { return nil }
-
-// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. IVF-PQ uses CDC
-// (see SyncDescriptor) — the synchronous DML-sync plan builders are
-// reserved for IVF-FLAT.
-func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
-func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
 // ivfpqIndexContext is the per-query IVF-PQ rewrite scratchpad, lifted from
 // pkg/sql/plan/apply_indices_ivfpq.go.
 //

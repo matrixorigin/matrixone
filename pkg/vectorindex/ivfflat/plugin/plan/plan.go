@@ -16,8 +16,12 @@
 //
 //   - BuildSecondaryIndexDefs — schema.go (Phase 4d)
 //   - CanApply, ApplyForSort  — this file + context.go + helpers.go (Phase 4e)
-//   - DMLSyncTableTypes, BuildPreInsertSyncPlan, BuildDeleteSyncPlan
-//                             — Phase 4f (still stubs below)
+//
+// Synchronous DML sync (the IVFFLAT case of buildPreInsertMultiTableIndexes
+// / buildDeleteMultiTableIndexes) stays in pkg/sql/plan/build_dml_util.go.
+// No other vector-index algorithm needs sync DML — HNSW / CAGRA / IVF-PQ
+// all use CDC — so abstracting it through the plugin framework would be
+// speculative.
 //
 // The ANN rewrite is the largest of any vector-index plugin's plan-layer
 // work because IVF-FLAT supports three search modes (auto / pre / post)
@@ -537,28 +541,3 @@ func applyPreMode(
 	return outerJoinNodeID, nil
 }
 
-// DMLSyncTableTypes — Phase 4f will return the entries-table type.
-// Until then, pkg/sql/plan/build_dml_util.go drives sync via the inline
-// IVFFLAT case.
-func (Hooks) DMLSyncTableTypes() []string {
-	return nil
-}
-
-// BuildPreInsertSyncPlan — stub until Phase 4f lifts
-// appendPreInsertSkVectorPlan + the IVFFLAT arm of
-// buildPreInsertMultiTableIndexes.
-func (Hooks) BuildPreInsertSyncPlan(
-	_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef,
-) error {
-	return nil
-}
-
-// BuildDeleteSyncPlan — stub until Phase 4f lifts the IVFFLAT arm of
-// buildDeleteMultiTableIndexes.
-func (Hooks) BuildDeleteSyncPlan(
-	_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef,
-) error {
-	return nil
-}

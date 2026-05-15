@@ -93,25 +93,6 @@ type ApplyForSortOpts struct {
 	IdxColMap map[[2]int32]*plan.Expr
 }
 
-// DMLInsertContext is the narrow view of the planner's pre-insert state
-// a Hooks.BuildPreInsertSyncPlan implementation operates against.
-// Implemented by pkg/sql/plan as a thin adapter over its internal types.
-type DMLInsertContext interface {
-	ObjRef() *plan.ObjectRef
-	TableDef() *plan.TableDef
-	SourceStep() int32
-}
-
-// DMLDeleteContext is the narrow view of plan.dmlPlanCtx a
-// Hooks.BuildDeleteSyncPlan implementation operates against.
-type DMLDeleteContext interface {
-	ObjRef() *plan.ObjectRef
-	TableDef() *plan.TableDef
-	// IsUpdate reports whether this DELETE is the delete half of an
-	// UPDATE (i.e. dmlPlanCtx.updateColLength > 0).
-	IsUpdate() bool
-}
-
 // PlanBuilder is the QueryBuilder facade plugins use to construct plan
 // trees. *plan.QueryBuilder satisfies it via methods defined in
 // pkg/sql/plan/plugin_builder.go.

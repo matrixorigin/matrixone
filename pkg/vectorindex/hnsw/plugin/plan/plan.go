@@ -222,21 +222,6 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncTableTypes: HNSW uses CDC for index maintenance.
-func (Hooks) DMLSyncTableTypes() []string { return nil }
-
-// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. HNSW uses CDC
-// (see SyncDescriptor).
-func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
-func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
 // hnswIndexContext is the per-query HNSW rewrite scratchpad.
 type hnswIndexContext struct {
 	metaDef      *plan.IndexDef

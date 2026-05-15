@@ -64,33 +64,12 @@ type Hooks interface {
 	ApplyForSort(pb vectorplan.PlanBuilder, vctx *vectorplan.VectorSortContext,
 		mti *vectorplan.MultiTableIndexRef, nodeID int32,
 		opts vectorplan.ApplyForSortOpts) (newNodeID int32, applied bool, err error)
-
-	// DMLSyncTableTypes returns the IndexAlgoTableType strings for the
-	// hidden tables this algorithm syncs SYNCHRONOUSLY during INSERT /
-	// DELETE / UPDATE plan construction (today: only IVF-FLAT's entries
-	// table). Returns an empty slice for algorithms that use CDC
-	// instead (HNSW / CAGRA / IVF-PQ — see
-	// catalog.Hooks.SyncDescriptor().UsesCDC).
-	//
-	// Consumed by pkg/sql/plan/build_dml_util.go:1346 to gate which
-	// hidden tables get their IndexTableName appended to
-	// delNodeInfo.indexTableNames during DELETE plan construction.
-	DMLSyncTableTypes() []string
-
-	// BuildPreInsertSyncPlan emits the plan nodes that synchronously
-	// populate the algorithm's hidden tables during INSERT. Called only
-	// when DMLSyncTableTypes() is non-empty AND the index is not async.
-	//
-	// Replaces the IVFFLAT-hardcoded block at
-	// build_dml_util.go:3590-3673. Algorithms without sync DML return
-	// nil here.
-	BuildPreInsertSyncPlan(pb vectorplan.PlanBuilder, ctx vectorplan.BindContext,
-		dml vectorplan.DMLInsertContext, mti *vectorplan.MultiTableIndexRef) error
-
-	// BuildDeleteSyncPlan emits the plan nodes for synchronous delete
-	// from the algorithm's hidden tables. Replaces the IVFFLAT-hardcoded
-	// block at build_dml_util.go:3675-3837. Algorithms without sync DML
-	// return nil here.
-	BuildDeleteSyncPlan(pb vectorplan.PlanBuilder, ctx vectorplan.BindContext,
-		dml vectorplan.DMLDeleteContext, mti *vectorplan.MultiTableIndexRef) error
 }
+
+// NOTE: an earlier draft of this interface included three sync-DML hooks
+// (DMLSyncTableTypes, BuildPreInsertSyncPlan, BuildDeleteSyncPlan)
+// intended to let plugins own synchronous INSERT / DELETE index sync.
+// Removed because only IVF-FLAT uses synchronous DML and its bodies
+// live in pkg/sql/plan/build_dml_util.go (HNSW / CAGRA / IVF-PQ all use
+// CDC). If a future algorithm needs sync DML the hooks can be added
+// back — but no point carrying the speculative interface today.

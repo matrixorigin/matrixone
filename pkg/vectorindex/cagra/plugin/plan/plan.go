@@ -267,22 +267,6 @@ func (Hooks) ApplyForSort(
 	return nodeID, true, nil
 }
 
-// DMLSyncTableTypes: CAGRA uses CDC for index maintenance, not
-// synchronous plan-time DML sync.
-func (Hooks) DMLSyncTableTypes() []string { return nil }
-
-// BuildPreInsertSyncPlan / BuildDeleteSyncPlan: no-ops. CAGRA uses CDC
-// (see SyncDescriptor).
-func (Hooks) BuildPreInsertSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLInsertContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
-func (Hooks) BuildDeleteSyncPlan(_ vectorplan.PlanBuilder, _ vectorplan.BindContext,
-	_ vectorplan.DMLDeleteContext, _ *vectorplan.MultiTableIndexRef) error {
-	return nil
-}
-
 // cagraIndexContext is the per-query CAGRA rewrite scratchpad, lifted from
 // pkg/sql/plan/apply_indices_cagra.go. Unexported; tests use the getters
 // below.
