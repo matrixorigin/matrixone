@@ -40,11 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-// TODO: choose either PostInsertFullText or PreInsertFullText
-var (
-	postdml_flag bool = false
-)
-
 var dmlPlanCtxPool = sync.Pool{
 	New: func() any {
 		return &dmlPlanCtx{}
@@ -953,18 +948,11 @@ func buildInsertPlansWithRelatedHiddenTable(
 					return err
 				}
 
-			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
-				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
-				if err != nil {
-					return err
-				}
 			}
 
 		}
 
-		// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
-		if !postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+		if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx, updateColPosMap)
 			if err != nil {
 				return err
@@ -4360,12 +4348,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 					return err
 				}
 			} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				// TODO: choose either PostDeleteFullTextIndex or PreDeleteFullTextIndex
-				if postdml_flag {
-					err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
-				} else {
-					err = buildPreDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
-				}
+				err = buildPreDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
 				if err != nil {
 					return err
 				}
@@ -4898,88 +4881,3 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	return nil
 }
 
-// build PostDml FullText Index node
-func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
-	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
-
-	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	if async {
-		return nil
-	}
-
-	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
-	orgPkColPos, _ := getPkPos(tableDef, false)
-
-	// postdml fulltext action
-	postdmlProject := getProjectionByLastNode(builder, lastNodeId)
-	postdml := &plan.Node{
-		NodeType:    plan.Node_POSTDML,
-		ProjectList: postdmlProject,
-		Children:    []int32{lastNodeId},
-		PostDmlCtx: &plan.PostDmlCtx{
-			Ref:                    indexObjRef,
-			PrimaryKeyIdx:          int32(orgPkColPos),
-			PrimaryKeyName:         tableDef.Pkey.PkeyColName,
-			IsDelete:               isDelete,
-			IsInsert:               isInsert,
-			IsDeleteWithoutFilters: isDeleteWithoutFilters,
-			FullText: &plan.PostDmlFullTextCtx{
-				SourceTableName: tableDef.Name,
-				IndexTableName:  indexTableDef.Name,
-				Parts:           indexdef.Parts,
-				AlgoParams:      indexdef.IndexAlgoParams,
-			},
-		},
-	}
-	lastNodeId = builder.appendNode(postdml, bindCtx)
-	// end postdml
-
-	builder.appendStep(lastNodeId)
-
-	return nil
-
-}
-
-// Post Delete Fulltext Index to use PostDml node to save both DELETE SQL and UPDATE SQL (i.e Delete and Insert SQL) and execute after the pipelines
-func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
-	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
-
-	isDelete := true
-	isInsert := delCtx.updateColLength > 0
-
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
-	if err != nil {
-		return err
-	}
-	if indexTableDef == nil {
-		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexName)
-	}
-
-	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, delCtx.tableDef,
-		delCtx.sourceStep, indexdef, idx, isDelete, isInsert, delCtx.isDeleteWithoutFilters)
-}
-
-// Post Insert FullText Index to use PostDml node to save INSERT SQL and execute after the pipelines
-func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
-	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
-
-	//isUpdate := updateColLength > 0
-	isDelete := false
-	isInsert := true
-	isDeleteWithoutFilters := false
-
-	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
-	if err != nil {
-		return err
-	}
-	if indexTableDef == nil {
-		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
-	}
-
-	return buildPostDmlFullTextIndex(ctx, builder, bindCtx, indexObjRef, indexTableDef, tableDef,
-		sourceStep, indexdef, idx, isDelete, isInsert, isDeleteWithoutFilters)
-}
