@@ -209,6 +209,12 @@ func (s *service) Lock(
 			result = r
 			err = e
 		})
+	if err == nil {
+		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+			result = pb.Result{}
+			err = e
+		}
+	}
 	return result, err
 }
 
@@ -629,6 +635,31 @@ func (s *service) fenceByBindChanged(bind pb.LockTable) {
 		return
 	}
 	s.activeTxnHolder.fenceByBindChanged(bind)
+}
+
+func (s *service) checkBindChangedBeforeLockSuccess(
+	txn *activeTxn,
+	txnID []byte,
+	bind pb.LockTable,
+) error {
+	// Let any pending bind-change fence complete before reporting lock success.
+	// Keep the lock order consistent with Lock: bindChangeMu before txn.Lock.
+	txn.Unlock()
+	s.bindChangeMu.RLock()
+	txn.Lock()
+	defer s.bindChangeMu.RUnlock()
+
+	if !bytes.Equal(txn.txnID, txnID) {
+		return ErrTxnNotFound
+	}
+	if txn.bindChanged {
+		return ErrLockTableBindChanged
+	}
+	l := s.tableGroups.get(bind.Group, bind.Table)
+	if l == nil || l.getBind().Changed(bind) {
+		return ErrLockTableBindChanged
+	}
+	return nil
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
