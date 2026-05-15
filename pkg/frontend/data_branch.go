@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -1359,7 +1360,7 @@ func constructChangeHandle(
 		from, end types.TS,
 		mp *mpool.MPool,
 	) (engine.ChangesHandle, error) {
-		if pkFilter != nil && len(pkFilter.Segments) > 0 {
+		if pkFilter != nil && pkFilter.Valid() {
 			return databranchutils.CollectChangesWithPKFilter(
 				ctx, rel, from, end, mp, pkFilter,
 			)
@@ -1810,7 +1811,14 @@ func getTablesCreationCommitTS(
 	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
 		totalStart := time.Now()
 		collectStart := time.Now()
-		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, tableID, snap)
+		var rel engine.Relation
+		switch tableID {
+		case tar.GetTableID(ctx):
+			rel = tar
+		case base.GetTableID(ctx):
+			rel = base
+		}
+		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, rel, tableID, snap)
 		if err == nil {
 			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
@@ -1926,6 +1934,7 @@ func getTableCreationCommitTSByID(
 func getTableCreationCommitTSByCollectChanges(
 	ctx context.Context,
 	ses *Session,
+	targetRel engine.Relation,
 	tableID uint64,
 	snapshotTS types.TS,
 ) (types.TS, error) {
@@ -1936,6 +1945,8 @@ func getTableCreationCommitTSByCollectChanges(
 	var (
 		found             bool
 		result            types.TS
+		pkFilter          *engine.PKFilter
+		pkFilterFallback  string
 		dataBatchCnt      int
 		dataRowCnt        int
 		tombstoneBatchCnt int
@@ -1947,11 +1958,15 @@ func getTableCreationCommitTSByCollectChanges(
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snapshotTS.ToString()),
 			zap.Bool("found", found),
+			zap.Bool("has-pk-filter", pkFilter != nil),
 			zap.Int("data-batch-cnt", dataBatchCnt),
 			zap.Int("data-row-cnt", dataRowCnt),
 			zap.Int("tombstone-batch-cnt", tombstoneBatchCnt),
 			zap.Int("tombstone-row-cnt", tombstoneRowCnt),
 			zap.Duration("duration", time.Since(start)),
+		}
+		if pkFilterFallback != "" {
+			fields = append(fields, zap.String("pk-filter-fallback", pkFilterFallback))
 		}
 		if found {
 			fields = append(fields, zap.String("commit-ts", result.ToString()))
@@ -1963,6 +1978,17 @@ func getTableCreationCommitTSByCollectChanges(
 	if err != nil {
 		return types.TS{}, err
 	}
+
+	pkFilter, pkFilterFallback, err = tryBuildCurrentMoTablesCPKeyFilter(
+		ctx, ses.GetAccountId(), targetRel, rel, mp,
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if pkFilter != nil {
+		ctx = engine.WithPKFilter(ctx, pkFilter)
+	}
+	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
 
 	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
 	if err != nil {
@@ -2016,6 +2042,72 @@ func getTableCreationCommitTSByCollectChanges(
 		"cannot find table %d commit ts at snapshot %s (via CollectChanges)",
 		tableID, snapshotTS.ToString(),
 	)
+}
+
+func tryBuildCurrentMoTablesCPKeyFilter(
+	ctx context.Context,
+	accountID uint32,
+	targetRel engine.Relation,
+	moTablesRel engine.Relation,
+	mp *mpool.MPool,
+) (*engine.PKFilter, string, error) {
+	switch {
+	case targetRel == nil:
+		return nil, "missing-target-rel", nil
+	case moTablesRel == nil:
+		return nil, "missing-mo-tables-rel", nil
+	}
+
+	targetDef := targetRel.GetTableDef(ctx)
+	if targetDef == nil {
+		return nil, "missing-target-table-def", nil
+	}
+	if targetDef.DbName == "" {
+		return nil, "missing-target-db-name", nil
+	}
+	tableName := targetRel.GetTableName()
+	if tableName == "" {
+		return nil, "missing-target-table-name", nil
+	}
+
+	moTablesDef := moTablesRel.GetTableDef(ctx)
+	if moTablesDef == nil {
+		return nil, "missing-mo-tables-table-def", nil
+	}
+
+	cpkeyIdx, ok := moTablesDef.Name2ColIndex[strings.ToLower(catalog.SystemRelAttr_CPKey)]
+	if !ok {
+		cpkeyIdx, ok = moTablesDef.Name2ColIndex[catalog.SystemRelAttr_CPKey]
+	}
+	if !ok || cpkeyIdx < 0 || int(cpkeyIdx) >= len(moTablesDef.Cols) {
+		return nil, "missing-mo-tables-cpkey-col", nil
+	}
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(accountID)
+	packer.EncodeStringType([]byte(targetDef.DbName))
+	packer.EncodeStringType([]byte(tableName))
+	packedKey := append([]byte(nil), packer.Bytes()...)
+	replayPacker := types.NewPacker()
+	defer replayPacker.Close()
+	replayKey := append([]byte(nil), readutil.EncodePrimaryKey(packedKey, replayPacker)...)
+
+	filterVec := vector.NewVec(types.T_varchar.ToType())
+	defer filterVec.Free(mp)
+	if err := vector.AppendBytes(filterVec, packedKey, false, mp); err != nil {
+		return nil, "", err
+	}
+
+	pkFilter := buildPKFilterFromVec(filterVec, types.T_varchar.ToType(), int(moTablesDef.Cols[cpkeyIdx].Seqnum))
+	if pkFilter == nil {
+		return nil, "empty-mo-tables-cpkey-filter", nil
+	}
+	pkFilter.ReplaySpec = &engine.PKReplaySpec{
+		Op:   function.EQUAL,
+		Keys: [][]byte{replayKey},
+	}
+	return pkFilter, "", nil
 }
 
 // locateColumnsInChangeBatch finds rel_id and commit_ts column indices
