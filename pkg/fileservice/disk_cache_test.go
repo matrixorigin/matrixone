@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -720,15 +721,17 @@ func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
 	vec := &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{{
-			Offset:      0,
-			Size:        3,
-			ToCacheData: CacheOriginalData,
+			Offset: 0,
+			Size:   3,
+			ToCacheData: func(ctx context.Context, _ io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+				return allocator.AllocateCacheDataWithHint(ctx, 10, malloc.NoClear), nil
+			},
 		}},
 	}
 	err = cache.Read(ctx, vec)
 	require.Nil(t, err)
 	require.Equal(t, 1, dataCache.ensureCalls)
-	require.Equal(t, 3, dataCache.ensureBytes)
+	require.Equal(t, 10, dataCache.ensureBytes)
 	require.True(t, vec.Entries[0].done)
 	require.NotNil(t, vec.Entries[0].CachedData)
 }
