@@ -185,7 +185,16 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, k.keepLockTableBindInterval, moerr.CauseDoKeepLockTableBind)
+	timeout := k.keepLockTableBindInterval
+	if keepBindTimeout := k.service.cfg.KeepBindTimeout.Duration; keepBindTimeout > 0 {
+		if v := keepBindTimeout / 2; v > timeout {
+			timeout = v
+		}
+	}
+	if timeout > defaultRPCTimeout {
+		timeout = defaultRPCTimeout
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoKeepLockTableBind)
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
