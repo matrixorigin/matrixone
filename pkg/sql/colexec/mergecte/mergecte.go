@@ -150,13 +150,18 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 						return result, err
 					}
 					if len(ctr.freeBats) > ctr.i {
-						if ctr.freeBats[ctr.i] != nil {
-							ctr.freeBats[ctr.i].CleanOnlyData()
-						}
-						ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-						if err != nil {
-							return result, err
-						}
+						// Release accounted bytes, clean the old data batch,
+						// then replace it with a fresh makeRecursiveBatch
+						// sentinel.  CleanOnlyData+AppendWithCopy(Last()) on
+						// an existing slot would free the prior payload in
+						// mpool without decrementing totalBytes (Account
+						// short-circuits on Last() inputs) — totalBytes
+						// would drift up across Reset cycles and trigger
+						// spurious ErrCteMemoryQuotaExceeded.  Mirrors
+						// sendLastTag at lines 98-110.
+						ctr.memAcct.Release(ctr.freeBats[ctr.i])
+						ctr.freeBats[ctr.i].Clean(proc.Mp())
+						ctr.freeBats[ctr.i] = makeRecursiveBatch(proc)
 					} else {
 						appBat, err := result.Batch.Dup(proc.Mp())
 						if err != nil {
