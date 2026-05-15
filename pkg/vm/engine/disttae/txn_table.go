@@ -74,6 +74,17 @@ var traceFilterExprInterval2 atomic.Uint64
 // mpool explosion when many transactions simultaneously check primary key conflicts.
 var pkCheckSemaphore = make(chan struct{}, 16)
 
+const maxChangedObjectsForIO = 64
+const maxCandidateBlksForIO = 32
+
+func shouldBailoutOnChangedObjects(cnt int) bool {
+	return cnt > maxChangedObjectsForIO
+}
+
+func shouldBailoutOnCandidateBlocks(cnt int) bool {
+	return cnt > maxCandidateBlksForIO
+}
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -2493,8 +2504,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	// write to the same table, producing many changed objects. Only inserted objects
 	// (cObjs) can contain conflicting PKs; deleted objects are excluded from the count
 	// since they don't contribute to PK conflict I/O.
-	const maxChangedObjectsForIO = 64
-	if len(cObjs) > maxChangedObjectsForIO {
+	if shouldBailoutOnChangedObjects(len(cObjs)) {
 		v2.TxnPKChangeCheckBailoutCounter.Inc()
 		return true, nil
 	}
@@ -2611,8 +2621,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	// If too many candidate blocks, conservatively return true to avoid excessive
 	// concurrent block reads that cause mpool explosion under high concurrency.
-	const maxCandidateBlksForIO = 32
-	if len(candidateBlks) > maxCandidateBlksForIO {
+	if shouldBailoutOnCandidateBlocks(len(candidateBlks)) {
 		v2.TxnPKChangeCheckBailoutCounter.Inc()
 		return true, nil
 	}
