@@ -18,6 +18,7 @@ import (
 	"context"
 	"math/rand"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -864,6 +865,85 @@ func TestRewriteRuleOutputColumns(t *testing.T) {
 	}
 }
 
+func TestTrimRewriteRuleForUnion(t *testing.T) {
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("  select a from db1.t1  ;;  ; "))
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("select a from db1.t1"))
+	require.Equal(t, "", trimRewriteRuleForUnion(" ; ; "))
+}
+
+func TestOutputColumnsFromRewriteStatementASTBranches(t *testing.T) {
+	selectClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
+	}
+
+	columns, ok := outputColumnsFromRewriteStatement(&tree.ParenSelect{
+		Select: &tree.Select{Select: selectClause},
+	})
+	require.True(t, ok)
+	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+
+	columns, ok = outputColumnsFromRewriteStatement(&tree.ParenSelect{})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	columns, ok = outputColumnsFromRewriteStatement(&tree.Delete{})
+	require.False(t, ok)
+	require.Nil(t, columns)
+}
+
+func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
+	selectClause := &tree.SelectClause{
+		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
+	}
+
+	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
+	})
+	require.True(t, ok)
+	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ParenSelect{})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{
+		Select:  selectClause,
+		OrderBy: tree.OrderBy{&tree.Order{Expr: tree.NewUnresolvedColName("a")}},
+	})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{Select: selectClause})
+	require.True(t, ok)
+	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ValuesStatement{})
+	require.False(t, ok)
+	require.Nil(t, columns)
+}
+
+func TestOutputColumnFromRewriteSelectExprBranches(t *testing.T) {
+	column, ok := outputColumnFromRewriteSelectExpr(tree.SelectExpr{
+		Expr: tree.NewBinaryExpr(tree.PLUS, tree.NewUnresolvedColName("a"), rewriteRuleNumVal(1)),
+	})
+	require.True(t, ok)
+	require.Equal(t, rewriteRuleOutputColumn{name: "a + 1", expr: "a + 1"}, column)
+
+	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
+		Expr: tree.NewUnresolvedColName("A"),
+		As:   tree.NewCStr("AliasA", 1),
+	})
+	require.True(t, ok)
+	require.Equal(t, rewriteRuleOutputColumn{name: "aliasa", expr: "a"}, column)
+
+	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
+		Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("t", 1)),
+	})
+	require.False(t, ok)
+	require.Equal(t, rewriteRuleOutputColumn{}, column)
+}
+
 func TestMergeableRewriteSelectClauseRejectsDistinctOptions(t *testing.T) {
 	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Distinct: true}))
 	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Option: tree.QuerySpecOptionDistinct}))
@@ -945,6 +1025,76 @@ func TestRewriteExprIsMergeSafe(t *testing.T) {
 	}
 }
 
+func TestRewriteExprIsMergeSafeASTBranches(t *testing.T) {
+	safeColumn := tree.NewUnresolvedColName("a")
+	safeNumber := rewriteRuleNumVal(1)
+	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
+
+	cases := []struct {
+		name string
+		expr tree.Expr
+		safe bool
+	}{
+		{name: "nil expression", expr: nil, safe: true},
+		{name: "string literal", expr: tree.NewStrVal("'x'"), safe: true},
+		{name: "unqualified star", expr: tree.UnqualifiedStar{}, safe: true},
+		{name: "unary expression", expr: tree.NewUnaryExpr(tree.UNARY_MINUS, safeNumber), safe: true},
+		{name: "comparison with escape", expr: tree.NewComparisonExprWithEscape(tree.LIKE, safeColumn, tree.NewStrVal("'a%'"), tree.NewStrVal("'\\'")), safe: true},
+		{name: "and expression", expr: tree.NewAndExpr(safeColumn, safeNumber), safe: true},
+		{name: "xor expression", expr: tree.NewXorExpr(safeColumn, safeNumber), safe: true},
+		{name: "or expression", expr: tree.NewOrExpr(safeColumn, safeNumber), safe: true},
+		{name: "not expression", expr: tree.NewNotExpr(safeColumn), safe: true},
+		{name: "is null expression", expr: tree.NewIsNullExpr(safeColumn), safe: true},
+		{name: "is not null expression", expr: tree.NewIsNotNullExpr(safeColumn), safe: true},
+		{name: "is unknown expression", expr: tree.NewIsUnknownExpr(safeColumn), safe: true},
+		{name: "is not unknown expression", expr: tree.NewIsNotUnknownExpr(safeColumn), safe: true},
+		{name: "is true expression", expr: tree.NewIsTrueExpr(safeColumn), safe: true},
+		{name: "is not true expression", expr: tree.NewIsNotTrueExpr(safeColumn), safe: true},
+		{name: "is false expression", expr: tree.NewIsFalseExpr(safeColumn), safe: true},
+		{name: "is not false expression", expr: tree.NewIsNotFalseExpr(safeColumn), safe: true},
+		{name: "paren expression", expr: tree.NewParentExpr(safeColumn), safe: true},
+		{name: "function with table type", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_TABLE, nil, safeColumn), safe: false},
+		{name: "function without a resolvable name", expr: &tree.FuncExpr{}, safe: false},
+		{name: "function with unsafe argument", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, nil, unsafeExpr), safe: false},
+		{name: "function with unsafe order by", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, tree.OrderBy{&tree.Order{Expr: unsafeExpr}}, safeColumn), safe: false},
+		{name: "serial extract expression", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: safeNumber}, safe: true},
+		{name: "serial extract with unsafe index", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: unsafeExpr}, safe: false},
+		{name: "bit cast expression", expr: &tree.BitCastExpr{Expr: safeColumn}, safe: true},
+		{name: "tuple expression", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, safeNumber}}, safe: true},
+		{name: "tuple with unsafe member", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, unsafeExpr}}, safe: false},
+		{name: "case with unsafe else", expr: &tree.CaseExpr{Expr: safeColumn, Else: unsafeExpr}, safe: false},
+		{name: "case with nil when", expr: &tree.CaseExpr{Whens: []*tree.When{nil, tree.NewWhen(safeColumn, safeNumber)}, Else: safeNumber}, safe: true},
+		{name: "case with unsafe when", expr: &tree.CaseExpr{Whens: []*tree.When{tree.NewWhen(unsafeExpr, safeNumber)}, Else: safeNumber}, safe: false},
+		{name: "interval expression", expr: &tree.IntervalExpr{Expr: safeNumber}, safe: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(tc.expr))
+		})
+	}
+}
+
+func TestRewriteExprsAndOrderByAreMergeSafe(t *testing.T) {
+	safeColumn := tree.NewUnresolvedColName("a")
+	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
+
+	require.True(t, rewriteExprsAreMergeSafe(nil))
+	require.True(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn}))
+	require.False(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn, unsafeExpr}))
+
+	require.True(t, rewriteOrderByIsMergeSafe(tree.OrderBy{nil, &tree.Order{Expr: safeColumn}}))
+	require.False(t, rewriteOrderByIsMergeSafe(tree.OrderBy{&tree.Order{Expr: unsafeExpr}}))
+}
+
+func TestRewriteFuncExprName(t *testing.T) {
+	require.Equal(t, "abs", rewriteFuncExprName(&tree.FuncExpr{FuncName: tree.NewCStr("ABS", 1)}))
+	require.Equal(t, "lower", rewriteFuncExprName(&tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("LOWER")),
+	}))
+	require.Equal(t, "", rewriteFuncExprName(&tree.FuncExpr{}))
+}
+
 func parseRewriteRuleSelectExprs(t *testing.T, sql string) tree.SelectExprs {
 	t.Helper()
 
@@ -955,6 +1105,25 @@ func parseRewriteRuleSelectExprs(t *testing.T, sql string) tree.SelectExprs {
 	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
 	require.True(t, ok)
 	return selectClause.Exprs
+}
+
+func rewriteRuleNumVal(v int64) *tree.NumVal {
+	return tree.NewNumVal[int64](v, strconv.FormatInt(v, 10), false, tree.P_int64)
+}
+
+func rewriteRuleFuncExpr(name string, typ tree.FuncType, orderBy tree.OrderBy, exprs ...tree.Expr) *tree.FuncExpr {
+	return &tree.FuncExpr{
+		FuncName: tree.NewCStr(name, 1),
+		Type:     typ,
+		Exprs:    exprs,
+		OrderBy:  orderBy,
+	}
+}
+
+func rewriteRuleUnsafeSubqueryExpr() tree.Expr {
+	return tree.NewSubquery(&tree.SelectClause{
+		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
+	}, true)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
