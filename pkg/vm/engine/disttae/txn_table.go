@@ -70,6 +70,21 @@ const (
 var traceFilterExprInterval atomic.Uint64
 var traceFilterExprInterval2 atomic.Uint64
 
+// pkCheckSemaphore limits concurrent block I/O in PKPersistedBetween to prevent
+// mpool explosion when many transactions simultaneously check primary key conflicts.
+var pkCheckSemaphore = make(chan struct{}, 16)
+
+const maxChangedObjectsForIO = 64
+const maxCandidateBlksForIO = 32
+
+func shouldBailoutOnChangedObjects(cnt int) bool {
+	return cnt > maxChangedObjectsForIO
+}
+
+func shouldBailoutOnCandidateBlocks(cnt int) bool {
+	return cnt > maxCandidateBlksForIO
+}
+
 var _ engine.Relation = new(txnTable)
 
 func newTxnTable(
@@ -2484,6 +2499,16 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+
+	// Under high-concurrency workloads (e.g., 1000 TPCC terminals), many transactions
+	// write to the same table, producing many changed objects. Only inserted objects
+	// (cObjs) can contain conflicting PKs; deleted objects are excluded from the count
+	// since they don't contribute to PK conflict I/O.
+	if shouldBailoutOnChangedObjects(len(cObjs)) {
+		v2.TxnPKChangeCheckBailoutCounter.Inc()
+		return true, nil
+	}
+
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
@@ -2592,6 +2617,13 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 			return inner(&cacheVectors[0])
 		}
+	}
+
+	// If too many candidate blocks, conservatively return true to avoid excessive
+	// concurrent block reads that cause mpool explosion under high concurrency.
+	if shouldBailoutOnCandidateBlocks(len(candidateBlks)) {
+		v2.TxnPKChangeCheckBailoutCounter.Inc()
+		return true, nil
 	}
 
 	cacheVectors := containers.NewVectors(1)
