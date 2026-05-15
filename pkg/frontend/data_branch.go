@@ -1800,6 +1800,8 @@ func getTablesCreationCommitTS(
 	snapshot []types.TS,
 ) ([]types.TS, error) {
 	txnSnap := types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	dbLowerBounds := make(map[dbCreatedTimeLowerBoundKey]types.TS)
+	tableCTS := make(map[tableCreationCommitTSKey]types.TS)
 
 	snapFor := func(idx int) types.TS {
 		if idx < len(snapshot) && !snapshot[idx].IsEmpty() {
@@ -1808,21 +1810,35 @@ func getTablesCreationCommitTS(
 		return txnSnap
 	}
 
-	resolve := func(tableID uint64, snap types.TS) (types.TS, error) {
+	resolve := func(targetRel engine.Relation, snap types.TS) (types.TS, error) {
 		totalStart := time.Now()
-		collectStart := time.Now()
-		var rel engine.Relation
-		switch tableID {
-		case tar.GetTableID(ctx):
-			rel = tar
-		case base.GetTableID(ctx):
-			rel = base
+		tableID := targetRel.GetTableID(ctx)
+		lowerBound, err := getDatabaseCreatedTimeLowerBound(
+			ctx, ses, targetRel, snap, dbLowerBounds,
+		)
+		if err != nil {
+			return types.TS{}, err
 		}
-		ts, err := getTableCreationCommitTSByCollectChanges(ctx, ses, rel, tableID, snap)
+
+		key := tableCreationCommitTSKey{
+			tableID:    tableID,
+			snapshot:   snap,
+			lowerBound: lowerBound,
+		}
+		if ts, ok := tableCTS[key]; ok {
+			return ts, nil
+		}
+
+		collectStart := time.Now()
+		ts, err := getTableCreationCommitTSByCollectChanges(
+			ctx, ses, targetRel, tableID, snap, lowerBound,
+		)
 		if err == nil {
+			tableCTS[key] = ts
 			logutil.Info("DataBranch-TableCTS-Resolve-Done",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
+				zap.String("lower-bound", lowerBound.ToString()),
 				zap.String("path", "CollectChanges"),
 				zap.String("commit-ts", ts.ToString()),
 				zap.Duration("collectchanges-cost", time.Since(collectStart)),
@@ -1834,6 +1850,7 @@ func getTablesCreationCommitTS(
 		logutil.Warn("getTablesCreationCommitTS: CollectChanges failed, trying Reader fallback",
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snap.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
 			zap.Error(err),
 		)
@@ -1844,6 +1861,7 @@ func getTablesCreationCommitTS(
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
 				zap.String("path", "ReaderFallback"),
+				zap.String("lower-bound", lowerBound.ToString()),
 				zap.Duration("collectchanges-cost", collectCost),
 				zap.Duration("reader-cost", time.Since(readerStart)),
 				zap.Duration("total-cost", time.Since(totalStart)),
@@ -1856,22 +1874,157 @@ func getTablesCreationCommitTS(
 			zap.String("snapshot", snap.ToString()),
 			zap.String("path", "ReaderFallback"),
 			zap.String("commit-ts", ts.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Duration("collectchanges-cost", collectCost),
 			zap.Duration("reader-cost", time.Since(readerStart)),
 			zap.Duration("total-cost", time.Since(totalStart)),
 		)
+		tableCTS[key] = ts
 		return ts, nil
 	}
 
-	tarCTS, err := resolve(tar.GetTableID(ctx), snapFor(0))
+	tarCTS, err := resolve(tar, snapFor(0))
 	if err != nil {
 		return nil, err
 	}
-	baseCTS, err := resolve(base.GetTableID(ctx), snapFor(1))
+	baseCTS, err := resolve(base, snapFor(1))
 	if err != nil {
 		return nil, err
 	}
 	return []types.TS{tarCTS, baseCTS}, nil
+}
+
+type dbCreatedTimeLowerBoundKey struct {
+	accountID  uint32
+	databaseID uint64
+	database   string
+	snapshot   types.TS
+}
+
+type tableCreationCommitTSKey struct {
+	tableID    uint64
+	snapshot   types.TS
+	lowerBound types.TS
+}
+
+func getDatabaseCreatedTimeLowerBound(
+	ctx context.Context,
+	ses *Session,
+	targetRel engine.Relation,
+	snapshotTS types.TS,
+	cache map[dbCreatedTimeLowerBoundKey]types.TS,
+) (types.TS, error) {
+	if targetRel == nil {
+		return types.TS{}, moerr.NewInternalErrorNoCtx(
+			"getDatabaseCreatedTimeLowerBound: missing target relation",
+		)
+	}
+	targetDef := targetRel.GetTableDef(ctx)
+	if targetDef == nil || targetDef.DbName == "" {
+		return types.TS{}, moerr.NewInternalErrorNoCtx(
+			"getDatabaseCreatedTimeLowerBound: missing target database name",
+		)
+	}
+	accountID := ses.GetAccountId()
+	databaseID := targetRel.GetDBID(ctx)
+	key := dbCreatedTimeLowerBoundKey{
+		accountID:  accountID,
+		databaseID: databaseID,
+		database:   targetDef.DbName,
+		snapshot:   snapshotTS,
+	}
+	if cache != nil {
+		if lowerBound, ok := cache[key]; ok {
+			return lowerBound, nil
+		}
+	}
+
+	lowerBound, err := getDatabaseCreatedTimeLowerBoundByPK(
+		ctx, ses, accountID, databaseID, targetDef.DbName, snapshotTS,
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if cache != nil {
+		cache[key] = lowerBound
+	}
+	return lowerBound, nil
+}
+
+func getDatabaseCreatedTimeLowerBoundByPK(
+	ctx context.Context,
+	ses *Session,
+	accountID uint32,
+	databaseID uint64,
+	databaseName string,
+	snapshotTS types.TS,
+) (types.TS, error) {
+	mp := ses.proc.Mp()
+
+	cpKey := packMoDatabaseCPKey(accountID, databaseName)
+	filterVec := vector.NewVec(types.T_varchar.ToType())
+	defer filterVec.Free(mp)
+	if err := vector.AppendBytes(filterVec, cpKey, false, mp); err != nil {
+		return types.TS{}, err
+	}
+
+	attrs := []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}
+	colTypes := []types.Type{types.T_uint64.ToType(), types.T_timestamp.ToType()}
+	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+
+	found := false
+	result := types.TS{}
+
+	err := scanSnapshotRelationByID(
+		ctx, "database-created-time-lower-bound", ses,
+		catalog.MO_DATABASE_ID, snapshotTS,
+		attrs, colTypes, filterExpr, 1,
+		func(bat *batch.Batch) error {
+			dbIDs := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+			createdTimes := vector.MustFixedColWithTypeCheck[types.Timestamp](bat.Vecs[1])
+			for i, dbID := range dbIDs {
+				if dbID != databaseID || bat.Vecs[1].IsNull(uint64(i)) {
+					continue
+				}
+				lowerBound, err := databaseCreatedTimeToCollectLowerBound(createdTimes[i])
+				if err != nil {
+					return err
+				}
+				if !found || lowerBound.LT(&result) {
+					result = lowerBound
+				}
+				found = true
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return types.TS{}, err
+	}
+	if !found {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"cannot find database %d (%s) created_time at snapshot %s",
+			databaseID, databaseName, snapshotTS.ToString(),
+		)
+	}
+	logutil.Info("DataBranch-DBCreatedTime-LowerBound-Done",
+		zap.Uint32("account-id", accountID),
+		zap.Uint64("database-id", databaseID),
+		zap.String("database-name", databaseName),
+		zap.String("snapshot", snapshotTS.ToString()),
+		zap.String("lower-bound", result.ToString()),
+	)
+	return result, nil
+}
+
+func databaseCreatedTimeToCollectLowerBound(createdTime types.Timestamp) (types.TS, error) {
+	unixMicros := int64(createdTime) - types.GetUnixEpochSecs()
+	if unixMicros <= 0 {
+		return types.TS{}, moerr.NewInternalErrorNoCtxf(
+			"invalid database created_time %s", createdTime.String(),
+		)
+	}
+	return types.BuildTS(unixMicros*int64(time.Microsecond), 0).Prev(), nil
 }
 
 // getTableCreationCommitTSByID scans the mo_tables snapshot at the given
@@ -1929,14 +2082,16 @@ func getTableCreationCommitTSByID(
 }
 
 // getTableCreationCommitTSByCollectChanges uses CollectChanges on mo_tables
-// to find the creation commit_ts.  BuildTS(0,1) forces the partition-state
-// path which preserves real per-row commit timestamps.
+// to find the creation commit_ts.  The caller supplies a lower bound derived
+// from the owning database's created_time to avoid scanning the whole catalog
+// history from BuildTS(0,1).
 func getTableCreationCommitTSByCollectChanges(
 	ctx context.Context,
 	ses *Session,
 	targetRel engine.Relation,
 	tableID uint64,
 	snapshotTS types.TS,
+	lowerBound types.TS,
 ) (types.TS, error) {
 	storage := ses.GetTxnHandler().GetStorage()
 	txnOp := ses.GetTxnHandler().GetTxn()
@@ -1957,6 +2112,7 @@ func getTableCreationCommitTSByCollectChanges(
 		fields := []zap.Field{
 			zap.Uint64("table-id", tableID),
 			zap.String("snapshot", snapshotTS.ToString()),
+			zap.String("lower-bound", lowerBound.ToString()),
 			zap.Bool("found", found),
 			zap.Bool("has-pk-filter", pkFilter != nil),
 			zap.Int("data-batch-cnt", dataBatchCnt),
@@ -1990,7 +2146,7 @@ func getTableCreationCommitTSByCollectChanges(
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
 
-	handle, err := rel.CollectChanges(ctx, types.BuildTS(0, 1), snapshotTS, true, mp)
+	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {
 		return types.TS{}, err
 	}
@@ -2083,12 +2239,7 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 		return nil, "missing-mo-tables-cpkey-col", nil
 	}
 
-	packer := types.NewPacker()
-	defer packer.Close()
-	packer.EncodeUint32(accountID)
-	packer.EncodeStringType([]byte(targetDef.DbName))
-	packer.EncodeStringType([]byte(tableName))
-	packedKey := append([]byte(nil), packer.Bytes()...)
+	packedKey := packMoTablesCPKey(accountID, targetDef.DbName, tableName)
 	replayPacker := types.NewPacker()
 	defer replayPacker.Close()
 	replayKey := append([]byte(nil), readutil.EncodePrimaryKey(packedKey, replayPacker)...)
@@ -2108,6 +2259,24 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 		Keys: [][]byte{replayKey},
 	}
 	return pkFilter, "", nil
+}
+
+func packMoDatabaseCPKey(accountID uint32, databaseName string) []byte {
+	return packCatalogCPKey(accountID, databaseName)
+}
+
+func packMoTablesCPKey(accountID uint32, databaseName, tableName string) []byte {
+	return packCatalogCPKey(accountID, databaseName, tableName)
+}
+
+func packCatalogCPKey(accountID uint32, values ...string) []byte {
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(accountID)
+	for _, value := range values {
+		packer.EncodeStringType([]byte(value))
+	}
+	return append([]byte(nil), packer.Bytes()...)
 }
 
 // locateColumnsInChangeBatch finds rel_id and commit_ts column indices

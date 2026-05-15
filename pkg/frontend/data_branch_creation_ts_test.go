@@ -81,6 +81,26 @@ func TestTryBuildCurrentMoTablesCPKeyFilter(t *testing.T) {
 	require.Equal(t, packer.Bytes(), zm.GetMaxBuf())
 }
 
+func TestPackMoDatabaseCPKey(t *testing.T) {
+	packedKey := packMoDatabaseCPKey(42, "bench_db")
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	packer.EncodeUint32(42)
+	packer.EncodeStringType([]byte("bench_db"))
+
+	require.Equal(t, packer.Bytes(), packedKey)
+}
+
+func TestDatabaseCreatedTimeToCollectLowerBound(t *testing.T) {
+	createdTime := types.UnixMicroToTimestamp(1234567)
+
+	lowerBound, err := databaseCreatedTimeToCollectLowerBound(createdTime)
+	require.NoError(t, err)
+
+	require.Equal(t, types.BuildTS(1234567*1000, 0).Prev(), lowerBound)
+}
+
 func TestTryBuildCurrentMoTablesCPKeyFilterMissingTargetDBNameFallsBack(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
