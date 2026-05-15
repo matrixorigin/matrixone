@@ -257,7 +257,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			case tree.Int:
 				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
