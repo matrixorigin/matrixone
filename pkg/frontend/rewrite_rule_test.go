@@ -605,6 +605,80 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 	}
 }
 
+func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	ses.ruleCache = map[string]string{"db1.t1": "select old_a from db1.t1"}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
+	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
+
+	var deleted, inserted bool
+	for _, sql := range bh.executedSQLs {
+		lowerSQL := strings.ToLower(sql)
+		if strings.Contains(lowerSQL, "delete from mo_catalog.mo_role_rule") &&
+			strings.Contains(lowerSQL, "role_id = 10") &&
+			strings.Contains(lowerSQL, "'db1.t1'") {
+			deleted = true
+		}
+		if strings.Contains(lowerSQL, "insert into mo_catalog.mo_role_rule") &&
+			strings.Contains(lowerSQL, "10") &&
+			strings.Contains(lowerSQL, "'db1.t1'") &&
+			strings.Contains(lowerSQL, "'select a from db1.t1'") {
+			inserted = true
+		}
+	}
+	require.True(t, deleted)
+	require.True(t, inserted)
+
+	ses.ruleCacheMu.RLock()
+	defer ses.ruleCacheMu.RUnlock()
+	require.Nil(t, ses.ruleCache)
+}
+
+func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "delete from db1.t1 where a = 1", "db1", "t1")
+	err = handleAlterRoleAddRule(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only accept SELECT-like statements")
+
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
+		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
+	}
+}
+
 func TestMergeRewriteRules(t *testing.T) {
 	ctx := context.Background()
 
