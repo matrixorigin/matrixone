@@ -36,6 +36,8 @@ type SeekFirstBlockOp func(objectio.ObjectDataMeta) int
 type BlockFilterOp func(int, objectio.BlockObject, objectio.BloomFilter) (bool, bool, error)
 type LoadOpFactory func(fileservice.FileService) LoadOp
 
+const maxPKInBloomFilterKeys = 10
+
 var loadMetadataOnlyOpFactory LoadOpFactory
 var loadMetadataAndBFOpFactory LoadOpFactory
 
@@ -827,7 +829,7 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().PrefixIn(vec), nil
 				}
 			}
-			highSelectivityHint = isPK && vec.Length() <= 10
+			highSelectivityHint = isPK && vec.Length() <= maxPKInBloomFilterKeys
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -929,13 +931,14 @@ func CompileFilterExpr(
 					return obj.SortKeyZoneMap().AnyIn(vec), nil
 				}
 			}
-			if isPK {
+			useBloomFilter := isPK && vec.Length() <= maxPKInBloomFilterKeys
+			if useBloomFilter {
 				loadOp = loadMetadataAndBFOpFactory(fs)
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
-			highSelectivityHint = isPK && vec.Length() <= 10
+			highSelectivityHint = useBloomFilter
 
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -959,7 +962,7 @@ func CompileFilterExpr(
 				if !zm.AnyIn(vec) {
 					return false, false, nil
 				}
-				if isPK {
+				if useBloomFilter {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
 					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {

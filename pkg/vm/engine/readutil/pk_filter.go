@@ -144,8 +144,9 @@ func ConstructBlockPKFilter(
 
 	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
 	var (
-		reusableSels   []int64
-		reusableExists map[int]bool
+		reusableSels       []int64
+		reusableCandidates []bool
+		reusableHits       []bool
 	)
 
 	bfVec := func(cacheVectors containers.Vectors) *vector.Vector {
@@ -209,44 +210,35 @@ func ConstructBlockPKFilter(
 				return offsets
 			}
 
-			var exists map[int]bool
-			var bfHits int
-
-			// Reuse exists map - use more efficient reallocation for large maps
-			if reusableExists == nil || rowCount > len(reusableExists)*2 {
-				reusableExists = make(map[int]bool, rowCount)
-			} else if len(reusableExists) > 0 {
-				// For small maps, clear by reallocating (more efficient than delete loop)
-				if len(reusableExists) < 100 {
-					// For small maps, use delete loop
-					for k := range reusableExists {
-						delete(reusableExists, k)
-					}
-				} else {
-					// For larger maps, reallocate is more efficient
-					reusableExists = make(map[int]bool, rowCount)
-				}
+			if cap(reusableCandidates) < rowCount {
+				reusableCandidates = make([]bool, rowCount)
+			} else {
+				reusableCandidates = reusableCandidates[:rowCount]
+				clear(reusableCandidates)
 			}
-			exists = reusableExists
+			if cap(reusableHits) < rowCount {
+				reusableHits = make([]bool, rowCount)
+			} else {
+				reusableHits = reusableHits[:rowCount]
+				clear(reusableHits)
+			}
 
 			// Test BloomFilter on vec, but only for rows that passed inner filter.
-			rowSet := make(map[int]bool, len(offsets))
 			for _, off := range offsets {
 				if int(off) >= 0 && int(off) < rowCount {
-					rowSet[int(off)] = true
+					reusableCandidates[int(off)] = true
 				}
 			}
 			bf.TestVector(vec, func(exist bool, isnull bool, row int) {
 				// Add strict boundary check to prevent index out of range
-				if exist && row >= 0 && row < rowCount && rowSet[row] {
-					exists[row] = true
-					bfHits++
+				if exist && row >= 0 && row < rowCount && reusableCandidates[row] {
+					reusableHits[row] = true
 				}
 			})
 
 			out := offsets[:0]
 			for _, off := range offsets {
-				if exists[int(off)] {
+				if reusableHits[int(off)] {
 					out = append(out, off)
 				}
 			}
@@ -259,10 +251,8 @@ func ConstructBlockPKFilter(
 	readFilter.Valid = true
 	// Set cleanup function
 	readFilter.Cleanup = func() {
-		// Clear reusableExists map by reallocating for better memory efficiency
-		if reusableExists != nil {
-			reusableExists = nil
-		}
+		reusableCandidates = nil
+		reusableHits = nil
 	}
 
 	readFilter.Valid = true

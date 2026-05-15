@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -2807,4 +2808,99 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
 	}
+}
+
+func TestCompileFilterExpr_PKLargerInSkipsBloomFilterLoad(t *testing.T) {
+	origMetaOnly := loadMetadataOnlyOpFactory
+	origMetaAndBF := loadMetadataAndBFOpFactory
+	defer func() {
+		loadMetadataOnlyOpFactory = origMetaOnly
+		loadMetadataAndBFOpFactory = origMetaAndBF
+	}()
+
+	var usedMetaOnly, usedMetaAndBF bool
+	loadMetadataOnlyOpFactory = func(fileservice.FileService) LoadOp {
+		return func(
+			context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
+		) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+			usedMetaOnly = true
+			return nil, nil, nil
+		}
+	}
+	loadMetadataAndBFOpFactory = func(fileservice.FileService) LoadOp {
+		return func(
+			context.Context, *objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
+		) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+			usedMetaAndBF = true
+			return nil, nil, nil
+		}
+	}
+
+	tableDef := &plan.TableDef{
+		Name:          "t",
+		Name2ColIndex: map[string]int32{"pk": 0},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"pk"},
+			PkeyColName: "pk",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:    "pk",
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_int64)},
+			},
+		},
+	}
+	m := mpool.MustNew(t.Name())
+	vals := make([]int64, maxPKInBloomFilterKeys+1)
+	for i := range vals {
+		vals[i] = int64(i)
+	}
+	expr := MakeFunctionExprForTest("in", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64, "pk"),
+		plan2.MakePlan2Int64VecExprWithType(m, vals...),
+	})
+
+	_, loadOp, _, _, _, canCompile, highSelectivityHint := CompileFilterExpr(expr, tableDef, nil)
+	require.True(t, canCompile)
+	require.NotNil(t, loadOp)
+	require.False(t, highSelectivityHint)
+
+	_, _, err := loadOp(context.Background(), nil, nil, nil)
+	require.NoError(t, err)
+	require.True(t, usedMetaOnly)
+	require.False(t, usedMetaAndBF)
+}
+
+func TestConstructBlockPKFilterIntersectsLargePrefixHitsWithoutMaps(t *testing.T) {
+	m := mpool.MustNew(t.Name())
+	rowCount := objectio.BlockMaxRows
+	pkVec := vector.NewVec(types.T_varchar.ToType())
+	defer pkVec.Free(m)
+	for i := 0; i < rowCount; i++ {
+		require.NoError(t, vector.AppendBytes(pkVec, []byte(fmt.Sprintf("warehouse-1-%05d", i)), false, m))
+	}
+
+	bf := bloomfilter.NewCBloomFilterWithProbability(int64(rowCount), 0.00001)
+	defer bf.Free()
+	bf.Add([]byte("warehouse-1-00001"))
+	bf.Add([]byte("warehouse-1-01000"))
+	bf.Add([]byte("warehouse-1-08191"))
+
+	filter, err := ConstructBlockPKFilter(false, BasePKFilter{
+		Valid: true,
+		Op:    function.PREFIX_EQ,
+		Oid:   types.T_varchar,
+		LB:    []byte("warehouse-1-"),
+	}, bf)
+	require.NoError(t, err)
+	require.True(t, filter.Valid)
+	require.NotNil(t, filter.SortedSearchFunc)
+
+	offsets := filter.SortedSearchFunc(containers.Vectors{*pkVec})
+	require.Contains(t, offsets, int64(1))
+	require.Contains(t, offsets, int64(1000))
+	require.Contains(t, offsets, int64(8191))
+	require.Less(t, len(offsets), rowCount)
 }
