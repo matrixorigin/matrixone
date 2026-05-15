@@ -385,3 +385,46 @@ select * from src where match(body, title) against('+教學指引 +短篇小說'
 drop table src;
 
 set ft_relevancy_algorithm="TF-IDF";
+
+-- ============================================================
+-- Chinese phrase queries in BOOLEAN MODE.
+-- The phrase body must be re-tokenized through gojieba so it matches the
+-- per-word rows the index stores. Pre-fix, an unspaced Chinese phrase
+-- collapsed to a single TEXT pattern and never matched any row.
+-- COUNT is used so the result is independent of internal join order.
+-- ============================================================
+drop table if exists srcph;
+create table srcph (id int primary key, body text, fulltext (body) with parser gojieba);
+insert into srcph values
+(1, '我来到北京清华大学'),
+(2, '北京清华大学是一所大学'),
+(3, '我来到上海'),
+(4, '清华大学很有名');
+
+-- Two-token phrase "我来到" (jieba: 我, 来到) — matches docs 1 and 3.
+select count(*) from srcph where match(body) against('"我来到"' in boolean mode);
+
+-- Three-token phrase "我来到北京" (jieba: 我, 来到, 北京) — only doc 1.
+select count(*) from srcph where match(body) against('"我来到北京"' in boolean mode);
+
+-- Single-token phrase "清华大学" — matches docs 1, 2, 4.
+select count(*) from srcph where match(body) against('"清华大学"' in boolean mode);
+
+-- Phrase that doesn't appear as a contiguous jieba-token run anywhere.
+select count(*) from srcph where match(body) against('"上海清华大学"' in boolean mode);
+
+drop table srcph;
+
+-- ============================================================
+-- fulltext_index_tokenize(...) with parser=gojieba.
+-- Direct table function call: the second arg `23` is the pkType code for
+-- bigint (matrixone types.T_int64). Verifies the build-time path produces
+-- jieba-segmented words plus the trailing __DocLen marker (5 rows total
+-- for "我来到北京清华大学": 我, 来到, 北京, 清华大学, __DocLen).
+-- ============================================================
+select count(*) from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '我来到北京清华大学'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+

@@ -471,3 +471,30 @@ id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
 drop table src;
 set ft_relevancy_algorithm="TF-IDF";
+drop table if exists srcph;
+create table srcph (id int primary key, body text, fulltext (body) with parser gojieba);
+insert into srcph values
+(1, '我来到北京清华大学'),
+(2, '北京清华大学是一所大学'),
+(3, '我来到上海'),
+(4, '清华大学很有名');
+select count(*) from srcph where match(body) against('"我来到"' in boolean mode);
+count(*)
+2
+select count(*) from srcph where match(body) against('"我来到北京"' in boolean mode);
+count(*)
+1
+select count(*) from srcph where match(body) against('"清华大学"' in boolean mode);
+count(*)
+3
+select count(*) from srcph where match(body) against('"上海清华大学"' in boolean mode);
+count(*)
+0
+drop table srcph;
+select count(*) from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '我来到北京清华大学'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+count(*)
+5

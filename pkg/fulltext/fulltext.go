@@ -611,7 +611,7 @@ func IsSubExpression(pattern string) bool {
 }
 
 // first character is a operator
-func CreatePattern(pattern string) (*Pattern, error) {
+func CreatePattern(pattern string, parser string) (*Pattern, error) {
 	if len(pattern) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("pattern is empty")
 	}
@@ -626,7 +626,7 @@ func CreatePattern(pattern string) (*Pattern, error) {
 	if op == '(' && lastop == ')' {
 		word = strings.TrimSpace(string(runeSlice[1 : strlen-1]))
 
-		p, err := ParsePatternInBooleanMode(word)
+		p, err := ParsePatternInBooleanMode(word, parser)
 		if err != nil {
 			return nil, err
 		}
@@ -644,14 +644,26 @@ func CreatePattern(pattern string) (*Pattern, error) {
 
 	// check sub-expression
 	word = string(runeSlice[1:])
-	p, err := ParsePatternInBooleanMode(word)
+	p, err := ParsePatternInBooleanMode(word, parser)
 	if err != nil {
 		return nil, err
 	}
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
-func ParsePhrase(pattern string) ([]*Pattern, error) {
+// ParsePhrase splits a quoted-phrase body into TEXT children for a PHRASE
+// node. With parser="gojieba" the phrase is segmented through jieba so the
+// children match how the index stores Chinese words; otherwise the legacy
+// whitespace split is used.
+//
+// Children carry BytePos as Position so SqlPhrase's positional JOIN
+// (kw[i].pos - kw[0].pos = ps[i].Position - ps[0].Position) is consistent
+// with what fulltext_index_tokenize writes into the index.
+func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
+	if parser == "gojieba" {
+		return parsePhraseJieba(pattern)
+	}
+
 	// phrase here
 	offset := int32(0)
 	isspace := false
@@ -687,8 +699,37 @@ func ParsePhrase(pattern string) ([]*Pattern, error) {
 
 }
 
+// parsePhraseJieba tokenizes a quoted-phrase body with gojieba and builds
+// PHRASE children whose Position matches the BytePos the index-build path
+// (fulltext_index_tokenize) recorded. HMM is left off to match the
+// dictionary-only segmentation used at index build.
+func parsePhraseJieba(pattern string) ([]*Pattern, error) {
+	tok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Pattern, 0, 8)
+	for t, err := range tok.Tokenize([]byte(pattern)) {
+		if err != nil {
+			return nil, err
+		}
+		slen := t.TokenBytes[0]
+		word := string(t.TokenBytes[1 : slen+1])
+		children = append(children, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
+	}
+	if len(children) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string converted to empty pattern")
+	}
+	ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
+	idx := int32(0)
+	for _, p := range ret {
+		assignPatternIndex(p, &idx)
+	}
+	return ret, nil
+}
+
 // Parse the search string in boolean mode
-func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
+func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error) {
 
 	if strings.HasPrefix(pattern, "\"") && strings.HasSuffix(pattern, "\"") {
 		// phrase here
@@ -697,7 +738,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 			return nil, moerr.NewInternalErrorNoCtx("phrase is empty string")
 		}
 
-		return ParsePhrase(ss)
+		return ParsePhrase(ss, parser)
 	}
 
 	runeSlice := []rune(pattern)
@@ -726,7 +767,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				if bracket == 0 {
 					// found ()
 					end = i
-					p, err := CreatePattern(string(runeSlice[offset : end+1]))
+					p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
 					if err != nil {
 						return nil, err
 					}
@@ -744,7 +785,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 				// something here
 				isspace = true
 
-				p, err := CreatePattern(string(runeSlice[offset : end+1]))
+				p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
 				if err != nil {
 					return nil, err
 				}
@@ -759,7 +800,7 @@ func ParsePatternInBooleanMode(pattern string) ([]*Pattern, error) {
 			} else {
 				end = i
 				if i == len(runeSlice)-1 {
-					p, err := CreatePattern(string(runeSlice[offset : end+1]))
+					p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
 					if err != nil {
 						return nil, err
 					}
@@ -1018,7 +1059,7 @@ func ParsePattern(pattern string, mode int64, parser string) ([]*Pattern, error)
 
 		lowerp := strings.ToLower(pattern)
 
-		ps, err := ParsePatternInBooleanMode(lowerp)
+		ps, err := ParsePatternInBooleanMode(lowerp, parser)
 		if err != nil {
 			return nil, err
 		}
