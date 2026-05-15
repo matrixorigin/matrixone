@@ -603,6 +603,29 @@ func TestLockRetryBacksOffUnderHighMemoryPressure(t *testing.T) {
 	wait, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
 	require.True(t, ok)
 	require.Equal(t, lockRetryMemoryBackoff, wait)
+	require.True(t, state.useMemoryRetrySlot)
+}
+
+func TestLockRetryHighMemoryUsesBoundedQueue(t *testing.T) {
+	oldSlots := lockRetryHighMemorySlots
+	defer func() {
+		lockRetryHighMemorySlots = oldSlots
+	}()
+
+	lockRetryHighMemorySlots = make(chan struct{}, 1)
+	lockRetryHighMemorySlots <- struct{}{}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		<-lockRetryHighMemorySlots
+	}()
+
+	state := lockRetryState{
+		backendRetryDeadline: time.Now().Add(time.Second),
+		useMemoryRetrySlot:   true,
+	}
+	start := time.Now()
+	require.True(t, waitToRetryLock(context.Background(), time.Millisecond, &state))
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
 }
 
 func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
