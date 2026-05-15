@@ -375,9 +375,14 @@ func (d *DiskCache) Read(
 				allocator: allocator,
 			}
 		}
+		readOffset, readSize := int64(0), entry.Size
+		if diskPath == d.pathForFile(path.File) {
+			readOffset = entry.Offset
+		}
 		if err := entry.ReadFromOSFile(ctx, file, allocator); err != nil {
 			return err
 		}
+		fadviseDontNeed(file, readOffset, readSize)
 
 		entry.done = true
 		entry.fromCache = d
@@ -549,6 +554,7 @@ func (d *DiskCache) writeFile(
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	fadviseDontNeed(f, 0, 0)
 
 	stat, err = f.Stat()
 	if err != nil {
