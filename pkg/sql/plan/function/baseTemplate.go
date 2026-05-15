@@ -1386,9 +1386,7 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 		return false
 	}
-
-	stmtType := stmtProfile.GetStmtType()
-	queryType := stmtProfile.GetQueryType()
+	stmtType, queryType, ignore := stmtProfile.GetDivByZeroRuntimeProfile()
 	stmtTypeUpper := strings.ToUpper(strings.TrimSpace(stmtType))
 	queryTypeUpper := strings.ToUpper(strings.TrimSpace(queryType))
 
@@ -1422,11 +1420,16 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
 	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
 
-	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled
-	// Note: INSERT IGNORE is handled at a higher level and won't reach here with errors
+	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
+	// INSERT IGNORE is handled through the statement ignore flag.
 	if hasStrictMode && hasErrorForDivByZero {
-		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
-		return true
+		if ignore {
+			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+			return false
+		} else {
+			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+			return true
+		}
 	}
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
