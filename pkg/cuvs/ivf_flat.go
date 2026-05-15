@@ -77,6 +77,9 @@ func (gi *GpuIvfFlat[T]) SetDynbConservativeDispatch(enable bool) error {
 
 // NewGpuIvfFlat creates a new GpuIvfFlat instance from a dataset.
 // ids may be nil to use internal sequential IDs (0..count-1).
+// For Sharded mode the shard count is len(devices) (one shard per GPU);
+// to use fewer shards than the GPUs you have available, just pass a
+// shorter `devices` slice.
 func NewGpuIvfFlat[T VectorType](dataset []T, count uint64, dimension uint32, metric DistanceType,
 	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode, ids []int64) (*GpuIvfFlat[T], error) {
 	if len(devices) == 0 {
@@ -193,10 +196,19 @@ func NewGpuIvfFlatFromFile[T VectorType](filename string, dimension uint32, metr
 }
 
 // NewGpuIvfFlatFromDataDirectory loads a GpuIvfFlat index from a directory written by save_dir.
+// For Sharded loads we peek manifest.json to learn the saved shard count and
+// truncate `devices` to that count, so the C++ worker only spawns threads /
+// RMM pools on devices that will actually host a shard.
 func NewGpuIvfFlatFromDataDirectory[T VectorType](dir string, dimension uint32, metric DistanceType,
 	bp IvfFlatBuildParams, devices []int, nthread uint32, mode DistributionMode) (*GpuIvfFlat[T], error) {
 	if len(devices) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("at least one device must be specified")
+	}
+
+	var err error
+	devices, err = devicesForLoad(devices, mode, dir)
+	if err != nil {
+		return nil, err
 	}
 
 	qtype := GetQuantization[T]()

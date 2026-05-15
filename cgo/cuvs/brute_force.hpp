@@ -401,7 +401,24 @@ public:
     // worker lambda. When prebuilt is null we use the legacy deletes-only
     // path (no user filter is configurable through that entry point).
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const brute_force_search_params_t& /*sp*/, const std::string& /*preds_json*/ = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // Snapshot index pointer and counters under a brief shared_lock; the
+        // GPU work below must run unlocked. brute_force is SINGLE_GPU only,
+        // so index_ is stable after build; count and deleted_count_ can move
+        // concurrently with delete_id() — we snapshot once and any in-flight
+        // delete lands in the next search.
+        const brute_force_index* local_index = nullptr;
+        uint64_t local_count = 0;
+        uint64_t local_deleted_count = 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || !this->index_) {
+                throw std::runtime_error("search_internal: index not loaded");
+            }
+            local_index = this->index_.get();
+            local_count = this->count;
+            local_deleted_count = this->deleted_count_;
+        }
+
         auto res = handle.get_raft_resources();
 
         search_result_t search_res;
@@ -423,25 +440,25 @@ public:
         std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
         if (prebuilt) {
             if (prebuilt->has_filter) {
-                bs_ptr = this->upload_host_mask(handle, prebuilt->mask, this->count);
+                bs_ptr = this->upload_host_mask(handle, prebuilt->mask, local_count);
             } else if (prebuilt->deletes_only) {
-                bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, this->count);
+                bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, local_count);
             }
-        } else if (this->deleted_count_ > 0) {
+        } else if (local_deleted_count > 0) {
             // Legacy deletes-only path — same as acquire_delete_bitset_device
             // for the non-SHARDED case, but kept inline to preserve the
             // pre-optimization semantics for callers that don't pass prebuilt.
-            bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, this->count);
+            bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, local_count);
         }
 
         cuvs::neighbors::brute_force::search_params bf_sp;
         if (bs_ptr) {
             auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *local_index,
                                                 raft::make_const_mdspan(queries_device.view()),
                                                 neighbors_device.view(), distances_device.view(), filter);
         } else {
-            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *local_index,
                                                 raft::make_const_mdspan(queries_device.view()),
                                                 neighbors_device.view(), distances_device.view());
         }
@@ -520,7 +537,20 @@ public:
     // semantics here (off-worker CPU mask eval, skip queries-H2D sync_stream
     // when prebuilt is non-null).
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/, uint32_t limit, const brute_force_search_params_t& /*sp*/, const std::string& /*preds_json*/ = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // Same snapshot pattern as search_internal — see comment there.
+        const brute_force_index* local_index = nullptr;
+        uint64_t local_count = 0;
+        uint64_t local_deleted_count = 0;
+        {
+            std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_ || !this->index_) {
+                throw std::runtime_error("search_float_internal: index not loaded");
+            }
+            local_index = this->index_.get();
+            local_count = this->count;
+            local_deleted_count = this->deleted_count_;
+        }
+
         auto res = handle.get_raft_resources();
 
         auto q_dev_t = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
@@ -556,22 +586,22 @@ public:
         std::shared_ptr<raft::core::bitset<uint32_t, int64_t>> bs_ptr;
         if (prebuilt) {
             if (prebuilt->has_filter) {
-                bs_ptr = this->upload_host_mask(handle, prebuilt->mask, this->count);
+                bs_ptr = this->upload_host_mask(handle, prebuilt->mask, local_count);
             } else if (prebuilt->deletes_only) {
-                bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, this->count);
+                bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, local_count);
             }
-        } else if (this->deleted_count_ > 0) {
-            bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, this->count);
+        } else if (local_deleted_count > 0) {
+            bs_ptr = this->acquire_delete_bitset_device(handle, /*start_row=*/0, local_count);
         }
 
         cuvs::neighbors::brute_force::search_params bf_sp;
         if (bs_ptr) {
             auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
-            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *local_index,
                                                 raft::make_const_mdspan(q_dev_t.view()),
                                                 neighbors_device.view(), distances_device.view(), filter);
         } else {
-            cuvs::neighbors::brute_force::search(*res, bf_sp, *index_,
+            cuvs::neighbors::brute_force::search(*res, bf_sp, *local_index,
                                                 raft::make_const_mdspan(q_dev_t.view()),
                                                 neighbors_device.view(), distances_device.view());
         }

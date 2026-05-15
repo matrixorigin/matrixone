@@ -597,16 +597,10 @@ public:
     void extend_internal(raft_handle_wrapper_t& handle, const T* new_data, uint64_t n_rows,
                          const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
-        auto stream = raft::resource::get_cuda_stream(*res);
 
-        // Pool-bypass: extend's upload buffer is one-shot, freed on return — keep
-        // it off the per-device pool so its footprint doesn't pin the high-water mark.
-        rmm::device_uvector<T> new_vecs_storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+        auto new_vecs_storage = this->upload_T_matrix(handle, new_data, n_rows);
+        auto new_vecs_device  = raft::make_device_matrix_view<T, int64_t>(
             new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-        raft::copy(*res, new_vecs_device,
-                   raft::make_host_matrix_view<const T, int64_t>(new_data, n_rows, this->dimension));
 
         auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
         raft::copy(*res, ids_device.view(),
@@ -661,31 +655,10 @@ public:
     void extend_internal_float(raft_handle_wrapper_t& handle, const float* new_data, uint64_t n_rows,
                                const int64_t* seq_ids) {
         auto res = handle.get_raft_resources();
-        auto stream = raft::resource::get_cuda_stream(*res);
 
-        // Pool-bypass: transient extend buffers — see extend_internal.
-        rmm::device_uvector<T> new_vecs_storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-        auto new_vecs_device = raft::make_device_matrix_view<T, int64_t>(
+        auto new_vecs_storage = this->upload_float_matrix_as_T(handle, new_data, n_rows);
+        auto new_vecs_device  = raft::make_device_matrix_view<T, int64_t>(
             new_vecs_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-        if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, new_vecs_device,
-                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
-        } else {
-            rmm::device_uvector<float> new_vecs_float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
-            auto new_vecs_float = raft::make_device_matrix_view<float, int64_t>(
-                new_vecs_float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
-            raft::copy(*res, new_vecs_float,
-                       raft::make_host_matrix_view<const float, int64_t>(new_data, n_rows, this->dimension));
-            if constexpr (sizeof(T) == 1) {
-                if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained for extend_float");
-                this->quantizer_.template transform<T>(*res, new_vecs_float, new_vecs_device.data_handle(), true);
-            } else {
-                // T is half
-                raft::copy(*res, new_vecs_device, new_vecs_float);
-            }
-        }
 
         auto ids_device = raft::make_device_vector<int64_t, int64_t>(*res, (int64_t)n_rows);
         raft::copy(*res, ids_device.view(),
@@ -738,117 +711,19 @@ public:
     }
 
     void extend(const T* new_data, uint64_t n_rows, const int64_t* new_ids) {
-        uint32_t old_count;
-        {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_) throw std::runtime_error("extend: index not built");
-            if (!new_data || n_rows == 0) return;
-            old_count = this->count;
-        }
-
-        // Serialize concurrent extends — callers queue here rather than race
-        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
-
-        if (this->dist_mode == DistributionMode_REPLICATED) {
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
-            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
-                this->extend_internal(handle, new_data, n_rows, seq_ids.data());
-                return std::any();
+        if (!new_data) return;
+        this->run_extend("extend", n_rows, new_ids, /*support_sharded=*/true,
+            [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
+                this->extend_internal(handle, new_data, n, seq_ids);
             });
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            // Extend the last shard only. Compute shard-local seq_ids.
-            int num_shards = (int)this->devices_.size();
-            uint64_t last_shard_offset = 0;
-            for (int r = 0; r < num_shards - 1; ++r) last_shard_offset += this->shard_sizes_[r];
-            uint64_t old_shard_size = old_count - last_shard_offset;
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
-            size_t last_rank = (size_t)(num_shards - 1);
-            uint64_t job_id = this->worker->submit_to_rank(last_rank,
-                [&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal(handle, new_data, n_rows, seq_ids.data());
-                    return std::any();
-                });
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-        } else {
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
-            uint64_t job_id = this->worker->submit_main(
-                [&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal(handle, new_data, n_rows, seq_ids.data());
-                    return std::any();
-                });
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-        }
-        {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids_internal(new_ids, n_rows, (uint64_t)old_count);
-            if (this->dist_mode == DistributionMode_SHARDED) {
-                this->shard_sizes_.back() += n_rows;
-            }
-            this->count += n_rows;
-            this->current_offset_ += n_rows;
-        }
     }
 
     void extend_float(const float* new_data, uint64_t n_rows, const int64_t* new_ids) {
-        uint32_t old_count;
-        {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->is_loaded_) throw std::runtime_error("extend_float: index not built");
-            if (!new_data || n_rows == 0) return;
-            old_count = this->count;
-        }
-
-        // Serialize concurrent extends — callers queue here rather than race
-        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
-
-        if (this->dist_mode == DistributionMode_REPLICATED) {
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
-            this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
-                this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
-                return std::any();
+        if (!new_data) return;
+        this->run_extend("extend_float", n_rows, new_ids, /*support_sharded=*/true,
+            [&](raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n) {
+                this->extend_internal_float(handle, new_data, n, seq_ids);
             });
-        } else if (this->dist_mode == DistributionMode_SHARDED) {
-            // Extend the last shard only. Compute shard-local seq_ids.
-            int num_shards = (int)this->devices_.size();
-            uint64_t last_shard_offset = 0;
-            for (int r = 0; r < num_shards - 1; ++r) last_shard_offset += this->shard_sizes_[r];
-            uint64_t old_shard_size = old_count - last_shard_offset;
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_shard_size);
-            size_t last_rank = (size_t)(num_shards - 1);
-            uint64_t job_id = this->worker->submit_to_rank(last_rank,
-                [&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
-                    return std::any();
-                });
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-        } else {
-            std::vector<int64_t> seq_ids(n_rows);
-            std::iota(seq_ids.begin(), seq_ids.end(), (int64_t)old_count);
-            uint64_t job_id = this->worker->submit_main(
-                [&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal_float(handle, new_data, n_rows, seq_ids.data());
-                    return std::any();
-                });
-            auto result_wait = this->worker->wait(job_id).get();
-            if (result_wait.error) std::rethrow_exception(result_wait.error);
-        }
-        {
-            std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (new_ids) this->set_ids_internal(new_ids, n_rows, (uint64_t)old_count);
-            if (this->dist_mode == DistributionMode_SHARDED) {
-                this->shard_sizes_.back() += n_rows;
-            }
-            this->count += n_rows;
-            this->current_offset_ += n_rows;
-        }
     }
 
     // Sync T-typed entry — wraps search_async + search_wait. SHARDED inline
@@ -1657,7 +1532,8 @@ public:
                 this->dimension = static_cast<uint32_t>(local_idx->dim());
                 this->current_offset_ = this->count;
 
-                if (this->dist_mode == DistributionMode_SINGLE_GPU) {                    index_ = std::move(local_idx);
+                if (this->dist_mode == DistributionMode_SINGLE_GPU) {
+                    index_ = std::move(local_idx);
                 } else {
                     this->replicated_indices_[handle.get_device_id()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));

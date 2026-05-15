@@ -676,38 +676,17 @@ public:
             }
         }
 
-        if (this->dist_mode == DistributionMode_SHARDED)
-            throw std::runtime_error("extend: SHARDED mode not supported for CAGRA");
-
         if constexpr (std::is_same_v<T, half>) {
             throw std::runtime_error("CAGRA extend is not supported for float16 (half) by cuVS.");
         } else {
-            if (num_vectors == 0) return;
-
-            // Serialize concurrent extends — callers queue here rather than race
-            std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
-
-            if (this->dist_mode == DistributionMode_REPLICATED) {
-                this->worker->submit_all_devices([&](raft_handle_wrapper_t& handle) -> std::any {
-                    this->extend_internal(handle, additional_data, num_vectors);
-                    return std::any();
+            if (!additional_data) return;
+            // CAGRA does not pass seq_ids to extend_internal — cuVS CAGRA
+            // auto-indexes the new rows. The helper still generates seq_ids
+            // for set_ids_internal bookkeeping; the lambda discards them.
+            this->run_extend("extend", num_vectors, new_ids, /*support_sharded=*/false,
+                [&](raft_handle_wrapper_t& handle, const int64_t* /*seq_ids*/, uint64_t n) {
+                    this->extend_internal(handle, additional_data, n);
                 });
-            } else {
-                uint64_t job_id = this->worker->submit_main(
-                    [&](raft_handle_wrapper_t& handle) -> std::any {
-                        this->extend_internal(handle, additional_data, num_vectors);
-                        return std::any();
-                    });
-                auto result = this->worker->wait(job_id).get();
-                if (result.error) std::rethrow_exception(result.error);
-            }
-
-            {
-                std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                if (new_ids) this->set_ids_internal(new_ids, num_vectors, static_cast<uint64_t>(this->count));
-                this->count += num_vectors;
-                this->current_offset_ += num_vectors;
-            }
         }
     }
 
@@ -842,10 +821,10 @@ public:
     // worker lambda. When prebuilt is null we use the legacy build_search_bitset
     // entry point which keeps its own internal sync (host_mask is local there).
     search_result_t search_internal(raft_handle_wrapper_t& handle, const T* queries_data, uint64_t num_queries, uint32_t limit, const cagra_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        // std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // No top-level lock: the index pointer is taken from the per-handle
+        // cache or, on a miss, a narrow inner shared_lock below (see the
+        // replicated_indices_ lookup). GPU work must run unlocked.
         auto res = handle.get_raft_resources();
-
-        // std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         search_result_t search_res;
         search_res.distances.resize(num_queries * limit);
@@ -1116,10 +1095,10 @@ public:
     // the same stream).
     search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
                         uint32_t limit, const cagra_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
-        // std::shared_lock<std::shared_mutex> lock(this->mutex_);
+        // No top-level lock: see search_internal() above — pointer fetched
+        // via per-handle cache / narrow inner shared_lock, GPU work runs
+        // unlocked.
         auto res = handle.get_raft_resources();
-
-        // std::cout << "[DEBUG " << get_timestamp() << "] CAGRA search_float_internal: num_queries=" << num_queries << " limit=" << limit << " device=" << handle.get_device_id() << std::endl;
 
         // Step C: reuse the per-thread T-typed query workspace buffer.
         const size_t n_q_elems = static_cast<size_t>(num_queries) * this->dimension;

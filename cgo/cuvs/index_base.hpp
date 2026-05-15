@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <fstream>
+#include <numeric>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -1528,6 +1529,160 @@ protected:
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
     std::mutex extend_mutex_;
+
+    // Common scaffolding for extend / extend_float in IVF-Flat, IVF-PQ, and
+    // CAGRA. Caller supplies a dispatch_fn that performs the per-device GPU
+    // work via this->extend_internal[_float]. The helper owns the
+    // CLAUDE.md-rule-4 contract — `set_ids_internal`, `count`, and
+    // `current_offset_` are always updated together under the same
+    // unique_lock — and the dist_mode-specific worker dispatch:
+    //
+    //   - pre-extend `is_loaded_` / `n_rows == 0` check (unique_lock)
+    //   - snapshot `old_count`
+    //   - acquire `extend_mutex_` to serialize concurrent extends
+    //   - generate sequential IDs, dispatch per dist_mode
+    //   - post-extend `set_ids_internal` + count / current_offset_ /
+    //     shard_sizes_ update (unique_lock)
+    //
+    // dispatch_fn signature:
+    //   void(raft_handle_wrapper_t& handle, const int64_t* seq_ids, uint64_t n_rows)
+    //
+    // `support_sharded` is checked at runtime — CAGRA passes false because
+    // cuVS does not support SHARDED CAGRA extend. `fn_name` is used only to
+    // format error messages.
+    template <typename DispatchFn>
+    void run_extend(const char* fn_name,
+                    uint64_t n_rows,
+                    const IdT* new_ids,
+                    bool support_sharded,
+                    DispatchFn&& dispatch_fn) {
+        uint64_t old_count;
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (!this->is_loaded_) {
+                throw std::runtime_error(std::string(fn_name) + ": index not built");
+            }
+            if (n_rows == 0) return;
+            old_count = this->count;
+        }
+
+        // Serialize concurrent extends — callers queue here rather than race
+        std::lock_guard<std::mutex> extend_lock(this->extend_mutex_);
+
+        if (this->dist_mode == DistributionMode_REPLICATED) {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_count));
+            this->worker->submit_all_devices(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+        } else if (this->dist_mode == DistributionMode_SHARDED) {
+            if (!support_sharded) {
+                throw std::runtime_error(std::string(fn_name) +
+                                         ": SHARDED mode not supported");
+            }
+            // Extend the last shard only. Compute shard-local seq_ids.
+            const int num_shards = static_cast<int>(this->devices_.size());
+            uint64_t last_shard_offset = 0;
+            for (int r = 0; r < num_shards - 1; ++r) {
+                last_shard_offset += this->shard_sizes_[r];
+            }
+            const uint64_t old_shard_size = old_count - last_shard_offset;
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_shard_size));
+            const size_t last_rank = static_cast<size_t>(num_shards - 1);
+            uint64_t job_id = this->worker->submit_to_rank(last_rank,
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        } else {
+            std::vector<int64_t> seq_ids(n_rows);
+            std::iota(seq_ids.begin(), seq_ids.end(), static_cast<int64_t>(old_count));
+            uint64_t job_id = this->worker->submit_main(
+                [&](raft_handle_wrapper_t& handle) -> std::any {
+                    dispatch_fn(handle, seq_ids.data(), n_rows);
+                    return std::any();
+                });
+            auto result_wait = this->worker->wait(job_id).get();
+            if (result_wait.error) std::rethrow_exception(result_wait.error);
+        }
+
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (new_ids) {
+                this->set_ids_internal(new_ids, n_rows, old_count);
+            }
+            if (this->dist_mode == DistributionMode_SHARDED) {
+                this->shard_sizes_.back() += n_rows;
+            }
+            this->count          += n_rows;
+            this->current_offset_ += n_rows;
+        }
+    }
+
+    // Upload a [n_rows x dimension] T host matrix to a transient T device
+    // buffer on raw_device_mr (pool-bypass — extend's upload buffer is
+    // one-shot, freed on return). Returns the storage; caller takes a
+    // device_matrix_view over storage.data() for the cuvs::extend call.
+    // Does NOT sync — caller pairs with sync_stream() / handle.sync()
+    // before the host-side input goes out of scope.
+    rmm::device_uvector<T> upload_T_matrix(
+        raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
+        auto res    = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
+        rmm::device_uvector<T> storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto device_view = raft::make_device_matrix_view<T, int64_t>(
+            storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+        raft::copy(*res, device_view,
+                   raft::make_host_matrix_view<const T, int64_t>(
+                       host_data, n_rows, this->dimension));
+        return storage;
+    }
+
+    // Upload a [n_rows x dimension] float host matrix to a transient T
+    // device buffer on raw_device_mr. If T is float, copies directly;
+    // otherwise stages through a float device buffer and quantizes (1-byte
+    // T) or casts (half). Same lifecycle / no-sync contract as
+    // upload_T_matrix above.
+    rmm::device_uvector<T> upload_float_matrix_as_T(
+        raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
+        auto res    = handle.get_raft_resources();
+        auto stream = raft::resource::get_cuda_stream(*res);
+        rmm::device_uvector<T> storage(
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+        auto device_view = raft::make_device_matrix_view<T, int64_t>(
+            storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+        if constexpr (std::is_same_v<T, float>) {
+            raft::copy(*res, device_view,
+                       raft::make_host_matrix_view<const float, int64_t>(
+                           host_data, n_rows, this->dimension));
+        } else {
+            rmm::device_uvector<float> float_storage(
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            auto float_view = raft::make_device_matrix_view<float, int64_t>(
+                float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+            raft::copy(*res, float_view,
+                       raft::make_host_matrix_view<const float, int64_t>(
+                           host_data, n_rows, this->dimension));
+            if constexpr (sizeof(T) == 1) {
+                if (!this->quantizer_.is_trained()) {
+                    throw std::runtime_error(
+                        "upload_float_matrix_as_T: quantizer not trained");
+                }
+                this->quantizer_.template transform<T>(
+                    *res, float_view, storage.data(), true);
+            } else {
+                // T is half — cast float → half
+                raft::copy(*res, device_view, float_view);
+            }
+        }
+        return storage;
+    }
 
     // Deferred float chunk buffer for quantizer training (1-byte types only).
     // See class-level comment block above for full description.
