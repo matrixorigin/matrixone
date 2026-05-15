@@ -589,6 +589,15 @@ END_FULLTEXT:
 			// Plugin-mediated dispatch for every registered vector
 			// algorithm. Every vector-index algorithm has a registered
 			// plugin (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
+			//
+			// Where the per-algo ANN-rewrite body lives:
+			//   pkg/vectorindex/hnsw/plugin/plan/
+			//   pkg/vectorindex/cagra/plugin/plan/
+			//   pkg/vectorindex/ivfpq/plugin/plan/
+			//   pkg/vectorindex/ivfflat/plugin/plan/
+			//
+			// Shared helpers (PlanBuilder facade, deep-copy fn-vars,
+			// filter predicate JSON) live in pkg/sql/plan/vectorplan/.
 			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 				opts := vectorplan.ApplyForSortOpts{
 					ColRefCnt: colRefCnt,

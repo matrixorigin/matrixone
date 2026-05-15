@@ -3575,6 +3575,12 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	}
 }
 
+// Synchronous DML sync for vector indexes is IVF-FLAT-only — HNSW /
+// CAGRA / IVF-PQ all use CDC (see their plugin's
+// catalog.Hooks.SyncDescriptor()). So the only case-arm below is
+// IVFFLAT; other vector algos return early via their CDC pipeline. No
+// plugin framework hook exists for sync DML because there's no second
+// algorithm that needs it — adding one would be speculative.
 func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, multiTableIndexes map[string]*MultiTableIndex) error {
 	var lastNodeId int32

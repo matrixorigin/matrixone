@@ -22,6 +22,26 @@
 //   - Function variables  — populated at pkg/sql/plan init() time; the plugin
 //                           calls them instead of taking a direct dependency
 //                           on pkg/sql/plan
+//   - Standalone helpers  — DeepCopyRankOption, MakeRuntimeFilter,
+//                           the over-fetch factor calculators,
+//                           ParseIncludedColumnsFromParams,
+//                           MakePlan2StringConstExprWithType, plus the
+//                           BuildFilterPredicateJSON / filter_predicate.go
+//                           predicate-pushdown helpers shared by GPU vector
+//                           plugins (CAGRA, IVF-PQ).
+//
+// WHERE PER-ALGORITHM PLAN-REWRITE BODIES LIVE (not here):
+//
+//	HNSW     → pkg/vectorindex/hnsw/plugin/plan/
+//	CAGRA    → pkg/vectorindex/cagra/plugin/plan/
+//	IVF-PQ   → pkg/vectorindex/ivfpq/plugin/plan/
+//	IVF-FLAT → pkg/vectorindex/ivfflat/plugin/plan/
+//
+// Each plugin directory holds plan.go (CanApply + ApplyForSort), schema.go
+// (BuildSecondaryIndexDefs), tablefunc.go (per-algo `<algo>_create` /
+// `<algo>_search` table function builders), plus context.go / helpers.go
+// for the larger ones (IVF-FLAT). They import this package to call the
+// shared helpers above.
 //
 // Cycle-safety: this package depends only on pkg/pb/plan, parsers/tree,
 // catalog, vectorindex/metric. pkg/sql/plan imports this package; the plugin

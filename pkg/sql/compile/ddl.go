@@ -2224,6 +2224,14 @@ func (s *Scope) doCreateIndex(
 	for _, multiTableIndex := range multiTableIndexes {
 		// Plugin-mediated dispatch — every vector-index algorithm has a
 		// registered plugin (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
+		//
+		// Where the per-algo HandleCreateIndex body lives:
+		//   pkg/vectorindex/hnsw/plugin/compile/
+		//   pkg/vectorindex/cagra/plugin/compile/
+		//   pkg/vectorindex/ivfpq/plugin/compile/
+		//   pkg/vectorindex/ivfflat/plugin/compile/
+		// Each plugin's runtime/ subdir holds the catalog hooks
+		// (HiddenTableTypes, ParamsFromTree, SyncDescriptor, ...).
 		if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 			cctx := newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
 			err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
