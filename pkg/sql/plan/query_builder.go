@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -5464,12 +5465,16 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
 	case "cagra_search":
 		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
-	case "ivfpq_create":
-		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
-	case "ivfpq_search":
-		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
-		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
+		// Fall through to the vector-index plugin registry. Per-algorithm
+		// table-function builders (e.g. ivfpq_create / ivfpq_search) are
+		// registered there by their plugins' init() so each algorithm can
+		// own its table-function plumbing without editing this switch.
+		if b, ok := vectorplan.TableFunc(id); ok {
+			nodeId, err = b(builder, tbl, ctx, exprs, children)
+		} else {
+			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
+		}
 	}
 	return nodeId, err
 }

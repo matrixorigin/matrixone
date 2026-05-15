@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -977,15 +978,21 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			// update the hidden tables
 			for _, multiTableIndex := range multiTableIndexes {
-				switch multiTableIndex.IndexAlgo {
-				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
-				case catalog.MoIndexHnswAlgo.ToString():
-					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
-				case catalog.MoIndexCagraAlgo.ToString():
-					err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
-				case catalog.MoIndexIvfpqAlgo.ToString():
-					err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok &&
+					multiTableIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() {
+					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+				} else {
+					switch multiTableIndex.IndexAlgo {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
+					case catalog.MoIndexHnswAlgo.ToString():
+						err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					case catalog.MoIndexCagraAlgo.ToString():
+						err = s.handleVectorCagraIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					case catalog.MoIndexIvfpqAlgo.ToString():
+						err = s.handleVectorIvfpqIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					}
 				}
 
 				if err != nil {
@@ -2225,15 +2232,26 @@ func (s *Scope) doCreateIndex(
 	}
 
 	for _, multiTableIndex := range multiTableIndexes {
-		switch multiTableIndex.IndexAlgo {
-		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
-		case catalog.MoIndexHnswAlgo.ToString():
-			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
-		case catalog.MoIndexCagraAlgo.ToString():
-			err = s.handleVectorCagraIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
-		case catalog.MoIndexIvfpqAlgo.ToString():
-			err = s.handleVectorIvfpqIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+		// IVF-PQ routes through the vectorindex plugin (see
+		// pkg/vectorindex/ivfpq/plugin). Other algorithms still use the
+		// legacy switch until their shim plugins land in Phase 3.
+		if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok &&
+			multiTableIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() {
+			cctx := newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
+			err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
+		} else {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
+			case catalog.MoIndexHnswAlgo.ToString():
+				err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			case catalog.MoIndexCagraAlgo.ToString():
+				err = s.handleVectorCagraIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			case catalog.MoIndexIvfpqAlgo.ToString():
+				// Fallback path if the plugin failed to register
+				// (e.g. cmd/mo-service didn't blank-import all/).
+				err = s.handleVectorIvfpqIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			}
 		}
 
 		if err != nil {

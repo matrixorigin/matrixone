@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -2090,7 +2091,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		case tree.INDEX_TYPE_CAGRA:
 			indexDef, tableDef, err = buildCagraSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		case tree.INDEX_TYPE_IVFPQ:
-			indexDef, tableDef, err = buildIvfpqSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+			// Lifted into the plugin: pkg/vectorindex/ivfpq/plugin/plan
+			// (BuildSecondaryIndexDefs). The dispatch is a registry
+			// lookup; if the plugin isn't registered the algorithm is
+			// effectively unavailable, matching legacy "unknown algo"
+			// behaviour.
+			if p, ok := vectorplugin.Get(catalog.MoIndexIvfpqAlgo.ToString()); ok {
+				indexDef, tableDef, err = p.Plan().BuildSecondaryIndexDefs(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+			} else {
+				return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
+			}
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -3109,247 +3119,6 @@ func validateIncludeColumns(ctx CompilerContext,
 		}
 	}
 	return nil
-}
-
-func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
-
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for ivfpq index")
-	}
-
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
-	}
-
-	indexParts := make([]string, 1)
-
-	// Validate: only 1 column of VECF32
-	{
-		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column IVFPQ vector index")
-		}
-
-		name := indexInfo.KeyParts[0].ColName.ColName()
-		indexParts[0] = name
-
-		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
-		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
-		}
-
-		if len(existedIndexes) > 0 {
-			for _, existedIndex := range existedIndexes {
-				if existedIndex.IndexAlgo == "ivfpq" && existedIndex.Parts[0] == name {
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFPQ indexes are not allowed to use the same column")
-				}
-			}
-		}
-	}
-
-	if indexInfo.IndexOption != nil {
-		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*TableDef, 2)
-
-	// 1. create ivfpq metadata table
-	{
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[0] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Ivfpq_TblType_Metadata,
-			Cols:      make([]*ColDef, 4),
-		}
-
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Primary: true,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Checksum,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[2] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Timestamp,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[3] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Filesize,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.Ivfpq_TblCol_Metadata_Index_Id},
-			PkeyColName: catalog.Ivfpq_TblCol_Metadata_Index_Id,
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Ivfpq_TblType_Metadata,
-			},
-		}
-		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 2. create ivfpq storage table
-	{
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[1] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Ivfpq_TblType_Storage,
-			Cols:      make([]*ColDef, 5),
-		}
-
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Storage, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[1] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Chunk_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Data,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_blob),
-				Width: 65536,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[3] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Tag,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[1].Cols[4].Primary = true
-
-		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.Ivfpq_TblCol_Storage_Index_Id,
-				catalog.Ivfpq_TblCol_Storage_Chunk_Id,
-				catalog.Ivfpq_TblCol_Storage_Tag},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[4],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Ivfpq_TblType_Storage,
-			},
-		}
-		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-	return indexDefs, tableDefs, nil
 }
 
 // buildCagraSecondaryIndexDef will create two internal tables

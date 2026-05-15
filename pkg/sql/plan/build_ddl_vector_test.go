@@ -18,11 +18,27 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/stretchr/testify/require"
 )
+
+// buildIvfpqSecondaryIndexDef is a thin shim that routes to the IVF-PQ
+// plugin's BuildSecondaryIndexDefs hook. The plan-side function of the same
+// name was deleted when the body moved into pkg/vectorindex/ivfpq/plugin/plan;
+// the shim keeps the tests below readable.
+func buildIvfpqSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
+	colMap map[string]*ColDef, existed []*plan.IndexDef, pkey string,
+) ([]*plan.IndexDef, []*TableDef, error) {
+	p, ok := vectorplugin.Get(catalog.MoIndexIvfpqAlgo.ToString())
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("ivfpq plugin not registered")
+	}
+	return p.Plan().BuildSecondaryIndexDefs(ctx, idx, colMap, existed, pkey)
+}
 
 // validateIncludeColumns ----------------------------------------------------
 

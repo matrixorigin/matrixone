@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -628,9 +629,20 @@ END_FULLTEXT:
 				}
 
 			case catalog.MoIndexIvfpqAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
+				// Plugin-mediated dispatch. The IVF-PQ plan-rewrite body
+				// lives in pkg/vectorindex/ivfpq/plugin/plan; it is invoked
+				// via the registry. If the plugin isn't registered (a
+				// build that didn't load it) the rewrite is skipped — the
+				// query then falls through to exact vector search.
+				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+					newNodeID, applied, err := p.Plan().ApplyForSort(
+						builder, vecCtx.export(), exportMultiTableIndex(multiTableIndex), nodeID)
+					if err != nil {
+						return newNodeID, err
+					}
+					if applied {
+						return newNodeID, nil
+					}
 				}
 			}
 		}
@@ -864,10 +876,14 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 				return nil
 			}
 		case catalog.MoIndexIvfpqAlgo.ToString():
-			if ctx, err := builder.prepareIvfpqIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
+			if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
+				canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
+				if err != nil {
+					return nil
+				}
+				if canApply {
+					return []int32{vecCtx.scanNode.NodeId}
+				}
 			}
 		}
 	}
