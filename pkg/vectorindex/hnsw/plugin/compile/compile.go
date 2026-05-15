@@ -152,6 +152,12 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
+// IdxcronMetadata: HNSW has no idxcron action (SyncDescriptor().IdxcronAction=="").
+// This method is never called for HNSW.
+func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
+	return nil, nil
+}
+
 // genDeleteSQL is lifted from pkg/sql/compile/util.go:554.
 func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]string, error) {
 	meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]

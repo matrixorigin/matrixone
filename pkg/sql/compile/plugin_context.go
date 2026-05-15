@@ -63,6 +63,13 @@ func newPluginCompileCtx(
 	}
 }
 
+// newPluginCompileCtxForSync is a minimal CompileContext for plugin hooks
+// that only need the process (ResolveVariable / Ctx). Used by
+// CreateAllIndexUpdateTasks to invoke IdxcronMetadata.
+func newPluginCompileCtxForSync(c *Compile) *pluginCompileCtx {
+	return &pluginCompileCtx{c: c}
+}
+
 func (p *pluginCompileCtx) Ctx() compileplugin.Context { return p.c.proc.Ctx }
 
 func (p *pluginCompileCtx) Database() engine.Database      { return p.dbSource }

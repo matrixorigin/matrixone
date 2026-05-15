@@ -58,6 +58,18 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
+// SyncDescriptor: CAGRA participates in ISCP CDC; async-ness derives
+// from the index's `async` param (mirroring IVF-FLAT). No idxcron action
+// wired in this phase — pkg/vectorindex/idxcron/executor.go only knows
+// Action_Ivfflat_Reindex today; once Action_Cagra_Reindex lands there,
+// flip IdxcronAction to "cagra_reindex".
+func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
+	return catalogplugin.SyncDescriptor{
+		UsesCDC:    true,
+		SinkerType: catalogplugin.SinkerType_IndexSync,
+	}
+}
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_CAGRA case (pkg/catalog/secondary_index_utils.go:376-433).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {

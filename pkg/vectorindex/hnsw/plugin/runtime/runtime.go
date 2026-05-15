@@ -52,6 +52,17 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
+// SyncDescriptor: HNSW is always async via ISCP CDC (matches the legacy
+// hardcoded behaviour in pkg/sql/compile/iscp_util.go:68-71). No idxcron
+// task.
+func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
+	return catalogplugin.SyncDescriptor{
+		UsesCDC:     true,
+		SinkerType:  catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync: true,
+	}
+}
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_HNSW case (pkg/catalog/secondary_index_utils.go:341-375).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {

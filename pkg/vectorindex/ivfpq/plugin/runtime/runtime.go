@@ -87,6 +87,18 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
+// SyncDescriptor: IVF-PQ participates in ISCP CDC; async-ness derives
+// from the index's `async` param. No idxcron action wired in this phase
+// — once Action_Ivfpq_Reindex lands in
+// pkg/vectorindex/idxcron/executor.go, flip IdxcronAction to
+// "ivfpq_reindex".
+func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
+	return catalogplugin.SyncDescriptor{
+		UsesCDC:    true,
+		SinkerType: catalogplugin.SinkerType_IndexSync,
+	}
+}
+
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_IVFPQ case (pkg/catalog/secondary_index_utils.go:434-477).
 func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {

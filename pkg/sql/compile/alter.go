@@ -283,10 +283,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
 			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
 
-			if !indexDef.Unique && (catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
+			if !indexDef.Unique && (vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) ||
 				catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo)) {
-				// ivf/hnsw/fulltext index
+				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
 				if !isAffectedIndex(indexDef, qry.AffectedCols) {
 					// column not affected means index already cloned in cloneUnaffectedIndexes()
@@ -352,9 +351,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				continue
 			}
 
-			// only affected ivf/hnsw/fulltext index will go here
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
+			// only affected vector (ivf/hnsw/cagra/ivfpq) or fulltext index
+			// reaches here. Vector indexes aggregate into multiTableIndexes
+			// for the plugin's HandleCreateIndex; fulltext goes through its
+			// own handler below.
+			if vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -852,9 +853,8 @@ func cloneUnaffectedIndexes(
 
 		affected := false
 		if !idxTbl.Unique && (catalog.IsFullTextIndexAlgo(idxTbl.IndexAlgo) ||
-			catalog.IsHnswIndexAlgo(idxTbl.IndexAlgo) ||
-			catalog.IsIvfIndexAlgo(idxTbl.IndexAlgo)) {
-			// only check parts when fulltext/hnsw/ivfflat index
+			vectorplugin.IsVectorIndexAlgo(idxTbl.IndexAlgo)) {
+			// only check parts for fulltext + vector (ivf/hnsw/cagra/ivfpq)
 
 			for _, part := range idxTbl.Parts {
 				if slices.Index(affectedCols, part) != -1 {

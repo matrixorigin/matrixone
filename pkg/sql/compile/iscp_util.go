@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -58,24 +59,27 @@ func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
-	var err error
+	if !idx.TableExist {
+		return false, nil
+	}
 
-	if idx.TableExist &&
-		(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-			catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-			catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-		async := false
-		if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-			// HNSW always async
-			async = true
-		} else {
-			async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
-			if err != nil {
-				return false, err
-			}
+	// Plugin-registered vector-index algorithms describe their CDC
+	// participation via SyncDescriptor().
+	if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+		d := p.Catalog().SyncDescriptor()
+		if !d.UsesCDC {
+			return false, nil
 		}
+		if d.AlwaysAsync {
+			return true, nil
+		}
+		return catalog.IsIndexAsync(idx.IndexAlgoParams)
+	}
 
-		return async, nil
+	// Inline fallback: IVF-FLAT (no plugin yet) and FullText (not a
+	// vector index — never gets a plugin).
+	if catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		return catalog.IsIndexAsync(idx.IndexAlgoParams)
 	}
 	return false, nil
 }
@@ -222,11 +226,13 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 }
 
 func getSinkerTypeFromAlgo(algo string) int8 {
-	if catalog.IsHnswIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
-	} else if catalog.IsIvfIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
-	} else if catalog.IsFullTextIndexAlgo(algo) {
+	if p, ok := vectorplugin.Get(algo); ok {
+		if d := p.Catalog().SyncDescriptor(); d.UsesCDC {
+			return d.SinkerType
+		}
+	}
+	// Inline fallback: IVF-FLAT (no plugin yet) and FullText.
+	if catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo) {
 		return int8(iscp.ConsumerType_IndexSync)
 	}
 	panic("getSinkerTypeFromAlgo: invalid sinker type")
@@ -329,7 +335,15 @@ func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) 
 }
 
 func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
-	if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+	if !idx.TableExist {
+		return false, nil
+	}
+	if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+		return p.Catalog().SyncDescriptor().IdxcronAction != "", nil
+	}
+	// Inline fallback: IVF-FLAT (no plugin yet) — always has the
+	// Action_Ivfflat_Reindex cron task.
+	if catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
 		return true, nil
 	}
 	return false, nil
@@ -338,7 +352,7 @@ func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
 // idxcron function
 func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) (err error) {
 	var (
-		ivf_metadata []byte
+		ivfMetadata []byte // lazy-init for the IVF-FLAT inline fallback
 	)
 
 	if c.proc.GetResolveVariableFunc() == nil {
@@ -347,43 +361,54 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 
 	idxmap := make(map[string]bool)
 	for _, idx := range indexes {
-		_, ok := idxmap[idx.IndexName]
-		if ok {
+		if _, ok := idxmap[idx.IndexName]; ok {
+			continue
+		}
+		if len(idx.IndexName) == 0 {
+			// alter reindex SQL doesn't support empty index names; skip.
 			continue
 		}
 
-		valid := false
-		valid, err = checkValidIndexUpdateByIndexdef(idx)
-		if err != nil {
-			return
-		}
-		if valid {
-			idxmap[idx.IndexName] = true
+		var action string
+		var metadata []byte
 
-			if len(idx.IndexName) == 0 {
-				// skip empty index name because alter reindex sql don't support empty index name
+		if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+			d := p.Catalog().SyncDescriptor()
+			if d.IdxcronAction == "" {
 				continue
 			}
-
-			if ivf_metadata == nil {
-				ivf_metadata, _, err = getIvfflatMetadata(c)
+			action = d.IdxcronAction
+			cctx := newPluginCompileCtxForSync(c)
+			metadata, err = p.Compile().IdxcronMetadata(cctx)
+			if err != nil {
+				return
+			}
+		} else if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+			// IVF-FLAT inline fallback (until its plugin migration).
+			action = idxcron.Action_Ivfflat_Reindex
+			if ivfMetadata == nil {
+				ivfMetadata, _, err = getIvfflatMetadata(c)
 				if err != nil {
 					return
 				}
 			}
+			metadata = ivfMetadata
+		} else {
+			continue
+		}
 
-			err = idxcron.RegisterUpdate(c.proc.Ctx,
-				c.proc.GetService(),
-				c.proc.GetTxnOperator(),
-				tableid,
-				dbname,
-				tablename,
-				idx.IndexName,
-				idxcron.Action_Ivfflat_Reindex,
-				string(ivf_metadata))
-			if err != nil {
-				return
-			}
+		idxmap[idx.IndexName] = true
+		err = idxcron.RegisterUpdate(c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			tableid,
+			dbname,
+			tablename,
+			idx.IndexName,
+			action,
+			string(metadata))
+		if err != nil {
+			return
 		}
 	}
 	return
@@ -393,30 +418,33 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) (err error) {
 	idxmap := make(map[string]bool)
 	for _, idx := range tabledef.Indexes {
-
-		_, ok := idxmap[idx.IndexName]
-		if ok {
+		if _, ok := idxmap[idx.IndexName]; ok {
 			continue
 		}
 
-		valid := false
-		valid, err = checkValidIndexUpdateByIndexdef(idx)
+		var action string
+		if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+			d := p.Catalog().SyncDescriptor()
+			if d.IdxcronAction == "" {
+				continue
+			}
+			action = d.IdxcronAction
+		} else if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+			// IVF-FLAT inline fallback.
+			action = idxcron.Action_Ivfflat_Reindex
+		} else {
+			continue
+		}
+
+		idxmap[idx.IndexName] = true
+		err = idxcron.UnregisterUpdate(c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			tabledef.TblId,
+			idx.IndexName,
+			action)
 		if err != nil {
 			return
-		}
-		if valid {
-			idxmap[idx.IndexName] = true
-			//hasindex = true
-
-			err = idxcron.UnregisterUpdate(c.proc.Ctx,
-				c.proc.GetService(),
-				c.proc.GetTxnOperator(),
-				tabledef.TblId,
-				idx.IndexName,
-				idxcron.Action_Ivfflat_Reindex)
-			if err != nil {
-				return
-			}
 		}
 	}
 	return

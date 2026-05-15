@@ -135,6 +135,14 @@ type Hooks interface {
 	// layer already performs). Examples: unregister CDC tasks, unregister
 	// idxcron schedules. May be a no-op.
 	HandleDropIndex(ctx CompileContext, indexDefs map[string]*plan.IndexDef) error
+
+	// IdxcronMetadata builds the metadata blob registered with idxcron
+	// alongside the action key (catalog.Hooks.CDC().IdxcronAction).
+	// Called by pkg/sql/compile/iscp_util.go:CreateAllIndexUpdateTasks
+	// only when IdxcronAction != "". May resolve session/system
+	// variables via ctx.ResolveVariable. Return (nil, nil) when the
+	// action takes no metadata.
+	IdxcronMetadata(ctx CompileContext) ([]byte, error)
 }
 
 // ReindexParamUpdate carries the alter-reindex inputs the plugin may consume.

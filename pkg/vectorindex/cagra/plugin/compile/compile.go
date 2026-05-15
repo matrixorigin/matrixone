@@ -104,6 +104,13 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
+// IdxcronMetadata: CAGRA has no idxcron action wired today
+// (SyncDescriptor().IdxcronAction==""). Returns (nil, nil) until the executor
+// learns Action_Cagra_Reindex.
+func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
+	return nil, nil
+}
+
 // genDeleteSQL is lifted from pkg/sql/compile/util.go:666.
 func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]string, error) {
 	meta, ok := indexDefs[catalog.Cagra_TblType_Metadata]

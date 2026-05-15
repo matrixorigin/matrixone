@@ -166,6 +166,13 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
+// IdxcronMetadata: IVF-PQ has no idxcron action wired today
+// (SyncDescriptor().IdxcronAction==""). Returns (nil, nil) until the executor
+// learns Action_Ivfpq_Reindex.
+func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
+	return nil, nil
+}
+
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
 
