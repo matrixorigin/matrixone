@@ -36,6 +36,7 @@ type SeekFirstBlockOp func(objectio.ObjectDataMeta) int
 type BlockFilterOp func(int, objectio.BlockObject, objectio.BloomFilter) (bool, bool, error)
 type LoadOpFactory func(fileservice.FileService) LoadOp
 
+// Large PK IN filters are not selective enough to justify loading object BloomFilters.
 const maxPKInBloomFilterKeys = 10
 
 var loadMetadataOnlyOpFactory LoadOpFactory
