@@ -375,7 +375,7 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 
 	var values []*serviceBinds
 	for _, b := range l.mu.services {
-		if b.timeout(now, l.keepBindTimeout) {
+		if b.timeout(now, l.keepBindTimeout*2) {
 			values = append(values, b)
 		}
 	}

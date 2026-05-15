@@ -249,7 +249,6 @@ func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T
 		lockSvc.EXPECT().
 			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
 			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
-		txnOp.EXPECT().TxnOptions().Return(txnpb.TxnOptions{}),
 		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
 	)
 
@@ -362,7 +361,7 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
-func TestLockWithRetryDoesNotRetryBindChangedInExplicitUserTxn(t *testing.T) {
+func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -371,105 +370,17 @@ func TestLockWithRetryDoesNotRetryBindChangedInExplicitUserTxn(t *testing.T) {
 
 	oldWait := defaultWaitTimeOnRetryLock
 	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
-	defer func() {
-		defaultWaitTimeOnRetryLock = oldWait
-	}()
-
-	ctx := context.Background()
-	expectedErr := moerr.NewLockTableBindChangedNoCtx()
-
-	gomock.InOrder(
-		lockSvc.EXPECT().
-			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
-			Return(lock.Result{}, expectedErr),
-		txnOp.EXPECT().TxnOptions().Return(txnpb.TxnOptions{}.WithUserTxn()),
-	)
-
-	start := time.Now()
-	_, err := lockWithRetry(
-		ctx,
-		lockSvc,
-		1,
-		nil,
-		[]byte("txn1"),
-		lock.LockOptions{},
-		txnOp,
-		nil,
-		nil,
-		LockOptions{},
-		types.Type{},
-	)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
-	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
-}
-
-func TestLockWithRetryDoesNotRetryBindChangedInBeginTxn(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	lockSvc := mock_lock.NewMockLockService(ctrl)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-
-	oldWait := defaultWaitTimeOnRetryLock
-	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
-	defer func() {
-		defaultWaitTimeOnRetryLock = oldWait
-	}()
-
-	ctx := context.Background()
-	expectedErr := moerr.NewLockTableBindChangedNoCtx()
-	opts := txnpb.TxnOptions{}.WithUserTxn()
-	opts.ByBegin = true
-	opts.Autocommit = true
-
-	gomock.InOrder(
-		lockSvc.EXPECT().
-			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
-			Return(lock.Result{}, expectedErr),
-		txnOp.EXPECT().TxnOptions().Return(opts),
-	)
-
-	start := time.Now()
-	_, err := lockWithRetry(
-		ctx,
-		lockSvc,
-		1,
-		nil,
-		[]byte("txn1"),
-		lock.LockOptions{},
-		txnOp,
-		nil,
-		nil,
-		LockOptions{},
-		types.Type{},
-	)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
-	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
-}
-
-func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	lockSvc := mock_lock.NewMockLockService(ctrl)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-
-	oldWait := defaultWaitTimeOnRetryLock
-	defaultWaitTimeOnRetryLock = time.Millisecond
 	defer func() {
 		defaultWaitTimeOnRetryLock = oldWait
 	}()
 
 	ctx := context.Background()
 	expected := lock.Result{HasConflict: true}
-	opts := txnpb.TxnOptions{}.WithUserTxn()
-	opts.Autocommit = true
 
 	gomock.InOrder(
 		lockSvc.EXPECT().
 			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
 			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
-		txnOp.EXPECT().TxnOptions().Return(opts),
 		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
 		lockSvc.EXPECT().
 			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
@@ -491,6 +402,133 @@ func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryRetriesBindChangedInBeginTxnBeforeLockHeld(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryDoesNotRetryBindChangedWhenLockTableAlreadyHeld(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expectedErr := moerr.NewLockTableBindChangedNoCtx()
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(true),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
 func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
