@@ -238,7 +238,8 @@ func ConstructBlockPKFilter(
 
 			out := offsets[:0]
 			for _, off := range offsets {
-				if reusableHits[int(off)] {
+				idx := int(off)
+				if idx >= 0 && idx < rowCount && reusableHits[idx] {
 					out = append(out, off)
 				}
 			}
