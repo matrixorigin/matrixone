@@ -134,10 +134,10 @@ func (Hooks) ApplyForSort(
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  vectorplan.IVFFLATSearchFuncName,
+				Name:  IVFFLATSearchFuncName,
 				Param: []byte(ivfCtx.Params),
 			},
-			Cols: vectorplan.DeepCopyColDefList(vectorplan.IVFFLATSearchColDefs),
+			Cols: vectorplan.DeepCopyColDefList(IVFFLATSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorplan.VectorSearchProviderChildren(vecCtx),
