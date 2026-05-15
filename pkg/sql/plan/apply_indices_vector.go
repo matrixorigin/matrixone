@@ -16,8 +16,89 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
+
+// getArgsFromDistFn returns the (vec-col-arg, vec-lit-arg, found) triple
+// for `distfn(col, lit)` where col is at partPos in its TABLE_SCAN. Used
+// by every vector-index plan rewriter (HNSW direct path, IVF-PQ, CAGRA,
+// IVF-FLAT). Lifted from pkg/sql/plan/apply_indices_hnsw.go:299 — moved
+// here so the HNSW file can be deleted independently of the other algos.
+func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return
+	}
+
+	if distFnArgs[1].GetCol() != nil {
+		if distFnArgs[0].GetCol() != nil {
+			return
+		}
+		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
+	}
+
+	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
+	if vecColArg != nil {
+		distFnArgs[0] = vecColArg
+	}
+	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
+	if vecLitArg != nil {
+		distFnArgs[1] = vecLitArg
+	}
+
+	if vecColArg.GetCol() == nil {
+		return
+	}
+	if !rule.IsConstant(vecLitArg, true) {
+		return
+	}
+
+	vecLitArg.Typ = vecColArg.Typ
+
+	if vecColArg.GetCol().ColPos != partPos {
+		return
+	}
+
+	return vecColArg, vecLitArg, true
+}
+
+// getArgsFromDistFnForJoin is the through-JOIN variant of
+// getArgsFromDistFn. Used today by HNSW (the only algorithm whose plan
+// rewrite handles the JOIN-derived vecCtx). Also lifted from the
+// now-deleted apply_indices_hnsw.go.
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+	distFnExpr *plan.Function,
+	partPos int32,
+	scanTag int32,
+) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) &&
+		distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return
+	}
+
+	if col := distFnArgs[0].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[1].Typ = distFnArgs[0].Typ
+		return distFnArgs[0], distFnArgs[1], true
+	}
+	if col := distFnArgs[1].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[0].Typ = distFnArgs[1].Typ
+		return distFnArgs[1], distFnArgs[0], true
+	}
+	return
+}
 
 type vectorSortContext struct {
 	projNode      *plan.Node

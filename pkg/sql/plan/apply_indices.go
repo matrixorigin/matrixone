@@ -616,13 +616,7 @@ END_FULLTEXT:
 					return newNodeID, err
 				}
 
-			case catalog.MoIndexHnswAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
-
-			case catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
+			case catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
 				// Plugin-mediated dispatch. Each algo's plan-rewrite body
 				// lives in pkg/vectorindex/<algo>/plugin/plan; the registry
 				// dispatches. If the plugin isn't registered, the rewrite
@@ -856,13 +850,7 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 			} else if err != nil {
 				return nil
 			}
-		case catalog.MoIndexHnswAlgo.ToString():
-			if ctx, err := builder.prepareHnswIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
-		case catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
+		case catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
 			if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
 				canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
 				if err != nil {

@@ -61,6 +61,13 @@ type VectorSortContext struct {
 	SortDirection plan.OrderBySpec_OrderByFlag
 	Limit         *plan.Expr
 	RankOption    *plan.RankOption
+
+	// ProviderNodeID and VecArgExpr are populated only when the ORDER BY
+	// reaches the scan through a JOIN (buildVectorSortContextThroughJoin in
+	// pkg/sql/plan). Today only HNSW consumes them — see
+	// PlanBuilder.GetArgsFromDistFnForJoin and VectorSearchProviderChildren.
+	ProviderNodeID int32
+	VecArgExpr     *plan.Expr
 }
 
 // MultiTableIndexRef is the plugin-facing view of plan.MultiTableIndex.
@@ -89,6 +96,11 @@ type PlanBuilder interface {
 	// Vector-specific QueryBuilder methods.
 	ValidateVectorIndexSortRewrite(vc *VectorSortContext) (bool, error)
 	GetArgsFromDistFn(distFn *plan.Function, partPos int32) (key, value *plan.Expr, found bool)
+
+	// GetArgsFromDistFnForJoin is the through-JOIN variant — used only by
+	// HNSW today, when the captured vecCtx came from
+	// buildVectorSortContextThroughJoin.
+	GetArgsFromDistFnForJoin(distFn *plan.Function, partPos, scanTag int32) (key, value *plan.Expr, found bool)
 	PeelAndRewriteDistFnFilters(filters []*plan.Expr, partPos int32, funcName string,
 		vecLit *plan.Expr, tableFuncTag int32, scoreColType plan.Type) (newFilters, peeled []*plan.Expr)
 
@@ -124,4 +136,11 @@ var (
 	CreateIndexDef          func(idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
 	MakeHiddenColDefByName  func(name string) *plan.ColDef
 	ValidateIncludeColumns  func(ctx CompilerContext, includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef, vecColName, pkeyName string) error
+
+	// VectorSearchProviderChildren returns the children IDs for an
+	// hnsw_search / ivf_search FUNCTION_SCAN when the captured vecCtx came
+	// from a JOIN (the search node needs the JOIN's right input as its
+	// child). Returns nil for the non-JOIN path. Populated at pkg/sql/plan
+	// init() by VectorSearchProviderChildren in apply_indices_vector.go.
+	VectorSearchProviderChildren func(*VectorSortContext) []int32
 )

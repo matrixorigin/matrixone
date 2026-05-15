@@ -24,6 +24,7 @@ import (
 	// any time this package is loaded (production via cmd/mo-service and
 	// every test that exercises compile).
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
 )
 
@@ -78,4 +79,29 @@ func (p *pluginCompileCtx) BuildIndexTable(def *plan.TableDef) error {
 
 func (p *pluginCompileCtx) ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error) {
 	return p.c.proc.GetResolveVariableFunc()(name, isSystemVar, isGlobalVar)
+}
+
+func (p *pluginCompileCtx) IsExperimentalEnabled(flag string) (bool, error) {
+	return p.scope.isExperimentalEnabled(p.c, flag)
+}
+
+func (p *pluginCompileCtx) IsCCPRTaskTransaction() bool {
+	return p.c.isCCPRTaskTransaction()
+}
+
+func (p *pluginCompileCtx) IsTableFromPublication(tableDef *plan.TableDef) bool {
+	return isTableFromPublication(tableDef)
+}
+
+func (p *pluginCompileCtx) SinkerTypeFromAlgo(algo string) int8 {
+	return getSinkerTypeFromAlgo(algo)
+}
+
+func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
+	sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error {
+	return CreateIndexCdcTask(p.c, dbName, tableName, tableID, indexName, sinkerType, startFromNow, sql, tableDef)
+}
+
+func (p *pluginCompileCtx) DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error {
+	return DropIndexCdcTask(p.c, tableDef, dbName, tableName, indexName)
 }

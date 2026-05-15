@@ -37,6 +37,19 @@ func init() {
 	vectorplan.CreateIndexDef = CreateIndexDef
 	vectorplan.MakeHiddenColDefByName = MakeHiddenColDefByName
 	vectorplan.ValidateIncludeColumns = validateIncludeColumnsForPlugin
+	vectorplan.VectorSearchProviderChildren = vectorSearchProviderChildrenForPlugin
+}
+
+// vectorSearchProviderChildrenForPlugin adapts vectorSearchProviderChildren
+// (which takes *vectorSortContext) to vectorplan.VectorSortContext.
+func vectorSearchProviderChildrenForPlugin(vc *vectorplan.VectorSortContext) []int32 {
+	if vc == nil {
+		return nil
+	}
+	return vectorSearchProviderChildren(&vectorSortContext{
+		providerNodeID: vc.ProviderNodeID,
+		vecArgExpr:     vc.VecArgExpr,
+	})
 }
 
 // validateIncludeColumnsForPlugin adapts validateIncludeColumns to the
@@ -107,6 +120,10 @@ func (builder *QueryBuilder) GetArgsFromDistFn(distFn *plan.Function, partPos in
 	return builder.getArgsFromDistFn(distFn, partPos)
 }
 
+func (builder *QueryBuilder) GetArgsFromDistFnForJoin(distFn *plan.Function, partPos, scanTag int32) (*plan.Expr, *plan.Expr, bool) {
+	return builder.getArgsFromDistFnForJoin(distFn, partPos, scanTag)
+}
+
 func (builder *QueryBuilder) PeelAndRewriteDistFnFilters(
 	filters []*plan.Expr, partPos int32, origFuncName string,
 	vecLitArg *plan.Expr, tableFuncTag int32, scoreColType plan.Type,
@@ -129,14 +146,16 @@ func (v *vectorSortContext) export() *vectorplan.VectorSortContext {
 		return nil
 	}
 	return &vectorplan.VectorSortContext{
-		ProjNode:      v.projNode,
-		SortNode:      v.sortNode,
-		ScanNode:      v.scanNode,
-		ChildNode:     v.childNode,
-		OrderExpr:     v.orderExpr,
-		DistFnExpr:    v.distFnExpr,
-		SortDirection: v.sortDirection,
-		Limit:         v.limit,
-		RankOption:    v.rankOption,
+		ProjNode:       v.projNode,
+		SortNode:       v.sortNode,
+		ScanNode:       v.scanNode,
+		ChildNode:      v.childNode,
+		OrderExpr:      v.orderExpr,
+		DistFnExpr:     v.distFnExpr,
+		SortDirection:  v.sortDirection,
+		Limit:          v.limit,
+		RankOption:     v.rankOption,
+		ProviderNodeID: v.providerNodeID,
+		VecArgExpr:     v.vecArgExpr,
 	}
 }

@@ -62,6 +62,40 @@ type CompileContext interface {
 
 	// ResolveVariable forwards to process.GetResolveVariableFunc().
 	ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error)
+
+	// IsExperimentalEnabled checks whether an experimental-feature flag is
+	// set in the current session/system variables. Used by HNSW today
+	// (flag "experimental_hnsw_index"). Plugins gating on a flag should
+	// fail HandleCreateIndex when this returns false.
+	IsExperimentalEnabled(flag string) (bool, error)
+
+	// IsCCPRTaskTransaction reports whether this Compile is running on
+	// behalf of a CCPR (cross-cluster physical replication) task. HNSW
+	// skips index data population when (ccpr && tableFromPublication) —
+	// the index data is synced via the CCPR pipeline instead.
+	IsCCPRTaskTransaction() bool
+
+	// IsTableFromPublication reports whether the given table is sourced
+	// from a publication (Subscription Account). Used together with
+	// IsCCPRTaskTransaction by the HNSW skip-during-ccpr check.
+	IsTableFromPublication(tableDef *plan.TableDef) bool
+
+	// SinkerTypeFromAlgo returns the ISCP sinker-type tag for an
+	// algorithm string (e.g. "hnsw" → kSinkerTypeHnsw). Used when
+	// registering CDC tasks.
+	SinkerTypeFromAlgo(algo string) int8
+
+	// CreateIndexCdcTask registers an ISCP CDC task to maintain the
+	// hidden index tables asynchronously. startFromNow=true means the
+	// task only sees mutations from now forward (used after an immediate
+	// initial build); false means it consumes the full log from the
+	// table's creation timestamp.
+	CreateIndexCdcTask(dbName, tableName string, tableID uint64, indexName string,
+		sinkerType int8, startFromNow bool, sql string, tableDef *plan.TableDef) error
+
+	// DropIndexCdcTask removes any ISCP CDC task previously registered
+	// for this (table, index). Safe to call when no task exists.
+	DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error
 }
 
 // Context is the algorithm-agnostic subset of context.Context the plugin needs.

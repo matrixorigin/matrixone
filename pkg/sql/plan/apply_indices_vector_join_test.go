@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -449,8 +450,13 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
 
-	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex())
+	p, ok := vectorplugin.Get(catalog.MoIndexHnswAlgo.ToString())
+	require.True(t, ok, "hnsw plugin must be registered")
+	mti := newVectorJoinHnswIndex()
+	newNodeID, applied, err := p.Plan().ApplyForSort(
+		tc.builder, vecCtx.export(), exportMultiTableIndex(mti), tc.projNodeID)
 	require.NoError(t, err)
+	require.True(t, applied)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
 	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)

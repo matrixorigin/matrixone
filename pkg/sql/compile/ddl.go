@@ -813,8 +813,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 					case catalog.MoIndexIvfFlatAlgo.ToString():
 						err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
-					case catalog.MoIndexHnswAlgo.ToString():
-						err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 					}
 				}
 
@@ -984,8 +982,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					switch multiTableIndex.IndexAlgo {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
 						err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
-					case catalog.MoIndexHnswAlgo.ToString():
-						err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
 					}
 				}
 
@@ -2236,8 +2232,6 @@ func (s *Scope) doCreateIndex(
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
-			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 			}
 		}
 

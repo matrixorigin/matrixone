@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
+	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -378,17 +379,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 		for _, multiTableIndex := range multiTableIndexes {
 
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil, false,
-				)
-			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
+			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+				cctx := newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+				err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
+			} else {
+				switch multiTableIndex.IndexAlgo {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(
+						c, id, extra, dbSource, multiTableIndex.IndexDefs,
+						qry.Database, newTableDef, nil, false,
+					)
+				}
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

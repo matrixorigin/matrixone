@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -624,109 +623,5 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	return nil
 }
 
-func (s *Scope) handleVectorHnswIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-
-	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
-	}
-
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
-	}
-	if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Skip index data population for CCPR tables when this is a CCPR task transaction.
-	// The index data will be synced via CCPR data synchronization instead.
-	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
-		return nil
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	async, err := catalog.IsIndexAsync(indexDefs[catalog.Hnsw_TblType_Metadata].IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-
-	if !async {
-		// 3. build hnsw index
-		sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-
-		// register ISCP job with startFromNow = true
-		// 4. register ISCP job for async update
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	}
-
-	if async {
-		// unregister ISCP job
-		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName)
-		if err != nil {
-			return err
-		}
-
-		// 4. register ISCP job for async update with startFromNow = false
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
 
 
