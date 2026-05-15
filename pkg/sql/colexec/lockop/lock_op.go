@@ -52,7 +52,7 @@ var (
 	defaultWaitTimeOnRetryLock = time.Second
 	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
 	// holding CN resources for hours while the outer statement context is still alive.
-	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
 )
 
 const opName = "lock_op"
@@ -915,7 +915,8 @@ func shouldBypassHeldLockTableCheck(err error) bool {
 }
 
 func isBoundedRetryLockError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
