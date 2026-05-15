@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -53,6 +54,10 @@ var (
 	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
 	// holding CN resources for hours while the outer statement context is still alive.
 	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
+	lockRetryMemoryBackoff               = 5 * time.Second
+	lockRetryHighMemoryPercent           = uint64(80)
+	lockRetryCriticalMemoryPercent       = uint64(90)
+	getLockRetryMemoryPressureLevel      = defaultLockRetryMemoryPressureLevel
 )
 
 const opName = "lock_op"
@@ -886,6 +891,16 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 	}
 
 	remaining := time.Until(retryState.backendRetryDeadline)
+	switch getLockRetryMemoryPressureLevel() {
+	case lockRetryMemoryPressureCritical:
+		logLockRetryMemoryPressureStop(err, *retryState)
+		return 0, false
+	case lockRetryMemoryPressureHigh:
+		if remaining < lockRetryMemoryBackoff {
+			return remaining, true
+		}
+		return lockRetryMemoryBackoff, true
+	}
 	if remaining < defaultWaitTimeOnRetryLock {
 		return remaining, true
 	}
@@ -922,6 +937,29 @@ func isBoundedRetryLockError(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
 }
 
+type lockRetryMemoryPressureLevel int
+
+const (
+	lockRetryMemoryPressureNormal lockRetryMemoryPressureLevel = iota
+	lockRetryMemoryPressureHigh
+	lockRetryMemoryPressureCritical
+)
+
+func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
+	total := system.MemoryTotal()
+	if total == 0 {
+		return lockRetryMemoryPressureNormal
+	}
+	used := system.MemoryUsed()
+	if used >= total*lockRetryCriticalMemoryPercent/100 {
+		return lockRetryMemoryPressureCritical
+	}
+	if used >= total*lockRetryHighMemoryPercent/100 {
+		return lockRetryMemoryPressureHigh
+	}
+	return lockRetryMemoryPressureNormal
+}
+
 func logLockRetryBudgetStop(
 	err error,
 	table uint64,
@@ -942,6 +980,20 @@ func logLockRetryBudgetStop(
 	}
 	fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
 	logutil.Warn("lock retry budget exhausted for backend availability error", fields...)
+}
+
+func logLockRetryMemoryPressureStop(
+	err error,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if !retryState.backendRetryDeadline.IsZero() {
+		fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	}
+	logutil.Warn("lock retry stopped under memory pressure", fields...)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
