@@ -576,6 +576,73 @@ func TestMergeRewriteRules(t *testing.T) {
 		merged,
 	)
 
+	fallbackCases := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "top-level order by",
+			left:  "select a from db1.t1 where age > 28 order by a",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "top-level limit",
+			left:  "select a from db1.t1 where age > 28 limit 1",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "distinct",
+			left:  "select distinct a from db1.t1 where age > 28",
+			right: "select distinct a from db1.t1 where age < 3",
+		},
+		{
+			name:  "group by",
+			left:  "select a from db1.t1 where age > 28 group by a",
+			right: "select a from db1.t1 where age < 3 group by a",
+		},
+		{
+			name:  "having",
+			left:  "select a from db1.t1 where age > 28 having a > 1",
+			right: "select a from db1.t1 where age < 3 having a > 1",
+		},
+		{
+			name:  "aggregate",
+			left:  "select count(*) as c from db1.t1 where age > 28",
+			right: "select count(*) as c from db1.t1 where age < 3",
+		},
+		{
+			name:  "window",
+			left:  "select row_number() over () as rn from db1.t1 where age > 28",
+			right: "select row_number() over () as rn from db1.t1 where age < 3",
+		},
+		{
+			name:  "same output names with different column expressions",
+			left:  "select a, age from db1.t1 where age > 28",
+			right: "select age as a, a as age from db1.t1 where age < 3",
+		},
+		{
+			name:  "same alias with different expressions",
+			left:  "select a + 1 as b from db1.t1 where age > 28",
+			right: "select a + 2 as b from db1.t1 where age < 3",
+		},
+	}
+	for _, tc := range fallbackCases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err = mergeRewriteRules(ctx, tc.left, tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.right, merged)
+		})
+	}
+
+	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3")
+	require.NoError(t, err)
+	require.Equal(t, "(select a as x from db1.t1 where age > 28) union distinct (select a as x from db1.t1 where age < 3)", merged)
+
+	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
+	require.NoError(t, err)
+	require.Equal(t, "(select a + 1 as b from db1.t1 where age > 28) union distinct (select a + 1 as b from db1.t1 where age < 3)", merged)
+
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
 }

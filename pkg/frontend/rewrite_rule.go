@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -337,7 +338,12 @@ func trimRewriteRuleForUnion(rule string) string {
 	return rule
 }
 
-func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]string, bool, error) {
+type rewriteRuleOutputColumn struct {
+	name string
+	expr string
+}
+
+func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]rewriteRuleOutputColumn, bool, error) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
@@ -346,9 +352,12 @@ func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]string, bool,
 	return columns, ok, nil
 }
 
-func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]string, bool) {
+func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]rewriteRuleOutputColumn, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
+		if len(s.OrderBy) > 0 || s.Limit != nil {
+			return nil, false
+		}
 		return outputColumnsFromRewriteSelectStatement(s.Select)
 	case *tree.ParenSelect:
 		if s.Select == nil {
@@ -360,10 +369,13 @@ func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]string, bool) {
 	}
 }
 
-func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]string, bool) {
+func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewriteRuleOutputColumn, bool) {
 	switch s := stmt.(type) {
 	case *tree.SelectClause:
-		columns := make([]string, 0, len(s.Exprs))
+		if !mergeableRewriteSelectClause(s) {
+			return nil, false
+		}
+		columns := make([]rewriteRuleOutputColumn, 0, len(s.Exprs))
 		for _, expr := range s.Exprs {
 			column, ok := outputColumnFromRewriteSelectExpr(expr)
 			if !ok {
@@ -380,27 +392,55 @@ func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]strin
 		}
 		return outputColumnsFromRewriteStatement(s.Select)
 	case *tree.Select:
+		if len(s.OrderBy) > 0 || s.Limit != nil {
+			return nil, false
+		}
 		return outputColumnsFromRewriteSelectStatement(s.Select)
 	default:
 		return nil, false
 	}
 }
 
-func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (string, bool) {
+func mergeableRewriteSelectClause(stmt *tree.SelectClause) bool {
+	if stmt.Distinct || stmt.Option&(tree.QuerySpecOptionDistinct|tree.QuerySpecOptionDistinctRow) != 0 {
+		return false
+	}
+	if stmt.GroupBy != nil || stmt.Having != nil {
+		return false
+	}
+	for _, expr := range stmt.Exprs {
+		if rewriteExprHasMergeUnsafeFunction(expr.Expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func outputColumnFromRewriteSelectExpr(expr tree.SelectExpr) (rewriteRuleOutputColumn, bool) {
 	if expr.As != nil && !expr.As.Empty() {
-		return normalizeRewriteOutputColumn(expr.As.Compare()), true
+		return rewriteRuleOutputColumn{
+			name: normalizeRewriteOutputColumn(expr.As.Compare()),
+			expr: normalizeRewriteOutputExpr(expr.Expr),
+		}, true
 	}
 
 	switch e := expr.Expr.(type) {
 	case tree.UnqualifiedStar:
-		return "", false
+		return rewriteRuleOutputColumn{}, false
 	case *tree.UnresolvedName:
 		if e.Star {
-			return "", false
+			return rewriteRuleOutputColumn{}, false
 		}
-		return normalizeRewriteOutputColumn(e.ColName()), true
+		return rewriteRuleOutputColumn{
+			name: normalizeRewriteOutputColumn(e.ColName()),
+			expr: normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)),
+		}, true
 	default:
-		return normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)), true
+		exprText := normalizeRewriteOutputExpr(expr.Expr)
+		return rewriteRuleOutputColumn{
+			name: normalizeRewriteOutputColumn(tree.String(expr.Expr, dialect.MYSQL)),
+			expr: exprText,
+		}, true
 	}
 }
 
@@ -408,7 +448,14 @@ func normalizeRewriteOutputColumn(column string) string {
 	return strings.ToLower(strings.TrimSpace(column))
 }
 
-func sameRewriteOutputColumns(leftColumns, rightColumns []string) bool {
+func normalizeRewriteOutputExpr(expr tree.Expr) string {
+	if _, ok := expr.(*tree.UnresolvedName); ok {
+		return normalizeRewriteOutputColumn(tree.String(expr, dialect.MYSQL))
+	}
+	return strings.TrimSpace(tree.String(expr, dialect.MYSQL))
+}
+
+func sameRewriteOutputColumns(leftColumns, rightColumns []rewriteRuleOutputColumn) bool {
 	if len(leftColumns) != len(rightColumns) {
 		return false
 	}
@@ -418,6 +465,53 @@ func sameRewriteOutputColumns(leftColumns, rightColumns []string) bool {
 		}
 	}
 	return true
+}
+
+type rewriteExprUnsafeFunctionVisitor struct {
+	unsafe bool
+}
+
+func (v *rewriteExprUnsafeFunctionVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if v.unsafe {
+		return expr, true
+	}
+	if fn, ok := expr.(*tree.FuncExpr); ok {
+		name := rewriteFuncExprName(fn)
+		if fn.WindowSpec != nil || function.GetFunctionIsAggregateByName(name) || function.GetFunctionIsWinFunByName(name) {
+			v.unsafe = true
+			return expr, true
+		}
+	}
+	return expr, false
+}
+
+func (v *rewriteExprUnsafeFunctionVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, !v.unsafe
+}
+
+func rewriteExprHasMergeUnsafeFunction(expr tree.Expr) (unsafe bool) {
+	if expr == nil {
+		return false
+	}
+	visitor := &rewriteExprUnsafeFunctionVisitor{}
+	defer func() {
+		if recover() != nil {
+			// Some expression nodes cannot be walked; fall back to the non-merge path.
+			unsafe = true
+		}
+	}()
+	_, ok := expr.Accept(visitor)
+	return !ok || visitor.unsafe
+}
+
+func rewriteFuncExprName(fn *tree.FuncExpr) string {
+	if fn.FuncName != nil {
+		return strings.ToLower(fn.FuncName.Origin())
+	}
+	if name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName); ok {
+		return strings.ToLower(name.ColName())
+	}
+	return ""
 }
 
 // escapeSQLString escapes a string for safe use in SQL literals using writeEscapedSQLString.
