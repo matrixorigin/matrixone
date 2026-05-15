@@ -825,7 +825,7 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 	node.NodeType = plan.Node_AGG
 	node.GroupBy = project.ProjectList
 	node.BindingTags = project.BindingTags
-	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
+	node.BindingTags = append(node.BindingTags, builder.GenNewBindTag())
 	node.Children[0] = project.Children[0]
 	node.SpillMem = builder.aggSpillMem
 }

@@ -372,7 +372,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		baseSecondScan := secondScanNode
 
 		oldTag := secondScanNode.BindingTags[0]
-		builder.rebindScanNode(secondScanNode)
+		builder.RebindScanNode(secondScanNode)
 		newTag := secondScanNode.BindingTags[0]
 
 		if oldTag != newTag {
@@ -389,7 +389,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			secondScanNodeID = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			secondScanNodeID = builder.ApplyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
 			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
 
@@ -397,7 +397,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		secondScanNode.Offset = nil
 
 		// PROJECT node above secondScanNode: output only PK column
-		secondProjectTag := builder.genNewBindTag()
+		secondProjectTag := builder.GenNewBindTag()
 		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if secondPkExpr == nil {
 			secondPkExpr = &plan.Expr{
@@ -468,7 +468,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		// For each ft_func node, create an independent BF build/probe pair
 		for _, ftNodeID := range allFtNodeIDs {
-			tag := builder.genNewMsgTag()
+			tag := builder.GenNewMsgTag()
 			ftNode := builder.qry.Nodes[ftNodeID]
 
 			bExpr := &plan.Expr{
@@ -528,7 +528,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}, ctx)
 
 		// IN-list runtime filter: innerJoin(build) -> scanNode(probe)
-		rfTag2 := builder.genNewMsgTag()
+		rfTag2 := builder.GenNewMsgTag()
 
 		probeExpr2 := &plan.Expr{
 			Typ: pkType,

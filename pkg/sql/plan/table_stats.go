@@ -93,7 +93,7 @@ func (builder *QueryBuilder) buildTableStats(_ *tree.TableFunction, ctx *BindCon
 			},
 			Cols: TableStatsColDefs,
 		},
-		BindingTags:     []int32{builder.genNewBindTag()},
+		BindingTags:     []int32{builder.GenNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

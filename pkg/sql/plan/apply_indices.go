@@ -77,37 +77,12 @@ type regularIndexTopSortContext struct {
 	scanNode        *plan.Node
 }
 
-// calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
-// for vector index queries with post-filtering (filters applied after index search).
-// Smaller limits need more over-fetching due to higher variance in filtering results.
-func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 10 {
-		return 5.0 // Small limits: 5x
-	} else if originalLimit < 50 {
-		return 2.0 // Medium limits: 2x
-	} else if originalLimit < 100 {
-		return 1.5 // Large limits: 1.5x
-	} else if originalLimit < 200 {
-		return 1.3 // Very large limits: 1.3x
-	} else {
-		return 1.2 // Huge limits: 1.2x
-	}
-}
-
-// calculateFilteredPostModeOverFetchFactor returns a fixed, more conservative
-// multiplier for filtered post mode. It intentionally avoids statistics-based
-// heuristics so the behavior is predictable across plans.
-func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 50 {
-		return 5.0
-	} else if originalLimit < 100 {
-		return 2.0
-	} else if originalLimit < 200 {
-		return 1.5
-	} else {
-		return 1.3
-	}
-}
+// Over-fetch calculators live in pkg/sql/plan/vectorplan (Phase 5b).
+// Aliased here so existing pkg/sql/plan callers keep compiling.
+var (
+	calculatePostFilterOverFetchFactor       = vectorplan.CalculatePostFilterOverFetchFactor
+	calculateFilteredPostModeOverFetchFactor = vectorplan.CalculateFilteredPostModeOverFetchFactor
+)
 
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
@@ -403,7 +378,7 @@ func (builder *QueryBuilder) suspendScanProtection(scanID int32) func() {
 	}
 }
 
-func (builder *QueryBuilder) withSuspendedScanProtection(scanID int32, callback func()) {
+func (builder *QueryBuilder) WithSuspendedScanProtection(scanID int32, callback func()) {
 	restore := builder.suspendScanProtection(scanID)
 	defer restore()
 	callback()
@@ -436,7 +411,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
+		return builder.ApplyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap), nil
@@ -450,7 +425,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
+func (builder *QueryBuilder) ApplyIndicesForFilters(nodeID int32, node *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
@@ -612,8 +587,8 @@ END_FULLTEXT:
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 
 			// Plugin-mediated dispatch for every registered vector
-			// algorithm. IVF-FLAT (no plugin yet) falls through to the
-			// inline call below.
+			// algorithm. Every vector-index algorithm has a registered
+			// plugin (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
 			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 				opts := vectorplan.ApplyForSortOpts{
 					ColRefCnt: colRefCnt,
@@ -628,14 +603,6 @@ END_FULLTEXT:
 					return newNodeID, nil
 				}
 				continue
-			}
-
-			// IVF-FLAT inline (legacy until its plugin migration).
-			if catalog.IsIvfIndexAlgo(multiTableIndex.IndexAlgo) {
-				newNodeID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
 			}
 		}
 
@@ -737,7 +704,7 @@ func hasTopValueMessage(node *plan.Node) bool {
 }
 
 func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortContext) {
-	hiddenKeyName := builder.getColName(ctx.sortNode.OrderBy[0].Expr.GetCol())
+	hiddenKeyName := builder.GetColName(ctx.sortNode.OrderBy[0].Expr.GetCol())
 	if hiddenKeyName == "" {
 		hiddenKeyName = catalog.IndexTableIndexColName
 	}
@@ -766,7 +733,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 
 	if !hasTopValueMessage(ctx.sortNode) {
 		msgHeader := plan.MsgHeader{
-			MsgTag:  builder.genNewMsgTag(),
+			MsgTag:  builder.GenNewMsgTag(),
 			MsgType: int32(message.MsgTopValue),
 		}
 		ctx.sortNode.SendMsgList = append([]plan.MsgHeader{msgHeader}, ctx.sortNode.SendMsgList...)
@@ -849,7 +816,6 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 
 	for _, multi := range multiTableIndexes {
 		// Plugin-mediated probe for every registered vector algorithm.
-		// IVF-FLAT (no plugin yet) falls through to the inline call.
 		if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
 			canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
 			if err != nil {
@@ -859,13 +825,6 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 				return []int32{vecCtx.scanNode.NodeId}
 			}
 			continue
-		}
-		if catalog.IsIvfIndexAlgo(multi.IndexAlgo) {
-			if ctx, err := builder.prepareIvfIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
 		}
 	}
 	return nil
@@ -878,9 +837,9 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		// Any vector index — HNSW / CAGRA / IVF-PQ via the plugin
-		// registry, IVF-FLAT inline until its plugin migration.
-		if vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+		// Any vector index — all four are registered plugins now
+		// (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
+		if vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -1325,12 +1284,12 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		return -1
 	}
 
-	idxTag := builder.genNewBindTag()
+	idxTag := builder.GenNewBindTag()
 	idxObjRef, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if e != nil {
 		panic(e)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
+	builder.AddNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
 	if numParts == 1 {
@@ -1412,12 +1371,12 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 		}
 	}
 
-	idxTag := builder.genNewBindTag()
+	idxTag := builder.GenNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
 		panic(err)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
+	builder.AddNameByColRef(idxTag, idxTableDef)
 
 	spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 
@@ -1608,12 +1567,12 @@ func rangeFilterConstValue(fn *plan.Function) *plan.Expr {
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
-	idxTag := builder.genNewBindTag()
+	idxTag := builder.GenNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
 		panic(err)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
+	builder.AddNameByColRef(idxTag, idxTableDef)
 
 	numParts := len(idxDef.Parts)
 	var idxFilter *plan.Expr
@@ -1844,14 +1803,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		idxTag := builder.genNewBindTag()
+		idxTag := builder.GenNewBindTag()
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		if err != nil {
 			panic(err)
 		}
-		builder.addNameByColRef(idxTag, idxTableDef)
+		builder.AddNameByColRef(idxTag, idxTableDef)
 
-		rfTag := builder.genNewMsgTag()
+		rfTag := builder.GenNewMsgTag()
 
 		var rfBuildExpr *plan.Expr
 		if numParts == 1 {

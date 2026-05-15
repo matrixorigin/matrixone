@@ -19,6 +19,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
 func DeepCopyExprList(list []*Expr) []*Expr {
@@ -199,14 +200,9 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 	return newCtx
 }
 
-func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
-	if opt == nil {
-		return nil
-	}
-	return &plan.RankOption{
-		Mode: opt.Mode,
-	}
-}
+// DeepCopyRankOption now lives in pkg/sql/plan/vectorplan (Phase 5b).
+// Re-exported here so existing pkg/sql/plan callers keep compiling.
+var DeepCopyRankOption = vectorplan.DeepCopyRankOption
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{

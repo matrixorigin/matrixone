@@ -137,7 +137,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
 
 	if len(astUpdateExprs) == 0 {
@@ -345,7 +345,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewBindTag()},
+			BindingTags: []int32{builder.GenNewBindTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 		reCheckifNeedLockWholeTable(builder)
@@ -513,7 +513,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		// dedup#1:handle pk dedup
 		if !skipPkDedup && pkName != catalog.FakePrimaryKeyColName {
-			builder.addNameByColRef(scanTag, tableDef)
+			builder.AddNameByColRef(scanTag, tableDef)
 
 			scanNodeID := builder.appendNode(&plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
@@ -648,8 +648,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			// step 2: append unique dedup join on the `__mo_index_idx_col` if expression
-			idxTag := builder.genNewBindTag()
-			builder.addNameByColRef(idxTag, idxTableDefs[i])
+			idxTag := builder.GenNewBindTag()
+			builder.AddNameByColRef(idxTag, idxTableDefs[i])
 
 			idxScanNode := &plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
@@ -735,7 +735,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	if newProjLen > len(selectNode.ProjectList) {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
-		finalProjTag := builder.genNewBindTag()
+		finalProjTag := builder.GenNewBindTag()
 		pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 		// input batch columns
@@ -966,8 +966,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				now, we need to join the index table to fetch the right rowid.
 			*/
 
-			idxTag := builder.genNewBindTag()
-			builder.addNameByColRef(idxTag, idxTableDefs[i])
+			idxTag := builder.GenNewBindTag()
+			builder.AddNameByColRef(idxTag, idxTableDefs[i])
 
 			idxScanNode := &plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
@@ -1022,7 +1022,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	dmlNode := &plan.Node{
 		NodeType:    plan.Node_MULTI_UPDATE,
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 	}
 
 	insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
@@ -1365,8 +1365,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	projList1 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
 	projList2 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
-	projTag1 := builder.genNewBindTag()
-	preInsertTag := builder.genNewBindTag()
+	projTag1 := builder.GenNewBindTag()
+	preInsertTag := builder.GenNewBindTag()
 
 	var (
 		compPkeyExpr  *plan.Expr
@@ -1537,7 +1537,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projList2,
 		Children:    []int32{lastNodeID},
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 	}, tmpCtx)
 
 	return lastNodeID, colName2Idx, skipUniqueIdx, nil
@@ -1553,7 +1553,7 @@ func (builder *QueryBuilder) buildValueScan(
 	var err error
 
 	proc := builder.compCtx.GetProcess()
-	lastTag := builder.genNewBindTag()
+	lastTag := builder.GenNewBindTag()
 	colCount := len(colNames)
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
@@ -1678,7 +1678,7 @@ func (builder *QueryBuilder) buildValueScan(
 		return 0, err
 	}
 
-	lastTag = builder.genNewBindTag()
+	lastTag = builder.GenNewBindTag()
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,

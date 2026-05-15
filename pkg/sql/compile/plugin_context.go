@@ -17,6 +17,8 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -25,6 +27,7 @@ import (
 	// every test that exercises compile).
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
 )
 
@@ -111,4 +114,22 @@ func (p *pluginCompileCtx) CreateIndexCdcTask(dbName, tableName string, tableID 
 
 func (p *pluginCompileCtx) DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error {
 	return DropIndexCdcTask(p.c, tableDef, dbName, tableName, indexName)
+}
+
+// RunSqlWithResult forwards to runSqlWithResult using NoAccountId
+// (matches the legacy ddl_index_algo.go:handleIndexColCount call
+// site). Callers must Close() the returned Result.
+func (p *pluginCompileCtx) RunSqlWithResult(sql string) (executor.Result, error) {
+	return p.c.runSqlWithResult(sql, NoAccountId)
+}
+
+func (p *pluginCompileCtx) RegisterIdxcronUpdate(
+	tableID uint64, dbName, tableName, indexName, action string, metadata []byte,
+) error {
+	return idxcron.RegisterUpdate(
+		p.c.proc.Ctx,
+		p.c.proc.GetService(),
+		p.c.proc.GetTxnOperator(),
+		tableID, dbName, tableName, indexName, action, string(metadata),
+	)
 }

@@ -280,7 +280,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
-	markTag := builder.genNewBindTag()
+	markTag := builder.GenNewBindTag()
 
 	for i, pred := range joinPreds {
 		if !pred.Typ.NotNullable {
@@ -649,7 +649,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	}, ctx)
 
 	// New AGG: group by outer columns, compute aggregates on raw inner rows
-	newAggTag := builder.genNewBindTag()
+	newAggTag := builder.GenNewBindTag()
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_AGG,
 		Children:    []int32{nodeID},

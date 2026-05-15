@@ -84,7 +84,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 			NodeType:    plan.Node_TABLE_SCAN,
 			TableDef:    tableDef,
 			ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-			BindingTags: []int32{builder.genNewBindTag()},
+			BindingTags: []int32{builder.GenNewBindTag()},
 		}
 		scanNodeID := builder.appendNode(scanNode, ctx)
 
@@ -278,7 +278,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtectio
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: schemaName, ObjName: tableName},
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 		FilterList: []*plan.Expr{
 			{
 				Expr: &plan.Expr_F{
@@ -450,7 +450,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: schemaName, ObjName: tableName},
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 		FilterList: []*plan.Expr{
 			{
 				Expr: &plan.Expr_F{
@@ -725,7 +725,7 @@ func newExactVectorFallbackApplyIndicesCase(t *testing.T, sortFlag plan.OrderByS
 		},
 	}
 
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 	scanNodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
@@ -819,7 +819,7 @@ func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilde
 		},
 	}
 
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 	scanNodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
@@ -847,7 +847,7 @@ func newProjectedExactVectorFallbackApplyIndicesCase(t *testing.T) (*QueryBuilde
 		}},
 	}
 
-	childTag := builder.genNewBindTag()
+	childTag := builder.GenNewBindTag()
 	childProjectID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{scanNodeID},
@@ -939,7 +939,7 @@ func newProjectedHiddenPkExactVectorFallbackApplyIndicesCase(t *testing.T) (*Que
 		},
 	}
 
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 	scanNodeID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
@@ -967,7 +967,7 @@ func newProjectedHiddenPkExactVectorFallbackApplyIndicesCase(t *testing.T) (*Que
 		}},
 	}
 
-	childTag := builder.genNewBindTag()
+	childTag := builder.GenNewBindTag()
 	childProjectID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{scanNodeID},

@@ -203,7 +203,7 @@ func TestPrepareIvfIndexContext_OpTypeMismatch(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-// TestPrepareIvfIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
+// TestPrepareIvfIndexContext_ArgsNotFound tests the case where GetArgsFromDistFn returns found=false
 func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
@@ -627,17 +627,20 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Equal(t, vecCtx, result.vecCtx)
-	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], result.metaDef)
-	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], result.idxDef)
-	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], result.entriesDef)
-	assert.Equal(t, "l2_distance", result.origFuncName)
-	assert.Equal(t, int32(0), result.partPos)
-	assert.Equal(t, int32(1), result.pkPos)
-	assert.Equal(t, idxAlgoParams, result.params)
-	assert.Equal(t, int64(4), result.nThread)
-	assert.Equal(t, int64(10), result.nProbe)
-	assert.NotNil(t, result.vecLitArg)
+	// The bridge converts the test's *vectorSortContext into an
+	// exported *vectorplan.VectorSortContext before calling
+	// PrepareContext; compare via export() so the types line up.
+	assert.Equal(t, vecCtx.export(), result.VecCtx)
+	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], result.MetaDef)
+	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], result.IdxDef)
+	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], result.EntriesDef)
+	assert.Equal(t, "l2_distance", result.OrigFuncName)
+	assert.Equal(t, int32(0), result.PartPos)
+	assert.Equal(t, int32(1), result.PkPos)
+	assert.Equal(t, idxAlgoParams, result.Params)
+	assert.Equal(t, int64(4), result.NThread)
+	assert.Equal(t, int64(10), result.NProbe)
+	assert.NotNil(t, result.VecLitArg)
 }
 
 // TestCalculateAdaptiveNprobe tests the calculateAdaptiveNprobe function
@@ -802,7 +805,7 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
-	assert.Equal(t, int64(20), result.nProbe)
+	assert.Equal(t, int64(20), result.NProbe)
 
 	// Case 2: Adaptive mode disabled because totalLists is missing
 	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
@@ -822,7 +825,7 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	// Should use baseNprobe (10) because totalLists is -1
-	assert.Equal(t, int64(10), result.nProbe)
+	assert.Equal(t, int64(10), result.NProbe)
 
 	// Case 3: Adaptive mode disabled because mode is "force"
 	vecCtxForce := &vectorSortContext{
@@ -1558,13 +1561,13 @@ func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
 }
 
 // ============================================================================
-// Tests for getColName
+// Tests for GetColName
 // ============================================================================
 
 // TestGetColName_NilCol tests when col is nil
 func TestGetColName_NilCol(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	result := builder.getColName(nil)
+	result := builder.GetColName(nil)
 	assert.Equal(t, "", result)
 }
 
@@ -1572,7 +1575,7 @@ func TestGetColName_NilCol(t *testing.T) {
 func TestGetColName_NilBuilder(t *testing.T) {
 	var builder *QueryBuilder
 	col := &plan.ColRef{Name: "test_col"}
-	result := builder.getColName(col)
+	result := builder.GetColName(col)
 	assert.Equal(t, "test_col", result)
 }
 
@@ -1581,7 +1584,7 @@ func TestGetColName_NilNameByColRef(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	builder.nameByColRef = nil
 	col := &plan.ColRef{Name: "test_col"}
-	result := builder.getColName(col)
+	result := builder.GetColName(col)
 	assert.Equal(t, "test_col", result)
 }
 
@@ -1597,7 +1600,7 @@ func TestGetColName_FoundInMap(t *testing.T) {
 		Name:   "original_name",
 	}
 
-	result := builder.getColName(col)
+	result := builder.GetColName(col)
 	assert.Equal(t, "mapped_name", result)
 }
 
@@ -1612,19 +1615,19 @@ func TestGetColName_NotFoundInMap(t *testing.T) {
 		Name:   "original_name",
 	}
 
-	result := builder.getColName(col)
+	result := builder.GetColName(col)
 	assert.Equal(t, "original_name", result)
 }
 
 // ============================================================================
-// Tests for rebindScanNode
+// Tests for RebindScanNode
 // ============================================================================
 
 // TestRebindScanNode_NilNode tests when scanNode is nil
 func TestRebindScanNode_NilNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	// Should not panic
-	builder.rebindScanNode(nil)
+	builder.RebindScanNode(nil)
 }
 
 // TestRebindScanNode_NoBindingTags tests when BindingTags is empty
@@ -1634,7 +1637,7 @@ func TestRebindScanNode_NoBindingTags(t *testing.T) {
 		BindingTags: []int32{},
 	}
 	// Should not panic
-	builder.rebindScanNode(scanNode)
+	builder.RebindScanNode(scanNode)
 }
 
 // TestRebindScanNode_Success tests successful rebinding
@@ -1673,7 +1676,7 @@ func TestRebindScanNode_Success(t *testing.T) {
 		},
 	}
 
-	builder.rebindScanNode(scanNode)
+	builder.RebindScanNode(scanNode)
 
 	newTag := scanNode.BindingTags[0]
 	assert.NotEqual(t, oldTag, newTag)

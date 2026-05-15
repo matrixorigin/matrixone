@@ -126,7 +126,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	idxTableDef *TableDef, idxObjRef *ObjectRef, scanSnapshot *Snapshot, colDefs []*plan.ColDef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
-	idxScanTag := builder.genNewBindTag()
+	idxScanTag := builder.GenNewBindTag()
 	args := filterExp.GetF().Args
 
 	var filterList *plan.Expr
@@ -221,7 +221,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 	//NOTE: very important. You need to set ColName for the ColExpr to be pushed down to
 	// the Storage Engine layer. Otherwise, we will end up scanning all the rows.
-	builder.addNameByColRef(idxScanTag, idxTableDef)
+	builder.AddNameByColRef(idxScanTag, idxTableDef)
 
 	scanId := builder.appendNode(&Node{
 		NodeType:    plan.Node_TABLE_SCAN,

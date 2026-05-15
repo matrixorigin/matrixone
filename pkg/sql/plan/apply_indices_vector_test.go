@@ -22,6 +22,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// i64Lit / f32Lit are local test helpers (the originals lived in
+// filter_predicate_test.go, which moved to vectorplan in Phase 5b
+// along with the helpers).
+func i64Lit(v int64) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}},
+	}
+}
+
+func f32Lit(v float32) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: v}}},
+	}
+}
+
 func TestIsDescendingVectorSort(t *testing.T) {
 	require.True(t, isDescendingVectorSort(plan.OrderBySpec_DESC))
 	require.False(t, isDescendingVectorSort(plan.OrderBySpec_ASC))
@@ -192,7 +209,7 @@ func TestGetDistRangeFromFilters_AllOps(t *testing.T) {
 		t.Run(tc.op, func(t *testing.T) {
 			f := makeDistFnFilter(tc.op, "l2_distance", scanTag, partPos, vecVal, f32Lit(0.5))
 			var b *QueryBuilder
-			rem, dr := b.getDistRangeFromFilters([]*plan.Expr{f}, partPos, "l2_distance", vecLitArg)
+			rem, dr := b.GetDistRangeFromFilters([]*plan.Expr{f}, partPos, "l2_distance", vecLitArg)
 			require.Empty(t, rem)
 			require.NotNil(t, dr)
 			if tc.lower {
@@ -224,30 +241,30 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 
 	// Wrong distfn name → kept as residual.
 	bad := makeDistFnFilter("<", "cosine_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.5))
-	rem, dr := b.getDistRangeFromFilters([]*plan.Expr{bad}, partPos, "l2_distance", vecLitArg)
+	rem, dr := b.GetDistRangeFromFilters([]*plan.Expr{bad}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 
 	// Wrong column position → kept.
 	bad2 := makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, "[1,2,3]", f32Lit(0.5))
-	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad2}, partPos, "l2_distance", vecLitArg)
+	rem, dr = b.GetDistRangeFromFilters([]*plan.Expr{bad2}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 
 	// Mismatched vec literal → kept.
 	bad3 := makeDistFnFilter("<", "l2_distance", scanTag, partPos, "[9,9,9]", f32Lit(0.5))
-	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad3}, partPos, "l2_distance", vecLitArg)
+	rem, dr = b.GetDistRangeFromFilters([]*plan.Expr{bad3}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 
 	// Unsupported operator → kept.
 	bad4 := makeDistFnFilter("=", "l2_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.5))
-	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad4}, partPos, "l2_distance", vecLitArg)
+	rem, dr = b.GetDistRangeFromFilters([]*plan.Expr{bad4}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 
 	// Filter is not a function call (just a literal) → kept.
-	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
+	rem, dr = b.GetDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 }
@@ -266,7 +283,7 @@ func TestPeelAndRewriteDistFnFilters_AllOps(t *testing.T) {
 	for _, op := range []string{"<", "<=", ">", ">="} {
 		t.Run(op, func(t *testing.T) {
 			f := makeDistFnFilter(op, "l2_distance", scanTag, partPos, vecVal, f32Lit(0.4))
-			rem, peeled := b.peelAndRewriteDistFnFilters(
+			rem, peeled := b.PeelAndRewriteDistFnFilters(
 				[]*plan.Expr{f}, partPos, "l2_distance", vecLitArg, tfTag, scoreType)
 			require.Empty(t, rem)
 			require.Len(t, peeled, 1)
@@ -305,7 +322,7 @@ func TestPeelAndRewriteDistFnFilters_KeepsNonMatching(t *testing.T) {
 	// Bare literal (not a function).
 	bare := f32Lit(0.4)
 
-	rem, peeled := b.peelAndRewriteDistFnFilters(
+	rem, peeled := b.PeelAndRewriteDistFnFilters(
 		[]*plan.Expr{eq, wrongFn, wrongCol, wrongVec, bare}, partPos, "l2_distance", vecLitArg, tfTag, scoreType)
 	require.Empty(t, peeled)
 	require.Len(t, rem, 5)

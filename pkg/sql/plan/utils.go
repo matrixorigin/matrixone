@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -2802,15 +2803,9 @@ func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, u
 	}
 }
 
-func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
-	return &plan.RuntimeFilterSpec{
-		Tag:         tag,
-		UpperLimit:  upperlimit,
-		Expr:        expr,
-		MatchPrefix: matchPrefix,
-		NotOnPk:     notOnPk,
-	}
-}
+// MakeRuntimeFilter lives in pkg/sql/plan/vectorplan (Phase 5b).
+// Re-exported here so existing pkg/sql/plan callers keep compiling.
+var MakeRuntimeFilter = vectorplan.MakeRuntimeFilter
 
 func MakeIntervalExpr(num int64, str string) *Expr {
 	arg0 := makePlan2Int64ConstExprWithType(num)
@@ -2962,7 +2957,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.
-func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef) {
+func (builder *QueryBuilder) AddNameByColRef(tag int32, tableDef *plan.TableDef) {
 	for i, col := range tableDef.Cols {
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = tableDef.Name + "." + col.Name
 	}

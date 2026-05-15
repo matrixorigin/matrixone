@@ -146,6 +146,50 @@ type PlanBuilder interface {
 	// ReplaceColumnsForNode rewrites every column reference in `node` using
 	// `projMap`, in place. Wraps plan.replaceColumnsForNode.
 	ReplaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr)
+
+	// GenNewMsgTag mints a new runtime-filter message tag. Used by IVF-FLAT
+	// when wiring BloomFilter / IN-list runtime filters between the table
+	// function and the source scan.
+	GenNewMsgTag() int32
+
+	// CopyNode deep-copies a plan subtree rooted at nodeID and returns the
+	// new root's ID. Used by IVF-FLAT pre-mode to build the inner second
+	// scan that feeds the BloomFilter.
+	CopyNode(ctx BindContext, nodeID int32) int32
+
+	// RebindScanNode reassigns the scan's binding tag (GenNewBindTag) and
+	// updates every dependent ColRef in its FilterList / BlockFilterList.
+	// Used after CopyNode so the cloned subtree has distinct bindings.
+	RebindScanNode(scanNode *plan.Node)
+
+	// ApplyIndicesForFilters runs the optimizer's regular secondary-index
+	// rewrite over `node`'s filter list. Returns the (possibly rewritten)
+	// node ID. Used by IVF-FLAT to layer regular-index optimization onto
+	// the second scan / outer scan when both indexes apply.
+	ApplyIndicesForFilters(nodeID int32, node *plan.Node,
+		colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32
+
+	// WithSuspendedScanProtection runs `fn` with the scan-protection guard
+	// for `scanNodeID` temporarily disabled. The scan protection prevents
+	// the regular-index optimizer from rewriting a scan that's actively
+	// being consumed by an ANN rewrite; for the outer-join case in IVF-FLAT
+	// the rewrite is done and we can run regular-index optimization safely.
+	WithSuspendedScanProtection(scanNodeID int32, fn func())
+
+	// GetDistRangeFromFilters extracts `<distFn>(part, vecLit) <op> K` style
+	// predicates from the filter list and returns the residual filters plus
+	// the bounds packaged as a DistRange for the table-function reader.
+	GetDistRangeFromFilters(filters []*plan.Expr, partPos int32, origFuncName string,
+		vecLitArg *plan.Expr) (newFilters []*plan.Expr, distRange *plan.DistRange)
+
+	// GetColName returns the column name for a ColRef, consulting the
+	// builder's nameByColRef table when col.Name is empty.
+	GetColName(col *plan.ColRef) string
+
+	// AddNameByColRef registers column names for a binding tag from a
+	// TableDef. Used after RebindScanNode so projections / filters can
+	// resolve column names against the new tag.
+	AddNameByColRef(tag int32, tableDef *plan.TableDef)
 }
 
 // Function variables populated by pkg/sql/plan at init() time. These break
@@ -157,24 +201,27 @@ type PlanBuilder interface {
 // hook actually runs, because pkg/sql/plan must have initialized to even
 // invoke the hook in the first place.
 var (
-	DeepCopyExpr                    func(*plan.Expr) *plan.Expr
-	DeepCopyColDefList              func([]*plan.ColDef) []*plan.ColDef
-	MakePlan2StringConstExprWithType func(string, ...bool) *plan.Expr
-	BuildFilterPredicateJSON        func(filters []*plan.Expr, scanNode *plan.Node, includeCols []string, pkColName string) (predsJSON string, peeled, residual []*plan.Expr, err error)
-	ParseIncludedColumnsFromParams  func(indexAlgoParams string) ([]string, error)
-	ReplaceDistFnExprsWithScoreCol  func(exprs []*plan.Expr, scanBindingTag, partPos int32, origFuncName string, vecLit *plan.Expr, tableFuncTag int32, scoreColType plan.Type)
-	CalculatePostFilterOverFetchFactor func(uint64) float64
+	// Bodies in pkg/sql/plan, published here as function variables
+	// because their pkg/sql/plan home has too many tributaries to
+	// move cheaply (deepcopy.go is a 1000+ LoC tight cluster; the
+	// remaining helpers depend on internal helpers like
+	// makeHiddenColTyp / makePlan2StringConstExpr / filterExprToPreds).
+	// pkg/sql/plan's init() populates them; they're guaranteed
+	// non-nil by the time a plan-rewrite hook actually runs because
+	// pkg/sql/plan must have initialized to invoke the hook.
+	DeepCopyExpr                   func(*plan.Expr) *plan.Expr
+	DeepCopyColDefList             func([]*plan.ColDef) []*plan.ColDef
+	ReplaceDistFnExprsWithScoreCol func(exprs []*plan.Expr, scanBindingTag, partPos int32, origFuncName string, vecLit *plan.Expr, tableFuncTag int32, scoreColType plan.Type)
 
-	// Hidden-table-schema build helpers, populated at pkg/sql/plan init().
-	// Used by vector-index plugins' BuildSecondaryIndexDefs implementations.
-	CreateIndexDef          func(idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
-	MakeHiddenColDefByName  func(name string) *plan.ColDef
-	ValidateIncludeColumns  func(ctx CompilerContext, includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef, vecColName, pkeyName string) error
+	// Hidden-table-schema build helpers — bodies stay in pkg/sql/plan.
+	// CreateIndexDef in particular has a per-algo default-options switch
+	// that's most naturally expressed alongside the planner.
+	CreateIndexDef         func(idx *tree.Index, indexTableName, indexAlgoTableType string, indexParts []string, isUnique bool) (*plan.IndexDef, error)
+	MakeHiddenColDefByName func(name string) *plan.ColDef
 
-	// VectorSearchProviderChildren returns the children IDs for an
-	// hnsw_search / ivf_search FUNCTION_SCAN when the captured vecCtx came
-	// from a JOIN (the search node needs the JOIN's right input as its
-	// child). Returns nil for the non-JOIN path. Populated at pkg/sql/plan
-	// init() by VectorSearchProviderChildren in apply_indices_vector.go.
+	// These two have type adapters bridging the plugin's exported
+	// types to the internal unexported ones — they cannot become
+	// straight aliases without surfacing more internals.
+	ValidateIncludeColumns       func(ctx CompilerContext, includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef, vecColName, pkeyName string) error
 	VectorSearchProviderChildren func(*VectorSortContext) []int32
 )

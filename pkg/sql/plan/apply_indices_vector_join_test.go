@@ -240,7 +240,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    mainTableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 	}
 	mainScanNodeID := builder.appendNode(mainScanNode, ctx)
 
@@ -248,7 +248,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    providerTableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 	}
 	var providerFilters []*plan.Expr
 	if opts.providerSingle {
@@ -297,7 +297,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 	sortChildID := joinNodeID
 	sortExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: distFnExpr}}
 	if opts.projectProvider {
-		projectTag := builder.genNewBindTag()
+		projectTag := builder.GenNewBindTag()
 		projectNode := &plan.Node{
 			NodeType: plan.Node_PROJECT,
 			Children: []int32{joinNodeID},
@@ -517,19 +517,19 @@ func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
 		Args: []*plan.Expr{providerArg, scanArg},
 	}
 
-	key, value, found := builder.getArgsFromDistFnForJoin(distFn, 1, scanTag)
+	key, value, found := builder.GetArgsFromDistFnForJoin(distFn, 1, scanTag)
 	require.True(t, found)
 	require.Equal(t, scanArg, key)
 	require.Equal(t, providerArg, value)
 	require.Equal(t, scanArg.Typ, providerArg.Typ)
 
-	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "not_a_distance"},
 		Args: []*plan.Expr{scanArg, providerArg},
 	}, 1, scanTag)
 	require.False(t, found)
 
-	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "l2_distance"},
 		Args: []*plan.Expr{
 			newVectorJoinColExpr(scanTag, 1, "id", intTyp),
@@ -538,7 +538,7 @@ func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
 	}, 1, scanTag)
 	require.False(t, found)
 
-	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "l2_distance"},
 		Args: []*plan.Expr{providerArg, scanArg},
 	}, 2, scanTag)
@@ -578,7 +578,7 @@ func TestVectorProviderNonNullProofBranches(t *testing.T) {
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
 	notNullFloatTyp := plan.Type{Id: int32(types.T_array_float32), NotNullable: true}
 
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    newVectorJoinTableDef(false, true),
@@ -600,7 +600,7 @@ func TestVectorProviderNonNullProofBranches(t *testing.T) {
 	require.False(t, builder.isNonNullVectorProviderArg(scanNode, nil))
 	require.False(t, builder.isNonNullVectorProviderArg(scanNode, newVectorJoinStringLitExpr()))
 
-	projectTag := builder.genNewBindTag()
+	projectTag := builder.GenNewBindTag()
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{scanNodeID},
@@ -639,7 +639,7 @@ func TestSingleRowVectorProviderProofBranches(t *testing.T) {
 	ctx := NewBindContext(builder, nil)
 	varcharTyp := plan.Type{Id: int32(types.T_varchar)}
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
-	tag := builder.genNewBindTag()
+	tag := builder.GenNewBindTag()
 
 	tableDef := newVectorJoinTableDef(false, false)
 	tableDef.Pkey = nil
@@ -790,7 +790,7 @@ func TestGetDistRangeFromFiltersWithJoinVectorArg(t *testing.T) {
 		}},
 	}
 
-	remainingFilters, distRange := builder.getDistRangeFromFilters(
+	remainingFilters, distRange := builder.GetDistRangeFromFilters(
 		[]*plan.Expr{filter},
 		1,
 		"l2_distance",

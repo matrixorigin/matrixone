@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -535,23 +536,12 @@ func makePlan2StringConstExpr(v string, isBin ...bool) *plan.Expr_Lit {
 	return c
 }
 
-var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
-
-func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
-	width := int32(utf8.RuneCountInString(v))
-	id := int32(types.T_varchar)
-	if width == 0 {
-		id = int32(types.T_char)
-	}
-	return &plan.Expr{
-		Expr: makePlan2StringConstExpr(v, isBin...),
-		Typ: plan.Type{
-			Id:          id,
-			NotNullable: true,
-			Width:       width,
-		},
-	}
-}
+// makePlan2StringConstExprWithType lives in pkg/sql/plan/vectorplan
+// (Phase 5b). Aliased here so existing pkg/sql/plan callers compile.
+var (
+	makePlan2StringConstExprWithType = vectorplan.MakePlan2StringConstExprWithType
+	MakePlan2StringConstExprWithType = vectorplan.MakePlan2StringConstExprWithType
+)
 
 func makePlan2NullTextConstExpr(v string) *plan.Expr_Lit {
 	c := &plan.Expr_Lit{Lit: &plan.Literal{

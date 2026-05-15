@@ -30,8 +30,8 @@ func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	leftTag := builder.genNewBindTag()
-	rightTag := builder.genNewBindTag()
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
 
 	intType := Type{Id: int32(types.T_int64)}
 
@@ -232,8 +232,8 @@ func TestWindowFilterPushesDownToOwningWindowNode(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	baseTag := builder.genNewBindTag()
-	windowTag := builder.genNewBindTag()
+	baseTag := builder.GenNewBindTag()
+	windowTag := builder.GenNewBindTag()
 	intType := Type{Id: int32(types.T_int64)}
 
 	baseCol := &plan.Expr{
@@ -327,8 +327,8 @@ func TestWindowNonPartitionFilterNotPushedDown(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	baseTag := builder.genNewBindTag()
-	windowTag := builder.genNewBindTag()
+	baseTag := builder.GenNewBindTag()
+	windowTag := builder.GenNewBindTag()
 	intType := Type{Id: int32(types.T_int64)}
 
 	// col-a: partition-by column
@@ -394,7 +394,7 @@ func TestWindowNonPartitionFilterNotPushedDown(t *testing.T) {
 
 func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 
 	vectorCol := &plan.Expr{
 		Typ: Type{Id: int32(types.T_array_float32), Width: 2},

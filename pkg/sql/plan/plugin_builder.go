@@ -25,14 +25,16 @@ import (
 // init populates the cross-package function variables in vectorplan so the
 // vector-index plugin's plan-rewrite body can use them without taking a
 // direct dependency on pkg/sql/plan.
+// init populates the cross-package function variables in vectorplan
+// whose bodies still live in pkg/sql/plan. Phase 5b moved 6 standalone
+// helpers (DeepCopyRankOption, MakeRuntimeFilter, the two over-fetch
+// calculators, ParseIncludedColumnsFromParams, MakePlan2StringConstExprWithType)
+// into vectorplan as real functions; what's left here is the
+// dependency-heavy or type-adapter-needing rump.
 func init() {
 	vectorplan.DeepCopyExpr = DeepCopyExpr
 	vectorplan.DeepCopyColDefList = DeepCopyColDefList
-	vectorplan.MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
-	vectorplan.BuildFilterPredicateJSON = buildFilterPredicateJSON
-	vectorplan.ParseIncludedColumnsFromParams = parseIncludedColumnsFromParams
 	vectorplan.ReplaceDistFnExprsWithScoreCol = replaceDistFnExprsWithScoreCol
-	vectorplan.CalculatePostFilterOverFetchFactor = calculatePostFilterOverFetchFactor
 
 	vectorplan.CreateIndexDef = CreateIndexDef
 	vectorplan.MakeHiddenColDefByName = MakeHiddenColDefByName
@@ -62,11 +64,19 @@ func validateIncludeColumnsForPlugin(ctx vectorplan.CompilerContext,
 	return validateIncludeColumns(ctx.(CompilerContext), includeCols, colMap, vecColName, pkeyName)
 }
 
-// QueryBuilder facade methods. These make *QueryBuilder satisfy
-// vectorplan.PlanBuilder so the plugin can drive plan construction without
-// importing pkg/sql/plan.
+// *QueryBuilder satisfies vectorplan.PlanBuilder. The compile-time
+// assertion below catches any signature drift between the interface
+// and the concrete type — add a new method to vectorplan.PlanBuilder
+// and forget to implement it (or rename it), and this line breaks the
+// build.
+var _ vectorplan.PlanBuilder = (*QueryBuilder)(nil)
 
-func (builder *QueryBuilder) GenNewBindTag() int32 { return builder.genNewBindTag() }
+// Most interface methods are already defined on *QueryBuilder under
+// the same exported names (after Phase 5 renames: GenNewBindTag,
+// GenNewMsgTag, GetArgsFromDistFn, etc.). The remaining definitions
+// here are genuine type-adapters that bridge the plugin's `any`
+// BindContext to the internal *BindContext, or that funnel a
+// standalone helper through a method.
 
 func (builder *QueryBuilder) AppendNode(node *plan.Node, ctx vectorplan.BindContext) int32 {
 	bc, _ := ctx.(*BindContext)
@@ -87,18 +97,17 @@ func (builder *QueryBuilder) CtxByNode(id int32) vectorplan.BindContext {
 
 func (builder *QueryBuilder) Query() *plan.Query { return builder.qry }
 
-// GetContext is already an exported method elsewhere; the receiver alias
-// here is a no-op compile-time interface check anchor.
-var _ context.Context = context.TODO()
+// _ = context.TODO is kept so this file still imports "context".
+var _ = context.TODO
 
 func (builder *QueryBuilder) ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error) {
 	return builder.compCtx.ResolveVariable(name, isSystemVar, isGlobalVar)
 }
 
-// ValidateVectorIndexSortRewrite is a thin facade that takes the exported
-// vectorplan.VectorSortContext (mirrors the unexported vectorSortContext
-// used internally). Only the sortDirection field is actually inspected, so
-// the copy is cheap.
+// ValidateVectorIndexSortRewrite is a thin adapter that takes the
+// exported vectorplan.VectorSortContext (mirrors the unexported
+// vectorSortContext used internally). Only the sortDirection field is
+// actually inspected, so the copy is cheap.
 func (builder *QueryBuilder) ValidateVectorIndexSortRewrite(vc *vectorplan.VectorSortContext) (bool, error) {
 	if vc == nil {
 		return builder.validateVectorIndexSortRewrite(nil)
@@ -116,27 +125,17 @@ func (builder *QueryBuilder) ValidateVectorIndexSortRewrite(vc *vectorplan.Vecto
 	})
 }
 
-func (builder *QueryBuilder) GetArgsFromDistFn(distFn *plan.Function, partPos int32) (*plan.Expr, *plan.Expr, bool) {
-	return builder.getArgsFromDistFn(distFn, partPos)
-}
-
-func (builder *QueryBuilder) GetArgsFromDistFnForJoin(distFn *plan.Function, partPos, scanTag int32) (*plan.Expr, *plan.Expr, bool) {
-	return builder.getArgsFromDistFnForJoin(distFn, partPos, scanTag)
-}
-
-func (builder *QueryBuilder) PeelAndRewriteDistFnFilters(
-	filters []*plan.Expr, partPos int32, origFuncName string,
-	vecLitArg *plan.Expr, tableFuncTag int32, scoreColType plan.Type,
-) (newFilters, peeled []*plan.Expr) {
-	return builder.peelAndRewriteDistFnFilters(filters, partPos, origFuncName, vecLitArg, tableFuncTag, scoreColType)
-}
-
 func (builder *QueryBuilder) BindFuncByName(name string, args []*plan.Expr) (*plan.Expr, error) {
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
 }
 
 func (builder *QueryBuilder) ReplaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForNode(node, projMap)
+}
+
+func (builder *QueryBuilder) CopyNode(ctx vectorplan.BindContext, nodeID int32) int32 {
+	bc, _ := ctx.(*BindContext)
+	return builder.copyNode(bc, nodeID)
 }
 
 // export converts the package-private vectorSortContext into the exported

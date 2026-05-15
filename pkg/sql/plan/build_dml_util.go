@@ -2317,7 +2317,7 @@ func appendDeleteIndexTablePlan(
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
-	rfTag := builder.genNewMsgTag()
+	rfTag := builder.GenNewMsgTag()
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
@@ -4486,7 +4486,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			},
 			Cols: ftcols,
 		},
-		BindingTags:     []int32{builder.genNewBindTag()},
+		BindingTags:     []int32{builder.GenNewBindTag()},
 		TblFuncExprList: args,
 		//Children:        []int32{lastNodeId},
 	}
@@ -4510,7 +4510,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		NodeType:    plan.Node_APPLY,
 		Children:    []int32{lastNodeId, tableFuncId},
 		ApplyType:   plan.Node_CROSSAPPLY,
-		BindingTags: []int32{builder.genNewBindTag()},
+		BindingTags: []int32{builder.GenNewBindTag()},
 		ProjectList: apply_project,
 	}, bindCtx)
 
@@ -4651,7 +4651,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
 		// see appendDeleteMasterTablePlan
 
-		rfTag := builder.genNewMsgTag()
+		rfTag := builder.GenNewMsgTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 

@@ -59,9 +59,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -809,11 +809,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo)
 					err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
-				} else {
-					switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
-					case catalog.MoIndexIvfFlatAlgo.ToString():
-						err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
-					}
 				}
 
 				if err != nil {
@@ -869,44 +864,59 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					switch catalog.ToLower(indexAlgo) {
-					case catalog.MoIndexIvfFlatAlgo.ToString():
-						// 1. Get old AlgoParams
-						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
-						if err != nil {
-							return err
-						}
-						// 2.a update AlgoParams for the index to be re-indexed
-						// NOTE: this will throw error if the algo type is not supported for reindex.
-						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
-						newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
-						newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
-
-						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						if err = c.runSqlWithOptions(
-							updateSql, executor.StatementOption{}.WithDisableLog(),
-						); err != nil {
-							return err
-						}
-
-						// 4. register auto update again
-						err = s.handleIvfIndexRegisterUpdate(c, indexDef, qry.Database, oTableDef)
-						if err != nil {
-							return err
-						}
-					default:
+					// AlterAutoUpdate updates the scheduled-rebuild
+					// cadence. Gate on whether the algorithm participates
+					// in idxcron — today only IVF-FLAT does, but CAGRA /
+					// IVF-PQ become eligible once their IdxcronAction
+					// values are wired.
+					p, ok := vectorplugin.Get(indexAlgo)
+					if !ok || p.Catalog().SyncDescriptor().IdxcronAction == "" {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+					}
+					// 1. Update AutoUpdate/Day/Hour in AlgoParams.
+					newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+					newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
+					newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
+					newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
+					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+					if err != nil {
+						return err
+					}
+
+					// 2. Update IndexDef and mo_catalog.mo_indexes.
+					alterIndex.IndexAlgoParams = newAlgoParams
+					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+					if err = c.runSqlWithOptions(
+						updateSql, executor.StatementOption{}.WithDisableLog(),
+					); err != nil {
+						return err
+					}
+
+					// 3. Re-register the idxcron update with the
+					// refreshed metadata. The plugin's IdxcronMetadata
+					// hook owns metadata composition; SyncDescriptor
+					// supplies the action key (already gated above).
+					desc := p.Catalog().SyncDescriptor()
+					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					metadata, err := p.Compile().IdxcronMetadata(cctx)
+					if err != nil {
+						return err
+					}
+					// Same frontend gate as registerIdxcronUpdate inside
+					// the plugin: skip when invoked from a background
+					// job (no `ivf_threads_search` var).
+					if _, ferr := cctx.ResolveVariable("ivf_threads_search", true, false); ferr != nil {
+						continue
+					}
+					if err = cctx.RegisterIdxcronUpdate(
+						oTableDef.TblId, qry.Database, oTableDef.Name,
+						indexDef.IndexName, desc.IdxcronAction, metadata,
+					); err != nil {
+						return err
 					}
 				}
 			}
@@ -924,44 +934,37 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					switch catalog.ToLower(indexAlgo) {
-					case catalog.MoIndexIvfFlatAlgo.ToString():
-						// 1. Get old AlgoParams
-						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
-						if err != nil {
+					if !vectorplugin.IsVectorIndexAlgo(indexAlgo) {
+						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+					}
+					// Each algorithm's plugin owns parameter-update
+					// semantics via Compile.ValidateReindexParams. For
+					// IVF-FLAT that merges `lists`; for HNSW/CAGRA/
+					// IVF-PQ today it's a passthrough.
+					oldParams, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+					p, _ := vectorplugin.Get(indexAlgo)
+					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
+						compileplugin.ReindexParamUpdate{
+							IndexAlgoParamList: tableAlterIndex.IndexAlgoParamList,
+						})
+					if err != nil {
+						return err
+					}
+					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newParamsMap)
+					if err != nil {
+						return err
+					}
+					if newAlgoParams != alterIndex.IndexAlgoParams {
+						alterIndex.IndexAlgoParams = newAlgoParams
+						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
 							return err
-						}
-						// 2.a update AlgoParams for the index to be re-indexed
-						// NOTE: this will throw error if the algo type is not supported for reindex.
-						// So Step 4. will not be executed if error is thrown here.
-						if tableAlterIndex.IndexAlgoParamList > 0 {
-							newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
-							// 2.b generate new AlgoParams string
-							newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-							if err != nil {
-								return err
-							}
-
-							// 3.a Update IndexDef and TableDef
-							alterIndex.IndexAlgoParams = newAlgoParams
-							oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-							// 3.b Update mo_catalog.mo_indexes
-							updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-							if err = c.runSqlWithOptions(
-								updateSql, executor.StatementOption{}.WithDisableLog(),
-							); err != nil {
-								return err
-							}
-						}
-					default:
-						// Plugin-registered vector indexes (HNSW / CAGRA /
-						// IVF-PQ today) have no online parameter updates
-						// — their Compile.ValidateReindexParams is a
-						// passthrough. Anything else is an invalid algo
-						// for ALTER REINDEX.
-						if !vectorplugin.IsVectorIndexAlgo(catalog.ToLower(indexAlgo)) {
-							return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 						}
 					}
 
@@ -981,11 +984,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
-				} else {
-					switch multiTableIndex.IndexAlgo {
-					case catalog.MoIndexIvfFlatAlgo.ToString():
-						err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
-					}
 				}
 
 				if err != nil {
@@ -2204,10 +2202,9 @@ func (s *Scope) doCreateIndex(
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique &&
-			(vectorplugin.IsVectorIndexAlgo(indexAlgo) || catalog.IsIvfIndexAlgo(indexAlgo)) {
-			// 4. Vector indexes (plugin-registered or IVF-FLAT inline)
-			// are aggregated and handled later.
+		} else if !indexDef.Unique && vectorplugin.IsVectorIndexAlgo(indexAlgo) {
+			// 4. Vector indexes are aggregated and handled later by
+			// their plugin's HandleCreateIndex.
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -2225,17 +2222,11 @@ func (s *Scope) doCreateIndex(
 	}
 
 	for _, multiTableIndex := range multiTableIndexes {
-		// Plugin-mediated dispatch — algorithms register their compile
-		// hooks via pkg/vectorindex/<algo>/plugin. Fall back to the legacy
-		// switch for algorithms that haven't migrated yet (HNSW, IVFFLAT).
+		// Plugin-mediated dispatch — every vector-index algorithm has a
+		// registered plugin (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
 		if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 			cctx := newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
 			err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
-		} else {
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
-			}
 		}
 
 		if err != nil {
@@ -2343,99 +2334,6 @@ func indexTableBuild(
 	)
 	mainExtra.IndexTables = append(mainExtra.IndexTables, def.TblId)
 	return err
-}
-
-func (s *Scope) handleVectorIvfFlatIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-	forceSync bool,
-) error {
-	// 1. static check
-	if len(indexDefs) != 3 {
-		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
-	} else if len(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Skip index data population for CCPR tables when this is a CCPR task transaction.
-	// The index data will be synced via CCPR data synchronization instead.
-	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
-		return nil
-	}
-
-	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-
-	// remove the cache with version 0
-	key := fmt.Sprintf("%s:0", indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-	cache.Cache.Remove(key)
-
-	// 3. get count of secondary index column in original table
-	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	// 4.a populate meta table
-	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
-	if err != nil {
-		return err
-	}
-
-	// 4.b populate centroids table
-	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
-		totalCnt,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		forceSync)
-	if err != nil {
-		return err
-	}
-
-	if !async || forceSync {
-		// 4.c populate entries table
-		err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-		if err != nil {
-			return err
-		}
-	}
-
-	// 4.d delete older entries in index table.
-	err = s.handleIvfIndexDeleteOldEntries(c,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,
-		qryDatabase)
-	if err != nil {
-		return err
-	}
-
-	// 4.e register auto index update (reindex)
-	err = s.handleIvfIndexRegisterUpdate(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	return nil
-
 }
 
 func (s *Scope) DropIndex(c *Compile) error {

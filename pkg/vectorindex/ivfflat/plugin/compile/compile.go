@@ -1,0 +1,572 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package compile implements the IVF-FLAT plugin's compile-layer (DDL) hooks.
+//
+// Lifted from:
+//   - pkg/sql/compile/ddl.go:2348              handleVectorIvfFlatIndex
+//   - pkg/sql/compile/ddl_index_algo.go:199    handleIndexColCount
+//   - pkg/sql/compile/ddl_index_algo.go:221    handleIvfIndexMetaTable
+//   - pkg/sql/compile/ddl_index_algo.go:253    handleIvfIndexCentroidsTable
+//   - pkg/sql/compile/ddl_index_algo.go:412    handleIvfIndexEntriesTable
+//   - pkg/sql/compile/ddl_index_algo.go:507    handleIvfIndexRegisterUpdate
+//   - pkg/sql/compile/ddl_index_algo.go:531    logTimestamp
+//   - pkg/sql/compile/ddl_index_algo.go:575    handleIvfIndexDeleteOldEntries
+//   - pkg/sql/compile/iscp_util.go:267         getIvfflatMetadata
+package compile
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+)
+
+// actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
+// here so this package doesn't import pkg/vectorindex/idxcron — which
+// would create an import cycle in tests: idxcron's executor_test imports
+// pkg/testutil/testengine → pkg/sql/plan → this plugin → idxcron.
+//
+// Stays in lock-step with pkg/vectorindex/idxcron/executor.go:56.
+const actionIvfflatReindex = "ivfflat_reindex"
+
+// IvfflatIndexFlag is the experimental-feature flag gating IVF-FLAT DDL.
+// Matches pkg/frontend/variables.go's `experimental_ivf_index` (legacy
+// name — predates the IVF-PQ split).
+const IvfflatIndexFlag = "experimental_ivf_index"
+
+// Compile-time interface check.
+var _ compileplugin.Hooks = Hooks{}
+
+// Hooks implements plugin/compile.Hooks for IVF-FLAT.
+type Hooks struct{}
+
+// HandleCreateIndex is lifted verbatim from Scope.handleVectorIvfFlatIndex
+// (pkg/sql/compile/ddl.go:2348). HandleReindex routes through the same
+// body with forceSync threaded.
+func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	return runCreateOrReindex(ctx, indexDefs, false)
+}
+
+// HandleReindex runs the same body as HandleCreateIndex with forceSync
+// threaded into centroid building. Matches ddl.go:980-987 dispatch.
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	return runCreateOrReindex(ctx, indexDefs, forceSync)
+}
+
+// ValidateReindexParams handles the IVF-FLAT `lists` update at ALTER
+// REINDEX time. The legacy switch at ddl.go:928 wrote new lists into
+// the AlgoParams map and persisted it via UPDATE mo_catalog.mo_indexes
+// inline — that persistence stays at the SQL-layer call site, so this
+// hook only performs the map merge.
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if alter.IndexAlgoParamList > 0 {
+		out := make(map[string]string, len(old)+1)
+		for k, v := range old {
+			out[k] = v
+		}
+		out[catalog.IndexAlgoParamLists] = strconv.FormatInt(alter.IndexAlgoParamList, 10)
+		return out, nil
+	}
+	return old, nil
+}
+
+// HandleDropIndex: IVF-FLAT generic hidden-table deletion is performed
+// by the SQL layer; CDC tasks and idxcron registrations are torn down
+// via DropAllIndexCdcTasks / DropAllIndexUpdateTasks at the same seam
+// (pkg/sql/compile/ddl.go DropIndex path). No additional cleanup here.
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+	return nil
+}
+
+// IdxcronMetadata is lifted from pkg/sql/compile/iscp_util.go:267
+// (getIvfflatMetadata). The original returned a `frontend` bool used by
+// handleIvfIndexRegisterUpdate to skip background invocations — that
+// check now lives in registerIdxcronUpdate below.
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	metadata, _, err := getIvfflatMetadata(ctx)
+	return metadata, err
+}
+
+// runCreateOrReindex is the shared body for HandleCreateIndex /
+// HandleReindex. Lifted from Scope.handleVectorIvfFlatIndex.
+func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	if ok, err := ctx.IsExperimentalEnabled(IvfflatIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("experimental_ivf_index is not enabled")
+	}
+
+	// 1. static check
+	if len(indexDefs) != 3 {
+		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
+	} else if len(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
+	}
+
+	// 2. create hidden tables
+	if info := ctx.IndexInfo(); info != nil {
+		for _, table := range info.GetIndexTables() {
+			if err := ctx.BuildIndexTable(table); err != nil {
+				return err
+			}
+		}
+	}
+
+	originalTableDef := ctx.OriginalTableDef()
+	qryDatabase := ctx.QryDatabase()
+
+	// Skip index data population for CCPR tables when this is a CCPR
+	// task transaction. The index data will be synced via CCPR data
+	// synchronization instead.
+	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
+		return nil
+	}
+
+	metaDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+	centroidsDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids]
+	entriesDef := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries]
+
+	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
+	// remove the cache with version 0
+	cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName))
+
+	// 3. count rows in the source table
+	totalCnt, err := indexColCount(ctx, metaDef, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	// 4.a populate meta table
+	if err = ivfIndexMetaTable(ctx, metaDef, qryDatabase); err != nil {
+		return err
+	}
+
+	// 4.b populate centroids table
+	if err = ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
+		totalCnt, metaDef.IndexTableName, forceSync); err != nil {
+		return err
+	}
+
+	if !async || forceSync {
+		// 4.c populate entries table
+		if err = ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
+			metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+			return err
+		}
+	}
+
+	// 4.d delete older entries in index table.
+	if err = ivfIndexDeleteOldEntries(ctx, metaDef.IndexTableName,
+		centroidsDef.IndexTableName, entriesDef.IndexTableName, qryDatabase); err != nil {
+		return err
+	}
+
+	// 4.e register auto index update (reindex)
+	return registerIdxcronUpdate(ctx, metaDef, qryDatabase, originalTableDef)
+}
+
+// indexColCount is lifted from Scope.handleIndexColCount
+// (pkg/sql/compile/ddl_index_algo.go:199).
+func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+	sql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
+		indexDef.Parts[0], qryDatabase, originalTableDef.Name)
+	rs, err := ctx.RunSqlWithResult(sql)
+	if err != nil {
+		return 0, err
+	}
+	defer rs.Close()
+	var n int64
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		n = executor.GetFixedRows[int64](cols[0])[0]
+		return false
+	})
+	return n, nil
+}
+
+// ivfIndexMetaTable is lifted from Scope.handleIvfIndexMetaTable
+// (pkg/sql/compile/ddl_index_algo.go:221).
+func ivfIndexMetaTable(ctx compileplugin.CompileContext, indexDef *plan.IndexDef, qryDatabase string) error {
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
+		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	)
+	return ctx.RunSql(insertSQL)
+}
+
+// ivfIndexCentroidsTable is lifted from Scope.handleIvfIndexCentroidsTable
+// (pkg/sql/compile/ddl_index_algo.go:253).
+func ivfIndexCentroidsTable(
+	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef,
+	totalCnt int64, metadataTableName string, forceSync bool,
+) error {
+	srcAlias := "src"
+	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+
+	cfg := vectorindex.IndexTableConfig{
+		MetadataTable: metadataTableName,
+		IndexTable:    indexDef.IndexTableName,
+		DbName:        qryDatabase,
+		SrcTable:      originalTableDef.Name,
+		PKey:          pkColName,
+		KeyPart:       indexDef.Parts[0],
+		DataSize:      totalCnt,
+	}
+
+	listsval, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamLists)
+	if err != nil {
+		return err
+	}
+	centroidParamsListsStr, err := listsval.StrictString()
+	if err != nil {
+		return err
+	}
+	centroidParamsLists, err := strconv.Atoi(centroidParamsListsStr)
+	if err != nil {
+		return err
+	}
+
+	var sql string
+	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+		// not enough rows: seed centroids with a single NULL placeholder.
+		// Re-running ALTER REINDEX once the table is populated upgrades
+		// the centroid quality.
+		sql = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+			"SELECT "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"1, NULL;",
+			qryDatabase,
+			indexDef.IndexTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metadataTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		)
+	} else {
+		threads, err := ctx.ResolveVariable("ivf_threads_build", true, false)
+		if err != nil {
+			return err
+		}
+		cfg.ThreadsBuild = threads.(int64)
+
+		trainPct, err := ctx.ResolveVariable("kmeans_train_percent", true, false)
+		if err != nil {
+			return err
+		}
+		cfg.KmeansTrainPercent = trainPct.(float64)
+
+		maxIter, err := ctx.ResolveVariable("kmeans_max_iteration", true, false)
+		if err != nil {
+			return err
+		}
+		cfg.KmeansMaxIteration = maxIter.(int64)
+
+		cfgbytes, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+
+		sql = fmt.Sprintf("SELECT * FROM ivf_create('%s', '%s') AS f;",
+			indexDef.IndexAlgoParams, string(cfgbytes))
+	}
+
+	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+	indexName := indexDef.IndexName
+
+	if async {
+		if forceSync {
+			// background reindex: build synchronously inside the txn so
+			// the new centroids land before subsequent steps; the CDC
+			// task is re-registered to consume only changes from now.
+			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
+				return err
+			}
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end"); err != nil {
+				return err
+			}
+			if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, indexName); err != nil {
+				return err
+			}
+			logutil.Infof("Ivfflat index Async = true, forceSync = true")
+			return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+				originalTableDef.TblId, indexName, sinkerType, true, "", originalTableDef)
+		}
+		// async, not forced: defer the actual build to the CDC pipeline,
+		// which replays from ts=0.
+		if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		logutil.Infof("Ivfflat index Async is true")
+		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, indexName, sinkerType, false, sql, originalTableDef)
+	}
+
+	// synchronous: build now and don't register CDC.
+	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
+		return err
+	}
+	if err = ctx.RunSql(sql); err != nil {
+		return err
+	}
+	return logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end")
+}
+
+// ivfIndexEntriesTable is lifted from Scope.handleIvfIndexEntriesTable
+// (pkg/sql/compile/ddl_index_algo.go:412).
+func ivfIndexEntriesTable(
+	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef,
+	metadataTableName, centroidsTableName string,
+) error {
+	val, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	if err != nil {
+		return err
+	}
+	optype, err := val.StrictString()
+	if err != nil {
+		return err
+	}
+
+	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
+	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		for i, part := range originalTableDef.Pkey.Names {
+			if i > 0 {
+				originalTblPkColsCommaSeparated += ","
+			}
+			originalTblPkColsCommaSeparated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
+		}
+		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeparated)
+	} else {
+		originalTblPkColsCommaSeparated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColMaySerial = originalTblPkColsCommaSeparated
+	}
+
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	)
+
+	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
+		"`%s`.`%s` where `%s` = "+
+		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		centroidsTableName,
+	)
+
+	indexColumnName := indexDef.Parts[0]
+	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
+		"SELECT `%s`, `%s`,  %s, `%s`"+
+		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
+		" using (`%s`, `%s`) ",
+		insertSQL,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+		originalTblPkColMaySerial,
+		indexColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+		optype,
+		centroidsTableForCurrentVersionSql,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+		indexColumnName,
+	)
+
+	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "mapping_start"); err != nil {
+		return err
+	}
+	if err = ctx.RunSql(centroidsCrossL2JoinTbl); err != nil {
+		return err
+	}
+	return logTimestamp(ctx, qryDatabase, metadataTableName, "mapping_end")
+}
+
+// registerIdxcronUpdate is lifted from Scope.handleIvfIndexRegisterUpdate
+// (pkg/sql/compile/ddl_index_algo.go:507). The original `frontend` check
+// guards against background (idxcron-triggered) invocations re-registering
+// themselves — preserved here.
+func registerIdxcronUpdate(
+	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef,
+) error {
+	metadata, frontend, err := getIvfflatMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if !frontend {
+		// background invocation: idxcron itself is the caller, skip
+		// re-registration.
+		logutil.Infof("Background invoke reindex and ignore register index update function call")
+		return nil
+	}
+	return ctx.RegisterIdxcronUpdate(
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		actionIvfflatReindex,
+		metadata,
+	)
+}
+
+// logTimestamp is lifted from Scope.logTimestamp
+// (pkg/sql/compile/ddl_index_algo.go:531).
+func logTimestamp(ctx compileplugin.CompileContext, qryDatabase, metadataTableName, metric string) error {
+	return ctx.RunSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		" VALUES ('%s', NOW()) "+
+		" ON DUPLICATE KEY UPDATE %s = NOW();",
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		metric,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	))
+}
+
+// ivfIndexDeleteOldEntries is lifted from Scope.handleIvfIndexDeleteOldEntries
+// (pkg/sql/compile/ddl_index_algo.go:575).
+func ivfIndexDeleteOldEntries(
+	ctx compileplugin.CompileContext,
+	metadataTableName, centroidsTableName, entriesTableName, qryDatabase string,
+) error {
+	pruneCentroids := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase, centroidsTableName, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+	pruneEntries := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
+		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
+		qryDatabase, entriesTableName, catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+	if err := logTimestamp(ctx, qryDatabase, metadataTableName, "pruning_start"); err != nil {
+		return err
+	}
+	if err := ctx.RunSql(pruneCentroids); err != nil {
+		return err
+	}
+	if err := ctx.RunSql(pruneEntries); err != nil {
+		return err
+	}
+	return logTimestamp(ctx, qryDatabase, metadataTableName, "pruning_end")
+}
+
+// getIvfflatMetadata is lifted from pkg/sql/compile/iscp_util.go:267.
+// Returns the marshaled metadata blob plus a `frontend` bool: true when
+// `ivf_threads_search` is resolvable (i.e. the caller is the user
+// frontend, not a background idxcron job).
+func getIvfflatMetadata(ctx compileplugin.CompileContext) ([]byte, bool, error) {
+	// `ivf_threads_search` only exists in the frontend variable table.
+	_, ferr := ctx.ResolveVariable("ivf_threads_search", true, false)
+	frontend := ferr == nil
+
+	threads, err := ctx.ResolveVariable("ivf_threads_build", true, false)
+	if err != nil {
+		return nil, frontend, err
+	}
+	threadsBuild := int64(0)
+	if threads != nil {
+		threadsBuild = threads.(int64)
+	}
+
+	trainPctV, err := ctx.ResolveVariable("kmeans_train_percent", true, false)
+	if err != nil {
+		return nil, frontend, err
+	}
+	kmeansTrainPercent := float64(10)
+	if trainPctV != nil {
+		kmeansTrainPercent = trainPctV.(float64)
+	}
+
+	maxIterV, err := ctx.ResolveVariable("kmeans_max_iteration", true, false)
+	if err != nil {
+		return nil, frontend, err
+	}
+	kmeansMaxIteration := int64(20)
+	if maxIterV != nil {
+		kmeansMaxIteration = maxIterV.(int64)
+	}
+
+	lcV, err := ctx.ResolveVariable("lower_case_table_names", true, false)
+	if err != nil {
+		return nil, frontend, err
+	}
+	lowerCase := int64(1)
+	if lcV != nil {
+		lowerCase = lcV.(int64)
+	}
+
+	expV, err := ctx.ResolveVariable("experimental_ivf_index", true, false)
+	if err != nil {
+		return nil, frontend, err
+	}
+	experimentalIvfIndex := int8(1)
+	if expV != nil {
+		experimentalIvfIndex = expV.(int8)
+	}
+
+	w := sqlexec.NewMetadataWriter()
+	w.AddInt("ivf_threads_build", threadsBuild)
+	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
+	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	w.AddInt("lower_case_table_names", lowerCase)
+	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
+	metadata, err := w.Marshal()
+	return metadata, frontend, err
+}

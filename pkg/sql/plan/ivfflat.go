@@ -19,12 +19,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
-// coldef shall copy index type
+// IVF-FLAT search-side constants now live in
+// pkg/sql/plan/vectorplan/ivfflat.go (Phase 4e) so the lifted plan body
+// in pkg/vectorindex/ivfflat/plugin/plan can reference them. These
+// aliases keep existing callers in this file compiling unchanged.
 var (
 	kIVFCreateFuncName = "ivf_create"
-	kIVFSearchFuncName = "ivf_search"
+	kIVFSearchFuncName = vectorplan.IVFFLATSearchFuncName
 
 	kIVFBuildIndexColDefs = []*plan.ColDef{
 		{
@@ -37,23 +41,7 @@ var (
 		},
 	}
 
-	kIVFSearchColDefs = []*plan.ColDef{
-		{
-			Name: "pkid",
-			Typ: plan.Type{
-				Id:          int32(types.T_any),
-				NotNullable: false,
-			},
-		},
-		{
-			Name: "score",
-			Typ: plan.Type{
-				Id:          int32(types.T_float64),
-				NotNullable: false,
-				Width:       8,
-			},
-		},
-	}
+	kIVFSearchColDefs = vectorplan.IVFFLATSearchColDefs
 )
 
 // arg list [param, ivf.IndexTableConfig (JSON), vec]
@@ -91,7 +79,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewBindTag()},
+		BindingTags:     []int32{builder.GenNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -125,7 +113,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewBindTag()},
+		BindingTags:     []int32{builder.GenNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

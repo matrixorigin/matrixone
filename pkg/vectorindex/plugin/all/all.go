@@ -20,6 +20,6 @@ package all
 import (
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
-	// IVF-FLAT plugin lands in a follow-up.
 )

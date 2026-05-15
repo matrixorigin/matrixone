@@ -317,26 +317,29 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 					}
 
 					{
-						// idxcron
-						metadata, _, err := getIvfflatMetadata(c)
-						if err != nil {
-							return err
-						}
-
-						if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-
-							err = idxcron.RegisterUpdate(c.proc.Ctx,
-								c.proc.GetService(),
-								c.proc.GetTxnOperator(),
-								id,
-								dbName,
-								newTableDef.Name,
-								indexDef.IndexName,
-								idxcron.Action_Ivfflat_Reindex,
-								string(metadata))
-
-							if err != nil {
-								return err
+						// idxcron — register the algorithm's scheduled
+						// maintenance task via the plugin. Plugins
+						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
+						// today) are skipped.
+						if p, ok := vectorplugin.Get(indexDef.IndexAlgo); ok {
+							d := p.Catalog().SyncDescriptor()
+							if d.IdxcronAction != "" {
+								cctx := newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								metadata, err := p.Compile().IdxcronMetadata(cctx)
+								if err != nil {
+									return err
+								}
+								if err = idxcron.RegisterUpdate(c.proc.Ctx,
+									c.proc.GetService(),
+									c.proc.GetTxnOperator(),
+									id,
+									dbName,
+									newTableDef.Name,
+									indexDef.IndexName,
+									d.IdxcronAction,
+									string(metadata)); err != nil {
+									return err
+								}
 							}
 						}
 					}
@@ -383,14 +386,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 				cctx := newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 				err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
-			} else {
-				switch multiTableIndex.IndexAlgo {
-				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(
-						c, id, extra, dbSource, multiTableIndex.IndexDefs,
-						qry.Database, newTableDef, nil, false,
-					)
-				}
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

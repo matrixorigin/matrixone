@@ -22,6 +22,7 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -96,6 +97,19 @@ type CompileContext interface {
 	// DropIndexCdcTask removes any ISCP CDC task previously registered
 	// for this (table, index). Safe to call when no task exists.
 	DropIndexCdcTask(tableDef *plan.TableDef, dbName, tableName, indexName string) error
+
+	// RunSqlWithResult executes a SQL statement and returns the result
+	// set so callers can read rows/scalars. Counterpart to RunSql,
+	// which discards results. The adapter passes the IVF-FLAT-legacy
+	// NoAccountId scope; callers must Close() the returned Result.
+	RunSqlWithResult(sql string) (executor.Result, error)
+
+	// RegisterIdxcronUpdate registers a scheduled-maintenance task
+	// with idxcron. Wraps idxcron.RegisterUpdate so plugin packages
+	// don't have to import that package directly. action is one of
+	// the idxcron.Action_* constants.
+	RegisterIdxcronUpdate(tableID uint64, dbName, tableName, indexName,
+		action string, metadata []byte) error
 }
 
 // Context is the algorithm-agnostic subset of context.Context the plugin needs.

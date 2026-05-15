@@ -24,12 +24,12 @@ import (
 	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 )
 
-// getArgsFromDistFn returns the (vec-col-arg, vec-lit-arg, found) triple
+// GetArgsFromDistFn returns the (vec-col-arg, vec-lit-arg, found) triple
 // for `distfn(col, lit)` where col is at partPos in its TABLE_SCAN. Used
 // by every vector-index plan rewriter (HNSW direct path, IVF-PQ, CAGRA,
 // IVF-FLAT). Lifted from pkg/sql/plan/apply_indices_hnsw.go:299 — moved
 // here so the HNSW file can be deleted independently of the other algos.
-func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
+func (builder *QueryBuilder) GetArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
 	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return
 	}
@@ -71,11 +71,11 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	return vecColArg, vecLitArg, true
 }
 
-// getArgsFromDistFnForJoin is the through-JOIN variant of
-// getArgsFromDistFn. Used today by HNSW (the only algorithm whose plan
+// GetArgsFromDistFnForJoin is the through-JOIN variant of
+// GetArgsFromDistFn. Used today by HNSW (the only algorithm whose plan
 // rewrite handles the JOIN-derived vecCtx). Also lifted from the
 // now-deleted apply_indices_hnsw.go.
-func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+func (builder *QueryBuilder) GetArgsFromDistFnForJoin(
 	distFnExpr *plan.Function,
 	partPos int32,
 	scanTag int32,
@@ -688,7 +688,7 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 
 	for idx, expr := range projectNode.ProjectList {
 		col := expr.GetCol()
-		if col == nil || builder.getColName(col) != pkName {
+		if col == nil || builder.GetColName(col) != pkName {
 			continue
 		}
 		return &plan.Expr{
@@ -718,7 +718,7 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 	}
 }
 
-// getDistRangeFromFilters peels filters of the shape `distfn(col, lit) <op> K`
+// GetDistRangeFromFilters peels filters of the shape `distfn(col, lit) <op> K`
 // off the filter list and collects the bounds into a *plan.DistRange. The
 // caller is expected to stash the returned DistRange onto the vector-index
 // table function's IndexReaderParam so the predicate does not also re-run as a
@@ -727,7 +727,7 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 // Applicable to any vector index (IVFFlat, CAGRA, IVFPQ) — caller passes the
 // three bits of context needed to recognize its own `distfn(col, vec_lit)`
 // expression.
-func (builder *QueryBuilder) getDistRangeFromFilters(
+func (builder *QueryBuilder) GetDistRangeFromFilters(
 	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr,
 ) ([]*plan.Expr, *plan.DistRange) {
 	var distRange *plan.DistRange
@@ -805,7 +805,7 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 	return filters[:currIdx], distRange
 }
 
-// peelAndRewriteDistFnFilters scans `filters` for predicates of shape
+// PeelAndRewriteDistFnFilters scans `filters` for predicates of shape
 // `origFuncName(col[partPos], vecLit) OP K` and, for each match:
 //
 //   - removes it from the returned remaining list so the base table scan no
@@ -820,7 +820,7 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 //     compileRestrict (pkg/sql/compile/compile.go Node_FUNCTION_SCAN case).
 //
 // Supported operators: `<`, `<=`, `>`, `>=`.
-func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
+func (builder *QueryBuilder) PeelAndRewriteDistFnFilters(
 	filters []*plan.Expr,
 	partPos int32, origFuncName string, vecLitArg *plan.Expr,
 	tableFuncTag int32, scoreColType plan.Type,
