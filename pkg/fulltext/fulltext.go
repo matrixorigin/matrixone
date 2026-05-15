@@ -767,7 +767,7 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 				if bracket == 0 {
 					// found ()
 					end = i
-					p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
+					p, err := CreatePattern(string(runeSlice[offset:end+1]), parser)
 					if err != nil {
 						return nil, err
 					}
@@ -785,7 +785,7 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 				// something here
 				isspace = true
 
-				p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
+				p, err := CreatePattern(string(runeSlice[offset:end+1]), parser)
 				if err != nil {
 					return nil, err
 				}
@@ -800,7 +800,7 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 			} else {
 				end = i
 				if i == len(runeSlice)-1 {
-					p, err := CreatePattern(string(runeSlice[offset : end+1]), parser)
+					p, err := CreatePattern(string(runeSlice[offset:end+1]), parser)
 					if err != nil {
 						return nil, err
 					}
