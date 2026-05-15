@@ -28,6 +28,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
@@ -645,6 +648,179 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
+}
+
+func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "left has order by",
+			left:  "select a from db1.t1 where a = 1 order by a",
+			right: "select a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has order by",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select a from db1.t1 where a = 2 order by a",
+		},
+		{
+			name:  "left has aggregate",
+			left:  "select count(*) as c from db1.t1 where a = 1",
+			right: "select count(*) as c from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has aggregate",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select count(*) as a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has unsupported expression",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select @@sql_mode as a from db1.t1 where a = 2",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err := mergeRewriteRules(ctx, tc.left, tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.right, merged)
+		})
+	}
+}
+
+func TestRewriteRuleOutputColumns(t *testing.T) {
+	ctx := context.Background()
+
+	columns, ok, err := rewriteRuleOutputColumns(ctx, "select A as x, a + 1 as b from db1.t1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []rewriteRuleOutputColumn{
+		{name: "x", expr: "a"},
+		{name: "b", expr: "a + 1"},
+	}, columns)
+
+	cases := []struct {
+		name string
+		rule string
+	}{
+		{name: "top-level order by", rule: "select a from db1.t1 order by a"},
+		{name: "top-level limit", rule: "select a from db1.t1 limit 1"},
+		{name: "union order by", rule: "select a from db1.t1 union select a from db1.t2 order by a"},
+		{name: "distinct", rule: "select distinct a from db1.t1"},
+		{name: "group by", rule: "select a from db1.t1 group by a"},
+		{name: "having", rule: "select a from db1.t1 having a > 1"},
+		{name: "star", rule: "select * from db1.t1"},
+		{name: "qualified star", rule: "select t.* from db1.t1 as t"},
+		{name: "aggregate projection", rule: "select sum(a) as s from db1.t1"},
+		{name: "window projection", rule: "select row_number() over () as rn from db1.t1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			columns, ok, err := rewriteRuleOutputColumns(ctx, tc.rule)
+			require.NoError(t, err)
+			require.False(t, ok)
+			require.Nil(t, columns)
+		})
+	}
+}
+
+func TestMergeableRewriteSelectClauseRejectsDistinctOptions(t *testing.T) {
+	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Distinct: true}))
+	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Option: tree.QuerySpecOptionDistinct}))
+	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Option: tree.QuerySpecOptionDistinctRow}))
+}
+
+func TestSameRewriteOutputColumnsComparesNamesAndExpressions(t *testing.T) {
+	cases := []struct {
+		name  string
+		left  string
+		right string
+		same  bool
+	}{
+		{
+			name:  "same aliases and same column expression",
+			left:  "select A as x, age as y from db1.t1",
+			right: "select a as x, age as y from db1.t1",
+			same:  true,
+		},
+		{
+			name:  "same aliases but swapped column expressions",
+			left:  "select a as x, age as y from db1.t1",
+			right: "select age as x, a as y from db1.t1",
+			same:  false,
+		},
+		{
+			name:  "same aliases but different scalar expressions",
+			left:  "select a + 1 as x from db1.t1",
+			right: "select a + 2 as x from db1.t1",
+			same:  false,
+		},
+		{
+			name:  "same expressions but different aliases",
+			left:  "select a + 1 as x from db1.t1",
+			right: "select a + 1 as y from db1.t1",
+			same:  false,
+		},
+	}
+
+	ctx := context.Background()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			left, ok, err := rewriteRuleOutputColumns(ctx, tc.left)
+			require.NoError(t, err)
+			require.True(t, ok)
+			right, ok, err := rewriteRuleOutputColumns(ctx, tc.right)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, tc.same, sameRewriteOutputColumns(left, right))
+		})
+	}
+}
+
+func TestRewriteExprIsMergeSafe(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		safe bool
+	}{
+		{name: "simple column", sql: "select a from db1.t1", safe: true},
+		{name: "binary expression", sql: "select a + age from db1.t1", safe: true},
+		{name: "comparison expression", sql: "select a > age from db1.t1", safe: true},
+		{name: "case expression", sql: "select case when a > 0 then age else 0 end from db1.t1", safe: true},
+		{name: "scalar function", sql: "select abs(a) from db1.t1", safe: true},
+		{name: "cast expression", sql: "select cast(a as signed) from db1.t1", safe: true},
+		{name: "between expression", sql: "select a between 1 and 3 from db1.t1", safe: true},
+		{name: "aggregate function", sql: "select count(*) from db1.t1", safe: false},
+		{name: "window function", sql: "select row_number() over () from db1.t1", safe: false},
+		{name: "subquery expression", sql: "select exists (select a from db1.t1) from db1.t1", safe: false},
+		{name: "system variable expression", sql: "select @@sql_mode from db1.t1", safe: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exprs := parseRewriteRuleSelectExprs(t, tc.sql)
+			require.Len(t, exprs, 1)
+			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(exprs[0].Expr))
+		})
+	}
+}
+
+func parseRewriteRuleSelectExprs(t *testing.T, sql string) tree.SelectExprs {
+	t.Helper()
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	return selectClause.Exprs
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
