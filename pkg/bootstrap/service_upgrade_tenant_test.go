@@ -212,6 +212,126 @@ func Test_asyncUpgradeTenantTask_ReconcilesReadyCountWhenTasksAlreadyFinished(t 
 	)
 }
 
+func Test_asyncUpgradeTenantTask_SkipsReconcileWhenConflictTasksRemain(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			var reconciled atomic.Bool
+			var upgraded atomic.Bool
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			defer cancel()
+
+			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "where state = 1") &&
+					!strings.Contains(sql, "for update"):
+					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 3, 2), nil
+				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+					return buildUpgradeTenantTaskRows([]uint64{200}, []int32{10}, []int32{12}), nil
+				case strings.Contains(sql, "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12"):
+					return executor.Result{}, moerr.NewLockConflictNoCtx()
+				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 13"):
+					return executor.Result{}, nil
+				case strings.Contains(sql, "select 1 from mo_upgrade_tenant where upgrade_id = 100 and ready = 0"):
+					return buildExistsResult(), nil
+				case strings.Contains(sql, "update mo_upgrade_tenant set ready = 1"):
+					reconciled.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3"):
+					upgraded.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			})
+
+			h := newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 0)
+			s := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) {
+					s.handles = append(s.handles, h)
+				},
+				WithCheckUpgradeTenantDuration(time.Millisecond),
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			s.exec = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
+			}, txnOperator)
+
+			s.asyncUpgradeTenantTask(ctx)
+			require.False(t, reconciled.Load())
+			require.False(t, upgraded.Load())
+			require.Zero(t, h.callHandleTenantUpgrade.Load())
+		},
+	)
+}
+
+func Test_asyncUpgradeTenantTask_SkipsAlreadyReconciledUpgradeCounts(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			var upgraded atomic.Bool
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*20)
+			defer cancel()
+
+			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "where state = 1") &&
+					!strings.Contains(sql, "for update"):
+					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 3, 2), nil
+				case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
+					return executor.Result{}, nil
+				case strings.Contains(sql, "select 1 from mo_upgrade_tenant where upgrade_id = 100 and ready = 0"):
+					return executor.Result{}, nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "where id = 100 for update"):
+					return buildUpgradeVersionResult(100, 1, "3.0.0", "3.0.1", 0, 1, 1, 1, 3, 3), nil
+				case strings.Contains(sql, "update mo_upgrade set total_tenant = 3, ready_tenant = 3"):
+					upgraded.Store(true)
+					return executor.Result{AffectedRows: 1}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			})
+
+			h := newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 0)
+			s := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				sqlExecutor,
+				func(s *service) {
+					s.handles = append(s.handles, h)
+				},
+				WithCheckUpgradeTenantDuration(time.Millisecond),
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			s.exec = executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+				return sqlExecutor.Exec(context.Background(), sql, executor.Options{})
+			}, txnOperator)
+
+			s.asyncUpgradeTenantTask(ctx)
+			require.False(t, upgraded.Load())
+			require.Zero(t, h.callHandleTenantUpgrade.Load())
+		},
+	)
+}
+
 func buildUpgradeVersionResult(
 	id uint64,
 	state int32,
