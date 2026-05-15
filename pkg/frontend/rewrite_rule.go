@@ -409,7 +409,7 @@ func mergeableRewriteSelectClause(stmt *tree.SelectClause) bool {
 		return false
 	}
 	for _, expr := range stmt.Exprs {
-		if rewriteExprHasMergeUnsafeFunction(expr.Expr) {
+		if !rewriteExprIsMergeSafe(expr.Expr) {
 			return false
 		}
 	}
@@ -467,41 +467,108 @@ func sameRewriteOutputColumns(leftColumns, rightColumns []rewriteRuleOutputColum
 	return true
 }
 
-type rewriteExprUnsafeFunctionVisitor struct {
-	unsafe bool
-}
-
-func (v *rewriteExprUnsafeFunctionVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
-	if v.unsafe {
-		return expr, true
-	}
-	if fn, ok := expr.(*tree.FuncExpr); ok {
-		name := rewriteFuncExprName(fn)
-		if fn.WindowSpec != nil || function.GetFunctionIsAggregateByName(name) || function.GetFunctionIsWinFunByName(name) {
-			v.unsafe = true
-			return expr, true
-		}
-	}
-	return expr, false
-}
-
-func (v *rewriteExprUnsafeFunctionVisitor) Exit(expr tree.Expr) (tree.Expr, bool) {
-	return expr, !v.unsafe
-}
-
-func rewriteExprHasMergeUnsafeFunction(expr tree.Expr) (unsafe bool) {
+func rewriteExprIsMergeSafe(expr tree.Expr) bool {
 	if expr == nil {
+		return true
+	}
+
+	switch e := expr.(type) {
+	case *tree.UnresolvedName, tree.UnqualifiedStar, *tree.NumVal, *tree.StrVal:
+		return true
+	case *tree.BinaryExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.UnaryExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.ComparisonExpr:
+		return rewriteExprIsMergeSafe(e.Left) &&
+			rewriteExprIsMergeSafe(e.Right) &&
+			rewriteExprIsMergeSafe(e.Escape)
+	case *tree.AndExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.XorExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.OrExpr:
+		return rewriteExprIsMergeSafe(e.Left) && rewriteExprIsMergeSafe(e.Right)
+	case *tree.NotExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNullExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotNullExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsUnknownExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsTrueExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsFalseExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.ParenExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.FuncExpr:
+		name := rewriteFuncExprName(e)
+		if name == "" || e.Type == tree.FUNC_TYPE_TABLE ||
+			e.WindowSpec != nil ||
+			function.GetFunctionIsAggregateByName(name) ||
+			function.GetFunctionIsWinFunByName(name) {
+			return false
+		}
+		return rewriteExprsAreMergeSafe(e.Exprs) && rewriteOrderByIsMergeSafe(e.OrderBy)
+	case *tree.SerialExtractExpr:
+		return rewriteExprIsMergeSafe(e.SerialExpr) && rewriteExprIsMergeSafe(e.IndexExpr)
+	case *tree.CastExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.BitCastExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	case *tree.Tuple:
+		return rewriteExprsAreMergeSafe(e.Exprs)
+	case *tree.RangeCond:
+		return rewriteExprIsMergeSafe(e.Left) &&
+			rewriteExprIsMergeSafe(e.From) &&
+			rewriteExprIsMergeSafe(e.To)
+	case *tree.CaseExpr:
+		if !rewriteExprIsMergeSafe(e.Expr) || !rewriteExprIsMergeSafe(e.Else) {
+			return false
+		}
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			if !rewriteExprIsMergeSafe(when.Cond) || !rewriteExprIsMergeSafe(when.Val) {
+				return false
+			}
+		}
+		return true
+	case *tree.IntervalExpr:
+		return rewriteExprIsMergeSafe(e.Expr)
+	default:
 		return false
 	}
-	visitor := &rewriteExprUnsafeFunctionVisitor{}
-	defer func() {
-		if recover() != nil {
-			// Some expression nodes cannot be walked; fall back to the non-merge path.
-			unsafe = true
+}
+
+func rewriteExprsAreMergeSafe(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if !rewriteExprIsMergeSafe(expr) {
+			return false
 		}
-	}()
-	_, ok := expr.Accept(visitor)
-	return !ok || visitor.unsafe
+	}
+	return true
+}
+
+func rewriteOrderByIsMergeSafe(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		if !rewriteExprIsMergeSafe(order.Expr) {
+			return false
+		}
+	}
+	return true
 }
 
 func rewriteFuncExprName(fn *tree.FuncExpr) string {
