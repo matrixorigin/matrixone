@@ -33,8 +33,10 @@ var (
 )
 
 type tableLockHolder struct {
-	tableKeys        map[uint64]*cowSlice
-	tableBinds       map[uint64]pb.LockTable
+	tableKeys  map[uint64]*cowSlice
+	tableBinds map[uint64]pb.LockTable
+	// tableBindIntents records bind versions touched before a lock attempt
+	// finishes, so bind-change fencing also covers failed in-flight attempts.
 	tableBindIntents map[uint64]pb.LockTable
 }
 
