@@ -545,6 +545,66 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	require.Equal(t, sql, rewritten)
 }
 
+func TestValidateRewriteRuleSQL(t *testing.T) {
+	ctx := context.Background()
+
+	validRules := []string{
+		"select a from db1.t1",
+		"(select a from db1.t1)",
+	}
+	for _, rule := range validRules {
+		t.Run("valid "+rule, func(t *testing.T) {
+			require.NoError(t, validateRewriteRuleSQL(ctx, rule))
+		})
+	}
+
+	invalidRules := []struct {
+		name string
+		rule string
+		err  string
+	}{
+		{name: "empty", rule: "  ", err: "rewrite rule SQL is empty"},
+		{name: "syntax error", rule: "select a from", err: "invalid rewrite rule SQL"},
+		{name: "non select", rule: "delete from db1.t1 where a = 1", err: "only accept SELECT-like statements"},
+	}
+	for _, tc := range invalidRules {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRewriteRuleSQL(ctx, tc.rule)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.err)
+		})
+	}
+}
+
+func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from", "db1", "t1")
+	err = handleAlterRoleAddRule(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid rewrite rule SQL")
+
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
+		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
+	}
+}
+
 func TestMergeRewriteRules(t *testing.T) {
 	ctx := context.Background()
 

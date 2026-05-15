@@ -352,6 +352,24 @@ func rewriteRuleOutputColumns(ctx context.Context, rule string) ([]rewriteRuleOu
 	return columns, ok, nil
 }
 
+func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+	if strings.TrimSpace(rule) == "" {
+		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
+	}
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	if err != nil {
+		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
+	}
+
+	switch stmt.(type) {
+	case *tree.Select, *tree.ParenSelect:
+		return nil
+	default:
+		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: only accept SELECT-like statements as rewrites", rule)
+	}
+}
+
 func outputColumnsFromRewriteStatement(stmt tree.Statement) ([]rewriteRuleOutputColumn, bool) {
 	switch s := stmt.(type) {
 	case *tree.Select:
@@ -617,6 +635,10 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return moerr.NewInternalErrorf(ctx, "there is no role %s", stmt.RoleName)
 	}
 	roleID := vr.id
+
+	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL); err != nil {
+		return err
+	}
 
 	// Derive rule_name from db.tbl
 	ruleName := stmt.DbName + "." + stmt.TblName
