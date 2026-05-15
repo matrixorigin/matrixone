@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -113,7 +114,11 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 			}
 		}
 	}
-	lockOp.ctr.parker = types.NewPacker()
+	if lockOp.ctr.parker == nil {
+		lockOp.ctr.parker = types.NewPacker()
+	} else {
+		lockOp.ctr.parker.Reset()
+	}
 	return nil
 }
 
@@ -512,6 +517,10 @@ func doLock(
 		opts.filterCols)
 	if !has {
 		return false, false, timestamp.Timestamp{}, nil
+	}
+
+	if g == lock.Granularity_Row && len(rows) > 1 {
+		rows = dedupLockRows(rows)
 	}
 
 	txn := txnOp.Txn()
@@ -1250,6 +1259,22 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
+}
+
+func dedupLockRows(rows [][]byte) [][]byte {
+	if len(rows) <= 1 {
+		return rows
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i], rows[j]) < 0
+	})
+	deduped := rows[:1]
+	for i := 1; i < len(rows); i++ {
+		if !bytes.Equal(rows[i], rows[i-1]) {
+			deduped = append(deduped, rows[i])
+		}
+	}
+	return deduped
 }
 
 func getRowsFilter(
