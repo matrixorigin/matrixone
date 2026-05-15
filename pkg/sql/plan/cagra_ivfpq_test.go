@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildIvfpqCreate / buildIvfpqSearch are the registered IVF-PQ
-// table-function builders (lifted to pkg/vectorindex/ivfpq/plugin/plan).
+// buildIvfpqCreate / buildIvfpqSearch / buildCagraCreate / buildCagraSearch
+// are the registered table-function builders (lifted to the algo plugins).
 // The shims keep these tests readable; the registry lookup is the public
 // contract the dispatch at query_builder.go uses too.
 func buildIvfpqCreate(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
@@ -35,6 +35,16 @@ func buildIvfpqCreate(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext
 
 func buildIvfpqSearch(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	fn, _ := vectorplan.TableFunc("ivfpq_search")
+	return fn(b, tbl, ctx, exprs, children)
+}
+
+func buildCagraCreate(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	fn, _ := vectorplan.TableFunc("cagra_create")
+	return fn(b, tbl, ctx, exprs, children)
+}
+
+func buildCagraSearch(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	fn, _ := vectorplan.TableFunc("cagra_search")
 	return fn(b, tbl, ctx, exprs, children)
 }
 
@@ -49,23 +59,10 @@ func newNonNumValFn() *tree.FuncExpr {
 	return &tree.FuncExpr{Exprs: tree.Exprs{un}}
 }
 
-func TestGetCagraParams_OK(t *testing.T) {
-	var b *QueryBuilder // GetContext on nil QueryBuilder returns context.TODO()
-	out, err := b.getCagraParams(newStringNumValFn(`{"m":"32"}`))
-	require.NoError(t, err)
-	require.Equal(t, `{"m":"32"}`, out)
-}
-
-func TestGetCagraParams_Error(t *testing.T) {
-	var b *QueryBuilder
-	_, err := b.getCagraParams(newNonNumValFn())
-	require.Error(t, err)
-}
-
-// (TestGetIvfpqParams_OK / _Error were deleted when getIvfpqParams moved
-// into pkg/vectorindex/ivfpq/plugin/plan and became unexported. The
-// TestBuildIvfpq{Create,Search}_BadParams tests below exercise the same
-// error path through the registered builder.)
+// (TestGetCagraParams_* / TestGetIvfpqParams_* were deleted when their
+// implementations moved into the plugin packages and became unexported.
+// The TestBuild{Cagra,Ivfpq}{Create,Search}_BadParams tests below
+// exercise the same error path through the registered builder.)
 
 // makeBuildArgs builds the n-element exprs slice the build* functions take.
 // First entry is a NumVal (param string); the rest are placeholder int64
@@ -96,7 +93,7 @@ func makeNumValTblFunc(s string) *tree.TableFunction {
 func TestBuildCagraCreate_TooFewArgs(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(b, nil)
-	_, err := b.buildCagraCreate(makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 3), nil)
+	_, err := buildCagraCreate(b,makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 3), nil)
 	require.Error(t, err)
 }
 
@@ -107,19 +104,19 @@ func TestBuildCagraCreate_BadParams(t *testing.T) {
 
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := b.buildCagraCreate(tbl, ctx, makeBuildArgs(t, 4), nil)
+	_, err := buildCagraCreate(b,tbl, ctx, makeBuildArgs(t, 4), nil)
 	require.Error(t, err)
 }
 
 func TestBuildCagraCreate_OK(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(b, nil)
-	id, err := b.buildCagraCreate(makeNumValTblFunc(`{"m":"32"}`), ctx, makeBuildArgs(t, 4), nil)
+	id, err := buildCagraCreate(b,makeNumValTblFunc(`{"m":"32"}`), ctx, makeBuildArgs(t, 4), nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), id)
 	node := b.qry.Nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-	require.Equal(t, kCAGRACreateFuncName, node.TableDef.TblFunc.Name)
+	require.Equal(t, "cagra_create", node.TableDef.TblFunc.Name)
 	// First arg was peeled off as Param; remaining 3 attach to TblFuncExprList.
 	require.Len(t, node.TblFuncExprList, 3)
 	require.True(t, node.TableDef.TblFunc.IsSingle, "create runs single-thread")
@@ -129,10 +126,10 @@ func TestBuildCagraSearch_BadArgCount(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(b, nil)
 	// 2 is not 3 or 4 → error
-	_, err := b.buildCagraSearch(makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 2), nil)
+	_, err := buildCagraSearch(b,makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 2), nil)
 	require.Error(t, err)
 	// 5 is not 3 or 4 → error
-	_, err = b.buildCagraSearch(makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 5), nil)
+	_, err = buildCagraSearch(b,makeNumValTblFunc(`{}`), ctx, makeBuildArgs(t, 5), nil)
 	require.Error(t, err)
 }
 
@@ -141,7 +138,7 @@ func TestBuildCagraSearch_BadParams(t *testing.T) {
 	ctx := NewBindContext(b, nil)
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := b.buildCagraSearch(tbl, ctx, makeBuildArgs(t, 3), nil)
+	_, err := buildCagraSearch(b,tbl, ctx, makeBuildArgs(t, 3), nil)
 	require.Error(t, err)
 }
 
@@ -149,11 +146,11 @@ func TestBuildCagraSearch_OK(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(b, nil)
 	for _, n := range []int{3, 4} {
-		id, err := b.buildCagraSearch(makeNumValTblFunc(`{"m":"32"}`), ctx, makeBuildArgs(t, n), nil)
+		id, err := buildCagraSearch(b,makeNumValTblFunc(`{"m":"32"}`), ctx, makeBuildArgs(t, n), nil)
 		require.NoError(t, err)
 		node := b.qry.Nodes[id]
 		require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, kCAGRASearchFuncName, node.TableDef.TblFunc.Name)
+		require.Equal(t, "cagra_search", node.TableDef.TblFunc.Name)
 		require.Len(t, node.TblFuncExprList, n-1, "first arg is peeled into Param")
 	}
 }

@@ -18,6 +18,7 @@
 package all
 
 import (
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
-	// HNSW / IVF-FLAT / CAGRA shim plugins are added in Phase 3.
+	// HNSW / IVF-FLAT plugins land in a follow-up.
 )

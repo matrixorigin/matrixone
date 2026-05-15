@@ -5461,15 +5461,12 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	case "load_file_chunks":
 		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
-	case "cagra_create":
-		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
-	case "cagra_search":
-		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
 	default:
 		// Fall through to the vector-index plugin registry. Per-algorithm
-		// table-function builders (e.g. ivfpq_create / ivfpq_search) are
-		// registered there by their plugins' init() so each algorithm can
-		// own its table-function plumbing without editing this switch.
+		// table-function builders (cagra_create/cagra_search,
+		// ivfpq_create/ivfpq_search, …) are registered there by their
+		// plugins' init() so each algorithm can own its table-function
+		// plumbing without editing this switch.
 		if b, ok := vectorplan.TableFunc(id); ok {
 			nodeId, err = b(builder, tbl, ctx, exprs, children)
 		} else {

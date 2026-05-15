@@ -622,18 +622,11 @@ END_FULLTEXT:
 					return newNodeID, err
 				}
 
-			case catalog.MoIndexCagraAlgo.ToString():
-				newNodeID, err := builder.applyIndicesForSortUsingCagra(nodeID, vecCtx, multiTableIndex)
-				if err != nil || newNodeID != nodeID {
-					return newNodeID, err
-				}
-
-			case catalog.MoIndexIvfpqAlgo.ToString():
-				// Plugin-mediated dispatch. The IVF-PQ plan-rewrite body
-				// lives in pkg/vectorindex/ivfpq/plugin/plan; it is invoked
-				// via the registry. If the plugin isn't registered (a
-				// build that didn't load it) the rewrite is skipped — the
-				// query then falls through to exact vector search.
+			case catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
+				// Plugin-mediated dispatch. Each algo's plan-rewrite body
+				// lives in pkg/vectorindex/<algo>/plugin/plan; the registry
+				// dispatches. If the plugin isn't registered, the rewrite
+				// is skipped and the query falls through to exact sort.
 				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
 					newNodeID, applied, err := p.Plan().ApplyForSort(
 						builder, vecCtx.export(), exportMultiTableIndex(multiTableIndex), nodeID)
@@ -869,13 +862,7 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 			} else if err != nil {
 				return nil
 			}
-		case catalog.MoIndexCagraAlgo.ToString():
-			if ctx, err := builder.prepareCagraIndexContext(vecCtx, multi); err == nil && ctx != nil {
-				return []int32{vecCtx.scanNode.NodeId}
-			} else if err != nil {
-				return nil
-			}
-		case catalog.MoIndexIvfpqAlgo.ToString():
+		case catalog.MoIndexCagraAlgo.ToString(), catalog.MoIndexIvfpqAlgo.ToString():
 			if p, ok := vectorplugin.Get(multi.IndexAlgo); ok {
 				canApply, err := p.Plan().CanApply(builder, vecCtx.export(), exportMultiTableIndex(multi))
 				if err != nil {

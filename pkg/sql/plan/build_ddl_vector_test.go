@@ -26,16 +26,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildIvfpqSecondaryIndexDef is a thin shim that routes to the IVF-PQ
-// plugin's BuildSecondaryIndexDefs hook. The plan-side function of the same
-// name was deleted when the body moved into pkg/vectorindex/ivfpq/plugin/plan;
-// the shim keeps the tests below readable.
+// build{Ivfpq,Cagra}SecondaryIndexDef are thin shims that route to the
+// per-algo plugin's BuildSecondaryIndexDefs hook. The plan-side functions
+// of the same name were deleted when the bodies moved into the plugin
+// packages; the shims keep the tests below readable.
 func buildIvfpqSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
 	colMap map[string]*ColDef, existed []*plan.IndexDef, pkey string,
 ) ([]*plan.IndexDef, []*TableDef, error) {
 	p, ok := vectorplugin.Get(catalog.MoIndexIvfpqAlgo.ToString())
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("ivfpq plugin not registered")
+	}
+	return p.Plan().BuildSecondaryIndexDefs(ctx, idx, colMap, existed, pkey)
+}
+
+func buildCagraSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
+	colMap map[string]*ColDef, existed []*plan.IndexDef, pkey string,
+) ([]*plan.IndexDef, []*TableDef, error) {
+	p, ok := vectorplugin.Get(catalog.MoIndexCagraAlgo.ToString())
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("cagra plugin not registered")
 	}
 	return p.Plan().BuildSecondaryIndexDefs(ctx, idx, colMap, existed, pkey)
 }

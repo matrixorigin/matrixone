@@ -23,6 +23,7 @@ import (
 	// Blank-import vector-index plugins so their init() registrations fire
 	// any time this package is loaded (production via cmd/mo-service and
 	// every test that exercises compile).
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
 )
 
