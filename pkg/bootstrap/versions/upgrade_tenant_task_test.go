@@ -162,6 +162,136 @@ func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
 	)
 }
 
+func TestReconcileDeletedUpgradeTenantTasks(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, "update mo_upgrade_tenant set ready = 1") &&
+					strings.Contains(sql, "where upgrade_id = 10") &&
+					strings.Contains(sql, "not exists") {
+					return executor.Result{AffectedRows: 2}, nil
+				}
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}, txnOperator)
+
+			affected, err := ReconcileDeletedUpgradeTenantTasks(10, exec)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), affected)
+		},
+	)
+}
+
+func TestHasUnreadyUpgradeTenantTasks(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, "select 1 from mo_upgrade_tenant where upgrade_id = 10 and ready = 0 limit 1") {
+					return buildExistsResult(), nil
+				}
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}, txnOperator)
+
+			hasUnready, err := HasUnreadyUpgradeTenantTasks(10, exec)
+			require.NoError(t, err)
+			require.True(t, hasUnready)
+		},
+	)
+}
+
+func TestGetUpgradeTenantTasksStopsAtMaxInt32Conflict(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			maxInt32 := int32(^uint32(0) >> 1)
+			taskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 0, 10, No)
+			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+				maxInt32, maxInt32)
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.EqualFold(sql, taskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{100}, []int32{maxInt32}, []int32{maxInt32}), nil
+				case strings.EqualFold(sql, tenantSQL):
+					return executor.Result{}, moerr.NewLockConflictNoCtx()
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, txnOperator)
+
+			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
+			require.NoError(t, err)
+			require.Zero(t, taskID)
+			require.Nil(t, tenants)
+			require.Nil(t, createVersions)
+			require.False(t, hasDeletedTenantTasks)
+			require.True(t, hasConflictTenantTasks)
+		},
+	)
+}
+
+func TestGetUpgradeTenantTasksStopsAtMaxInt32DeletedRange(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			maxInt32 := int32(^uint32(0) >> 1)
+			taskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
+				catalog.MOUpgradeTenantTable, 0, 10, No)
+			tenantSQL := fmt.Sprintf("select account_id, create_version from mo_account where account_id >= %d and account_id <= %d for update",
+				maxInt32, maxInt32)
+
+			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.EqualFold(sql, taskSQL):
+					return buildUpgradeTenantTaskResult([]uint64{100}, []int32{maxInt32}, []int32{maxInt32}), nil
+				case strings.EqualFold(sql, tenantSQL):
+					return executor.Result{}, nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, txnOperator)
+
+			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
+			require.NoError(t, err)
+			require.Zero(t, taskID)
+			require.Nil(t, tenants)
+			require.Nil(t, createVersions)
+			require.True(t, hasDeletedTenantTasks)
+			require.False(t, hasConflictTenantTasks)
+		},
+	)
+}
+
+func buildExistsResult() executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{
+			types.New(types.T_int32, 32, 0),
+		},
+		mpool.MustNewZero(),
+	)
+	memRes.NewBatchWithRowCount(1)
+	executor.AppendFixedRows(memRes, 0, []int32{1})
+	return memRes.GetResult()
+}
+
 func buildTenantVersionRows(versions []string) executor.Result {
 	if len(versions) == 0 {
 		return executor.Result{}
