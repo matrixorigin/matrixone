@@ -794,11 +794,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		minTS            = types.MaxTs()
 		inputRowCnt      = outBatch.RowCount()
 		applyOffset      = 0
+		iterKind         = "rows"
 	)
+	if ls.memPKFilter.Valid() {
+		iterKind = "primary-key"
+	}
 
 	var (
 		scan      int
 		inserted  int
+		bfSkipped int
 		delInFile int
 	)
 
@@ -826,9 +831,11 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
 				bfColVec := entry.Batch.Vecs[2+ls.memPKFilter.BFSeqNum] // 2 for rowid and commits
 				if bfColVec.IsNull(uint64(entry.Offset)) {
+					bfSkipped++
 					continue
 				}
 				if !ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
+					bfSkipped++
 					continue
 				}
 			}
@@ -917,6 +924,17 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		// found one row in InMemCommitted for the pk equal, record it
 		ls.memPKFilter.RecordExactHit()
 	}
+	logPKFilterInMemSummary(
+		ctx,
+		"local-committed-inserts",
+		ls.memPKFilter,
+		iterKind,
+		scan,
+		inserted,
+		bfSkipped,
+		delInFile,
+		outBatch.RowCount()-inputRowCnt,
+	)
 
 	return nil
 }
