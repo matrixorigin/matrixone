@@ -537,6 +537,7 @@ func TestLockWithRetryStopsWhenBindChangedRetryBudgetExceeded(t *testing.T) {
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
 	budget := 10 * time.Millisecond
 	oldWait := defaultWaitTimeOnRetryLock
@@ -580,6 +581,46 @@ func TestLockWithRetryStopsWhenBindChangedRetryBudgetExceeded(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 	require.GreaterOrEqual(t, elapsed, budget)
 	require.Less(t, elapsed, 100*time.Millisecond)
+}
+
+func TestLockRetryBacksOffUnderHighMemoryPressure(t *testing.T) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	oldBackoff := lockRetryMemoryBackoff
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defer func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+		lockRetryMemoryBackoff = oldBackoff
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return lockRetryMemoryPressureHigh
+	}
+	lockRetryMemoryBackoff = 25 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = time.Second
+
+	state := lockRetryState{}
+	wait, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
+	require.True(t, ok)
+	require.Equal(t, lockRetryMemoryBackoff, wait)
+}
+
+func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defer func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return lockRetryMemoryPressureCritical
+	}
+	defaultMaxWaitTimeOnRetryBackendLock = time.Second
+
+	state := lockRetryState{}
+	_, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
+	require.False(t, ok)
 }
 
 func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
