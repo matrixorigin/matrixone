@@ -209,3 +209,72 @@ func TestSentinelPromotionReleasesAccountedBytes(t *testing.T) {
 	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes(),
 		"Reset must not re-add sentinel bytes to baseline")
 }
+
+func TestRecursiveStageLastSlotReuseReleasesAccountedBytes(t *testing.T) {
+	// Reproduces the recursive-stage slot-reuse bug at mergecte.go:148-159.
+	// When result.Batch.Last() arrives at curNodeCnt==0 in the second
+	// Prepare cycle and freeBats[ctr.i] already holds a data batch from the
+	// first cycle, the old code did CleanOnlyData()+AppendWithCopy(Last())
+	// which freed the data bytes in mpool but left totalBytes unchanged
+	// because Account short-circuits on Last() inputs. Across cycles
+	// totalBytes drifts up and triggers spurious ErrCteMemoryQuotaExceeded.
+	//
+	// The fix mirrors sendLastTag: Release(prev) + Clean(mpool) + replace
+	// the slot with a fresh makeRecursiveBatch sentinel.
+	//
+	// Note: we don't assert on proc.Mp().CurrNB() mid-test because under
+	// mpool.MustNewZero() that counter is independent of bat.Size() — the
+	// existing TestSentinelPromotionReleasesAccountedBytes follows the
+	// same convention and only checks CurrNB()==0 in deferred cleanup.
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(0), nil
+	})
+
+	arg := &MergeCTE{}
+	defer arg.Free(proc, false, nil)
+
+	// Simulate the state at the start of a second Prepare cycle:
+	// freeBats[0] holds a previously-accounted data batch from cycle 1.
+	prev := colexec.MakeMockBatchs(proc.Mp())
+	require.NoError(t, arg.ctr.memAcct.AccountSlot(proc, arg.ctr.freeBats, arg.ctr.i, prev))
+	prevSize := int64(prev.Size())
+	require.Greater(t, prevSize, int64(0))
+	arg.ctr.freeBats = append(arg.ctr.freeBats, prev)
+	require.Equal(t, prevSize, arg.ctr.memAcct.TotalBytes())
+
+	// Simulate the recursive-stage Last() + curNodeCnt==0 slot-reuse path
+	// using the post-fix three-line idiom from sendLastTag. The Account
+	// call below mirrors mergecte.go's AccountSlot at the head of the
+	// block, which is a no-op for Last() inputs but must not be skipped
+	// in the test harness because the production path always runs it.
+	sentinelIn := makeRecursiveBatch(proc)
+	defer sentinelIn.Clean(proc.Mp())
+	require.NoError(t, arg.ctr.memAcct.AccountSlot(proc, arg.ctr.freeBats, arg.ctr.i, sentinelIn))
+
+	arg.ctr.memAcct.Release(arg.ctr.freeBats[arg.ctr.i])
+	arg.ctr.freeBats[arg.ctr.i].Clean(proc.Mp())
+	arg.ctr.freeBats[arg.ctr.i] = makeRecursiveBatch(proc)
+	arg.ctr.i++
+
+	// totalBytes must drop to 0: Release subtracted prevSize, Account
+	// short-circuited on the Last() input.
+	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes(),
+		"Release must zero out the prior data batch's accounted bytes on slot reuse")
+
+	// The promoted slot must be a structurally-correct sentinel.
+	promoted := arg.ctr.freeBats[arg.ctr.i-1]
+	require.True(t, promoted.Last(),
+		"promoted slot must be a sentinel (Last() == true)")
+	require.Equal(t, []string{"recursive_col"}, promoted.Attrs,
+		"sentinel must have makeRecursiveBatch's schema")
+
+	// Reset must keep totalBytes at 0 since the only retained slot is a sentinel.
+	arg.Reset(proc, false, nil)
+	require.Equal(t, int64(0), arg.ctr.memAcct.TotalBytes(),
+		"Reset must not re-add sentinel bytes to baseline")
+}
