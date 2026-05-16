@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	goruntime "runtime"
 	"sync"
@@ -52,6 +53,7 @@ func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
 
 type mockStatsQueryClient struct {
 	response    *querypb.Response
+	err         error
 	sendStarted chan struct{}
 	allowReturn chan struct{}
 	sendOnce    sync.Once
@@ -69,6 +71,9 @@ func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Req
 	}
 	if m.allowReturn != nil {
 		<-m.allowReturn
+	}
+	if m.err != nil {
+		return nil, m.err
 	}
 	return m.response, nil
 }
@@ -2160,7 +2165,7 @@ func TestGlobalStatsGetCoalescesConcurrentCacheMiss(t *testing.T) {
 			t.Fatal("GlobalStats.Get did not request remote stats")
 		}
 
-		for range waiters {
+		for i := 0; i < waiters; i++ {
 			go func() {
 				resultCh <- gs.Get(getCtx, key, false)
 			}()
@@ -2172,7 +2177,7 @@ func TestGlobalStatsGetCoalescesConcurrentCacheMiss(t *testing.T) {
 
 		close(qc.allowReturn)
 
-		for range waiters + 1 {
+		for i := 0; i < waiters+1; i++ {
 			select {
 			case info := <-resultCh:
 				require.Equal(t, remoteInfo, info)
@@ -2182,6 +2187,93 @@ func TestGlobalStatsGetCoalescesConcurrentCacheMiss(t *testing.T) {
 		}
 		assert.Equal(t, int32(1), subscribeCount.Load())
 		assert.Equal(t, int32(1), qc.sendCount.Load())
+	})
+}
+
+func TestGlobalStatsGetWaiterRetryStopsOnPersistentRemoteFailure(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 101
+		const tblID uint64 = 10002
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		qc := &mockStatsQueryClient{
+			err:         errors.New("remote stats unavailable"),
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		const waiters = 4
+		resultCh := make(chan *statsinfo.StatsInfo, waiters+1)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not request remote stats")
+		}
+
+		for i := 0; i < waiters; i++ {
+			go func() {
+				resultCh <- gs.Get(getCtx, key, false)
+			}()
+		}
+
+		close(qc.allowReturn)
+
+		for i := 0; i < waiters+1; i++ {
+			select {
+			case info := <-resultCh:
+				require.Nil(t, info)
+			case <-time.After(time.Second):
+				t.Fatal("GlobalStats.Get did not return after repeated remote failures")
+			}
+		}
+		require.LessOrEqual(t, qc.sendCount.Load(), int32((waiters+1)*(maxStatsInfoLoadRetries+1)))
 	})
 }
 

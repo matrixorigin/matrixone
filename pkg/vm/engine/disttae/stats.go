@@ -275,6 +275,8 @@ type statsInfoLoadCall struct {
 	retry bool
 }
 
+const maxStatsInfoLoadRetries = 3
+
 func NewGlobalStats(
 	ctx context.Context, e *Engine, keyRouter client.KeyRouter[pb.StatsInfoKey], opts ...GlobalStatsOption,
 ) *GlobalStats {
@@ -407,6 +409,10 @@ func (gs *GlobalStats) cacheRemoteInfoIfSubscribed(
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return gs.get(ctx, key, sync, 0)
+}
+
+func (gs *GlobalStats) get(ctx context.Context, key pb.StatsInfoKey, sync bool, retries int) *pb.StatsInfo {
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
 		Key: key,
@@ -433,7 +439,13 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 			select {
 			case <-call.done:
 				if call.info == nil && ctx.Err() == nil && (call.retry || (sync && !call.sync)) {
-					return gs.Get(ctx, key, sync)
+					if call.retry {
+						retries++
+						if retries > maxStatsInfoLoadRetries {
+							return nil
+						}
+					}
+					return gs.get(ctx, key, sync, retries)
 				}
 				return call.info
 			case <-ctx.Done():
