@@ -2853,3 +2853,35 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 		})
 	}
 }
+
+func TestConstructBlockPKFilterIntersectsLargePrefixHitsWithoutMaps(t *testing.T) {
+	m := mpool.MustNew(t.Name())
+	rowCount := objectio.BlockMaxRows
+	pkVec := vector.NewVec(types.T_varchar.ToType())
+	defer pkVec.Free(m)
+	for i := 0; i < rowCount; i++ {
+		require.NoError(t, vector.AppendBytes(pkVec, []byte(fmt.Sprintf("warehouse-1-%05d", i)), false, m))
+	}
+
+	bf := bloomfilter.NewCBloomFilterWithProbability(int64(rowCount), 0.00001)
+	defer bf.Free()
+	bf.Add([]byte("warehouse-1-00001"))
+	bf.Add([]byte("warehouse-1-01000"))
+	bf.Add([]byte("warehouse-1-08191"))
+
+	filter, err := ConstructBlockPKFilter(false, BasePKFilter{
+		Valid: true,
+		Op:    function.PREFIX_EQ,
+		Oid:   types.T_varchar,
+		LB:    []byte("warehouse-1-"),
+	}, bf)
+	require.NoError(t, err)
+	require.True(t, filter.Valid)
+	require.NotNil(t, filter.SortedSearchFunc)
+
+	offsets := filter.SortedSearchFunc(containers.Vectors{*pkVec})
+	require.Contains(t, offsets, int64(1))
+	require.Contains(t, offsets, int64(1000))
+	require.Contains(t, offsets, int64(8191))
+	require.Less(t, len(offsets), rowCount)
+}
