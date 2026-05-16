@@ -412,11 +412,11 @@ func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewri
 		// Note: In SQL, UNION without ALL is equivalent to UNION DISTINCT
 		if s.Type == tree.UNION && !s.All {
 			// For union (distinct), validate both branches have the same output columns
-			leftColumns, ok := outputColumnsFromRewriteStatement(s.Left)
+			leftColumns, ok := outputColumnsFromRewriteSelectStatement(s.Left)
 			if !ok {
 				return nil, false
 			}
-			rightColumns, ok := outputColumnsFromRewriteStatement(s.Right)
+			rightColumns, ok := outputColumnsFromRewriteSelectStatement(s.Right)
 			if !ok {
 				return nil, false
 			}
