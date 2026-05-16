@@ -36,6 +36,8 @@ type SeekFirstBlockOp func(objectio.ObjectDataMeta) int
 type BlockFilterOp func(int, objectio.BlockObject, objectio.BloomFilter) (bool, bool, error)
 type LoadOpFactory func(fileservice.FileService) LoadOp
 
+const maxPKInFastFilterKeys = 10
+
 var loadMetadataOnlyOpFactory LoadOpFactory
 var loadMetadataAndBFOpFactory LoadOpFactory
 
@@ -819,6 +821,10 @@ func CompileFilterExpr(
 			_ = vec.UnmarshalBinary(val)
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
+			if isPK && vec.Length() > maxPKInFastFilterKeys {
+				canCompile = false
+				return
+			}
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -921,6 +927,10 @@ func CompileFilterExpr(
 			_ = vec.UnmarshalBinary(val)
 			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
+			if isPK && vec.Length() > maxPKInFastFilterKeys {
+				canCompile = false
+				return
+			}
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {

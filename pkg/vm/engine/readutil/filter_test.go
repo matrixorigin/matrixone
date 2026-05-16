@@ -2605,6 +2605,51 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExpr_LargePKInSkipsFastFilter(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:          "test_tbl",
+		Name2ColIndex: map[string]int32{"id": 0, "v": 1},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				ColId:   0,
+				Seqnum:  0,
+				Primary: true,
+				Typ:     plan.Type{Id: int32(types.T_int64)},
+			},
+			{
+				Name:   "v",
+				ColId:  1,
+				Seqnum: 1,
+				Typ:    plan.Type{Id: int32(types.T_int64)},
+			},
+		},
+	}
+
+	m := mpool.MustNew(t.Name())
+	makeInExpr := func(t *testing.T, colName string, count int) *plan.Expr {
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(m)
+		for i := 0; i < count; i++ {
+			require.NoError(t, vector.AppendFixed(vec, int64(i), false, m))
+		}
+		return ConstructInExpr(context.Background(), colName, vec)
+	}
+
+	_, _, _, _, _, canCompileSmallPKIn, _ := CompileFilterExpr(makeInExpr(t, "id", maxPKInFastFilterKeys), tableDef, nil)
+	require.True(t, canCompileSmallPKIn)
+
+	_, _, _, _, _, canCompileLargePKIn, _ := CompileFilterExpr(makeInExpr(t, "id", maxPKInFastFilterKeys+1), tableDef, nil)
+	require.False(t, canCompileLargePKIn)
+
+	_, _, _, _, _, canCompileLargeNonPKIn, _ := CompileFilterExpr(makeInExpr(t, "v", maxPKInFastFilterKeys+1), tableDef, nil)
+	require.True(t, canCompileLargeNonPKIn)
+}
+
 func TestCompileFilterExpr_Between(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "test_tbl",
