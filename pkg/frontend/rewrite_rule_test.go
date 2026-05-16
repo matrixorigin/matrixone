@@ -829,11 +829,6 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 			right: "select now() as a from db1.t1 where a = 2",
 		},
 		{
-			name:  "left has union",
-			left:  "select a from db1.t1 where a = 1 union select a from db1.t2 where a = 1",
-			right: "select a from db1.t1 where a = 2",
-		},
-		{
 			name:  "right has union all",
 			left:  "select a from db1.t1 where a = 1",
 			right: "select a from db1.t1 where a = 2 union all select a from db1.t2 where a = 2",
@@ -852,6 +847,11 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 			name:  "right has minus",
 			left:  "select a from db1.t1 where a = 1",
 			right: "select a from db1.t1 where a = 2 minus select a from db1.t2 where a = 2",
+		},
+		{
+			name:  "union all with real-time function",
+			left:  "select a from db1.t1 where a = 1 union all select now() as a from db1.t2",
+			right: "select a from db1.t1 where a = 2",
 		},
 	}
 
@@ -931,11 +931,36 @@ func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
 		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
 	}
 
-	// UnionClause is not mergeable because set operations have different semantics
-	// and merging via union distinct may change the original semantics
+	// UnionClause with different column names is not mergeable
 	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
 		Left:  selectClause,
 		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
+	})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	// UnionClause with same column names is mergeable
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
+	})
+	require.True(t, ok)
+	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+
+	// UnionClause with ALL is not mergeable
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
+		All:   true,
+	})
+	require.False(t, ok)
+	require.Nil(t, columns)
+
+	// Intersect is not mergeable
+	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
+		Type:  tree.INTERSECT,
+		Left:  selectClause,
+		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}}},
 	})
 	require.False(t, ok)
 	require.Nil(t, columns)
