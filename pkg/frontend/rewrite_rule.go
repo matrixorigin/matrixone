@@ -127,6 +127,9 @@ func loadRuleCache(ctx context.Context, ses *Session) (map[string]string, error)
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
+	if bh == nil {
+		return nil, moerr.NewInternalError(ctx, "failed to get background executor")
+	}
 	defer bh.Close()
 
 	roleIDs, err := loadActiveRoleIDsForRuleCache(ctx, bh, tenant)
@@ -616,6 +619,9 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
+	if bh == nil {
+		return moerr.NewInternalError(ctx, "failed to get background executor")
+	}
 	defer bh.Close()
 
 	// Begin transaction
@@ -678,6 +684,9 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
+	if bh == nil {
+		return moerr.NewInternalError(ctx, "failed to get background executor")
+	}
 	defer bh.Close()
 
 	// Begin transaction
@@ -747,6 +756,9 @@ func handleShowRules(ses *Session, execCtx *ExecCtx, stmt *tree.ShowRules) error
 	ctx := execCtx.reqCtx
 
 	bh := ses.GetBackgroundExec(ctx)
+	if bh == nil {
+		return moerr.NewInternalError(ctx, "failed to get background executor")
+	}
 	defer bh.Close()
 
 	// Begin transaction

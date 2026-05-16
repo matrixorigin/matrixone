@@ -843,6 +843,16 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 			left:  "select a from db1.t1 intersect select a from db1.t2",
 			right: "select a from db1.t1 where a = 2",
 		},
+		{
+			name:  "left has except",
+			left:  "select a from db1.t1 except select a from db1.t2",
+			right: "select a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has minus",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select a from db1.t1 where a = 2 minus select a from db1.t2 where a = 2",
+		},
 	}
 
 	for _, tc := range cases {
