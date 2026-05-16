@@ -532,7 +532,8 @@ func rewriteExprIsMergeSafe(expr tree.Expr) bool {
 		if name == "" || e.Type == tree.FUNC_TYPE_TABLE ||
 			e.WindowSpec != nil ||
 			function.GetFunctionIsAggregateByName(name) ||
-			function.GetFunctionIsWinFunByName(name) {
+			function.GetFunctionIsWinFunByName(name) ||
+			function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
 			return false
 		}
 		return rewriteExprsAreMergeSafe(e.Exprs) && rewriteOrderByIsMergeSafe(e.OrderBy)

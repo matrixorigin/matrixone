@@ -818,6 +818,16 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 			left:  "select a from db1.t1 where a = 1",
 			right: "select @@sql_mode as a from db1.t1 where a = 2",
 		},
+		{
+			name:  "left has volatile function",
+			left:  "select rand() as a from db1.t1 where a = 1",
+			right: "select rand() as a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has real-time function",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select now() as a from db1.t1 where a = 2",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1012,6 +1022,9 @@ func TestRewriteExprIsMergeSafe(t *testing.T) {
 		{name: "between expression", sql: "select a between 1 and 3 from db1.t1", safe: true},
 		{name: "aggregate function", sql: "select count(*) from db1.t1", safe: false},
 		{name: "window function", sql: "select row_number() over () from db1.t1", safe: false},
+		{name: "volatile function rand", sql: "select rand() from db1.t1", safe: false},
+		{name: "volatile function uuid", sql: "select uuid() from db1.t1", safe: false},
+		{name: "real-time function now", sql: "select now() from db1.t1", safe: false},
 		{name: "subquery expression", sql: "select exists (select a from db1.t1) from db1.t1", safe: false},
 		{name: "system variable expression", sql: "select @@sql_mode from db1.t1", safe: false},
 	}
