@@ -244,6 +244,9 @@ type GlobalStats struct {
 
 		// statsInfoMap is the real stats info data.
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
+
+		// statsInfoLoads coalesces concurrent cache misses for the same table.
+		statsInfoLoads map[pb.StatsInfoKey]*statsInfoLoadCall
 	}
 
 	// updateWorkerFactor is the times of CPU number of this node
@@ -265,6 +268,13 @@ type GlobalStats struct {
 	beforeSubscribeTable func(pb.StatsInfoKey)
 }
 
+type statsInfoLoadCall struct {
+	done  chan struct{}
+	info  *pb.StatsInfo
+	sync  bool
+	retry bool
+}
+
 func NewGlobalStats(
 	ctx context.Context, e *Engine, keyRouter client.KeyRouter[pb.StatsInfoKey], opts ...GlobalStatsOption,
 ) *GlobalStats {
@@ -278,6 +288,7 @@ func NewGlobalStats(
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
+	s.mu.statsInfoLoads = make(map[pb.StatsInfoKey]*statsInfoLoadCall)
 	s.mu.cond = sync.NewCond(&s.mu)
 	for _, opt := range opts {
 		opt(s)
@@ -407,7 +418,47 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		gs.mu.Unlock()
 		return info
 	}
+	call, loading := gs.mu.statsInfoLoads[key]
+	if loading {
+		if !sync && call.sync {
+			gs.mu.Unlock()
+			return nil
+		}
+		if sync && !call.sync {
+			// A synchronous request must keep its forced-update semantics instead
+			// of waiting behind a best-effort remote stats load.
+			delete(gs.mu.statsInfoLoads, key)
+		} else {
+			gs.mu.Unlock()
+			select {
+			case <-call.done:
+				if call.info == nil && ctx.Err() == nil && (call.retry || (sync && !call.sync)) {
+					return gs.Get(ctx, key, sync)
+				}
+				return call.info
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	}
+	if gs.mu.statsInfoLoads == nil {
+		gs.mu.statsInfoLoads = make(map[pb.StatsInfoKey]*statsInfoLoadCall)
+	}
+	call = &statsInfoLoadCall{done: make(chan struct{}), sync: sync}
+	gs.mu.statsInfoLoads[key] = call
 	gs.mu.Unlock()
+
+	retryLoad := false
+	defer func() {
+		gs.mu.Lock()
+		if gs.mu.statsInfoLoads[key] == call {
+			delete(gs.mu.statsInfoLoads, key)
+		}
+		gs.mu.Unlock()
+		call.info = info
+		call.retry = retryLoad
+		close(call.done)
+	}()
 
 	// after checking first potential patched cache
 	// we check the approx to avoid taking a place in statInfo map
@@ -421,6 +472,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		key.TableName,
 		key.DatabaseID,
 		key.DbName)
+	if err != nil {
+		retryLoad = true
+	}
 
 	if err == nil && ps.ApproxDataObjectsNum() == 0 {
 		return nil
@@ -443,10 +497,13 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		if len(target) != 0 {
 			resp, err := client.SendMessage(ctx, target, client.NewRequest(query.CmdMethod_GetStatsInfo))
 			if err != nil || resp == nil {
+				retryLoad = true
 				logutil.Errorf("failed to send request to %s, err: %v, resp: %v", "", err, resp)
 			} else if resp.GetStatsInfoResponse != nil {
 				defer client.Release(resp)
 				remoteInfo = resp.GetStatsInfoResponse.StatsInfo
+			} else {
+				retryLoad = true
 			}
 		}
 	}
@@ -473,6 +530,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	if sync {
 		for !ok {
 			if ctx.Err() != nil {
+				retryLoad = true
 				return nil
 			}
 

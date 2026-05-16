@@ -54,6 +54,8 @@ type mockStatsQueryClient struct {
 	response    *querypb.Response
 	sendStarted chan struct{}
 	allowReturn chan struct{}
+	sendOnce    sync.Once
+	sendCount   atomic.Int32
 }
 
 func (m *mockStatsQueryClient) ServiceID() string {
@@ -61,8 +63,13 @@ func (m *mockStatsQueryClient) ServiceID() string {
 }
 
 func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
-	close(m.sendStarted)
-	<-m.allowReturn
+	m.sendCount.Add(1)
+	if m.sendStarted != nil {
+		m.sendOnce.Do(func() { close(m.sendStarted) })
+	}
+	if m.allowReturn != nil {
+		<-m.allowReturn
+	}
 	return m.response, nil
 }
 
@@ -2072,5 +2079,200 @@ func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
 		_, ok := gs.mu.statsInfoMap[key]
 		gs.mu.Unlock()
 		assert.False(t, ok)
+	})
+}
+
+func TestGlobalStatsGetCoalescesConcurrentCacheMiss(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		qc := &mockStatsQueryClient{
+			response: &querypb.Response{
+				GetStatsInfoResponse: &querypb.GetStatsInfoResponse{StatsInfo: remoteInfo},
+			},
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		oldSubscribeHook := gs.beforeSubscribeTable
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		var subscribeCount atomic.Int32
+		gs.beforeSubscribeTable = func(statsinfo.StatsInfoKey) {
+			subscribeCount.Add(1)
+		}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+			gs.beforeSubscribeTable = oldSubscribeHook
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		const waiters = 16
+		resultCh := make(chan *statsinfo.StatsInfo, waiters+1)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not request remote stats")
+		}
+
+		for range waiters {
+			go func() {
+				resultCh <- gs.Get(getCtx, key, false)
+			}()
+		}
+
+		require.Eventually(t, func() bool {
+			return subscribeCount.Load() == 1 && qc.sendCount.Load() == 1
+		}, time.Second, 10*time.Millisecond)
+
+		close(qc.allowReturn)
+
+		for range waiters + 1 {
+			select {
+			case info := <-resultCh:
+				require.Equal(t, remoteInfo, info)
+			case <-time.After(time.Second):
+				t.Fatal("GlobalStats.Get did not return")
+			}
+		}
+		assert.Equal(t, int32(1), subscribeCount.Load())
+		assert.Equal(t, int32(1), qc.sendCount.Load())
+	})
+}
+
+func TestGlobalStatsGetSyncRequestDoesNotWaitBehindNonSyncLoad(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		qc := &mockStatsQueryClient{
+			response: &querypb.Response{
+				GetStatsInfoResponse: &querypb.GetStatsInfoResponse{StatsInfo: remoteInfo},
+			},
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		resultCh := make(chan *statsinfo.StatsInfo, 2)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("non-sync GlobalStats.Get did not request remote stats")
+		}
+
+		go func() {
+			resultCh <- gs.Get(getCtx, key, true)
+		}()
+
+		require.Eventually(t, func() bool {
+			return qc.sendCount.Load() == 2
+		}, time.Second, 10*time.Millisecond, "sync GlobalStats.Get waited behind non-sync load")
+
+		close(qc.allowReturn)
+
+		for range 2 {
+			select {
+			case info := <-resultCh:
+				require.Equal(t, remoteInfo, info)
+			case <-time.After(time.Second):
+				t.Fatal("GlobalStats.Get did not return")
+			}
+		}
 	})
 }
