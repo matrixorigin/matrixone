@@ -828,6 +828,21 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 			left:  "select a from db1.t1 where a = 1",
 			right: "select now() as a from db1.t1 where a = 2",
 		},
+		{
+			name:  "left has union",
+			left:  "select a from db1.t1 where a = 1 union select a from db1.t2 where a = 1",
+			right: "select a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has union all",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select a from db1.t1 where a = 2 union all select a from db1.t2 where a = 2",
+		},
+		{
+			name:  "left has intersect",
+			left:  "select a from db1.t1 intersect select a from db1.t2",
+			right: "select a from db1.t1 where a = 2",
+		},
 	}
 
 	for _, tc := range cases {
@@ -906,12 +921,14 @@ func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
 		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
 	}
 
+	// UnionClause is not mergeable because set operations have different semantics
+	// and merging via union distinct may change the original semantics
 	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
 		Left:  selectClause,
 		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
 	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
+	require.False(t, ok)
+	require.Nil(t, columns)
 
 	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ParenSelect{})
 	require.False(t, ok)

@@ -403,7 +403,11 @@ func outputColumnsFromRewriteSelectStatement(stmt tree.SelectStatement) ([]rewri
 		}
 		return columns, true
 	case *tree.UnionClause:
-		return outputColumnsFromRewriteSelectStatement(s.Left)
+		// Set-operation rules are not mergeable because:
+		// 1. Different set operation types (UNION/UNION ALL/INTERSECT/EXCEPT) have different semantics
+		// 2. Both branches need to be validated, not just the left one
+		// 3. Merging via union distinct may change the original semantics
+		return nil, false
 	case *tree.ParenSelect:
 		if s.Select == nil {
 			return nil, false
