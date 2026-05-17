@@ -1516,12 +1516,21 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		}
 	}
 
-	for colPos, lowerIdx := range colLowerBounds {
-		upperIdx, hasUpper := colUpperBounds[colPos]
-		if !hasUpper {
+	for i := range node.FilterList {
+		fn := node.FilterList[i].GetF()
+		if fn == nil || len(fn.Args) < 2 {
 			continue
 		}
-		idxPos := colPos2Idx[colPos]
+		col, _ := classifyRangeBound(fn)
+		if col == nil {
+			continue
+		}
+		lowerIdx, hasLower := colLowerBounds[col.ColPos]
+		upperIdx, hasUpper := colUpperBounds[col.ColPos]
+		if !hasLower || !hasUpper {
+			continue
+		}
+		idxPos := colPos2Idx[col.ColPos]
 		return idxPos, []int32{lowerIdx, upperIdx}
 	}
 
