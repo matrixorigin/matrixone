@@ -1508,33 +1508,22 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 		}
 	}
 
-	for i := range node.FilterList {
-		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
-			continue
-		}
-		col, _ := classifyRangeBound(fn)
-		if col == nil {
-			continue
-		}
-		lowerIdx, hasLower := colLowerBounds[col.ColPos]
-		upperIdx, hasUpper := colUpperBounds[col.ColPos]
-		if !hasLower || !hasUpper {
-			continue
-		}
-		idxPos := colPos2Idx[col.ColPos]
-		return idxPos, []int32{lowerIdx, upperIdx}
-	}
-
 	// Second pass: find non-equi conditions (in, between, in_range, or, single range ops)
 	for i := range node.FilterList {
-		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
+		fn := node.FilterList[i].GetF()
+		filterType, col := checkIndexFilter(fn)
 		if filterType == NonEqualIndexCondition {
 			idxPos, ok := colPos2Idx[col.ColPos]
 			if !ok {
 				continue
 			}
-			fn := node.FilterList[i].GetF()
+			if rangeCol, _ := classifyRangeBound(fn); rangeCol != nil {
+				lowerIdx, hasLower := colLowerBounds[rangeCol.ColPos]
+				upperIdx, hasUpper := colUpperBounds[rangeCol.ColPos]
+				if hasLower && hasUpper && int32(i) == min(lowerIdx, upperIdx) {
+					return idxPos, []int32{lowerIdx, upperIdx}
+				}
+			}
 			if fn != nil {
 				numParts := len(indexes[idxPos].Parts)
 				if numParts > 1 && hasUnsafeRangeOp(fn) {
