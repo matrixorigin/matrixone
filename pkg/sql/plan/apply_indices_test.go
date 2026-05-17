@@ -984,6 +984,70 @@ func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
 	}
 }
 
+func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &IndexDef{
+		IndexName:      "idx_price",
+		Parts:          []string{"price", catalog.FakePrimaryKeyColName},
+		Unique:         false,
+		IndexTableName: "__mo_index_secondary_idx_price",
+	}
+
+	node := &planpb.Node{
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{
+				catalog.FakePrimaryKeyColName: 0,
+				"price":                       1,
+			},
+			Cols: []*planpb.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+				{Name: "price", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+			Pkey:    &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			Indexes: []*planpb.IndexDef{idxDef},
+		},
+		FilterList: []*planpb.Expr{
+			makeRangeFilterExpr(bindTag, 1, ">=", 99),
+			makeRangeFilterExpr(bindTag, 1, "<=", 299),
+		},
+	}
+
+	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
+	require.Equal(t, 0, idxPos)
+	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
+}
+
+func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	filters := []*planpb.Expr{
+		makeRangeFilterExpr(bindTag, 1, ">=", 99),
+		makeRangeFilterExpr(bindTag, 1, "<=", 299),
+	}
+	filters[0].Selectivity = 0.3
+	filters[1].Selectivity = 0.4
+
+	idxTableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{
+				Name: catalog.IndexTableIndexColName,
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			},
+			{
+				Name: catalog.IndexTablePrimaryColName,
+				Typ:  planpb.Type{Id: int32(types.T_uint64)},
+			},
+		},
+	}
+
+	expr := builder.replaceRangePairCondition(filters, []int32{0, 1}, 42, idxTableDef, 2)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
+}
+
 func makeEqFilterExpr(colPos int32) *planpb.Expr {
 	return &planpb.Expr{
 		Expr: &planpb.Expr_F{
@@ -1002,6 +1066,33 @@ func makeEqFilterExpr(colPos int32) *planpb.Expr {
 						Expr: &planpb.Expr_Lit{
 							Lit: &planpb.Literal{
 								Value: &planpb.Literal_I64Val{I64Val: 1},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: op},
+				Args: []*planpb.Expr{
+					{
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_I64Val{I64Val: val},
 							},
 						},
 					},
