@@ -474,4 +474,3 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.True(t, leftJoinFound, "REPLACE on table with unique secondary index should use legacy LEFT JOIN path")
 	require.True(t, leftJoinHasOr, "LEFT JOIN ON clause should combine PK and UK equality with OR")
 }
-
