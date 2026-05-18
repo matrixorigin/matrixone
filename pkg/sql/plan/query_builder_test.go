@@ -384,16 +384,18 @@ func TestQueryBuilder_bindGroupByNull(t *testing.T) {
 func TestQueryBuilder_bindGroupByOrdinalPosition(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by 1", 1)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a + 1 as x from select_test.bind_select group by 1", 1)
 	require.NoError(t, err)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
 	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, selectClause.Exprs, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(bindCtx.groups))
-	colExpr, ok := bindCtx.groups[0].Expr.(*plan.Expr_Col)
+	funcExpr, ok := bindCtx.groups[0].Expr.(*plan.Expr_F)
 	require.True(t, ok)
-	require.Equal(t, "a", colExpr.Col.Name)
+	require.Equal(t, "+", funcExpr.F.Func.ObjName)
+	require.Equal(t, "a", funcExpr.F.Args[0].Expr.(*plan.Expr_Col).Col.Name)
+	require.Equal(t, int64(1), funcExpr.F.Args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val)
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {
@@ -860,10 +862,56 @@ func TestQueryBuilder_bindOrderByNullKeepsFollowingKeys(t *testing.T) {
 	require.Equal(t, int32(0), colExpr.Col.ColPos)
 }
 
+func TestQueryBuilder_bindOrderByNullDistinct(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	bindCtx.isDistinct = true
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select order by null", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Empty(t, boundOrderBys)
+	require.Equal(t, 1, len(bindCtx.projects))
+}
+
+func TestQueryBuilder_bindOrderByNullDistinctKeepsFollowingKeys(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	bindCtx.isDistinct = true
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select order by null, a desc", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	require.Equal(t, plan.OrderBySpec_DESC, boundOrderBys[0].Flag)
+	require.Equal(t, 1, len(bindCtx.projects))
+
+	colExpr, ok := boundOrderBys[0].Expr.Expr.(*plan.Expr_Col)
+	require.True(t, ok)
+	require.Equal(t, bindCtx.projectTag, colExpr.Col.RelPos)
+	require.Equal(t, int32(0), colExpr.Col.ColPos)
+}
+
 func TestQueryBuilder_bindOrderByOrdinalPosition(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select order by 1", 1)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a + 1 as x, b from select_test.bind_select order by 1", 1)
 	require.NoError(t, err)
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
@@ -880,6 +928,12 @@ func TestQueryBuilder_bindOrderByOrdinalPosition(t *testing.T) {
 	colExpr, ok := boundOrderBys[0].Expr.Expr.(*plan.Expr_Col)
 	require.True(t, ok)
 	require.Equal(t, int32(0), colExpr.Col.ColPos)
+
+	funcExpr, ok := bindCtx.projects[0].Expr.(*plan.Expr_F)
+	require.True(t, ok)
+	require.Equal(t, "+", funcExpr.F.Func.ObjName)
+	require.Equal(t, "a", funcExpr.F.Args[0].Expr.(*plan.Expr_Col).Col.Name)
+	require.Equal(t, int64(1), funcExpr.F.Args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val)
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
