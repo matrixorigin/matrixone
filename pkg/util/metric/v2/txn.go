@@ -42,8 +42,9 @@ var (
 			Name:      "statement_total",
 			Help:      "Total number of txn statement executed.",
 		}, []string{"type"})
-	TxnStatementTotalCounter = txnStatementCounter.WithLabelValues("total")
-	TxnStatementRetryCounter = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementTotalCounter               = txnStatementCounter.WithLabelValues("total")
+	TxnStatementRetryCounter               = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementInsertS3FlushBypassCounter = txnStatementCounter.WithLabelValues("insert-s3-flush-bypass")
 
 	txnCommitCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
