@@ -123,3 +123,245 @@ func TestTryBuildCurrentMoTablesCPKeyFilterMissingTargetDBNameFallsBack(t *testi
 	require.Nil(t, pkFilter)
 	require.Equal(t, "missing-target-db-name", fallbackReason)
 }
+
+func TestTryBuildCurrentMoTablesCPKeyFilterFallbackReasons(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	t.Run("missing target relation", func(t *testing.T) {
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			nil,
+			nil,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-target-rel", fallbackReason)
+	})
+
+	t.Run("missing mo_tables relation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			targetRel,
+			nil,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-mo-tables-rel", fallbackReason)
+	})
+
+	t.Run("missing target table def", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		moTablesRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(nil).Times(1)
+
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			targetRel,
+			moTablesRel,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-target-table-def", fallbackReason)
+	})
+
+	t.Run("missing target table name", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		moTablesRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "bench_db",
+		}).Times(1)
+		targetRel.EXPECT().GetTableName().Return("").Times(1)
+
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			targetRel,
+			moTablesRel,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-target-table-name", fallbackReason)
+	})
+
+	t.Run("missing mo_tables table def", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		moTablesRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "bench_db",
+		}).Times(1)
+		targetRel.EXPECT().GetTableName().Return("bench_table").Times(1)
+		moTablesRel.EXPECT().GetTableDef(gomock.Any()).Return(nil).Times(1)
+
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			targetRel,
+			moTablesRel,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-mo-tables-table-def", fallbackReason)
+	})
+
+	t.Run("missing mo_tables cpkey col", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		moTablesRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "bench_db",
+		}).Times(1)
+		targetRel.EXPECT().GetTableName().Return("bench_table").Times(1)
+		moTablesRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			Cols:          []*plan.ColDef{},
+			Name2ColIndex: map[string]int32{},
+		}).Times(1)
+
+		pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+			context.Background(),
+			1,
+			targetRel,
+			moTablesRel,
+			mp,
+		)
+		require.NoError(t, err)
+		require.Nil(t, pkFilter)
+		require.Equal(t, "missing-mo-tables-cpkey-col", fallbackReason)
+	})
+}
+
+func TestTryBuildCurrentMoTablesCPKeyFilterUsesExactCPKeyNameFallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	targetRel := mock_frontend.NewMockRelation(ctrl)
+	moTablesRel := mock_frontend.NewMockRelation(ctrl)
+
+	targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "bench_db",
+	}).Times(1)
+	targetRel.EXPECT().GetTableName().Return("bench_table").Times(1)
+
+	moTablesRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name:   catalog.SystemRelAttr_CPKey,
+				Seqnum: uint32(catalog.MO_TABLES_CPKEY_IDX),
+			},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.SystemRelAttr_CPKey: 0,
+		},
+	}).Times(1)
+
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	pkFilter, fallbackReason, err := tryBuildCurrentMoTablesCPKeyFilter(
+		context.Background(),
+		42,
+		targetRel,
+		moTablesRel,
+		mp,
+	)
+	require.NoError(t, err)
+	require.Empty(t, fallbackReason)
+	require.NotNil(t, pkFilter)
+}
+
+func TestDatabaseCreatedTimeToCollectLowerBoundRejectsInvalidTimestamp(t *testing.T) {
+	_, err := databaseCreatedTimeToCollectLowerBound(types.Timestamp(types.GetUnixEpochSecs()))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid database created_time")
+}
+
+func TestGetDatabaseCreatedTimeLowerBoundGuardAndCachePaths(t *testing.T) {
+	ses := newValidateSession(t)
+	ses.SetAccountId(42)
+
+	t.Run("missing target relation", func(t *testing.T) {
+		_, err := getDatabaseCreatedTimeLowerBound(
+			context.Background(),
+			ses,
+			nil,
+			types.BuildTS(1, 0),
+			nil,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing target relation")
+	})
+
+	t.Run("missing target database name", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).Times(1)
+
+		_, err := getDatabaseCreatedTimeLowerBound(
+			context.Background(),
+			ses,
+			targetRel,
+			types.BuildTS(1, 0),
+			nil,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing target database name")
+	})
+
+	t.Run("cache hit skips lookup", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		targetRel := mock_frontend.NewMockRelation(ctrl)
+		targetRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "bench_db",
+		}).Times(1)
+		targetRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(7)).Times(1)
+
+		snapshotTS := types.BuildTS(123, 0)
+		expected := types.BuildTS(456, 0)
+		cache := map[dbCreatedTimeLowerBoundKey]types.TS{
+			{
+				accountID:  42,
+				databaseID: 7,
+				database:   "bench_db",
+				snapshot:   snapshotTS,
+			}: expected,
+		}
+
+		lowerBound, err := getDatabaseCreatedTimeLowerBound(
+			context.Background(),
+			ses,
+			targetRel,
+			snapshotTS,
+			cache,
+		)
+		require.NoError(t, err)
+		require.Equal(t, expected, lowerBound)
+	})
+}
