@@ -612,6 +612,15 @@ func makeInExpr(col *plan.Expr, vals ...*plan.Expr) *plan.Expr {
 	}
 }
 
+func makeBetweenExpr(col, low, high *plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(function.BETWEEN) << 32},
+			Args: []*plan.Expr{col, low, high},
+		}},
+	}
+}
+
 func TestClassifyFilters_Basic(t *testing.T) {
 	td := makeTableDef("year", "amount", "account", "__mo_filepath")
 	partColSet := map[string]bool{"year": true}
@@ -901,6 +910,19 @@ func TestExtractPartitionPredicates_InWithStrings(t *testing.T) {
 
 	require.Equal(t, 1, len(preds))
 	assert.Equal(t, []string{"US", "CA"}, preds[0].Values)
+}
+
+func TestExtractPartitionPredicates_Between(t *testing.T) {
+	td := makeTableDef("year", "data")
+	partColSet := map[string]bool{"year": true}
+
+	betweenExpr := makeBetweenExpr(makeColExpr(0, "year"), makeLitInt64(2020), makeLitInt64(2025))
+	preds := ExtractPartitionPredicatesFromExprs(td, []*plan.Expr{betweenExpr}, partColSet)
+
+	require.Equal(t, 1, len(preds))
+	assert.Equal(t, "year", preds[0].ColName)
+	assert.Equal(t, PartOpBetween, preds[0].Op)
+	assert.Equal(t, []string{"2020", "2025"}, preds[0].Values)
 }
 
 func TestExtractPartitionPredicates_NonStructurable(t *testing.T) {
@@ -1728,6 +1750,41 @@ func TestDiscoverHivePartitions_INTwoValuesListCalls(t *testing.T) {
 	assert.Equal(t, 2, result.PartitionCount)
 	assert.Equal(t, 1, result.PrunedCount)
 	assert.Equal(t, 2, len(result.Files))
+}
+
+func TestDiscoverHivePartitions_BetweenPredicate(t *testing.T) {
+	dirs := map[string][]fileservice.DirEntry{
+		"/data": {
+			{Name: "year=2019", IsDir: true},
+			{Name: "year=2020", IsDir: true},
+			{Name: "year=2021", IsDir: true},
+			{Name: "year=2022", IsDir: true},
+			{Name: "year=2023", IsDir: true},
+		},
+		"/data/year=2020": {
+			{Name: "a.parquet", IsDir: false, Size: 100},
+		},
+		"/data/year=2021": {
+			{Name: "b.parquet", IsDir: false, Size: 200},
+		},
+		"/data/year=2022": {
+			{Name: "c.parquet", IsDir: false, Size: 300},
+		},
+	}
+
+	result, err := DiscoverHivePartitions(
+		context.Background(),
+		mockListDir(dirs),
+		"/data",
+		[]string{"year"},
+		[]tree.HivePartColType{{Id: int32(types.T_int32)}},
+		[]PartitionPredicate{{ColName: "year", Op: PartOpBetween, Values: []string{"2020", "2022"}}},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 4, result.ListCalls, "BETWEEN: root + 3 hit partition file dirs = 4")
+	assert.Equal(t, 3, result.PartitionCount)
+	assert.Equal(t, 2, result.PrunedCount)
+	assert.Equal(t, 3, len(result.Files))
 }
 
 func TestDiscoverHivePartitions_MultiLevelPartialPredicate(t *testing.T) {

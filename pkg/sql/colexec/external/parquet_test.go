@@ -1142,7 +1142,7 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 	}
 
 	var h ParquetHandler
-	err := h.openFile(param)
+	err := h.openFile(param, false)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
 }
@@ -1288,6 +1288,55 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 		}
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
+}
+
+func TestParquet_ScanParquetFile_CountStarNoAttrs(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 2
+	defer func() { maxParquetBatchCnt = save }()
+
+	var buf bytes.Buffer
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+	w := parquet.NewWriter(&buf, schema)
+	values := make([]parquet.Value, page.NumRows())
+	_, _ = page.Values().ReadValues(values)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}, ExParam: tree.ExParam{}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+
+	r := NewParquetReader(param, proc)
+	fileEmpty, err := r.Open(param, proc)
+	require.NoError(t, err)
+	require.False(t, fileEmpty)
+	defer r.Close()
+
+	var total int
+	for attempts := 0; attempts < 5; attempts++ {
+		bat := batch.NewWithSize(0)
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		require.LessOrEqual(t, bat.RowCount(), int(maxParquetBatchCnt))
+		total += bat.RowCount()
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, 3, total)
 }
 
 // helper to build a batch with provided vector types
