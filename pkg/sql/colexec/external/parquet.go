@@ -209,18 +209,22 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		if col == nil {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
-
+		physicalCol := col
 		var fn *columnMapper
 		if !col.Leaf() {
-			// nested type: List/Struct/Map
 			targetType := types.T(def.Typ.Id)
-			if !isNestedTargetTypeSupported(targetType) {
-				return moerr.NewInvalidInputf(param.Ctx,
-					"parquet nested column %s must map to JSON or TEXT type, got %s",
-					attr.ColName, targetType.String())
+			switch targetType {
+			case types.T_array_float32, types.T_array_float64:
+				physicalCol, fn = h.getNestedListMapper(col, def.Typ)
+			default:
+				if !isNestedTargetTypeSupported(targetType) {
+					return moerr.NewInvalidInputf(param.Ctx,
+						"parquet nested column %s must map to JSON or TEXT type, got %s",
+						attr.ColName, targetType.String())
+				}
+				h.hasNestedCols = true
+				fn = h.getNestedMapper(col, def.Typ)
 			}
-			h.hasNestedCols = true
-			fn = h.getNestedMapper(col, def.Typ)
 		} else {
 			fn = h.getMapper(col, def.Typ)
 		}
@@ -239,9 +243,11 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			}
 			return moerr.NewNYIf(param.Ctx, "load %s to %s", st, dt)
 		}
-		h.cols[attr.ColIndex] = col
+		h.cols[attr.ColIndex] = physicalCol
 		h.mappers[attr.ColIndex] = fn
-		h.pages[attr.ColIndex] = col.Pages()
+		if physicalCol.Leaf() {
+			h.pages[attr.ColIndex] = physicalCol.Pages()
+		}
 	}
 
 	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
@@ -254,6 +260,81 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	}
 
 	return nil
+}
+
+func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*parquet.Column, *columnMapper) {
+	leaf, ok := parquetListElementLeaf(sc)
+	if !ok {
+		return nil, nil
+	}
+	if leaf.Optional() && dt.NotNullable {
+		return nil, nil
+	}
+
+	mp := &columnMapper{
+		srcNull:            true,
+		dstNull:            !dt.NotNullable,
+		maxDefinitionLevel: byte(leaf.MaxDefinitionLevel()),
+		allowRepetition:    true,
+	}
+	width := int(dt.Width)
+	if width <= 0 {
+		width = types.MaxArrayDimension
+	}
+
+	switch types.T(dt.Id) {
+	case types.T_array_float32:
+		if leaf.Type().Kind() != parquet.Float {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float32, error) {
+				return v.Float(), nil
+			})
+		}
+	case types.T_array_float64:
+		if leaf.Type().Kind() != parquet.Double {
+			return nil, nil
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float64, error) {
+				return v.Double(), nil
+			})
+		}
+	default:
+		return nil, nil
+	}
+	return leaf, mp
+}
+
+func parquetListElementLeaf(sc *parquet.Column) (*parquet.Column, bool) {
+	if sc == nil || sc.Leaf() {
+		return nil, false
+	}
+	st := sc.Type()
+	if st == nil {
+		return nil, false
+	}
+	lt := st.LogicalType()
+	if lt == nil || lt.List == nil {
+		return nil, false
+	}
+
+	listCol := sc.Column("list")
+	if listCol == nil || !listCol.Repeated() {
+		return nil, false
+	}
+	elem := listCol.Column("element")
+	if elem == nil {
+		elem = listCol.Column("item")
+	}
+	if elem == nil && len(listCol.Columns()) == 1 {
+		elem = listCol.Columns()[0]
+	}
+	if elem == nil || !elem.Leaf() {
+		return nil, false
+	}
+	return elem, true
 }
 
 func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
@@ -1435,6 +1516,105 @@ func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Va
 	return values, nil
 }
 
+func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
+	n := int(page.NumValues())
+	values := make([]parquet.Value, n)
+	read, err := page.Values().ReadValues(values)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, moerr.ConvertGoError(ctx, err)
+	}
+	if read != n {
+		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
+	}
+	return values, nil
+}
+
+func processParquetListToArray[T types.RealNumbers](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+	convert func(parquet.Value) (T, error),
+) error {
+	values, err := readParquetPageAllValues(ctx, page)
+	if err != nil {
+		return err
+	}
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+	if len(values) == 0 {
+		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: %d rows but no values", numRows)
+	}
+	if values[0].RepetitionLevel() != 0 {
+		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: first repetition level is %d", values[0].RepetitionLevel())
+	}
+	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+		return err
+	}
+
+	capHint := width
+	if capHint == types.MaxArrayDimension {
+		capHint = 0
+	}
+	row := make([]T, 0, capHint)
+	rowNull := false
+	rowCount := 0
+	flushRow := func() error {
+		if rowNull {
+			rowCount++
+			return vector.AppendArray[T](vec, nil, true, proc.Mp())
+		}
+		if width != types.MaxArrayDimension && len(row) != width {
+			return moerr.NewArrayDefMismatchNoCtx(width, len(row))
+		}
+		rowCount++
+		return vector.AppendArray[T](vec, row, false, proc.Mp())
+	}
+
+	for i, v := range values {
+		if i > 0 && v.RepetitionLevel() == 0 {
+			if err := flushRow(); err != nil {
+				return err
+			}
+			row = row[:0]
+			rowNull = false
+		}
+
+		if v.DefinitionLevel() != int(mp.maxDefinitionLevel) {
+			if v.DefinitionLevel() == 0 && len(row) == 0 {
+				if !mp.dstNull {
+					return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				}
+				rowNull = true
+				continue
+			}
+			return moerr.NewInvalidInputf(ctx,
+				"parquet list value cannot map to vector: definition level %d, expected %d",
+				v.DefinitionLevel(), mp.maxDefinitionLevel)
+		}
+		if rowNull {
+			return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
+		}
+
+		val, err := convert(v)
+		if err != nil {
+			return wrapParseError(ctx, rowCount, err)
+		}
+		row = append(row, val)
+	}
+	if err := flushRow(); err != nil {
+		return err
+	}
+	if rowCount != numRows {
+		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: mapped %d rows, expected %d", rowCount, numRows)
+	}
+	return nil
+}
+
 func processParquetValuesToFixed[T any](
 	ctx context.Context,
 	mp *columnMapper,
@@ -2175,7 +2355,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				continue
 			}
 
-			if len(page.RepetitionLevels()) != 0 {
+			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
 				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 

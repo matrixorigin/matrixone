@@ -187,6 +187,75 @@ func TestParquetStringToJsonMapping(t *testing.T) {
 	})
 }
 
+func TestParquetListToVectorMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("float list to vecf32", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+				parquet.FloatValue(3).Level(1, 1, 0),
+			},
+			{
+				parquet.FloatValue(4.5).Level(0, 1, 0),
+				parquet.FloatValue(5.5).Level(1, 1, 0),
+				parquet.FloatValue(6.5).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+		require.True(t, mp.allowRepetition)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float32{{1, 2, 3}, {4.5, 5.5, 6.5}}, vector.MustArrayCol[float32](vec))
+	})
+
+	t.Run("double list to vecf64", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{
+			{
+				parquet.DoubleValue(1.25).Level(0, 1, 0),
+				parquet.DoubleValue(2.25).Level(1, 1, 0),
+				parquet.DoubleValue(3.25).Level(1, 1, 0),
+			},
+			{
+				parquet.DoubleValue(4.25).Level(0, 1, 0),
+				parquet.DoubleValue(5.25).Level(1, 1, 0),
+				parquet.DoubleValue(6.25).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float64{{1.25, 2.25, 3.25}, {4.25, 5.25, 6.25}}, vector.MustArrayCol[float64](vec))
+	})
+
+	t.Run("dimension mismatch", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "expected vector dimension 3 != actual dimension 2")
+	})
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
@@ -414,6 +483,53 @@ func TestParquet_AllTypesBasic(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParquetPrepareAllocatesByColumnIndex(t *testing.T) {
+	f, _ := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{parquet.Int32Value(1)})
+
+	h := &ParquetHandler{file: f}
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "c", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "__mo_rowid", Hidden: true},
+				{Name: "c", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}},
+			},
+		},
+	}
+	require.NoError(t, h.prepare(param))
+	require.Len(t, h.cols, 2)
+	require.Nil(t, h.cols[0])
+	require.NotNil(t, h.cols[1])
+	require.Nil(t, h.mappers[0])
+	require.NotNil(t, h.mappers[1])
+}
+
+func writeListAndGetPage(t *testing.T, elem parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
+	t.Helper()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.List(elem),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	require.NotNil(t, col)
+	require.False(t, col.Leaf())
+	leaf, ok := parquetListElementLeaf(col)
+	require.True(t, ok)
+	pg, err := leaf.Pages().ReadPage()
+	require.NoError(t, err)
+	return f, pg
 }
 
 // write a single-column file with dictionary page enabled and return first page
