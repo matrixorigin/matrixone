@@ -152,12 +152,13 @@ id    name    value
 drop table ai_replace_test;
 drop table if exists ai_composite_uk;
 create table ai_composite_uk (id int auto_increment primary key, a int, b int, value int, unique key uk_ab(a, b));
-insert into ai_composite_uk (a, b, value) values (1, 1, 100), (2, 2, 200);
+insert into ai_composite_uk (a, b, value) values (1, 1, 100), (1, 2, 150), (2, 2, 200);
 replace into ai_composite_uk (a, b, value) values (1, 1, 300);
 select * from ai_composite_uk order by id;
 id    a    b    value
-2    2    2    200
-3    1    1    300
+2    1    2    150
+3    2    2    200
+4    1    1    300
 drop table ai_composite_uk;
 drop table if exists ai_multi_uk;
 create table ai_multi_uk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);

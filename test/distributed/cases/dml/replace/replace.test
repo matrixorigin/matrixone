@@ -114,9 +114,12 @@ select * from ai_replace_test order by id;
 drop table ai_replace_test;
 
 -- test REPLACE on AUTO_INCREMENT table with composite UNIQUE key
+-- Distractor row (1, 2) shares the first key part with (1, 1) but must NOT be
+-- deleted when REPLACE targets (1, 1). This ensures the planner matches on
+-- ALL composite-key parts, not just the first one.
 drop table if exists ai_composite_uk;
 create table ai_composite_uk (id int auto_increment primary key, a int, b int, value int, unique key uk_ab(a, b));
-insert into ai_composite_uk (a, b, value) values (1, 1, 100), (2, 2, 200);
+insert into ai_composite_uk (a, b, value) values (1, 1, 100), (1, 2, 150), (2, 2, 200);
 replace into ai_composite_uk (a, b, value) values (1, 1, 300);
 select * from ai_composite_uk order by id;
 drop table ai_composite_uk;
