@@ -89,7 +89,12 @@ show create table hive_single;
 -- 1.11 LOAD DATA into hive table should be rejected (external table generic rejection)
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 
--- 1.12 hive_partitioning='false' treated as disabled (existing external table path)
+-- 1.12 Creating indexes on hive-partitioned external tables should be rejected
+create index idx_hive_single_id on hive_single(id);
+create unique index uidx_hive_single_id on hive_single(id);
+alter table hive_single add unique (amount);
+
+-- 1.13 hive_partitioning='false' treated as disabled (existing external table path)
 drop table if exists hive_disabled;
 create external table hive_disabled (
     id int,
@@ -371,7 +376,8 @@ group by d.y order by d.y;
 -- 9.4 UNION ALL merges partitions from two tables
 select 'single' as src, count(*) as cnt from hive_single where year = 2024
 union all
-select 'multi' as src, count(*) as cnt from hive_multi where year = 2024;
+select 'multi' as src, count(*) as cnt from hive_multi where year = 2024
+order by src desc;
 
 -- 9.5 Scalar subquery with partition predicate
 select id, year from hive_single
