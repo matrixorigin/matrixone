@@ -303,25 +303,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_uint8:
-		if st.Kind() == parquet.Int32 {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				dict := page.Dictionary()
-				data := page.Data()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint8 {
-						return uint8(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint8 {
-					return uint8(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to UINT8 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint8, error) {
@@ -334,27 +316,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					uint8(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint8(0), func(v parquet.Value) (uint8, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > 255 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT UNSIGNED", val)
+				}
+				return uint8(val), nil
+			})
 		}
 	case types.T_int8:
-		if st.Kind() == parquet.Int32 {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				dict := page.Dictionary()
-				data := page.Data()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int8 {
-						return int8(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int8 {
-					return int8(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to INT8 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (int8, error) {
@@ -367,27 +347,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					int8(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int8(0), func(v parquet.Value) (int8, error) {
+				val, err := parquetValueToInt64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val < -128 || val > 127 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT", val)
+				}
+				return int8(val), nil
+			})
 		}
 	case types.T_uint16:
-		if st.Kind() == parquet.Int32 {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) uint16 {
-						return uint16(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint16 {
-					return uint16(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to UINT16 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint16, error) {
@@ -400,27 +378,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					uint16(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint16(0), func(v parquet.Value) (uint16, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > 65535 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT UNSIGNED", val)
+				}
+				return uint16(val), nil
+			})
 		}
 	case types.T_int16:
-		if st.Kind() == parquet.Int32 {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int16 {
-						return int16(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int16 {
-					return int16(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to INT16 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (int16, error) {
@@ -433,26 +409,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					int16(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int16(0), func(v parquet.Value) (int16, error) {
+				val, err := parquetValueToInt64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val < -32768 || val > 32767 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT", val)
+				}
+				return int16(val), nil
+			})
 		}
 	case types.T_int32:
-		if st.Kind() == parquet.Int32 {
-			// Direct mapping: INT32 → INT32
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Int32())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to INT32 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (int32, error) {
@@ -465,44 +440,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					int32(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
+				val, err := parquetValueToInt64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val < -2147483648 || val > 2147483647 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT", val)
+				}
+				return int32(val), nil
+			})
 		}
 	case types.T_int64:
-		if st.Kind() == parquet.Int64 {
-			// Direct mapping: INT64 → INT64
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Int64())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int64()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.Int32 {
-			// Widening conversion: INT32 → INT64 (always safe)
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Int32(), func(v int32) int64 {
-						return int64(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Int32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int64 {
-					return int64(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to INT64 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (int64, error) {
@@ -515,25 +471,18 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					int64(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int64(0), func(v parquet.Value) (int64, error) {
+				return parquetValueToInt64(proc.Ctx, st, v)
+			})
 		}
 	case types.T_uint32:
-		if st.Kind() == parquet.Int32 {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Uint32())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Uint32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint32 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to UINT32 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint32, error) {
@@ -546,44 +495,25 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					uint32(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint32(0), func(v parquet.Value) (uint32, error) {
+				val, err := parquetValueToUint64(proc.Ctx, st, v)
+				if err != nil {
+					return 0, err
+				}
+				if val > 4294967295 {
+					return 0, moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT UNSIGNED", val)
+				}
+				return uint32(val), nil
+			})
 		}
 	case types.T_uint64:
-		if st.Kind() == parquet.Int64 {
-			// Direct mapping: INT64 → UINT64
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Uint64())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Uint64()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.Int32 {
-			// Widening conversion: INT32 → UINT64 (always safe for unsigned target)
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Uint32(), func(v uint32) uint64 {
-						return uint64(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Uint32()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) uint64 {
-					return uint64(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to UINT64 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (uint64, error) {
@@ -596,25 +526,18 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					uint64(0),
 				)
 			}
+			break
+		}
+		if !isParquetIntegerSource(st, true) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint64(0), func(v parquet.Value) (uint64, error) {
+				return parquetValueToUint64(proc.Ctx, st, v)
+			})
 		}
 	case types.T_float32:
-		if st.Kind() == parquet.Float {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Float())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Float()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float32 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to FLOAT32 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (float32, error) {
@@ -627,43 +550,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					float32(0),
 				)
 			}
+			break
+		}
+		if !isParquetFloatConvertibleSource(st) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, float32(0), func(v parquet.Value) (float32, error) {
+				val, err := parquetValueToFloat64(proc.Ctx, st, v)
+				return float32(val), err
+			})
 		}
 	case types.T_float64:
-		if st.Kind() == parquet.Double {
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVec(mp, page, proc, vec, data.Double())
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Double()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
-					return dictValues[int(idx)]
-				})
-			}
-		} else if st.Kind() == parquet.Float {
-			// Widening conversion: FLOAT32 → FLOAT64 (always safe)
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				data := page.Data()
-				dict := page.Dictionary()
-				if dict == nil {
-					return copyPageToVecMap(mp, page, proc, vec, data.Float(), func(v float32) float64 {
-						return float64(v)
-					})
-				}
-
-				dictData := dict.Page().Data()
-				dictValues := dictData.Float()
-				indices := data.Int32()
-				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
-					return float64(dictValues[int(idx)])
-				})
-			}
-		} else if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to FLOAT64 conversion
+		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (float64, error) {
@@ -676,6 +575,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					float64(0),
 				)
 			}
+			break
+		}
+		if !isParquetFloatConvertibleSource(st) {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, float64(0), func(v parquet.Value) (float64, error) {
+				return parquetValueToFloat64(proc.Ctx, st, v)
+			})
 		}
 	case types.T_date:
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
@@ -996,6 +904,18 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		if isParquetValueStringConvertibleSource(st) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToBytes(proc.Ctx, mp, page, proc, vec, func(v parquet.Value) ([]byte, error) {
+					val, err := parquetValueToString(proc.Ctx, st, v)
+					if err != nil {
+						return nil, err
+					}
+					return []byte(val), nil
+				})
+			}
+			break
+		}
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -1500,6 +1420,303 @@ func processStringToJson(
 		}
 	}
 	return nil
+}
+
+func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
+	n := int(page.NumRows())
+	values := make([]parquet.Value, n)
+	read, err := page.Values().ReadValues(values)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, moerr.ConvertGoError(ctx, err)
+	}
+	if read != n {
+		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
+	}
+	return values, nil
+}
+
+func processParquetValuesToFixed[T any](
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	zeroVal T,
+	convert func(parquet.Value) (T, error),
+) error {
+	values, err := readParquetPageValues(ctx, page)
+	if err != nil {
+		return err
+	}
+	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
+		return err
+	}
+	for i, v := range values {
+		if v.IsNull() {
+			if !mp.dstNull {
+				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+			}
+			if err := vector.AppendFixed(vec, zeroVal, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+		val, err := convert(v)
+		if err != nil {
+			return wrapParseError(ctx, i, err)
+		}
+		if err := vector.AppendFixed(vec, val, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processParquetValuesToBytes(
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	convert func(parquet.Value) ([]byte, error),
+) error {
+	values, err := readParquetPageValues(ctx, page)
+	if err != nil {
+		return err
+	}
+	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
+		return err
+	}
+	for i, v := range values {
+		if v.IsNull() {
+			if !mp.dstNull {
+				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+			}
+			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+		val, err := convert(v)
+		if err != nil {
+			return wrapParseError(ctx, i, err)
+		}
+		if err := vector.AppendBytes(vec, val, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
+	if st.PhysicalType() == nil || isDecimalLogicalType(st.LogicalType()) {
+		return false
+	}
+	lt := st.LogicalType()
+	if lt != nil && (lt.Date != nil || lt.Time != nil || lt.Timestamp != nil) {
+		return false
+	}
+	switch st.Kind() {
+	case parquet.Boolean:
+		return includeBoolean
+	case parquet.Int32, parquet.Int64:
+		return true
+	default:
+		return false
+	}
+}
+
+func isParquetFloatConvertibleSource(st parquet.Type) bool {
+	switch st.Kind() {
+	case parquet.Int32, parquet.Int64:
+		return isParquetIntegerSource(st, false) || isDecimalLogicalType(st.LogicalType())
+	case parquet.Float, parquet.Double:
+		return true
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		return isDecimalLogicalType(st.LogicalType())
+	default:
+		return false
+	}
+}
+
+func isParquetValueStringConvertibleSource(st parquet.Type) bool {
+	if isDecimalLogicalType(st.LogicalType()) {
+		return true
+	}
+	lt := st.LogicalType()
+	if lt != nil && (lt.Date != nil || lt.Time != nil || lt.Timestamp != nil) {
+		return true
+	}
+	switch st.Kind() {
+	case parquet.Boolean, parquet.Int32, parquet.Int64, parquet.Float, parquet.Double:
+		return true
+	default:
+		return false
+	}
+}
+
+func parquetValueToInt64(ctx context.Context, st parquet.Type, v parquet.Value) (int64, error) {
+	switch st.Kind() {
+	case parquet.Boolean:
+		if v.Boolean() {
+			return 1, nil
+		}
+		return 0, nil
+	case parquet.Int32:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			return int64(v.Uint32()), nil
+		}
+		return int64(v.Int32()), nil
+	case parquet.Int64:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			val := v.Uint64()
+			if val > uint64(1<<63-1) {
+				return 0, moerr.NewInvalidInputf(ctx, "parquet value %d overflows BIGINT", val)
+			}
+			return int64(val), nil
+		}
+		return v.Int64(), nil
+	default:
+		return 0, moerr.NewInvalidInputf(ctx, "cannot convert parquet %s to integer", st.Kind())
+	}
+}
+
+func parquetValueToUint64(ctx context.Context, st parquet.Type, v parquet.Value) (uint64, error) {
+	switch st.Kind() {
+	case parquet.Boolean:
+		if v.Boolean() {
+			return 1, nil
+		}
+		return 0, nil
+	case parquet.Int32:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			return uint64(v.Uint32()), nil
+		}
+		val := v.Int32()
+		if val < 0 {
+			return 0, moerr.NewInvalidInputf(ctx, "negative parquet value %d overflows unsigned integer", val)
+		}
+		return uint64(val), nil
+	case parquet.Int64:
+		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			return v.Uint64(), nil
+		}
+		val := v.Int64()
+		if val < 0 {
+			return 0, moerr.NewInvalidInputf(ctx, "negative parquet value %d overflows unsigned integer", val)
+		}
+		return uint64(val), nil
+	default:
+		return 0, moerr.NewInvalidInputf(ctx, "cannot convert parquet %s to unsigned integer", st.Kind())
+	}
+}
+
+func parquetValueToFloat64(ctx context.Context, st parquet.Type, v parquet.Value) (float64, error) {
+	if isDecimalLogicalType(st.LogicalType()) {
+		dec, err := parquetValueToDecimal256(ctx, st, v)
+		if err != nil {
+			return 0, err
+		}
+		return types.Decimal256ToFloat64(dec, parquetDecimalScale(st)), nil
+	}
+	switch st.Kind() {
+	case parquet.Int32, parquet.Int64:
+		val, err := parquetValueToInt64(ctx, st, v)
+		if err != nil {
+			return 0, err
+		}
+		return float64(val), nil
+	case parquet.Float:
+		return float64(v.Float()), nil
+	case parquet.Double:
+		return v.Double(), nil
+	default:
+		return 0, moerr.NewInvalidInputf(ctx, "cannot convert parquet %s to floating point", st.Kind())
+	}
+}
+
+func parquetValueToString(ctx context.Context, st parquet.Type, v parquet.Value) (string, error) {
+	lt := st.LogicalType()
+	if isDecimalLogicalType(lt) {
+		dec, err := parquetValueToDecimal256(ctx, st, v)
+		if err != nil {
+			return "", err
+		}
+		return dec.Format(parquetDecimalScale(st)), nil
+	}
+	if lt != nil {
+		switch {
+		case lt.Date != nil:
+			return types.DaysFromUnixEpochToDate(v.Int32()).String(), nil
+		case lt.Time != nil:
+			return parquetTimeValueToString(v, lt), nil
+		case lt.Timestamp != nil:
+			return parquetTimestampValueToString(v, lt), nil
+		}
+	}
+	switch st.Kind() {
+	case parquet.Boolean:
+		return strconv.FormatBool(v.Boolean()), nil
+	case parquet.Int32, parquet.Int64:
+		if lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
+			val, err := parquetValueToUint64(ctx, st, v)
+			if err != nil {
+				return "", err
+			}
+			return strconv.FormatUint(val, 10), nil
+		}
+		val, err := parquetValueToInt64(ctx, st, v)
+		if err != nil {
+			return "", err
+		}
+		return strconv.FormatInt(val, 10), nil
+	case parquet.Float:
+		return strconv.FormatFloat(float64(v.Float()), 'g', -1, 32), nil
+	case parquet.Double:
+		return strconv.FormatFloat(v.Double(), 'g', -1, 64), nil
+	default:
+		return "", moerr.NewInvalidInputf(ctx, "cannot convert parquet %s to string", st.Kind())
+	}
+}
+
+func parquetTimeValueToString(v parquet.Value, lt *format.LogicalType) string {
+	switch {
+	case lt.Time.Unit.Nanos != nil:
+		return types.Time(v.Int64() / 1000).String()
+	case lt.Time.Unit.Micros != nil:
+		return types.Time(v.Int64()).String()
+	default:
+		return (types.Time(v.Int32()) * 1000).String()
+	}
+}
+
+func parquetTimestampValueToString(v parquet.Value, lt *format.LogicalType) string {
+	var micros int64
+	switch {
+	case lt.Timestamp.Unit.Nanos != nil:
+		micros = v.Int64() / 1000
+	case lt.Timestamp.Unit.Micros != nil:
+		micros = v.Int64()
+	default:
+		micros = v.Int64() * 1000
+	}
+	if lt.Timestamp.IsAdjustedToUTC {
+		return types.UnixMicroToTimestamp(micros).String()
+	}
+	return types.Datetime(types.UnixMicroToTimestamp(micros)).String()
+}
+
+func parquetValueToDecimal256(ctx context.Context, st parquet.Type, v parquet.Value) (types.Decimal256, error) {
+	switch st.Kind() {
+	case parquet.Int32:
+		return decimal256FromInt64(int64(v.Int32())), nil
+	case parquet.Int64:
+		return decimal256FromInt64(v.Int64()), nil
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		return decimalBytesToDecimal256(ctx, v.ByteArray())
+	default:
+		return types.Decimal256{}, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal", st.Kind())
+	}
 }
 
 type strLoader struct {

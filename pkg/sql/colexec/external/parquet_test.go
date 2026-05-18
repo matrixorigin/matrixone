@@ -187,6 +187,121 @@ func TestParquetStringToJsonMapping(t *testing.T) {
 	})
 }
 
+func TestParquetCrossTypeMappings(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+
+	t.Run("bool to tinyint and varchar", func(t *testing.T) {
+		values := []parquet.Value{parquet.BooleanValue(true), parquet.BooleanValue(false)}
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.BooleanType), values)
+		col := f.Root().Column("c")
+
+		vecInt := vector.NewVec(types.T_int8.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_int8), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int8{1, 0}, vector.MustFixedColWithTypeCheck[int8](vecInt))
+
+		vecStr := vector.NewVec(types.T_varchar.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecStr))
+		require.Equal(t, "true", vecStr.GetStringAt(0))
+		require.Equal(t, "false", vecStr.GetStringAt(1))
+	})
+
+	t.Run("int64 to int32 and varchar", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Int(64), []parquet.Value{
+			parquet.Int64Value(100),
+			parquet.Int64Value(-200),
+		})
+		col := f.Root().Column("c")
+
+		vecInt := vector.NewVec(types.T_int32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_int32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int32{100, -200}, vector.MustFixedColWithTypeCheck[int32](vecInt))
+
+		vecStr := vector.NewVec(types.T_varchar.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecStr))
+		require.Equal(t, "100", vecStr.GetStringAt(0))
+		require.Equal(t, "-200", vecStr.GetStringAt(1))
+	})
+
+	t.Run("int64 to int32 overflow", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Int(64), []parquet.Value{
+			parquet.Int64Value(1 << 40),
+		})
+
+		vec := vector.NewVec(types.T_int32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows INT")
+	})
+
+	t.Run("double to float", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
+			parquet.DoubleValue(1.5),
+			parquet.DoubleValue(2.25),
+		})
+
+		vec := vector.NewVec(types.T_float32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.InDeltaSlice(t, []float32{1.5, 2.25}, vector.MustFixedColWithTypeCheck[float32](vec), 1e-6)
+	})
+
+	t.Run("decimal to double and varchar", func(t *testing.T) {
+		dec := func(v int64) []byte {
+			b, err := bigIntToTwosComplementBytes(ctx, big.NewInt(v), 8)
+			require.NoError(t, err)
+			return b
+		}
+		f, page := writeDictAndGetPage(t, parquet.Decimal(2, 10, parquet.FixedLenByteArrayType(8)), []parquet.Value{
+			parquet.FixedLenByteArrayValue(dec(10000)),
+			parquet.FixedLenByteArrayValue(dec(20050)),
+		})
+		col := f.Root().Column("c")
+
+		vecFloat := vector.NewVec(types.T_float64.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat))
+		require.InDeltaSlice(t, []float64{100, 200.5}, vector.MustFixedColWithTypeCheck[float64](vecFloat), 1e-9)
+
+		vecStr := vector.NewVec(types.T_varchar.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecStr))
+		require.Equal(t, "100.00", vecStr.GetStringAt(0))
+		require.Equal(t, "200.50", vecStr.GetStringAt(1))
+	})
+
+	t.Run("date to varchar", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Date(), []parquet.Value{
+			parquet.Int32Value(19723),
+			parquet.Int32Value(19875),
+		})
+
+		vec := vector.NewVec(types.T_varchar.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, "2024-01-01", vec.GetStringAt(0))
+		require.Equal(t, "2024-06-01", vec.GetStringAt(1))
+	})
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt
 type fakeFS struct{ b []byte }
 
