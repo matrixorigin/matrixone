@@ -453,6 +453,8 @@ year int
 ) infile{'filepath'='$resources/hive_partition/invalid_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_invalid_type;
 internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
+select count(*) from hive_invalid_type;
+internal error: partition value type conversion failed: col=year, value='abc', path=year=abc/data.parquet: strconv.ParseInt: parsing "abc": invalid syntax
 drop table if exists hive_url_encoded;
 create external table hive_url_encoded (
 id int,
