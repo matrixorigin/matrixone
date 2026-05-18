@@ -143,6 +143,9 @@ select year, sum(amount) as total from hive_single group by year having sum(amou
 -- 2.12 COUNT DISTINCT on partition column
 select count(distinct year) as distinct_years from hive_single;
 
+-- 2.12.1 COUNT DISTINCT on physical column with partition pruning (issue #24360)
+select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
+
 -- 2.13 Partition column in arithmetic expression (rowFilter evaluates)
 select count(*) from hive_single where year + 1 = 2025;
 
