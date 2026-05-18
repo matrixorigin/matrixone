@@ -905,7 +905,8 @@ commit;
 select * from su_fu_main where id = 3;
 select * from su_fu_ref where id = 10;
 
--- in subquery + for update; subquery table must NOT be locked
+-- in subquery + for update; the subquery actually reads su_fu_ref ids 10/20/30/40/50,
+-- and even one of those rows must not be locked
 begin;
 select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
 -- @session:id=1{
@@ -915,26 +916,40 @@ update su_fu_ref set province = 'in_test' where id = 20;
 commit;
 select * from su_fu_ref where id = 20;
 
--- aggregate + for update
+-- aggregate + for update; outer table must be locked
 begin;
 select company_id, count(*) from su_fu_main group by company_id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 66 where id = 4;
+-- @session}
 commit;
+select * from su_fu_main where id = 4;
 
--- aggregate + group by + having + for update
+-- aggregate + group by + having + for update; outer table must be locked
 begin;
 select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 67 where id = 5;
+-- @session}
 commit;
+select * from su_fu_main where id = 5;
 
--- subquery in select list + for update; subquery table must NOT be locked
+-- subquery in select list + for update; the scalar subquery actually reads
+-- su_fu_ref ids 10 (when m.id=1) and 20 (when m.id=2). Concurrently updating
+-- id=10 proves that even rows the subquery actually fetched are not locked.
 begin;
 select id, (select province from su_fu_ref r where r.id = m.company_id) p
   from su_fu_main m where id <= 2 for update;
 -- @session:id=1{
 use select_for_update;
-update su_fu_ref set province = 'scalar_test' where id = 30;
+update su_fu_ref set province = 'scalar_test' where id = 10;
 -- @session}
 commit;
-select * from su_fu_ref where id = 30;
+select * from su_fu_ref where id = 10;
 
 -- cte + join + for update; LIMIT scope must not over-lock rows outside the cte result set
 begin;
@@ -946,6 +961,19 @@ update su_fu_main set status = 55 where id = 5;
 -- @session}
 commit;
 select * from su_fu_main where id = 5;
+
+-- view + for update; view body must not inherit FOR UPDATE state and over-lock
+drop view if exists su_fu_view;
+create view su_fu_view as select id, company_id from su_fu_main order by id limit 2;
+begin;
+select * from su_fu_view for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 44 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+drop view if exists su_fu_view;
 
 -- cleanup
 drop table if exists su_fu_main;

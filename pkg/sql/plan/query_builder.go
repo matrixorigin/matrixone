@@ -4716,6 +4716,16 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.cteName = table
 
+	// A view body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the view body could emit its own LOCK_OP (e.g. above an
+	// ORDER BY/LIMIT inside the view) on top of the outer LOCK_OP, locking
+	// rows that fall outside the final result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
+	defer func() {
+		builder.isForUpdate = savedIsForUpdate
+	}()
+
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
