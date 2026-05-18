@@ -1562,7 +1562,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 				if numParts > 1 && hasUnsafeRangeOp(fn) {
 					continue
 				}
-				if isSingleRangeOp(fn) && node.Stats != nil && node.Stats.TableCnt >= 50000 {
+				if isRangeOp(fn) && node.Stats != nil && node.Stats.TableCnt >= 50000 {
 					if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(InFilterCardLimitNonPK) {
 						continue
 					}
@@ -1601,9 +1601,9 @@ func hasUnsafeRangeOp(fn *plan.Function) bool {
 	return op == "<=" || op == ">"
 }
 
-func isSingleRangeOp(fn *plan.Function) bool {
+func isRangeOp(fn *plan.Function) bool {
 	switch fn.Func.ObjName {
-	case ">=", ">", "<=", "<":
+	case ">=", ">", "<=", "<", "in_range":
 		return true
 	}
 	return false
