@@ -7026,16 +7026,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimeSub
 				},
 			},
-				{
-					overloadId: 7,
-					args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
-					retType: func(parameters []types.Type) types.Type {
-						return types.T_int32.ToType()
-					},
-					newOp: func() executeLogicOfOverload {
-						return DateIntSub
-					},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_int32, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int32.ToType()
 				},
+				newOp: func() executeLogicOfOverload {
+					return DateIntSub
+				},
+			},
 		},
 	},
 
