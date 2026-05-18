@@ -52,6 +52,39 @@ select id, LAG(val_f32) over (order by id) as prev_f32 from test_float_types;
 select id, LEAD(val_f64) over (order by id) as next_f64 from test_float_types;
 drop table if exists test_float_types;
 
+-- Test lead/lag with DECIMAL and default values
+-- Regression: int default with decimal column should be correctly scaled
+-- e.g., lead(decimal_col, 1, -1) should return -1.0000, not -0.0001
+drop table if exists test_decimal_window;
+create table test_decimal_window (id int, val decimal(10, 4));
+insert into test_decimal_window values (1, 100.1234), (2, 200.5678);
+
+-- lead with int default (should be auto-cast to decimal, -1 -> -1.0000)
+select id, val, lead(val, 1, -1) over (order by id) as lead_val from test_decimal_window order by id;
+
+-- lag with int default
+select id, val, lag(val, 1, -1) over (order by id) as lag_val from test_decimal_window order by id;
+
+-- lead with negative int default
+select id, val, lead(val, 1, -999) over (order by id) as lead_val from test_decimal_window order by id;
+
+-- lag with default 0 (zero unaffected by scaling but should still be cast correctly)
+select id, val, lag(val, 1, 0) over (order by id) as lag_val from test_decimal_window order by id;
+
+-- lag with default matching decimal type (no cast needed, same scale)
+select id, val, lag(val, 1, cast(-1 as decimal(10, 4))) over (order by id) as lag_val from test_decimal_window order by id;
+
+-- lead with integer column and int default (no cast needed)
+select id, val, lead(id, 1, -1) over (order by id) as lead_id from test_decimal_window order by id;
+
+-- lag with default on existing DECIMAL(10,2) column from test_value_window
+select id, revenue, lag(revenue, 1, -1) over (order by year_col) as lag_revenue from test_value_window where category = 'A';
+
+-- lead with offset=2 and int default
+select id, val, lead(val, 2, -1) over (order by id) as lead_val from test_decimal_window order by id;
+
+drop table if exists test_decimal_window;
+
 -- Test keywords as role names
 drop role if exists lag;
 drop role if exists lead;
