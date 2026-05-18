@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -204,10 +205,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  kIVFPQSearchFuncName,
+				Name:  ivfpqplan.IVFPQSearchFuncName,
 				Param: []byte(ivfpqCtx.params),
 			},
-			Cols: DeepCopyColDefList(kIVFPQSearchColDefs),
+			Cols: DeepCopyColDefList(ivfpqplan.IVFPQSearchColDefs),
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,

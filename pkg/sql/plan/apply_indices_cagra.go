@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -198,10 +199,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kCAGRASearchFuncName,
+				Name:  cagraplan.CAGRASearchFuncName,
 				Param: []byte(cagraCtx.params),
 			},
-			Cols: DeepCopyColDefList(kCAGRASearchColDefs),
+			Cols: DeepCopyColDefList(cagraplan.CAGRASearchColDefs),
 		},
 		BindingTags:     []int32{tableFuncTag},
 		TblFuncExprList: tableFuncExprs,

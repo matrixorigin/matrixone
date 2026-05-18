@@ -1,3 +1,5 @@
+//go:build gpu
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -415,7 +418,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
 	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, kIVFPQSearchFuncName, right.TableDef.TblFunc.Name)
+	assert.Equal(t, ivfpqplan.IVFPQSearchFuncName, right.TableDef.TblFunc.Name)
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through

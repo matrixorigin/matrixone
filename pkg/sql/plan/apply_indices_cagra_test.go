@@ -1,3 +1,5 @@
+//go:build gpu
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -407,7 +410,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
 	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, kCAGRASearchFuncName, right.TableDef.TblFunc.Name)
+	assert.Equal(t, cagraplan.CAGRASearchFuncName, right.TableDef.TblFunc.Name)
 }
 
 // TestApplyIndicesForSortUsingCagra_RichPushdown drives the optimizer through
