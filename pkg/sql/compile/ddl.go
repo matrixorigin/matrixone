@@ -788,10 +788,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
 					// 3. FullText index
 					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique &&
-					(vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) || catalog.IsIvfIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. Vector indexes (plugin-registered or IVF-FLAT
-					// inline) are aggregated and handled later.
+				} else if !indexDef.Unique && vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
+					// 4. Plugin-registered vector indexes are aggregated
+					// and handled later by the per-plugin compile hook.
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
