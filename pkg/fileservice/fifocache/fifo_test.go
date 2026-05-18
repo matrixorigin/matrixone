@@ -17,6 +17,7 @@ package fifocache
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
@@ -164,4 +165,23 @@ func TestGhostQueue(t *testing.T) {
 	// 2 is in the ghost queue now
 	cache.Set(t.Context(), 3, 3, 1)
 	// 2 was evicted from ghost queue
+}
+
+func TestEvictWithWaitReturnsWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cache := New[int, int](fscache.ConstCapacity(0), ShardInt[int], nil, nil, nil)
+	cache.used1 = 1
+
+	done := make(chan struct{})
+	go func() {
+		cache.EvictWithWait(ctx, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("EvictWithWait did not return after context cancellation")
+	}
 }

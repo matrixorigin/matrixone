@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -244,20 +245,21 @@ func LoadBFWithMeta(
 // share the result. This prevents cache stampede under high concurrency.
 //
 // Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
-// deleted. Each waiter copies the result to avoid holding a shared reference
-// that delays GC of the loaded buffer.
+// deleted. Waiters read through metaCache after the load finishes so they do
+// not keep per-call copies of large metadata buffers.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
 	metaLoadMu.Lock()
 	if call, ok := metaLoadCalls[key]; ok {
 		metaLoadMu.Unlock()
 		select {
 		case <-call.done:
+			if v, ok := metaCache.Get(ctx, key); ok {
+				return v, nil
+			}
 			if call.err != nil {
 				return nil, call.err
 			}
-			dst := make([]byte, len(call.val))
-			copy(dst, call.val)
-			return dst, nil
+			return call.val, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -266,16 +268,25 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 	metaLoadCalls[key] = call
 	metaLoadMu.Unlock()
 
+	defer func() {
+		if r := recover(); r != nil {
+			call.err = fmt.Errorf("dedup load panic: %v", r)
+			metaLoadMu.Lock()
+			delete(metaLoadCalls, key)
+			metaLoadMu.Unlock()
+			close(call.done)
+			panic(r)
+		}
+		metaLoadMu.Lock()
+		delete(metaLoadCalls, key)
+		metaLoadMu.Unlock()
+		close(call.done)
+	}()
+
 	call.val, call.err = load()
 	if call.err == nil {
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
-	close(call.done)
-
-	metaLoadMu.Lock()
-	delete(metaLoadCalls, key)
-	metaLoadMu.Unlock()
-
 	return call.val, call.err
 }
 

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -591,7 +590,6 @@ func (s *service) handleFileServiceCacheRequest(
 			fileservice.GlobalDiskCacheSizeHint.Store(n)
 		case query.FileServiceCacheType_Memory:
 			fileservice.GlobalMemoryCacheSizeHint.Store(n)
-			mpool.InitCap(n)
 		}
 		logutil.Info("cache size adjusted",
 			zap.Any("type", req.FileServiceCacheRequest.Type),
