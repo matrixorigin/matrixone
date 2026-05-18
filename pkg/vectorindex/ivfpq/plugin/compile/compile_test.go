@@ -35,14 +35,14 @@ type stubCompileContext struct {
 	vars             map[string]any
 }
 
-func (s *stubCompileContext) Ctx() compileplugin.Context     { return nil }
-func (s *stubCompileContext) Database() engine.Database      { return nil }
-func (s *stubCompileContext) QryDatabase() string            { return s.qryDatabase }
+func (s *stubCompileContext) Ctx() compileplugin.Context       { return nil }
+func (s *stubCompileContext) Database() engine.Database        { return nil }
+func (s *stubCompileContext) QryDatabase() string              { return s.qryDatabase }
 func (s *stubCompileContext) OriginalTableDef() *plan.TableDef { return s.originalTableDef }
-func (s *stubCompileContext) IndexInfo() *plan.CreateTable   { return nil }
-func (s *stubCompileContext) MainTableID() uint64            { return 0 }
-func (s *stubCompileContext) MainExtra() *api.SchemaExtra    { return nil }
-func (s *stubCompileContext) RunSql(_ string) error          { return nil }
+func (s *stubCompileContext) IndexInfo() *plan.CreateTable     { return nil }
+func (s *stubCompileContext) MainTableID() uint64              { return 0 }
+func (s *stubCompileContext) MainExtra() *api.SchemaExtra      { return nil }
+func (s *stubCompileContext) RunSql(_ string) error            { return nil }
 func (s *stubCompileContext) BuildIndexTable(_ *plan.TableDef) error {
 	return nil
 }
