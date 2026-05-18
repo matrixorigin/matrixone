@@ -279,6 +279,9 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 	}
 
 	idxmap := make(map[string]bool)
+	// cctx is loop-invariant (depends only on c) — lazy-init so we
+	// don't allocate when no index reaches the metadata fetch.
+	var cctx *pluginCompileCtx
 	for _, idx := range indexes {
 		if _, ok := idxmap[idx.IndexName]; ok {
 			continue
@@ -296,7 +299,9 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 		if d.IdxcronAction == "" {
 			continue
 		}
-		cctx := newPluginCompileCtxForSync(c)
+		if cctx == nil {
+			cctx = newPluginCompileCtxForSync(c)
+		}
 		metadata, mErr := p.Compile().IdxcronMetadata(cctx)
 		if mErr != nil {
 			err = mErr

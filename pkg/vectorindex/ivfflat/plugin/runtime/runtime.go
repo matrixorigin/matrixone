@@ -56,6 +56,13 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	}
 }
 
+// ShouldTruncateHiddenTable — only entries are reset; metadata and
+// centroids preserve the k-means model across TRUNCATE so a subsequent
+// ALTER REINDEX is cheap.
+func (CatalogHooks) ShouldTruncateHiddenTable(algoTableType string) bool {
+	return algoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries
+}
+
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
 // statement carries no WITH(...) clause: lists=1, op_type=l2.
 func (CatalogHooks) DefaultOptions() map[string]string {
@@ -97,6 +104,11 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		SinkerType:    catalogplugin.SinkerType_IndexSync,
 		AlwaysAsync:   false,
 		IdxcronAction: actionIvfflatReindex,
+		// ivf_threads_search is present in the frontend system-variable
+		// table but is NOT added to IdxcronMetadata, so it serves as
+		// the frontend-vs-background probe at the AlterTableInplace
+		// idxcron re-registration site.
+		IdxcronFrontendProbeVar: "ivf_threads_search",
 	}
 }
 

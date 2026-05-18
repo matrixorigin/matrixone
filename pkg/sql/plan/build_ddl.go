@@ -2668,20 +2668,14 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 					catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) ||
 					catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
-					// IVF-FLAT keeps the k-means model across TRUNCATE:
-					// only entries are dropped; metadata + centroids stay.
-					// Users run ALTER REINDEX for a full rebuild. Must
-					// precede the generic vectorplugin branch — IVF-FLAT
-					// is plugin-registered but needs this special-case at
-					// the plan layer until the plan hooks are lifted.
-					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+				} else if p, ok := vectorplugin.Get(indexdef.IndexAlgo); ok {
+					// Vector indexes delegate to the plugin's catalog
+					// hook. HNSW/CAGRA/IVF-PQ truncate all hidden
+					// tables; IVF-FLAT preserves metadata + centroids
+					// (k-means model) and only drops entries.
+					if p.Catalog().ShouldTruncateHiddenTable(indexdef.IndexAlgoTableType) {
 						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 					}
-				} else if vectorplugin.IsVectorIndexAlgo(indexdef.IndexAlgo) {
-					// Plugin-registered vector indexes (HNSW / CAGRA /
-					// IVF-PQ): include every hidden table.
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}

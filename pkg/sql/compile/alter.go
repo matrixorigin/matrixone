@@ -276,6 +276,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			return affected
 		}
 
+		// cctx for the idxcron re-registration arm below — lazy-init,
+		// reused across loop iterations.
+		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
 			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
@@ -324,8 +327,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						if p, ok := vectorplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
-								cctx := newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
-								metadata, err := p.Compile().IdxcronMetadata(cctx)
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								}
+								metadata, err := p.Compile().IdxcronMetadata(idxcronCctx)
 								if err != nil {
 									return err
 								}
@@ -381,11 +386,15 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				}
 			}
 		}
+		// cctx is loop-invariant — hoist to avoid per-index allocs.
+		var aggCctx *pluginCompileCtx
 		for _, multiTableIndex := range multiTableIndexes {
 
 			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-				cctx := newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
-				err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
+				if aggCctx == nil {
+					aggCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+				}
+				err = p.Compile().HandleCreateIndex(aggCctx, multiTableIndex.IndexDefs)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

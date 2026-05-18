@@ -804,9 +804,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return err
 				}
 			}
+			// cctx is loop-invariant — hoist to avoid per-index allocs.
+			var cctx *pluginCompileCtx
 			for _, multiTableIndex := range multiTableIndexes {
 				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo)
+					if cctx == nil {
+						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo)
+					}
 					err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
 				}
 
@@ -898,18 +902,24 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 3. Re-register the idxcron update with the
 					// refreshed metadata. The plugin's IdxcronMetadata
 					// hook owns metadata composition; SyncDescriptor
-					// supplies the action key (already gated above).
+					// supplies the action key (already gated above) and
+					// the optional frontend probe variable.
 					desc := p.Catalog().SyncDescriptor()
 					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					metadata, err := p.Compile().IdxcronMetadata(cctx)
 					if err != nil {
 						return err
 					}
-					// Same frontend gate as registerIdxcronUpdate inside
-					// the plugin: skip when invoked from a background
-					// job (no `ivf_threads_search` var).
-					if _, ferr := cctx.ResolveVariable("ivf_threads_search", true, false); ferr != nil {
-						continue
+					// Plugin-declared frontend gate: skip re-registration
+					// when invoked from a background idxcron job. The
+					// Metadata-based resolver only knows keys this plugin
+					// put into IdxcronMetadata; a probe var that lives in
+					// the frontend table but NOT in Metadata fails to
+					// resolve from background context.
+					if probe := desc.IdxcronFrontendProbeVar; probe != "" {
+						if _, ferr := cctx.ResolveVariable(probe, true, false); ferr != nil {
+							continue
+						}
 					}
 					if err = cctx.RegisterIdxcronUpdate(
 						oTableDef.TblId, qry.Database, oTableDef.Name,
@@ -978,10 +988,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 
-			// update the hidden tables
+			// update the hidden tables — cctx is loop-invariant.
+			var cctx *pluginCompileCtx
 			for _, multiTableIndex := range multiTableIndexes {
 				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-					cctx := newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					if cctx == nil {
+						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
+					}
 					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
 				}
 
@@ -2220,6 +2233,8 @@ func (s *Scope) doCreateIndex(
 		}
 	}
 
+	// cctx is loop-invariant — hoist to avoid per-index allocs.
+	var cctx *pluginCompileCtx
 	for _, multiTableIndex := range multiTableIndexes {
 		// Plugin-mediated dispatch — every vector-index algorithm has a
 		// registered plugin (HNSW, CAGRA, IVF-PQ, IVF-FLAT).
@@ -2232,7 +2247,9 @@ func (s *Scope) doCreateIndex(
 		// Each plugin's runtime/ subdir holds the catalog hooks
 		// (HiddenTableTypes, ParamsFromTree, SyncDescriptor, ...).
 		if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-			cctx := newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
+			if cctx == nil {
+				cctx = newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
+			}
 			err = p.Compile().HandleCreateIndex(cctx, multiTableIndex.IndexDefs)
 		}
 

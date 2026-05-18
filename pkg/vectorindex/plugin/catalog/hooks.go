@@ -60,6 +60,20 @@ type Hooks interface {
 	// "experimental_ivfpq_index".
 	ExperimentalFlag() string
 
+	// ShouldTruncateHiddenTable reports whether the hidden table of the
+	// given IndexAlgoTableType (one of HiddenTableTypes()) should be
+	// included in a TRUNCATE TABLE on the source table.
+	//
+	// Most algorithms return true unconditionally — the index is
+	// derived from source rows and must be reset alongside it.
+	// IVF-FLAT returns true only for the entries table; metadata +
+	// centroids preserve the k-means model so a subsequent ALTER
+	// REINDEX is cheap.
+	//
+	// Consumed by pkg/sql/plan/build_ddl.go on TRUNCATE TABLE plan
+	// build. Hot path — keep the implementation allocation-free.
+	ShouldTruncateHiddenTable(algoTableType string) bool
+
 	// SyncDescriptor returns this algorithm's index-sync descriptor,
 	// covering both the ISCP CDC pipeline (event-driven) and the
 	// idxcron scheduler (time-driven). The zero value (SyncDescriptor{})
@@ -112,4 +126,19 @@ type SyncDescriptor struct {
 	SinkerType    int8
 	AlwaysAsync   bool
 	IdxcronAction string
+
+	// IdxcronFrontendProbeVar is a system-variable name used by the
+	// SQL layer to distinguish a frontend (user-session) invocation
+	// from a background idxcron re-entry when re-registering the
+	// scheduled task. The variable must exist in the frontend's
+	// system-variable table AND be absent from this plugin's
+	// IdxcronMetadata blob, so that:
+	//
+	//   - frontend session:   ResolveVariable(probe) succeeds
+	//   - idxcron background: ResolveVariable(probe) fails (key not
+	//                         in Metadata JSON)
+	//
+	// Empty string disables the gate (the caller always proceeds).
+	// Only meaningful when IdxcronAction != "".
+	IdxcronFrontendProbeVar string
 }

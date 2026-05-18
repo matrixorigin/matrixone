@@ -64,6 +64,10 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	}
 }
 
+// ShouldTruncateHiddenTable — IVF-PQ has no preserved-across-truncate
+// state; both hidden tables are derived from source rows and must reset.
+func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
+
 // DefaultOptions is the params map produced when CREATE INDEX is issued
 // without a WITH(...) clause. Return nil if your algorithm requires
 // explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).

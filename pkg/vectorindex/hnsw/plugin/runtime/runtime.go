@@ -38,6 +38,10 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	}
 }
 
+// ShouldTruncateHiddenTable — HNSW has no preserved-across-truncate
+// state; both hidden tables are derived from source rows and must reset.
+func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
+
 func (CatalogHooks) DefaultOptions() map[string]string {
 	return map[string]string{
 		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
