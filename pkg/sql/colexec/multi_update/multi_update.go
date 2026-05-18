@@ -71,6 +71,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
+			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
 			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
 		}
 	}

@@ -80,7 +80,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
 	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
 
-	oldColName2Idx := make(map[string][2]int32)
+	oldColName2Idx := make(map[string][2]int32, len(tableDef.Cols)+len(tableDef.Indexes)*2)
 
 	// For fake PK tables with no unique indexes (no PK, no UK), REPLACE behaves like INSERT.
 	// Skip the LEFT JOIN to avoid a cross join (empty join condition) that would incorrectly
@@ -391,13 +391,23 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		dedupJoinCtx := &plan.DedupJoinCtx{}
 		if useMergedMainScan {
-			// Merged-scan mode: the DEDUP JOIN captures every main-table column
-			// from its own probe-side scan into the build-side NULL placeholder
-			// slots set up in fullProjList above. The old DelRows/OldColList
-			// path is no longer needed because the captured values feed
-			// downstream consumers directly.
-			captureList := make([]plan.OldColCapture, 0, len(tableDef.Cols))
+			// Merged-scan mode: only capture the old columns that downstream
+			// actually needs (RowID, PK, and index-key columns), not every
+			// main-table column. The remaining NULL placeholders in fullProjList
+			// stay as-is — they are never read by MULTI_UPDATE.
+			requiredOldCols := make(map[string]struct{}, 2+len(tableDef.Indexes))
+			requiredOldCols[catalog.Row_ID] = struct{}{}
+			requiredOldCols[tableDef.Pkey.PkeyColName] = struct{}{}
+			for _, idxDef := range tableDef.Indexes {
+				if !indexTableStoresSerializedKey(idxDef) {
+					requiredOldCols[indexPrimaryPartName(idxDef)] = struct{}{}
+				}
+			}
+			captureList := make([]plan.OldColCapture, 0, len(requiredOldCols))
 			for i, col := range tableDef.Cols {
+				if _, needed := requiredOldCols[col.Name]; !needed {
+					continue
+				}
 				placeholderPos := oldColName2Idx[tableDef.Name+"."+col.Name]
 				captureList = append(captureList, plan.OldColCapture{
 					BuildPlaceholder: plan.ColRef{
@@ -784,7 +794,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
 ) (int32, map[string]int32, []bool, error) {
-	colName2Idx := make(map[string]int32)
+	colCount := len(tableDef.Cols)
+	colName2Idx := make(map[string]int32, colCount+len(tableDef.Indexes)*2)
 	hasAutoCol := false
 	for _, col := range tableDef.Cols {
 		if col.Typ.AutoIncr {
@@ -793,8 +804,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		}
 	}
 
-	projList1 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
-	projList2 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
+	projList1 := make([]*plan.Expr, 0, colCount-1)
+	projList2 := make([]*plan.Expr, 0, colCount-1)
 	projTag1 := builder.genNewBindTag()
 	preInsertTag := builder.genNewBindTag()
 
@@ -803,11 +814,11 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		clusterByExpr *plan.Expr
 	)
 
-	columnIsNull := make(map[string]bool)
+	columnIsNull := make(map[string]bool, colCount)
 	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
-	colIdxToProjPos := make(map[int32]int32)
-	genColIdxToProj1Pos := make(map[int]int)
-	genColIdxToProj2Pos := make(map[int]int)
+	colIdxToProjPos := make(map[int32]int32, colCount)
+	genColIdxToProj1Pos := make(map[int]int, colCount)
+	genColIdxToProj2Pos := make(map[int]int, colCount)
 	generatedColIdxs := make([]int, 0)
 
 	for i, col := range tableDef.Cols {
