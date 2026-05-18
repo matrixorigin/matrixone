@@ -581,13 +581,7 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'", param.CompressType, param.Format, param.JsonData)
-		if param.HivePartitioning {
-			createStr += fmt.Sprintf(",'HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='%s'",
-				strings.Join(param.HivePartitionCols, ","))
-		}
-		createStr += "}"
+		createStr += formatExternalTableOptionsForShowCreate(param)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -926,6 +920,87 @@ func FormatColType(colType plan.Type) string {
 
 	}
 	return ts + suffix
+}
+
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+	if param.ScanType == tree.S3 {
+		return formatS3ExternalOptionsForShowCreate(param)
+	}
+	return formatInfileExternalOptionsForShowCreate(param)
+}
+
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	filepath := ""
+	if param.HivePartitioning {
+		filepath = param.Filepath
+	}
+	parts := []string{
+		"'FILEPATH'=" + formatStrLit(filepath),
+		"'COMPRESSION'=" + formatStrLit(param.CompressType),
+		"'FORMAT'=" + formatStrLit(param.Format),
+		"'JSONDATA'=" + formatStrLit(param.JsonData),
+	}
+	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	return " INFILE{" + strings.Join(parts, ",") + "}"
+}
+
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	parts := make([]string, 0, len(param.Option)/2+2)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		if hasExternalOption(param, "access_key_id") {
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+		}
+		if hasExternalOption(param, "secret_access_key") {
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+		}
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	return " URL s3option{" + strings.Join(parts, ",") + "}"
+}
+
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+	if !param.HivePartitioning {
+		return
+	}
+	hivePartitioningKey := "hive_partitioning"
+	hivePartitionColsKey := "hive_partition_columns"
+	if upperKey {
+		hivePartitioningKey = "HIVE_PARTITIONING"
+		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
+	}
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+}
+
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+	if value == "" && !mask {
+		return
+	}
+	if mask {
+		value = "******"
+	}
+	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+}
+
+func hasExternalOption(param *tree.ExternParam, key string) bool {
+	for i := 0; i < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], key) {
+			return true
+		}
+	}
+	return false
 }
 
 // Character replace mapping maps certain special characters to their escape sequences.

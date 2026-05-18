@@ -53,7 +53,7 @@ hive_single  ¦  CREATE EXTERNAL TABLE `hive_single` (
   `id` int DEFAULT NULL,
   `amount` double DEFAULT NULL,
   `year` int DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+) INFILE{'FILEPATH'='$resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
 create index idx_hive_single_id on hive_single(id);
