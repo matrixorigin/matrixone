@@ -34,7 +34,11 @@ INSERT INTO emp VALUES (8,'SCOTT','ANALYST',7566,'0087-07-13',3000,NULL,20);
 INSERT INTO emp VALUES (9,'KING','PRESIDENT',NULL,'1981-11-17',5000,NULL,10);
 INSERT INTO emp VALUES (10,'TURNER','SALESMAN',7698,'1981-09-08',1500,0,30);
 SELECT * FROM EMP;
-DROP TABLE emp;drop table if exists t1;
+DROP TABLE emp;
+
+-- merged from truncate_table_3.sql
+
+drop table if exists t1;
 create table t1(a int);
 insert into t1 values(1),(2),(3),(4);
 select count(*) from t1;
@@ -77,7 +81,11 @@ truncate t1;
 commit;
 show tables;
 select count(*) from t1;
-select count(*) from t2;drop table if exists t1;
+select count(*) from t2;
+
+-- merged from truncate_table_4.sql
+
+drop table if exists t1;
 create table t1(a int);
 insert into t1 values(1),(2),(3),(4);
 select count(*) from t1;
