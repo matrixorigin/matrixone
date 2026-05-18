@@ -17,12 +17,9 @@ package plan
 import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 
-	// Blank-import vector-index plugins so their init() registrations fire
-	// any time this package is loaded.
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
+	// Blank-import the central plugin registration list so every
+	// vector-index plugin's init() fires whenever plan is loaded.
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
 )
 
 // exportMultiTableIndex copies a package-private *MultiTableIndex into the

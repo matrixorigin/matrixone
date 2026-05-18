@@ -2084,19 +2084,15 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
-		case tree.INDEX_TYPE_HNSW, tree.INDEX_TYPE_CAGRA, tree.INDEX_TYPE_IVFPQ, tree.INDEX_TYPE_IVFFLAT:
-			// Lifted into plugins: pkg/vectorindex/<algo>/plugin/plan
-			// (BuildSecondaryIndexDefs). The dispatch is a registry
-			// lookup; if the plugin isn't registered the algorithm is
-			// effectively unavailable.
-			algo := indexInfo.KeyType.ToString()
-			if p, ok := vectorplugin.Get(algo); ok {
+		default:
+			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
+			// (BuildSecondaryIndexDefs). Any KeyType registered with the
+			// plugin registry is supported; anything else is rejected.
+			if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
 				indexDef, tableDef, err = p.Plan().BuildSecondaryIndexDefs(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 			} else {
 				return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 			}
-		default:
-			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
 
 		if err != nil {
@@ -2574,31 +2570,18 @@ func CreateIndexDef(indexInfo *tree.Index,
 		indexDef.IndexAlgoParams = params
 	} else {
 		// default indexInfo.IndexOption values
-		switch indexInfo.KeyType {
-		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo, catalog.MOIndexMasterAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexIvfFlatAlgo:
-			// IVF-FLAT inline (no plugin yet).
-			var err error
-			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
-			if err != nil {
-				return nil, err
-			}
-		default:
-			// Plugin-registered vector indexes (HNSW / CAGRA / IVF-PQ
-			// today) contribute their default params map. Non-vector
-			// algos fall through with empty params.
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-			if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
-				if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
-					params, err := catalog.IndexParamsMapToJsonString(defaults)
-					if err != nil {
-						return nil, err
-					}
-					indexDef.IndexAlgoParams = params
+		indexDef.Comment = ""
+		indexDef.IndexAlgoParams = ""
+		if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
+			// Vector-index algorithms supply their default params via the
+			// plugin (DefaultOptions). Non-vector algos miss the registry
+			// and leave the empty defaults set above.
+			if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
+				params, err := catalog.IndexParamsMapToJsonString(defaults)
+				if err != nil {
+					return nil, err
 				}
+				indexDef.IndexAlgoParams = params
 			}
 		}
 

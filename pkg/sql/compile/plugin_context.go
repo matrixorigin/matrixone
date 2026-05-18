@@ -22,13 +22,10 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
-	// Blank-import vector-index plugins so their init() registrations fire
-	// any time this package is loaded (production via cmd/mo-service and
-	// every test that exercises compile).
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
+	// Blank-import the central plugin registration list so every
+	// vector-index plugin's init() fires whenever compile is loaded
+	// (production via cmd/mo-service and every test that exercises compile).
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
 )
 
 // pluginCompileCtx adapts a *Scope + *Compile to compileplugin.CompileContext
