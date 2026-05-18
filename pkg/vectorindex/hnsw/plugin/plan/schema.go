@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 )
 
 // BuildSecondaryIndexDefs constructs the IndexDef + TableDef pair for the

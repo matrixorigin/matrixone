@@ -89,14 +89,14 @@ type ApplyForSortOpts struct {
 
 // PlanBuilder is the *plan.QueryBuilder facade plugins use. Two roles:
 //
-//   1. Provide the minimum primitives the per-algo tablefunc.go needs
-//      to construct FUNCTION_SCAN nodes (GenNewBindTag, AppendNode,
-//      GetContext).
+//  1. Provide the minimum primitives the per-algo tablefunc.go needs
+//     to construct FUNCTION_SCAN nodes (GenNewBindTag, AppendNode,
+//     GetContext).
 //
-//   2. Provide the per-algo redirect methods plan.go calls. Each is
-//      implemented in pkg/sql/plan/plugin_builder.go as a one-liner
-//      that converts the exported types to internal types and invokes
-//      the real body (e.g. `applyIndicesForSortUsingHnsw`).
+//  2. Provide the per-algo redirect methods plan.go calls. Each is
+//     implemented in pkg/sql/plan/plugin_builder.go as a one-liner
+//     that converts the exported types to internal types and invokes
+//     the real body (e.g. `applyIndicesForSortUsingHnsw`).
 type PlanBuilder interface {
 	// Primitives for tablefunc.go.
 	GenNewBindTag() int32

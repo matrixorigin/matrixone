@@ -164,35 +164,3 @@ func fromPlanplugin(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTab
 	}
 	return vc, m
 }
-
-// toPlanplugin is the inverse — used at the dispatch site in
-// apply_indices.go to hand the plugin the exported view.
-func (v *vectorSortContext) toPlanplugin() *planplugin.VectorSortContext {
-	if v == nil {
-		return nil
-	}
-	return &planplugin.VectorSortContext{
-		ProjNode:       v.projNode,
-		SortNode:       v.sortNode,
-		ScanNode:       v.scanNode,
-		ChildNode:      v.childNode,
-		OrderExpr:      v.orderExpr,
-		DistFnExpr:     v.distFnExpr,
-		SortDirection:  v.sortDirection,
-		Limit:          v.limit,
-		RankOption:     v.rankOption,
-		ProviderNodeID: v.providerNodeID,
-		VecArgExpr:     v.vecArgExpr,
-	}
-}
-
-func toPlanpluginMti(m *MultiTableIndex) *planplugin.MultiTableIndexRef {
-	if m == nil {
-		return nil
-	}
-	return &planplugin.MultiTableIndexRef{
-		IndexAlgo:       m.IndexAlgo,
-		IndexAlgoParams: m.IndexAlgoParams,
-		IndexDefs:       m.IndexDefs,
-	}
-}

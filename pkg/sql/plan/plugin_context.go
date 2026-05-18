@@ -14,24 +14,6 @@
 
 package plan
 
-import (
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-
-	// Blank-import the central plugin registration list so every
-	// vector-index plugin's init() fires whenever plan is loaded.
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
-)
-
-// exportMultiTableIndex copies a package-private *MultiTableIndex into the
-// exported *planplugin.MultiTableIndexRef so it can cross the plugin
-// boundary without leaking pkg/sql/plan internals.
-func exportMultiTableIndex(m *MultiTableIndex) *planplugin.MultiTableIndexRef {
-	if m == nil {
-		return nil
-	}
-	return &planplugin.MultiTableIndexRef{
-		IndexAlgo:       m.IndexAlgo,
-		IndexAlgoParams: m.IndexAlgoParams,
-		IndexDefs:       m.IndexDefs,
-	}
-}
+// Blank-import the central plugin registration list so every
+// vector-index plugin's init() fires whenever plan is loaded.
+import _ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
