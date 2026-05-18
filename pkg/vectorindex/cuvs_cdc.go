@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // CDC chunk framing.
@@ -81,17 +82,17 @@ func FrameCdcChunk(records []byte) []byte {
 // wrong magic, unknown version, length overrun, or CRC mismatch.
 func UnframeCdcChunk(framed []byte) ([]byte, error) {
 	if len(framed) < cdcFrameOverhead {
-		return nil, fmt.Errorf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
 	}
 	if got := binary.LittleEndian.Uint32(framed[0:4]); got != cdcChunkMagic {
-		return nil, fmt.Errorf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
 	if v := binary.LittleEndian.Uint32(framed[4:8]); v != cdcChunkVersion {
-		return nil, fmt.Errorf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
 	}
 	plen := binary.LittleEndian.Uint32(framed[8:12])
 	if uint64(plen)+uint64(cdcFrameOverhead) != uint64(len(framed)) {
-		return nil, fmt.Errorf("UnframeCdcChunk: payload_len %d + overhead %d != chunk size %d",
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: payload_len %d + overhead %d != chunk size %d",
 			plen, cdcFrameOverhead, len(framed))
 	}
 	records := framed[cdcHeaderSize : cdcHeaderSize+plen]
@@ -99,10 +100,10 @@ func UnframeCdcChunk(framed []byte) ([]byte, error) {
 	gotCrc := binary.LittleEndian.Uint32(framed[footerOff : footerOff+4])
 	wantCrc := crc32.ChecksumIEEE(framed[4:footerOff])
 	if gotCrc != wantCrc {
-		return nil, fmt.Errorf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
 	}
 	if got := binary.LittleEndian.Uint32(framed[footerOff+12 : footerOff+16]); got != cdcChunkMagic {
-		return nil, fmt.Errorf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
 	return records, nil
 }
@@ -156,7 +157,7 @@ func EncodeEventRecord(
 	switch op {
 	case CdcOpDelete:
 		if len(vec) != 0 || len(include) != 0 {
-			return nil, fmt.Errorf("EncodeEventRecord: DELETE record must not carry vec/include")
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: DELETE record must not carry vec/include")
 		}
 		dst = append(dst, byte(CdcOpDelete))
 		var pk [8]byte
@@ -165,17 +166,17 @@ func EncodeEventRecord(
 		return dst, nil
 	case CdcOpInsert:
 		if dim <= 0 {
-			return nil, fmt.Errorf("EncodeEventRecord: INSERT requires positive dim, got %d", dim)
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT requires positive dim, got %d", dim)
 		}
 		if len(vec) != dim {
-			return nil, fmt.Errorf("EncodeEventRecord: INSERT vec length %d != dim %d", len(vec), dim)
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT vec length %d != dim %d", len(vec), dim)
 		}
 		if includeBytesPerRow > 0 && len(include) != includeBytesPerRow {
-			return nil, fmt.Errorf("EncodeEventRecord: INSERT include length %d != includeBytesPerRow %d",
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: INSERT include length %d != includeBytesPerRow %d",
 				len(include), includeBytesPerRow)
 		}
 		if includeBytesPerRow == 0 && len(include) != 0 {
-			return nil, fmt.Errorf("EncodeEventRecord: includeBytesPerRow=0 but include bytes supplied")
+			return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: includeBytesPerRow=0 but include bytes supplied")
 		}
 		dst = append(dst, byte(CdcOpInsert))
 		var pk [8]byte
@@ -191,7 +192,7 @@ func EncodeEventRecord(
 		}
 		return dst, nil
 	default:
-		return nil, fmt.Errorf("EncodeEventRecord: unknown op %d", op)
+		return nil, moerr.NewInternalErrorNoCtxf("EncodeEventRecord: unknown op %d", op)
 	}
 }
 
@@ -346,10 +347,10 @@ func ReplayEventLog(
 	includeBytesPerRow int,
 ) (ReplayState, error) {
 	if dim <= 0 {
-		return ReplayState{}, fmt.Errorf("ReplayEventLog: invalid dim %d", dim)
+		return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: invalid dim %d", dim)
 	}
 	if includeBytesPerRow < 0 {
-		return ReplayState{}, fmt.Errorf("ReplayEventLog: negative includeBytesPerRow %d", includeBytesPerRow)
+		return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: negative includeBytesPerRow %d", includeBytesPerRow)
 	}
 
 	deleted := map[int64]struct{}{}
@@ -358,7 +359,7 @@ func ReplayEventLog(
 	for _, ch := range chunks {
 		data, err := UnframeCdcChunk(ch.Data)
 		if err != nil {
-			return ReplayState{}, fmt.Errorf("ReplayEventLog: chunk_id=%d: %w", ch.ChunkId, err)
+			return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: chunk_id=%d: %v", ch.ChunkId, err)
 		}
 		for len(data) > 0 {
 			rec, n, ok := DecodeEventRecord(data, dim, includeBytesPerRow)
@@ -366,7 +367,7 @@ func ReplayEventLog(
 				// Frame CRC already validated the payload, so any decode
 				// failure here is a record-level bug (encoder/decoder mismatch
 				// on dim or includeBytesPerRow).
-				return ReplayState{}, fmt.Errorf(
+				return ReplayState{}, moerr.NewInternalErrorNoCtxf(
 					"ReplayEventLog: chunk_id=%d: undecodable record at offset %d (dim=%d includeBytesPerRow=%d)",
 					ch.ChunkId, len(ch.Data)-cdcFooterSize-len(data), dim, includeBytesPerRow)
 			}
@@ -444,7 +445,7 @@ func IncludeColSizes(colMetaJSON string) ([]int, error) {
 		Type int    `json:"type"`
 	}
 	if err := sonic.Unmarshal([]byte(trimmed), &meta); err != nil {
-		return nil, fmt.Errorf("IncludeColSizes: parse colMetaJSON: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("IncludeColSizes: parse colMetaJSON: %v", err)
 	}
 	if len(meta) == 0 {
 		return nil, nil
@@ -457,7 +458,7 @@ func IncludeColSizes(colMetaJSON string) ([]int, error) {
 		case 1, 3, 4: // int64, float64, uint64
 			sizes[i] = 8
 		default:
-			return nil, fmt.Errorf("IncludeColSizes: column %d (%q) unknown type %d",
+			return nil, moerr.NewInternalErrorNoCtxf("IncludeColSizes: column %d (%q) unknown type %d",
 				i, c.Name, c.Type)
 		}
 	}
@@ -492,7 +493,7 @@ func SplitIncludeBytes(
 	}
 	expected := uint64(includeBytesPerRow) * nrows
 	if uint64(len(includeBytes)) != expected {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, moerr.NewInternalErrorNoCtxf(
 			"SplitIncludeBytes: includeBytes length %d does not match nrows*includeBytesPerRow %d",
 			len(includeBytes), expected)
 	}
@@ -511,7 +512,7 @@ func SplitIncludeBytes(
 		off += s
 	}
 	if off != dataBytes {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, moerr.NewInternalErrorNoCtxf(
 			"SplitIncludeBytes: column sizes sum %d != per-row data bytes %d",
 			off, dataBytes)
 	}
