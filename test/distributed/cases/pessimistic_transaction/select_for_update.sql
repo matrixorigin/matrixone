@@ -889,23 +889,31 @@ select m.id, m.company_id, r.province from su_fu_main m
   for update;
 commit;
 
--- exists subquery + for update (only locks outer rows, matches MySQL)
+-- exists subquery + for update
+-- outer table (su_fu_main) is locked; subquery table (su_fu_ref) must NOT be locked
 begin;
 select id, company_id from su_fu_main t
   where exists (select 1 from su_fu_ref r where r.id = t.company_id)
   for update;
 -- @session:id=1{
 use select_for_update;
+update su_fu_ref set province = 'updated_ref' where id = 10;
 -- @wait:0:commit
 update su_fu_main set status = 77 where id = 3;
 -- @session}
 commit;
 select * from su_fu_main where id = 3;
+select * from su_fu_ref where id = 10;
 
--- in subquery + for update
+-- in subquery + for update; subquery table must NOT be locked
 begin;
 select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'in_test' where id = 20;
+-- @session}
 commit;
+select * from su_fu_ref where id = 20;
 
 -- aggregate + for update
 begin;
@@ -917,11 +925,27 @@ begin;
 select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
 commit;
 
--- subquery in select list + for update
+-- subquery in select list + for update; subquery table must NOT be locked
 begin;
 select id, (select province from su_fu_ref r where r.id = m.company_id) p
   from su_fu_main m where id <= 2 for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'scalar_test' where id = 30;
+-- @session}
 commit;
+select * from su_fu_ref where id = 30;
+
+-- cte + join + for update; LIMIT scope must not over-lock rows outside the cte result set
+begin;
+with target as (select id from su_fu_main order by id limit 2)
+select t.id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 55 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
 
 -- cleanup
 drop table if exists su_fu_main;
