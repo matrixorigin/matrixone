@@ -365,6 +365,37 @@ func TestQueryBuilder_bindGroupBy(t *testing.T) {
 	// TODO time window ast
 }
 
+func TestQueryBuilder_bindGroupByNull(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select count(*) from select_test.bind_select group by null", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, selectClause.Exprs, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(bindCtx.groups))
+	require.True(t, isNullExpr(bindCtx.groups[0]))
+
+	require.Equal(t, 1, len(bindCtx.groupingFlag))
+	require.True(t, bindCtx.groupingFlag[0])
+}
+
+func TestQueryBuilder_bindGroupByOrdinalPosition(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by 1", 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = builder.bindGroupBy(bindCtx, selectClause.GroupBy, selectClause.Exprs, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(bindCtx.groups))
+	colExpr, ok := bindCtx.groups[0].Expr.(*plan.Expr_Col)
+	require.True(t, ok)
+	require.Equal(t, "a", colExpr.Col.Name)
+}
+
 func TestQueryBuilder_bindHaving(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -785,6 +816,70 @@ func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	_, ok = boundOrderBys[1].Expr.Expr.(*plan.Expr_Col)
 	require.True(t, ok)
 	require.Equal(t, plan.OrderBySpec_ASC, boundOrderBys[1].Flag)
+}
+
+func TestQueryBuilder_bindOrderByNull(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by null", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Empty(t, boundOrderBys)
+	require.Equal(t, 1, len(bindCtx.projects))
+}
+
+func TestQueryBuilder_bindOrderByNullKeepsFollowingKeys(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by null, a desc", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+	require.Equal(t, plan.OrderBySpec_DESC, boundOrderBys[0].Flag)
+
+	colExpr, ok := boundOrderBys[0].Expr.Expr.(*plan.Expr_Col)
+	require.True(t, ok)
+	require.Equal(t, int32(0), colExpr.Col.ColPos)
+}
+
+func TestQueryBuilder_bindOrderByOrdinalPosition(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select order by 1", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	_, _, err = builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	require.NoError(t, err)
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(boundOrderBys))
+
+	colExpr, ok := boundOrderBys[0].Expr.Expr.(*plan.Expr_Col)
+	require.True(t, ok)
+	require.Equal(t, int32(0), colExpr.Col.ColPos)
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
