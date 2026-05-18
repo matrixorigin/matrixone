@@ -52,14 +52,18 @@
 //
 //         _ "github.com/matrixorigin/matrixone/pkg/vectorindex/<foo>/plugin"
 //
+//     For GPU-only algorithms (CAGRA, IVF-PQ), add the blank import to
+//     all_gpu.go instead — it carries //go:build gpu so CPU binaries
+//     skip the registration. Plan-build then surfaces "unsupported
+//     index type: <foo>" via pkg/sql/plan/build_ddl.go's existing
+//     vectorplugin.Get dispatch.
+//
 //  5. Add a SQL case under test/distributed/cases/vector/ that exercises
 //     CREATE INDEX, ORDER BY <distfn>(col, v) LIMIT k, ALTER REINDEX, and
 //     DROP INDEX.
 package all
 
 import (
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin"
 )
