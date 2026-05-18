@@ -322,17 +322,28 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				capOffset := int64(i) * int64(colexec.DefaultBatchSize)
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						typ := ap.RightTypes[rp.Pos]
-						ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
 						if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
+							// Capture column: when matched==0, no probe hit any
+							// bucket, so capturedVecs are still all-NULL. Emit a
+							// pre-filled NULL vector directly instead of copying.
 							cIdx := ctr.captureResultIdx[j]
-							if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, proc.Mp()); err != nil {
-								return err
+							if ctr.captured != nil && ctr.captured.Count() > 0 {
+								typ := ap.RightTypes[rp.Pos]
+								ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(typ)
+								if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, proc.Mp()); err != nil {
+									return err
+								}
+							} else {
+								ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
+								if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
+									return err
+								}
 							}
 						} else {
-							if err := vector.GetUnionAllFunction(typ, proc.Mp())(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
-								return err
-							}
+							// Non-capture build column: transfer ownership from
+							// the build batch to avoid a full copy.
+							ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
+							bat.Vecs[rp.Pos] = nil
 						}
 					} else {
 						ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
@@ -375,11 +386,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			for j, rp := range ap.Result {
 				if rp.Rel == 1 {
 					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
-					for _, sel := range newSels {
-						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[i].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
-							return err
-						}
+					if err := unionSelsByBatch(ap.ctr.buf[i].Vecs[j], ctr.batches, rp.Pos, newSels, proc); err != nil {
+						return err
 					}
 				} else {
 					ap.ctr.buf[i].Vecs[j] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
@@ -560,7 +568,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 
 	rowCntInc := 0
 	count := bat.RowCount()
-	itr := ctr.mp.NewIterator()
+	if ctr.cachedItr == nil {
+		ctr.cachedItr = ctr.mp.NewIterator()
+	}
+	itr := ctr.cachedItr
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -727,6 +738,40 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
+	}
+	return nil
+}
+
+func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
+	if len(sels) <= 16 {
+		for _, sel := range sels {
+			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+			if err := dst.UnionOne(batches[idx1].Vecs[colPos], int64(idx2), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	offsets := make([]int64, 0, len(sels))
+	prevIdx := int32(-1)
+	for _, sel := range sels {
+		idx1 := sel / colexec.DefaultBatchSize
+		idx2 := int64(sel % colexec.DefaultBatchSize)
+		if idx1 != prevIdx {
+			if prevIdx >= 0 && len(offsets) > 0 {
+				if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+					return err
+				}
+				offsets = offsets[:0]
+			}
+			prevIdx = idx1
+		}
+		offsets = append(offsets, idx2)
+	}
+	if len(offsets) > 0 {
+		if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	return nil
 }

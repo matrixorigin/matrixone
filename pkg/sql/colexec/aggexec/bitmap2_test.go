@@ -200,6 +200,37 @@ func TestBitmapConstructExec(t *testing.T) {
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
+	t.Run("SaveIntermediateWithNilMobs", func(t *testing.T) {
+		curNB := mp.CurrNB()
+		exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		require.NoError(t, exec.GroupGrow(4))
+		// Only fill groups 1 and 3, leaving groups 2 and 4 with nil mobs entries.
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []*vector.Vector{vec1}))
+		require.NoError(t, exec.BatchFill(0, []uint64{3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, []*vector.Vector{vec2}))
+
+		buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+		require.NoError(t, exec.SaveIntermediateResultOfChunk(0, buf))
+
+		execb := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		r := bytes.NewReader(buf.Bytes())
+		require.NoError(t, execb.UnmarshalFromReader(r, mp))
+
+		results, err := execb.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		checkBitmap(t, results[0], 0, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+		require.True(t, results[0].IsNull(1))
+		checkBitmap(t, results[0], 2, []uint32{3, 4, 5, 6, 8, 9, 10, 11})
+		require.True(t, results[0].IsNull(3))
+
+		exec.Free()
+		execb.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
+
 	t.Run("BatchMerge", func(t *testing.T) {
 		curNB := mp.CurrNB()
 		execa1 := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
