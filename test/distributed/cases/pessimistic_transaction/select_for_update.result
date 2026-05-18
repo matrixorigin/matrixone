@@ -1233,98 +1233,6 @@ id    company_id
 1    10
 2    20
 use select_for_update;
-update su_fu_main set status = 77 where id = 3;
-commit;
-select * from su_fu_main where id = 3;
-id    company_id    status
-3    30    77
-begin;
-select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
-id
-4
-5
-1
-2
-3
-commit;
-begin;
-select company_id, count(*) from su_fu_main group by company_id for update;
-company_id    count(*)
-40    1
-50    1
-10    1
-20    1
-30    1
-commit;
-begin;
-select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
-company_id    c
-40    1
-50    1
-10    1
-20    1
-30    1
-commit;
-begin;
-select id, (select province from su_fu_ref r where r.id = m.company_id) p
-from su_fu_main m where id <= 2 for update;
-id    p
-1    p1
-2    p2
-commit;
-drop table if exists su_fu_main;
-drop table if exists su_fu_ref;
-drop table if exists su_fu_main;
-drop table if exists su_fu_ref;
-create table su_fu_main(id int primary key, company_id int, status int);
-create table su_fu_ref(id int primary key, province varchar(32));
-insert into su_fu_main values(1,10,1),(2,20,1),(3,30,1),(4,40,1),(5,50,1);
-insert into su_fu_ref values(10,'p1'),(20,'p2'),(30,'p3'),(40,'p4'),(50,'p5');
-begin;
-with target as (select id, company_id from su_fu_main order by id limit 3)
-select t.id, t.company_id from su_fu_main t join target on t.id = target.id for update;
-id    company_id
-1    10
-2    20
-3    30
-use select_for_update;
-update su_fu_main set status = 99 where id = 1;
-commit;
-select * from su_fu_main where id = 1;
-id    company_id    status
-1    10    99
-begin;
-select * from (select id, company_id from su_fu_main order by id limit 3) t for update;
-id    company_id
-1    10
-2    20
-3    30
-use select_for_update;
-update su_fu_main set status = 88 where id = 2;
-commit;
-select * from su_fu_main where id = 2;
-id    company_id    status
-2    20    88
-begin;
-select m.id, m.company_id, r.province from su_fu_main m
-join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
-for update;
-id    company_id    province
-3    30    p3
-1    10    p1
-2    20    p2
-commit;
-begin;
-select id, company_id from su_fu_main t
-where exists (select 1 from su_fu_ref r where r.id = t.company_id)
-for update;
-id    company_id
-3    30
-4    40
-5    50
-1    10
-2    20
-use select_for_update;
 update su_fu_ref set province = 'updated_ref' where id = 10;
 update su_fu_main set status = 77 where id = 3;
 commit;
@@ -1356,16 +1264,26 @@ company_id    count(*)
 10    1
 20    1
 30    1
+use select_for_update;
+update su_fu_main set status = 66 where id = 4;
 commit;
+select * from su_fu_main where id = 4;
+id    company_id    status
+4    40    66
 begin;
 select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
 company_id    c
-40    1
 50    1
 10    1
 20    1
 30    1
+40    1
+use select_for_update;
+update su_fu_main set status = 67 where id = 5;
 commit;
+select * from su_fu_main where id = 5;
+id    company_id    status
+5    50    67
 begin;
 select id, (select province from su_fu_ref r where r.id = m.company_id) p
 from su_fu_main m where id <= 2 for update;
@@ -1373,11 +1291,11 @@ id    p
 1    updated_ref
 2    in_test
 use select_for_update;
-update su_fu_ref set province = 'scalar_test' where id = 30;
+update su_fu_ref set province = 'scalar_test' where id = 10;
 commit;
-select * from su_fu_ref where id = 30;
+select * from su_fu_ref where id = 10;
 id    province
-30    scalar_test
+10    scalar_test
 begin;
 with target as (select id from su_fu_main order by id limit 2)
 select t.id from su_fu_main t join target on t.id = target.id for update;
@@ -1390,5 +1308,19 @@ commit;
 select * from su_fu_main where id = 5;
 id    company_id    status
 5    50    55
+drop view if exists su_fu_view;
+create view su_fu_view as select id, company_id from su_fu_main order by id limit 2;
+begin;
+select * from su_fu_view for update;
+id    company_id
+1    10
+2    20
+use select_for_update;
+update su_fu_main set status = 44 where id = 5;
+commit;
+select * from su_fu_main where id = 5;
+id    company_id    status
+5    50    44
+drop view if exists su_fu_view;
 drop table if exists su_fu_main;
 drop table if exists su_fu_ref;
