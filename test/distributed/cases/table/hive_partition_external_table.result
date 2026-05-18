@@ -115,6 +115,9 @@ year    total
 select count(distinct year) as distinct_years from hive_single;
 distinct_years
 5
+select count(distinct id) as distinct_ids_2024 from hive_single where year = 2024;
+distinct_ids_2024
+5
 select count(*) from hive_single where year + 1 = 2025;
 count(*)
 5
