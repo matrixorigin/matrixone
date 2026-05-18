@@ -39,6 +39,154 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParquetDecimalMappingRegression(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	decimalBytes := func(v int64) []byte {
+		b, err := bigIntToTwosComplementBytes(ctx, big.NewInt(v), 8)
+		require.NoError(t, err)
+		return b
+	}
+
+	values := []parquet.Value{
+		parquet.FixedLenByteArrayValue(decimalBytes(12345)).Level(0, 0, 0),
+		parquet.FixedLenByteArrayValue(decimalBytes(-6789)).Level(0, 0, 0),
+	}
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Decimal(2, 12, parquet.FixedLenByteArrayType(8)),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	page, err := col.Pages().ReadPage()
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	var h ParquetHandler
+	mp := h.getMapper(col, plan.Type{
+		Id:          int32(types.T_decimal64),
+		Width:       12,
+		Scale:       2,
+		NotNullable: true,
+	})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+
+	neg := int64(-6789)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+	require.Equal(t, []types.Decimal64{
+		types.Decimal64(int64(12345)),
+		types.Decimal64(neg),
+	}, got)
+}
+
+func TestParquetStringToDecimalMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	values := []parquet.Value{
+		parquet.ByteArrayValue([]byte(" +123.45 ")).Level(0, 0, 0),
+		parquet.ByteArrayValue([]byte("-6.70")).Level(0, 0, 0),
+	}
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.String(),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("c")
+	page, err := col.Pages().ReadPage()
+	require.NoError(t, err)
+
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	var h ParquetHandler
+	mp := h.getMapper(col, plan.Type{
+		Id:          int32(types.T_decimal64),
+		Width:       12,
+		Scale:       2,
+		NotNullable: true,
+	})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+
+	expected0, err := types.ParseDecimal64("123.45", 12, 2)
+	require.NoError(t, err)
+	expected1, err := types.ParseDecimal64("-6.70", 12, 2)
+	require.NoError(t, err)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+	require.Equal(t, []types.Decimal64{expected0, expected1}, got)
+}
+
+func TestParquetStringToJsonMapping(t *testing.T) {
+	proc := testutil.NewProc(t)
+	requireJSONAt := func(t *testing.T, vec *vector.Vector, row int, expected string) {
+		t.Helper()
+		want, err := types.ParseStringToByteJson(expected)
+		require.NoError(t, err)
+		got := types.DecodeJson(vec.GetBytesAt(row))
+		require.Equal(t, want.String(), got.String())
+	}
+
+	t.Run("plain string page", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte(`{"k":"v0","n":0}`)),
+			parquet.ByteArrayValue([]byte(` {"k":"v1","n":1} `)),
+		})
+
+		vec := vector.NewVec(types.T_json.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+
+		require.Equal(t, 2, vec.Length())
+		requireJSONAt(t, vec, 0, `{"k":"v0","n":0}`)
+		requireJSONAt(t, vec, 1, `{"k":"v1","n":1}`)
+	})
+
+	t.Run("dictionary string page", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+			parquet.ByteArrayValue([]byte(`{"k":"v0","n":0}`)),
+			parquet.ByteArrayValue([]byte(`{"k":"v1","n":1}`)),
+			parquet.ByteArrayValue([]byte(`{"k":"v0","n":0}`)),
+		})
+
+		vec := vector.NewVec(types.T_json.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+
+		require.Equal(t, 3, vec.Length())
+		requireJSONAt(t, vec, 0, `{"k":"v0","n":0}`)
+		requireJSONAt(t, vec, 1, `{"k":"v1","n":1}`)
+		requireJSONAt(t, vec, 2, `{"k":"v0","n":0}`)
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte(`not-json`)),
+		})
+
+		vec := vector.NewVec(types.T_json.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "json text not-json")
+	})
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt
 type fakeFS struct{ b []byte }
 
