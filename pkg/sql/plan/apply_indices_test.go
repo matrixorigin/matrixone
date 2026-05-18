@@ -1386,3 +1386,25 @@ func TestRangeFilterConstValue(t *testing.T) {
 	require.NotNil(t, val2)
 	assert.Equal(t, int64(42), val2.GetLit().GetI64Val())
 }
+
+func TestIsRangeOp(t *testing.T) {
+	tests := []struct {
+		op       string
+		expected bool
+	}{
+		{">=", true},
+		{">", true},
+		{"<=", true},
+		{"<", true},
+		{"in_range", true},
+		{"=", false},
+		{"in", false},
+		{"between", false},
+		{"or", false},
+		{"prefix_in_range", false},
+	}
+	for _, tt := range tests {
+		fn := &planpb.Function{Func: &planpb.ObjectRef{ObjName: tt.op}}
+		assert.Equal(t, tt.expected, isRangeOp(fn), "isRangeOp(%q)", tt.op)
+	}
+}
