@@ -3483,6 +3483,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
@@ -3568,6 +3571,13 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
@@ -3994,6 +4004,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4046,6 +4059,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.FullTextIndex:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,
@@ -4100,6 +4116,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.Index:
+				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+					return nil, err
+				}
 				if err := checkIndexKeypartSupportability(
 					ctx.GetContext(),
 					def.KeyParts,

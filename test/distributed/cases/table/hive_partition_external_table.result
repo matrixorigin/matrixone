@@ -52,6 +52,12 @@ Table    Create Table
 hive_single    CREATE EXTERNAL TABLE `hive_single` (\n  `id` int DEFAULT NULL,\n  `amount` double DEFAULT NULL,\n  `year` int DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
+create index idx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+create unique index uidx_hive_single_id on hive_single(id);
+invalid input: cannot create index on external table
+alter table hive_single add unique (amount);
+invalid input: cannot create index on external table
 drop table if exists hive_disabled;
 create external table hive_disabled (
 id int,
@@ -377,7 +383,8 @@ y    cnt
 2025    0
 select 'single' as src, count(*) as cnt from hive_single where year = 2024
 union all
-select 'multi' as src, count(*) as cnt from hive_multi where year = 2024;
+select 'multi' as src, count(*) as cnt from hive_multi where year = 2024
+order by src desc;
 src    cnt
 single    5
 multi    9

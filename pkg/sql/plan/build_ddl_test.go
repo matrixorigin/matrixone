@@ -615,6 +615,38 @@ func TestBuildAlterTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["ext_idx"] = &plan.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "ext_idx",
+	}
+	ctx.tables["ext_idx"] = &plan.TableDef{
+		Name:      "ext_idx",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "col_int32", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "col_varchar", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+			{Name: "part_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+
+	sqls := []string{
+		"CREATE INDEX idx_ext ON ext_idx(col_int32);",
+		"CREATE UNIQUE INDEX uidx_ext ON ext_idx(col_int32);",
+		"CREATE FULLTEXT INDEX fidx_ext ON ext_idx(col_varchar);",
+		"ALTER TABLE ext_idx ADD INDEX idx_ext2 (col_int32);",
+		"ALTER TABLE ext_idx ADD UNIQUE (col_varchar);",
+		"ALTER TABLE ext_idx ADD FULLTEXT INDEX fidx_ext2 (col_varchar);",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
 func TestBuildAlterTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass
