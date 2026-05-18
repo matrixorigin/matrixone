@@ -792,6 +792,11 @@ func hashDiffIfHasLCA(
 	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
+// pruneUnchangedDataOnLCA removes rows that were physically collected as data
+// because range replay had to select a whole LCA-derived object, for example a
+// rewritten object without per-row commit-ts, while their visible values are
+// unchanged at both LCA observation snapshots. Tombstones are excluded per key;
+// item counts are not a valid substitute for set containment.
 func pruneUnchangedDataOnLCA(
 	ctx context.Context,
 	ses *Session,
@@ -804,8 +809,7 @@ func pruneUnchangedDataOnLCA(
 	tombstoneHashmap databranchutils.BranchHashmap,
 ) error {
 	if dataHashmap == nil || tombstoneHashmap == nil ||
-		dataHashmap.ItemCount() == 0 ||
-		dataHashmap.ItemCount() <= tombstoneHashmap.ItemCount() {
+		dataHashmap.ItemCount() == 0 {
 		return nil
 	}
 

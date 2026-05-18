@@ -688,26 +688,8 @@ func TestPruneUnchangedDataOnLCA_RemovesOnlyRowsVisibleAtBothSnapshots(t *testin
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff := newPruneTestTableStuff(ctrl, 81)
 	tblStuff.maxTombstoneBatchCnt = 1
-	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-	lcaDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "lca_tbl",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
-	baseDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
-	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
-	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(81)).AnyTimes()
-	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
 
 	dataHashmap := buildTestBranchHashmap(
 		t,
@@ -747,6 +729,131 @@ func TestPruneUnchangedDataOnLCA_RemovesOnlyRowsVisibleAtBothSnapshots(t *testin
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), dataHashmap.ItemCount())
+}
+
+func TestPruneUnchangedDataOnLCA_DoesNotUseTombstoneCountAsContainment(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newPruneTestTableStuff(ctrl, 82)
+	tblStuff.maxTombstoneBatchCnt = 1
+
+	dataHashmap := buildTestBranchHashmap(
+		t,
+		ses.proc.Mp(),
+		tblStuff.def.colTypes,
+		[][]any{{int64(1), "alice", "h1"}},
+	)
+	defer func() { require.NoError(t, dataHashmap.Close()) }()
+	tombstoneHashmap := buildTestBranchHashmap(
+		t,
+		ses.proc.Mp(),
+		tblStuff.def.colTypes,
+		[][]any{
+			{int64(2), "deleted", "h2"},
+			{int64(3), "deleted", "h3"},
+		},
+	)
+	defer func() { require.NoError(t, tombstoneHashmap.Close()) }()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	gomock.InOrder(
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+	)
+
+	err := pruneUnchangedDataOnLCA(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		"target",
+		types.BuildTS(10, 0),
+		types.BuildTS(5, 0),
+		dataHashmap,
+		tombstoneHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), dataHashmap.ItemCount())
+}
+
+func TestPruneUnchangedDataOnLCA_KeepsRowsChangedAtCommonPrefix(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newPruneTestTableStuff(ctrl, 83)
+	tblStuff.maxTombstoneBatchCnt = 1
+	dataHashmap := buildTestBranchHashmap(
+		t,
+		ses.proc.Mp(),
+		tblStuff.def.colTypes,
+		[][]any{{int64(1), "alice", "h1"}},
+	)
+	defer func() { require.NoError(t, dataHashmap.Close()) }()
+	tombstoneHashmap, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tombstoneHashmap.Close()) }()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	gomock.InOrder(
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "alice", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{
+			buildLCAProbeResultSetFromRows([]interface{}{int64(0), int64(1), "bob", "h1"}),
+		}),
+		bh.EXPECT().ClearExecResultSet(),
+	)
+
+	err = pruneUnchangedDataOnLCA(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		"target",
+		types.BuildTS(10, 0),
+		types.BuildTS(5, 0),
+		dataHashmap,
+		tombstoneHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), dataHashmap.ItemCount())
+}
+
+func newPruneTestTableStuff(ctrl *gomock.Controller, lcaTableID uint64) tableStuff {
+	tblStuff := newTestFullScanTableStuff(ctrl)
+	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(lcaTableID).AnyTimes()
+	tblStuff.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
+	return tblStuff
 }
 
 func TestBuildHashmapForTable_UsesRowIDAdjustedPKIndexes(t *testing.T) {
