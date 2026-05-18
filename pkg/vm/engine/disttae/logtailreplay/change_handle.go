@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -604,8 +605,7 @@ func (h *AObjectHandle) buildBlockPlan(
 	plan.evaluableBlocks = evaluableBlockCnt
 	plan.overlapBlocks = overlapBlockCnt
 	if evaluableBlockCnt == 0 {
-		logutil.Warn(
-			"ChangesHandle-CommitTSBlockPlan no evaluable blocks",
+		fields := []zap.Field{
 			zap.String("object", obj.ObjectShortName().ShortString()),
 			zap.Bool("tombstone", h.isTombstone),
 			zap.String("start", h.start.ToString()),
@@ -613,10 +613,13 @@ func (h *AObjectHandle) buildBlockPlan(
 			zap.Int("total-blocks", plan.totalBlocks),
 			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
 			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
-		)
+		}
+		if h.p.changesHandle.debugLabel != "" {
+			fields = append(fields, zap.String("debug-label", h.p.changesHandle.debugLabel))
+		}
+		logutil.Warn("ChangesHandle-CommitTSBlockPlan no evaluable blocks", fields...)
 	} else {
-		logutil.Info(
-			"ChangesHandle-CommitTSBlockPlan summary",
+		fields := []zap.Field{
 			zap.String("object", obj.ObjectShortName().ShortString()),
 			zap.Bool("tombstone", h.isTombstone),
 			zap.Int("total-blocks", plan.totalBlocks),
@@ -627,7 +630,11 @@ func (h *AObjectHandle) buildBlockPlan(
 			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
 			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
 			zap.Strings("evaluable-samples", plan.evaluableSamples),
-		)
+		}
+		if h.p.changesHandle.debugLabel != "" {
+			fields = append(fields, zap.String("debug-label", h.p.changesHandle.debugLabel))
+		}
+		logutil.Info("ChangesHandle-CommitTSBlockPlan summary", fields...)
 	}
 	return nil
 }
@@ -886,9 +893,11 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 		p.fillInSkipTS(dataIter, start, end)
 		dataIter.Release()
 	}
-	rowIter := state.rows.Iter()
-	defer rowIter.Release()
-	p.inMemoryHandle = p.newBatchHandleWithRowIterator(ctx, rowIter, start, end, tombstone, mp)
+	rowIter, rowIterKind, pkFilterApplied := p.newReplayRowsIter(state, start, end, tombstone)
+	defer rowIter.Close()
+	p.inMemoryHandle = p.newBatchHandleWithRowIterator(
+		ctx, rowIter, rowIterKind, pkFilterApplied, start, end, tombstone, mp,
+	)
 	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
 	if p.changesHandle.enableDeleteChainResolve {
 		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
@@ -908,6 +917,23 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
 	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
 	return
+}
+
+func (p *baseHandle) newReplayRowsIter(
+	state *PartitionState,
+	start, end types.TS,
+	tombstone bool,
+) (RowsIter, string, bool) {
+	if p.changesHandle == nil || p.changesHandle.pkFilter == nil || p.changesHandle.pkFilter.ReplaySpec == nil {
+		return state.NewRawReplayRowsIter(), "full-row-btree", false
+	}
+
+	spec := p.changesHandle.pkFilter.ReplaySpec
+	if spec.Op == function.EQUAL && len(spec.Keys) == 1 {
+		return state.NewExactPrimaryKeyReplayIter(start, end, spec.Keys[0], tombstone), "primary-key-exact-replay", true
+	}
+
+	return state.NewRawReplayRowsIter(), "full-row-btree", false
 }
 
 func NewBaseHandlerWithObjEntries(
@@ -1047,20 +1073,39 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
 	return
 }
-func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btree.IterG[*RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (h *BatchHandle) {
-	bat := p.getBatchesFromRowIterator(iter, start, end, tombstone, mp)
+func (p *baseHandle) newBatchHandleWithRowIterator(
+	ctx context.Context,
+	iter RowsIter,
+	iterKind string,
+	pkFilterApplied bool,
+	start, end types.TS,
+	tombstone bool,
+	mp *mpool.MPool,
+) (h *BatchHandle) {
+	bat := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
 	if bat == nil {
 		return nil
 	}
 	h = NewRowHandle(bat, mp, p, ctx, tombstone)
 	return
 }
-func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {
+func (p *baseHandle) getBatchesFromRowIterator(
+	iter RowsIter,
+	iterKind string,
+	pkFilterApplied bool,
+	start, end types.TS,
+	tombstone bool,
+	mp *mpool.MPool,
+) (bat *batch.Batch) {
+	var scanned, tsMatched, emitted int
 	for iter.Next() {
-		entry := iter.Item()
+		scanned++
+		entry := iter.Entry()
 		if checkTS(start, end, entry.Time) {
+			tsMatched++
 			if !entry.Deleted && !tombstone {
 				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				emitted++
 			}
 			if entry.Deleted && tombstone {
 				if p.skipTS != nil {
@@ -1070,8 +1115,22 @@ func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], star
 					}
 				}
 				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				emitted++
 			}
 		}
+	}
+	if p.changesHandle.debugLabel != "" {
+		logutil.Info(
+			"ChangesHandle-PKFilterRowIterSummary",
+			zap.String("debug-label", p.changesHandle.debugLabel),
+			zap.Bool("tombstone", tombstone),
+			zap.String("iter-kind", iterKind),
+			zap.Bool("has-pk-filter", p.changesHandle.pkFilter != nil && len(p.changesHandle.pkFilter.Segments) > 0),
+			zap.Bool("pk-filter-applied", pkFilterApplied),
+			zap.Int("scanned", scanned),
+			zap.Int("ts-matched", tsMatched),
+			zap.Int("emitted", emitted),
+		)
 	}
 	return
 }
@@ -1088,13 +1147,21 @@ func (p *baseHandle) getObjectEntries(
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
 	tnKeySet := make(map[types.TS]struct{})
 	var pkf *engine.PKFilter
+	debugLabel := ""
 	if p.changesHandle != nil {
 		pkf = p.changesHandle.pkFilter
+		debugLabel = p.changesHandle.debugLabel
 	}
+	var (
+		totalAppendable, prunedAppendable int
+		totalCNCreated, prunedCNCreated   int
+		totalTNStatic, prunedTNStatic     int
+	)
 	for objIter.Next() {
 		entry := objIter.Item()
 		entryCopy := entry
 		if entry.GetAppendable() {
+			totalAppendable++
 			if entry.CreateTime.GT(&end) {
 				continue
 			}
@@ -1106,24 +1173,28 @@ func (p *baseHandle) getObjectEntries(
 			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
 				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					prunedAppendable++
 					continue
 				}
 			}
 			aobj = append(aobj, &entryCopy)
 		} else {
 			if entry.ObjectStats.GetCNCreated() {
+				totalCNCreated++
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
 				if pkf != nil && len(pkf.Segments) > 0 {
 					zm := entry.SortKeyZoneMap()
 					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+						prunedCNCreated++
 						continue
 					}
 				}
 				cnObj = append(cnObj, &entryCopy)
 				continue
 			}
+			totalTNStatic++
 			if entry.CreateTime.GT(&end) {
 				continue
 			}
@@ -1131,6 +1202,7 @@ func (p *baseHandle) getObjectEntries(
 			if pkf != nil && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
 				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					prunedTNStatic++
 					continue
 				}
 			}
@@ -1156,6 +1228,21 @@ func (p *baseHandle) getObjectEntries(
 	goSort.Slice(tnCreateTSKeys, func(i, j int) bool {
 		return tnCreateTSKeys[i].LT(&tnCreateTSKeys[j])
 	})
+	if debugLabel != "" {
+		logutil.Info(
+			"ChangesHandle-PKFilterObjectSummary",
+			zap.String("debug-label", debugLabel),
+			zap.Bool("has-pk-filter", pkf != nil && len(pkf.Segments) > 0),
+			zap.Int("appendable-total", totalAppendable),
+			zap.Int("appendable-pruned", prunedAppendable),
+			zap.Int("cn-created-total", totalCNCreated),
+			zap.Int("cn-created-pruned", prunedCNCreated),
+			zap.Int("tn-static-total", totalTNStatic),
+			zap.Int("tn-static-pruned", prunedTNStatic),
+			zap.String("start", start.ToString()),
+			zap.String("end", end.ToString()),
+		)
+	}
 	return
 }
 
@@ -1427,6 +1514,8 @@ type ChangeHandler struct {
 	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
 	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
 	pkFilter *engine.PKFilter
+	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
+	debugLabel string
 
 	retainRowID bool
 
@@ -1557,6 +1646,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
@@ -1625,6 +1715,7 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
+		debugLabel:     engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:    engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
@@ -1856,6 +1947,7 @@ func NewChangesHandler(
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 		pkFilter:      engine.PKFilterFromContext(ctx),
+		debugLabel:    engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:   engine.RetainRowIDFromContext(ctx),
 	}
 	defer func() {
