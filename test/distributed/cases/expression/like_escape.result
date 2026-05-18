@@ -1,0 +1,36 @@
+drop table if exists t_like_escape;
+create table t_like_escape (a varchar(100));
+insert into t_like_escape values ('a_b'), ('a%b'), ('a_c'), ('A_B');
+select * from t_like_escape where a like 'a\_b' escape '\\';
+	a
+a_b
+select * from t_like_escape where a like 'a\%b' escape '\\';
+	a
+a%b
+select * from t_like_escape where a like 'a#_b' escape '#';
+	a
+a_b
+select * from t_like_escape where a ilike 'a\_b' escape '\\';
+	a
+a_b
+A_B
+select * from t_like_escape where a not like 'a\_b' escape '\\';
+	a
+a%b
+a_c
+A_B
+select * from t_like_escape where a not ilike 'a\_b' escape '\\';
+	a
+a%b
+a_c
+select * from t_like_escape where a like 'a_b' escape '';
+	a
+a_b
+a%b
+select * from t_like_escape where a like 'a%b' escape '';
+	a
+a_b
+a%b
+select * from t_like_escape where a like 'a\_b' escape 'ab';
+invalid input: Incorrect arguments: escape character must be a single character
+drop table t_like_escape;
