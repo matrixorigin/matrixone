@@ -168,17 +168,68 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		}
+		var joinConds []*plan.Expr
+		pkCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
+		joinConds = append(joinConds, pkCond)
 
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			leftExpr,
-			rightExpr,
-		})
+		for _, idxDef := range tableDef.Indexes {
+			if !idxDef.Unique {
+				continue
+			}
+			var ukPartConds []*plan.Expr
+			for _, part := range idxDef.Parts {
+				colName := catalog.ResolveAlias(part)
+				colIdx := tableDef.Name2ColIndex[colName]
+				colTyp := tableDef.Cols[colIdx].Typ
+				lExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectTag,
+							ColPos: colName2Idx[tableDef.Name+"."+colName],
+						},
+					},
+				}
+				rExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: oldScanTag,
+							ColPos: colIdx,
+						},
+					},
+				}
+				partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
+				ukPartConds = append(ukPartConds, partCond)
+			}
+			var ukCond *plan.Expr
+			if len(ukPartConds) == 1 {
+				ukCond = ukPartConds[0]
+			} else {
+				ukCond = ukPartConds[0]
+				for _, c := range ukPartConds[1:] {
+					ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
+				}
+			}
+			joinConds = append(joinConds, ukCond)
+		}
+
+		var joinOnList []*plan.Expr
+		if len(joinConds) == 1 {
+			joinOnList = joinConds
+		} else if len(joinConds) > 1 {
+			combined := joinConds[0]
+			for _, c := range joinConds[1:] {
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{combined, c})
+			}
+			joinOnList = []*plan.Expr{combined}
+		}
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{lastNodeID, oldScanNodeID},
 			JoinType: plan.Node_LEFT,
-			OnList:   []*plan.Expr{joinCond},
+			OnList:   joinOnList,
 		}, bindCtx)
 
 		lastNodeID = builder.appendNode(&plan.Node{
