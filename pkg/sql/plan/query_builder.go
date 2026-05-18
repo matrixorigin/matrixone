@@ -2598,7 +2598,15 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
 	builder.compCtx.SetSnapshot(subCtx.snapshot)
+	// A CTE body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the CTE would emit its own LOCK_OP (e.g. above its
+	// LIMIT) on top of the outer LOCK_OP that collectLockTargets injects
+	// after the outer query's FROM, locking rows that fall outside the final
+	// result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
 	nodeID, err = builder.bindSelect(s, subCtx, false)
+	builder.isForUpdate = savedIsForUpdate
 	builder.compCtx.SetSnapshot(oldSnapshot)
 	if err != nil {
 		return
