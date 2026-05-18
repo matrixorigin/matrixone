@@ -1,0 +1,113 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package runtime
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/stretchr/testify/require"
+)
+
+func TestHnswHiddenTableTypes(t *testing.T) {
+	got := CatalogHooks{}.HiddenTableTypes()
+	require.Len(t, got, 2)
+	require.Contains(t, got, catalog.Hnsw_TblType_Metadata)
+	require.Contains(t, got, catalog.Hnsw_TblType_Storage)
+}
+
+func TestHnswShouldTruncateHiddenTable(t *testing.T) {
+	require.True(t, CatalogHooks{}.ShouldTruncateHiddenTable("anything"))
+}
+
+func TestHnswDefaultOptions(t *testing.T) {
+	got := CatalogHooks{}.DefaultOptions()
+	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
+}
+
+func TestHnswExperimentalFlag(t *testing.T) {
+	require.Equal(t, "experimental_hnsw_index", CatalogHooks{}.ExperimentalFlag())
+	require.Equal(t, "experimental_hnsw_index", HnswIndexFlag)
+}
+
+func TestHnswSupportedOpTypes(t *testing.T) {
+	got := CatalogHooks{}.SupportedOpTypes()
+	require.NotEmpty(t, got)
+	for k := range metric.OpTypeToUsearchMetric {
+		require.Contains(t, got, k)
+	}
+}
+
+func TestHnswSyncDescriptor(t *testing.T) {
+	d := CatalogHooks{}.SyncDescriptor()
+	require.True(t, d.UsesCDC)
+	require.True(t, d.AlwaysAsync)
+}
+
+func TestHnswParamsFromTree_Defaults(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{}}
+	got, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.NoError(t, err)
+	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
+	require.NotContains(t, got, catalog.HnswM)
+	require.NotContains(t, got, catalog.HnswEfConstruction)
+}
+
+func TestHnswParamsFromTree_AllOptions(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{
+		AlgoParamM:            16,
+		HnswEfConstruction:    200,
+		HnswEfSearch:          64,
+		AlgoParamVectorOpType: metric.OpType_CosineDistance,
+		Async:                 true,
+	}}
+	got, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.NoError(t, err)
+	require.Equal(t, "16", got[catalog.HnswM])
+	require.Equal(t, "200", got[catalog.HnswEfConstruction])
+	require.Equal(t, "64", got[catalog.HnswEfSearch])
+	require.Equal(t, metric.OpType_CosineDistance, got[catalog.IndexAlgoParamOpType])
+	require.Equal(t, "true", got[catalog.Async])
+}
+
+func TestHnswParamsFromTree_NegativeM(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamM: -1}}
+	_, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "M")
+}
+
+func TestHnswParamsFromTree_NegativeEfConstruction(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{HnswEfConstruction: -1}}
+	_, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ef_construction")
+}
+
+func TestHnswParamsFromTree_NegativeEfSearch(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{HnswEfSearch: -1}}
+	_, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ef_search")
+}
+
+func TestHnswParamsFromTree_InvalidOpType(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamVectorOpType: "not_real"}}
+	_, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid op_type")
+}
