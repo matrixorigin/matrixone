@@ -704,9 +704,12 @@ var supportedStringBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
+			if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
+				if len(inputs) == 2 {
 					return newCheckResultWithSuccess(0)
+				}
+				if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithSuccess(1)
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -720,6 +723,15 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().iLikeFn
+				},
+			},
+			{
+				overloadId: 1,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().iLikeFn3Args
 				},
 			},
 		},

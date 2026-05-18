@@ -106,7 +106,7 @@ func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	}
 
 	for i, c := range cs {
-		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str))
+		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str), '\\')
 		require.NoError(t, err, i)
 		require.Equal(t, c.expected, match, i)
 	}
