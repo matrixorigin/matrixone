@@ -18,7 +18,7 @@
 package plan
 
 import (
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
 type Hooks struct{}

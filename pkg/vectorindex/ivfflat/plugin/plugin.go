@@ -20,7 +20,7 @@
 // DefaultOptions, SupportedOpTypes, ExperimentalFlag, SyncDescriptor)
 // are fully implemented in runtime/. Compile and plan hooks are STUBS
 // (see compile/compile.go and plan/plan.go). The plugin is intentionally
-// NOT registered in pkg/vectorindex/plugin/all/all.go yet — the
+// NOT registered in pkg/indexplugin/all/all.go yet — the
 // stub hooks would break IVF-FLAT DDL/query if dispatch routed through
 // them. The remaining inline IVFFLAT case arms in pkg/sql/compile and
 // pkg/sql/plan continue to handle IVF-FLAT until the lifts complete.
@@ -42,10 +42,10 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	ivfflatcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/compile"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"

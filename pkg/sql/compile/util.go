@@ -24,8 +24,8 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -435,7 +435,7 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 					// catalog.Hooks.ExperimentalFlag(). Today only HNSW
 					// returns a non-empty flag at this seam; CAGRA and
 					// IVF-PQ have flags defined but not enforced here.
-					if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+					if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
 						if flag := p.Catalog().ExperimentalFlag(); flag != "" {
 							if ok2, err := s.isExperimentalEnabled(c, flag); err != nil {
 								return err

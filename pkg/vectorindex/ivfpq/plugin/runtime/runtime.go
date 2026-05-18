@@ -37,10 +37,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
 )
 
 // Compile-time interface check.
@@ -49,7 +49,7 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 // CatalogHooks implements plugin/catalog.Hooks for IVF-PQ.
 //
 // All four methods are required by the framework — see
-// pkg/vectorindex/plugin/catalog/hooks.go for the contract. The compile-
+// pkg/indexplugin/catalog/hooks.go for the contract. The compile-
 // time interface check below catches missing methods.
 type CatalogHooks struct{}
 

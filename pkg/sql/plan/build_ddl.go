@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -36,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 )
 
 func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -1719,7 +1719,7 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	p, ok := vectorplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
+	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
 	}
@@ -1896,7 +1896,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
 			// (BuildSecondaryIndexDefs). Any KeyType registered with the
 			// plugin registry is supported; anything else is rejected.
-			if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
+			if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
 				indexDef, tableDef, err = p.Plan().BuildSecondaryIndexDefs(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 			} else {
 				return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
@@ -2379,7 +2379,7 @@ func CreateIndexDef(indexInfo *tree.Index,
 		// default indexInfo.IndexOption values
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
-		if p, ok := vectorplugin.Get(indexInfo.KeyType.ToString()); ok {
+		if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
 			// Vector-index algorithms supply their default params via the
 			// plugin (DefaultOptions). Non-vector algos miss the registry
 			// and leave the empty defaults set above.
@@ -2475,7 +2475,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 					catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) ||
 					catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if p, ok := vectorplugin.Get(indexdef.IndexAlgo); ok {
+				} else if p, ok := indexplugin.Get(indexdef.IndexAlgo); ok {
 					// Vector indexes delegate to the plugin's catalog
 					// hook. HNSW/CAGRA/IVF-PQ truncate all hidden
 					// tables; IVF-FLAT preserves metadata + centroids

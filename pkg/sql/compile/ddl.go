@@ -43,6 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -60,8 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -785,7 +785,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 					// 3. Master index
 					err = s.handleMasterIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && vectorplugin.IsPluginAlgo(indexDef.IndexAlgo) {
+				} else if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 					// 4. Plugin-registered indexes (vector + fulltext)
 					// are aggregated and handled later by the per-plugin
 					// compile hook.
@@ -805,7 +805,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			// cctx is loop-invariant — hoist to avoid per-index allocs.
 			var cctx *pluginCompileCtx
 			for _, multiTableIndex := range multiTableIndexes {
-				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+				if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, indexInfo)
 					}
@@ -870,7 +870,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// in idxcron — today only IVF-FLAT does, but CAGRA /
 					// IVF-PQ become eligible once their IdxcronAction
 					// values are wired.
-					p, ok := vectorplugin.Get(indexAlgo)
+					p, ok := indexplugin.Get(indexAlgo)
 					if !ok || p.Catalog().SyncDescriptor().IdxcronAction == "" {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
@@ -941,7 +941,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !vectorplugin.IsVectorIndexAlgo(indexAlgo) {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
@@ -952,7 +952,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if err != nil {
 						return err
 					}
-					p, _ := vectorplugin.Get(indexAlgo)
+					p, _ := indexplugin.Get(indexAlgo)
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
 							IndexAlgoParamList: tableAlterIndex.IndexAlgoParamList,
@@ -989,7 +989,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			// update the hidden tables — cctx is loop-invariant.
 			var cctx *pluginCompileCtx
 			for _, multiTableIndex := range multiTableIndexes {
-				if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+				if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
@@ -2212,7 +2212,7 @@ func (s *Scope) doCreateIndex(
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique && vectorplugin.IsPluginAlgo(indexAlgo) {
+		} else if !indexDef.Unique && indexplugin.IsPluginAlgo(indexAlgo) {
 			// 4. Plugin-registered indexes (vector + fulltext) are
 			// aggregated and handled later by the per-plugin
 			// HandleCreateIndex hook.
@@ -2242,7 +2242,7 @@ func (s *Scope) doCreateIndex(
 		//   pkg/vectorindex/ivfflat/plugin/compile/
 		// Each plugin's runtime/ subdir holds the catalog hooks
 		// (HiddenTableTypes, ParamsFromTree, SyncDescriptor, ...).
-		if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+		if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 			if cctx == nil {
 				cctx = newPluginCompileCtx(s, c, tableId, extra, dbSource, qry.Database, originalTableDef, indexInfo)
 			}

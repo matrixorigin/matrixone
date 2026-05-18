@@ -23,7 +23,7 @@
 //     the source table's CDC stream.
 //
 // All of those features go through methods on CompileContext (see
-// pkg/vectorindex/plugin/compile/hooks.go) so this package doesn't have to
+// pkg/indexplugin/compile/hooks.go) so this package doesn't have to
 // import pkg/sql/compile.
 //
 // Lifted from:
@@ -37,11 +37,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
 
 // insertIntoHnswIndexTableFormat is the SQL template used to populate the

@@ -21,8 +21,8 @@ package runtime
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
 )
 
 // Compile-time interface check.

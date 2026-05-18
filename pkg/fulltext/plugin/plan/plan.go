@@ -28,9 +28,9 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 )
 
 // Compile-time interface check.

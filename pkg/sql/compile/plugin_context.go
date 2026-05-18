@@ -15,17 +15,17 @@
 package compile
 
 import (
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	// Blank-import the central plugin registration list so every
 	// vector-index plugin's init() fires whenever compile is loaded
 	// (production via cmd/mo-service and every test that exercises compile).
-	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
+	_ "github.com/matrixorigin/matrixone/pkg/indexplugin/all"
 )
 
 // pluginCompileCtx adapts a *Scope + *Compile to compileplugin.CompileContext

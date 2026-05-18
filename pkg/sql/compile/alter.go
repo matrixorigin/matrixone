@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -36,7 +37,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -286,7 +286,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
 			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
 
-			if !indexDef.Unique && vectorplugin.IsPluginAlgo(indexDef.IndexAlgo) {
+			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
 				if !isAffectedIndex(indexDef, qry.AffectedCols) {
@@ -323,7 +323,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						// maintenance task via the plugin. Plugins
 						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
 						// today) are skipped.
-						if p, ok := vectorplugin.Get(indexDef.IndexAlgo); ok {
+						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
 								if idxcronCctx == nil {
@@ -362,7 +362,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// indexes reach here. All are plugin-registered today, so
 			// aggregate into multiTableIndexes; the loop below
 			// dispatches each through its plugin's HandleCreateIndex.
-			if vectorplugin.IsPluginAlgo(indexDef.IndexAlgo) {
+			if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -378,7 +378,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		var aggCctx *pluginCompileCtx
 		for _, multiTableIndex := range multiTableIndexes {
 
-			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
+			if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
 				if aggCctx == nil {
 					aggCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 				}
@@ -844,7 +844,7 @@ func cloneUnaffectedIndexes(
 		}
 
 		affected := false
-		if !idxTbl.Unique && vectorplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
+		if !idxTbl.Unique && indexplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
 			// only check parts for fulltext + vector (ivf/hnsw/cagra/ivfpq)
 
 			for _, part := range idxTbl.Parts {

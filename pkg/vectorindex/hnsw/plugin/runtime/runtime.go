@@ -22,9 +22,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
 )
 
 var _ catalogplugin.Hooks = CatalogHooks{}

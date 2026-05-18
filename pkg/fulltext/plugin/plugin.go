@@ -24,7 +24,7 @@
 // fulltext arms in pkg/sql/compile/ddl.go::CreateTable (line ~788)
 // and pkg/sql/plan/build_ddl.go::buildFullTextIndexTable still handle
 // the actual DDL. The fulltext-specific if-arms take precedence over
-// vectorplugin.IsVectorIndexAlgo, so the stubs here never run.
+// indexplugin.IsVectorIndexAlgo, so the stubs here never run.
 //
 // # Phase 2 — Compile lift
 //
@@ -50,10 +50,10 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	fulltextcompile "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/compile"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"

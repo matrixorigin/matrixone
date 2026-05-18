@@ -19,10 +19,10 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	hnswcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/compile"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"

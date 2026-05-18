@@ -20,12 +20,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 )
 
 var (
@@ -64,7 +64,7 @@ func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
 
 	// Plugin-registered algorithms (vector + fulltext) describe their
 	// CDC participation via SyncDescriptor().
-	if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+	if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
 		d := p.Catalog().SyncDescriptor()
 		if !d.UsesCDC {
 			return false, nil
@@ -220,7 +220,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 }
 
 func getSinkerTypeFromAlgo(algo string) int8 {
-	if p, ok := vectorplugin.Get(algo); ok {
+	if p, ok := indexplugin.Get(algo); ok {
 		if d := p.Catalog().SyncDescriptor(); d.UsesCDC {
 			return d.SinkerType
 		}
@@ -258,7 +258,7 @@ func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
 	if !idx.TableExist {
 		return false, nil
 	}
-	if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
+	if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
 		return p.Catalog().SyncDescriptor().IdxcronAction != "", nil
 	}
 	return false, nil
@@ -283,7 +283,7 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 			continue
 		}
 
-		p, ok := vectorplugin.Get(idx.IndexAlgo)
+		p, ok := indexplugin.Get(idx.IndexAlgo)
 		if !ok {
 			continue
 		}
@@ -325,7 +325,7 @@ func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string,
 			continue
 		}
 
-		p, ok := vectorplugin.Get(idx.IndexAlgo)
+		p, ok := indexplugin.Get(idx.IndexAlgo)
 		if !ok {
 			continue
 		}

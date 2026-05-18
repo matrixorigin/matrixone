@@ -49,9 +49,9 @@
 //     that don't belong to a SQL pipeline layer.
 //
 //  4. Implement the three Hooks interfaces:
-//     - pkg/vectorindex/plugin/catalog.Hooks  (4 methods — metadata)
-//     - pkg/vectorindex/plugin/compile.Hooks  (~12 methods — DDL execution)
-//     - pkg/vectorindex/plugin/plan.Hooks     (3 methods — schema +
+//     - pkg/indexplugin/catalog.Hooks  (4 methods — metadata)
+//     - pkg/indexplugin/compile.Hooks  (~12 methods — DDL execution)
+//     - pkg/indexplugin/plan.Hooks     (3 methods — schema +
 //     two thin ANN redirects)
 //     The Go compiler enforces completeness via the `var _ Hooks =
 //     Hooks{}` interface checks in each sub-package.
@@ -66,14 +66,14 @@
 //     Then wire four redirect methods on *QueryBuilder in
 //     pkg/sql/plan/plugin_builder.go (ApplyIndicesForSortUsing<Algo> +
 //     CanApply<Algo>) and four matching abstract methods on
-//     planplugin.PlanBuilder in pkg/vectorindex/plugin/plan/hooks.go.
+//     planplugin.PlanBuilder in pkg/indexplugin/plan/hooks.go.
 //     Add the dispatch case at pkg/sql/plan/apply_indices.go.
 //
 //  6. Register: this file's init() calls plugin.Register(New()). To make
 //     production binaries and tests pick it up, add ONE blank import
-//     line to pkg/vectorindex/plugin/all/all.go. That aggregator is the
+//     line to pkg/indexplugin/all/all.go. That aggregator is the
 //     only place that needs editing — pkg/sql/plan and pkg/sql/compile
-//     already blank-import pkg/vectorindex/plugin/all.
+//     already blank-import pkg/indexplugin/all.
 //
 //  7. End-to-end test: CREATE INDEX, populate, ORDER BY <distfn>(col, v)
 //     LIMIT k, ALTER REINDEX, DROP INDEX, DROP TABLE all exercise
@@ -81,7 +81,7 @@
 //     test/distributed/cases/vector/.
 //
 // Helpers the plugin may use without re-implementing them:
-//   - pkg/vectorindex/plugin/plan  — schema / tablefunc helper function
+//   - pkg/indexplugin/plan  — schema / tablefunc helper function
 //     variables (CreateIndexDef, MakeHiddenColDefByName,
 //     ValidateIncludeColumns, DeepCopyColDefList) wired by pkg/sql/plan's
 //     init(). Use these from schema.go / tablefunc.go.
@@ -105,10 +105,10 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
-	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
 	ivfpqcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/compile"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
@@ -153,6 +153,6 @@ var _ plugin.AlgoPlugin = (*Plugin)(nil)
 //
 // For this init() to fire, something must import this package. Production
 // does it transitively via pkg/sql/plan and pkg/sql/compile (see their
-// plugin_context.go files). The aggregator pkg/vectorindex/plugin/all is
+// plugin_context.go files). The aggregator pkg/indexplugin/all is
 // the canonical "load every algorithm" import.
 func init() { plugin.Register(New()) }

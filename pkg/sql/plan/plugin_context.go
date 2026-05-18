@@ -16,4 +16,4 @@ package plan
 
 // Blank-import the central plugin registration list so every
 // vector-index plugin's init() fires whenever plan is loaded.
-import _ "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/all"
+import _ "github.com/matrixorigin/matrixone/pkg/indexplugin/all"

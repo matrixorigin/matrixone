@@ -22,7 +22,7 @@
 // layer (pkg/sql/compile/plugin_context.go), so this package does not
 // import pkg/sql/compile — that would create a cycle.
 //
-// What CompileContext exposes (see pkg/vectorindex/plugin/compile/hooks.go
+// What CompileContext exposes (see pkg/indexplugin/compile/hooks.go
 // for the contract):
 //
 //	Ctx()                   — request context.Context
@@ -51,11 +51,11 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
-	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the

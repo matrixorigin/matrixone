@@ -16,8 +16,8 @@
 
 // CAGRA / IVF-PQ plan-build tests. Gated on //go:build gpu because
 // those plugins are registered only in the gpu build (see
-// pkg/vectorindex/plugin/all/all_gpu.go); under the cpu build
-// vectorplugin.Get returns false for "cagra" and "ivfpq" and the
+// pkg/indexplugin/all/all_gpu.go); under the cpu build
+// indexplugin.Get returns false for "cagra" and "ivfpq" and the
 // shims below would short-circuit before reaching the body under test.
 
 package plan
@@ -28,9 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +41,7 @@ import (
 func buildIvfpqSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
 	colMap map[string]*ColDef, existed []*plan.IndexDef, pkey string,
 ) ([]*plan.IndexDef, []*TableDef, error) {
-	p, ok := vectorplugin.Get(catalog.MoIndexIvfpqAlgo.ToString())
+	p, ok := indexplugin.Get(catalog.MoIndexIvfpqAlgo.ToString())
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("ivfpq plugin not registered")
 	}
@@ -51,7 +51,7 @@ func buildIvfpqSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
 func buildCagraSecondaryIndexDef(ctx CompilerContext, idx *tree.Index,
 	colMap map[string]*ColDef, existed []*plan.IndexDef, pkey string,
 ) ([]*plan.IndexDef, []*TableDef, error) {
-	p, ok := vectorplugin.Get(catalog.MoIndexCagraAlgo.ToString())
+	p, ok := indexplugin.Get(catalog.MoIndexCagraAlgo.ToString())
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("cagra plugin not registered")
 	}
