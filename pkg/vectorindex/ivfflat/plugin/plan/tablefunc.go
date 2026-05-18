@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -26,7 +27,7 @@ import (
 // invoked when the planner sees `ivf_create(...)` / `ivf_search(...)` in
 // SQL. Lifted from pkg/sql/plan/ivfflat.go (Phase 4g, now deleted).
 //
-// The plugin's init() registers these with vectorplan.RegisterTableFunc;
+// The plugin's init() registers these with planplugin.RegisterTableFunc;
 // pkg/sql/plan/query_builder.go's table-function dispatch falls through
 // to the registry in its default arm.
 
@@ -71,8 +72,8 @@ var (
 )
 
 func init() {
-	vectorplan.RegisterTableFunc(IVFFLATCreateFuncName, buildIvfflatCreate)
-	vectorplan.RegisterTableFunc(IVFFLATSearchFuncName, buildIvfflatSearch)
+	planplugin.RegisterTableFunc(IVFFLATCreateFuncName, buildIvfflatCreate)
+	planplugin.RegisterTableFunc(IVFFLATSearchFuncName, buildIvfflatSearch)
 }
 
 // buildIvfflatCreate constructs a FUNCTION_SCAN node for `ivf_create`.
@@ -80,7 +81,7 @@ func init() {
 //
 // IsSingle is set on the TblFunc because centroid computation requires
 // single-threaded execution. Lifted from (*QueryBuilder).buildIvfCreate.
-func buildIvfflatCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildIvfflatCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) < 2 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 2).")
 	}
@@ -117,7 +118,7 @@ func buildIvfflatCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx 
 // arg list: [param, IndexTableConfig (JSON), search_vec].
 //
 // Lifted from (*QueryBuilder).buildIvfSearch.
-func buildIvfflatSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildIvfflatSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
@@ -150,7 +151,7 @@ func buildIvfflatSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx 
 
 // getIvfflatTblFuncParams extracts the first argument (a string literal)
 // from the user's `ivf_create(...)` / `ivf_search(...)` call.
-func getIvfflatTblFuncParams(pb vectorplan.PlanBuilder, fn *tree.FuncExpr) (string, error) {
+func getIvfflatTblFuncParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}

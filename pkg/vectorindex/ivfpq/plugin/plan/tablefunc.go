@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -26,7 +27,7 @@ import (
 // invoked when the planner sees `ivfpq_create(...)` / `ivfpq_search(...)`
 // in SQL. Lifted from pkg/sql/plan/ivfpq.go (now deleted).
 //
-// The plugin's init() registers these with vectorplan.RegisterTableFunc;
+// The plugin's init() registers these with planplugin.RegisterTableFunc;
 // pkg/sql/plan/query_builder.go's table-function dispatch falls through to
 // the registry in its default arm.
 
@@ -71,15 +72,15 @@ var (
 )
 
 func init() {
-	vectorplan.RegisterTableFunc(IVFPQCreateFuncName, buildIvfpqCreate)
-	vectorplan.RegisterTableFunc(IVFPQSearchFuncName, buildIvfpqSearch)
+	planplugin.RegisterTableFunc(IVFPQCreateFuncName, buildIvfpqCreate)
+	planplugin.RegisterTableFunc(IVFPQSearchFuncName, buildIvfpqSearch)
 }
 
 // buildIvfpqCreate constructs a FUNCTION_SCAN node for `ivfpq_create`.
 // arg list: [param, ivfpq.IndexTableConfig (JSON), pkid, vec].
 //
 // Lifted from (*QueryBuilder).buildIvfpqCreate (was pkg/sql/plan/ivfpq.go).
-func buildIvfpqCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildIvfpqCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) < 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
@@ -118,7 +119,7 @@ func buildIvfpqCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx ve
 // search.
 //
 // Lifted from (*QueryBuilder).buildIvfpqSearch (was pkg/sql/plan/ivfpq.go).
-func buildIvfpqSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildIvfpqSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 && len(exprs) != 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
@@ -150,7 +151,7 @@ func buildIvfpqSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx ve
 	return pb.AppendNode(node, ctx), nil
 }
 
-func getIvfpqParams(pb vectorplan.PlanBuilder, fn *tree.FuncExpr) (string, error) {
+func getIvfpqParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -190,7 +191,7 @@ func findScanNodeByTagVisited(qry *plan.Query, nodeID, tag int32, visited map[in
 // optimized outer scan and the inner ivf_search subtree.
 //
 // Lifted from pkg/sql/plan/apply_indices_ivfflat.go:buildPkExprFromNode.
-func buildPkExprFromNode(pb vectorplan.PlanBuilder, nodeID int32, pkType plan.Type, pkName string) *plan.Expr {
+func buildPkExprFromNode(pb planplugin.PlanBuilder, nodeID int32, pkType plan.Type, pkName string) *plan.Expr {
 	qry := pb.Query()
 	if qry == nil || nodeID < 0 {
 		return nil

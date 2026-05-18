@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -35,7 +36,7 @@ import (
 //   - The composite-PK column references Cols[3] (Tag), matching the
 //     pre-lift behaviour at build_ddl.go:3034.
 func (Hooks) BuildSecondaryIndexDefs(
-	ctx vectorplan.CompilerContext,
+	ctx planplugin.CompilerContext,
 	indexInfo *tree.Index,
 	colMap map[string]*plan.ColDef,
 	existedIndexes []*plan.IndexDef,

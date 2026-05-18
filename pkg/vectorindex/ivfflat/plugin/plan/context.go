@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -30,7 +30,7 @@ import (
 // once and ApplyForSort reuses. Mirrors the pre-lift apply_indices_ivfflat
 // struct of the same name.
 type IndexContext struct {
-	VecCtx          *vectorplan.VectorSortContext
+	VecCtx          *planplugin.VectorSortContext
 	MetaDef         *plan.IndexDef
 	IdxDef          *plan.IndexDef
 	EntriesDef      *plan.IndexDef
@@ -63,7 +63,7 @@ type IndexContext struct {
 // dominates over the savings, and a full scan also guarantees 100% recall.
 //
 // Lifted from pkg/sql/plan/apply_indices_ivfflat.go:shouldUseForceMode.
-func ShouldUseForceMode(vecCtx *vectorplan.VectorSortContext) bool {
+func ShouldUseForceMode(vecCtx *planplugin.VectorSortContext) bool {
 	scanNode := vecCtx.ScanNode
 	stats := scanNode.Stats
 
@@ -109,7 +109,7 @@ func ShouldUseForceMode(vecCtx *vectorplan.VectorSortContext) bool {
 //
 // Lifted from pkg/sql/plan/apply_indices_ivfflat.go:resolveVectorSearchMode.
 func ResolveVectorSearchMode(
-	vecCtx *vectorplan.VectorSortContext,
+	vecCtx *planplugin.VectorSortContext,
 	enableVectorPrefilterByDefault bool,
 	enableVectorAutoModeByDefault bool,
 ) (mode string, isAutoMode bool, shouldDisableIndex bool) {
@@ -172,9 +172,9 @@ func CalculateAdaptiveNprobe(baseNprobe int64, stats *plan.Stats, totalLists int
 //
 // Lifted from pkg/sql/plan/apply_indices_ivfflat.go:prepareIvfIndexContext.
 func PrepareContext(
-	pb vectorplan.PlanBuilder,
-	vecCtx *vectorplan.VectorSortContext,
-	mti *vectorplan.MultiTableIndexRef,
+	pb planplugin.PlanBuilder,
+	vecCtx *planplugin.VectorSortContext,
+	mti *planplugin.MultiTableIndexRef,
 ) (*IndexContext, error) {
 	if vecCtx == nil || mti == nil {
 		return nil, nil

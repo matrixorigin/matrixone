@@ -40,7 +40,7 @@ type Hooks struct{}
 var _ planplugin.Hooks = Hooks{}
 
 // CanApply is the non-destructive probe used by detectVectorGuard.
-func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortContext, mti *vectorplan.MultiTableIndexRef) (bool, error) {
+func (Hooks) CanApply(pb planplugin.PlanBuilder, vecCtx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
 	ctx, err := PrepareContext(pb, vecCtx, mti)
 	if err != nil {
 		return false, err
@@ -55,11 +55,11 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 // opts.ColRefCnt / IdxColMap are unused by CAGRA (only IVF-FLAT's
 // auto-mode rewrite consults them).
 func (Hooks) ApplyForSort(
-	pb vectorplan.PlanBuilder,
-	vecCtx *vectorplan.VectorSortContext,
-	mti *vectorplan.MultiTableIndexRef,
+	pb planplugin.PlanBuilder,
+	vecCtx *planplugin.VectorSortContext,
+	mti *planplugin.MultiTableIndexRef,
 	nodeID int32,
-	_ vectorplan.ApplyForSortOpts,
+	_ planplugin.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -293,7 +293,7 @@ func (c *cagraIndexContext) VecLitArg() *plan.Expr { return c.vecLitArg }
 
 // PrepareContext is the lifted body of prepareCagraIndexContext
 // (was pkg/sql/plan/apply_indices_cagra.go:43).
-func PrepareContext(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortContext, mti *vectorplan.MultiTableIndexRef) (*cagraIndexContext, error) {
+func PrepareContext(pb planplugin.PlanBuilder, vecCtx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (*cagraIndexContext, error) {
 	if vecCtx == nil || mti == nil {
 		return nil, nil
 	}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -599,7 +600,7 @@ END_FULLTEXT:
 			// Shared helpers (PlanBuilder facade, deep-copy fn-vars,
 			// filter predicate JSON) live in pkg/sql/plan/vectorplan/.
 			if p, ok := vectorplugin.Get(multiTableIndex.IndexAlgo); ok {
-				opts := vectorplan.ApplyForSortOpts{
+				opts := planplugin.ApplyForSortOpts{
 					ColRefCnt: colRefCnt,
 					IdxColMap: idxColMap,
 				}

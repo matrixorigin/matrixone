@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,22 +29,22 @@ import (
 // The shims keep these tests readable; the registry lookup is the public
 // contract the dispatch at query_builder.go uses too.
 func buildIvfpqCreate(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	fn, _ := vectorplan.TableFunc("ivfpq_create")
+	fn, _ := planplugin.TableFunc("ivfpq_create")
 	return fn(b, tbl, ctx, exprs, children)
 }
 
 func buildIvfpqSearch(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	fn, _ := vectorplan.TableFunc("ivfpq_search")
+	fn, _ := planplugin.TableFunc("ivfpq_search")
 	return fn(b, tbl, ctx, exprs, children)
 }
 
 func buildCagraCreate(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	fn, _ := vectorplan.TableFunc("cagra_create")
+	fn, _ := planplugin.TableFunc("cagra_create")
 	return fn(b, tbl, ctx, exprs, children)
 }
 
 func buildCagraSearch(b *QueryBuilder, tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	fn, _ := vectorplan.TableFunc("cagra_search")
+	fn, _ := planplugin.TableFunc("cagra_search")
 	return fn(b, tbl, ctx, exprs, children)
 }
 

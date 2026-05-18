@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -32,7 +33,7 @@ import (
 // Lifted verbatim from pkg/sql/plan/build_ddl.go:2480
 // (buildIvfFlatSecondaryIndexDef, now deleted).
 func (Hooks) BuildSecondaryIndexDefs(
-	ctx vectorplan.CompilerContext,
+	ctx planplugin.CompilerContext,
 	indexInfo *tree.Index,
 	colMap map[string]*plan.ColDef,
 	existedIndexes []*plan.IndexDef,

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -43,8 +44,8 @@ func init() {
 }
 
 // vectorSearchProviderChildrenForPlugin adapts vectorSearchProviderChildren
-// (which takes *vectorSortContext) to vectorplan.VectorSortContext.
-func vectorSearchProviderChildrenForPlugin(vc *vectorplan.VectorSortContext) []int32 {
+// (which takes *vectorSortContext) to planplugin.VectorSortContext.
+func vectorSearchProviderChildrenForPlugin(vc *planplugin.VectorSortContext) []int32 {
 	if vc == nil {
 		return nil
 	}
@@ -55,21 +56,21 @@ func vectorSearchProviderChildrenForPlugin(vc *vectorplan.VectorSortContext) []i
 }
 
 // validateIncludeColumnsForPlugin adapts validateIncludeColumns to the
-// narrower vectorplan.CompilerContext the plugin uses. Dispatch always
+// narrower planplugin.CompilerContext the plugin uses. Dispatch always
 // passes a real *plan.CompilerContext, so the assertion is total at call
 // time; the second return is only for the compiler's exhaustiveness.
-func validateIncludeColumnsForPlugin(ctx vectorplan.CompilerContext,
+func validateIncludeColumnsForPlugin(ctx planplugin.CompilerContext,
 	includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef,
 	vecColName, pkeyName string) error {
 	return validateIncludeColumns(ctx.(CompilerContext), includeCols, colMap, vecColName, pkeyName)
 }
 
-// *QueryBuilder satisfies vectorplan.PlanBuilder. The compile-time
+// *QueryBuilder satisfies planplugin.PlanBuilder. The compile-time
 // assertion below catches any signature drift between the interface
-// and the concrete type — add a new method to vectorplan.PlanBuilder
+// and the concrete type — add a new method to planplugin.PlanBuilder
 // and forget to implement it (or rename it), and this line breaks the
 // build.
-var _ vectorplan.PlanBuilder = (*QueryBuilder)(nil)
+var _ planplugin.PlanBuilder = (*QueryBuilder)(nil)
 
 // Most interface methods are already defined on *QueryBuilder under
 // the same exported names (after Phase 5 renames: GenNewBindTag,
@@ -78,17 +79,17 @@ var _ vectorplan.PlanBuilder = (*QueryBuilder)(nil)
 // BindContext to the internal *BindContext, or that funnel a
 // standalone helper through a method.
 
-func (builder *QueryBuilder) AppendNode(node *plan.Node, ctx vectorplan.BindContext) int32 {
+func (builder *QueryBuilder) AppendNode(node *plan.Node, ctx planplugin.BindContext) int32 {
 	bc, _ := ctx.(*BindContext)
 	return builder.appendNode(node, bc)
 }
 
-func (builder *QueryBuilder) AddBinding(nodeID int32, alias tree.AliasClause, ctx vectorplan.BindContext) error {
+func (builder *QueryBuilder) AddBinding(nodeID int32, alias tree.AliasClause, ctx planplugin.BindContext) error {
 	bc, _ := ctx.(*BindContext)
 	return builder.addBinding(nodeID, alias, bc)
 }
 
-func (builder *QueryBuilder) CtxByNode(id int32) vectorplan.BindContext {
+func (builder *QueryBuilder) CtxByNode(id int32) planplugin.BindContext {
 	if int(id) < 0 || int(id) >= len(builder.ctxByNode) {
 		return nil
 	}
@@ -105,10 +106,10 @@ func (builder *QueryBuilder) ResolveVariable(name string, isSystemVar, isGlobalV
 }
 
 // ValidateVectorIndexSortRewrite is a thin adapter that takes the
-// exported vectorplan.VectorSortContext (mirrors the unexported
+// exported planplugin.VectorSortContext (mirrors the unexported
 // vectorSortContext used internally). Only the sortDirection field is
 // actually inspected, so the copy is cheap.
-func (builder *QueryBuilder) ValidateVectorIndexSortRewrite(vc *vectorplan.VectorSortContext) (bool, error) {
+func (builder *QueryBuilder) ValidateVectorIndexSortRewrite(vc *planplugin.VectorSortContext) (bool, error) {
 	if vc == nil {
 		return builder.validateVectorIndexSortRewrite(nil)
 	}
@@ -133,18 +134,18 @@ func (builder *QueryBuilder) ReplaceColumnsForNode(node *plan.Node, projMap map[
 	replaceColumnsForNode(node, projMap)
 }
 
-func (builder *QueryBuilder) CopyNode(ctx vectorplan.BindContext, nodeID int32) int32 {
+func (builder *QueryBuilder) CopyNode(ctx planplugin.BindContext, nodeID int32) int32 {
 	bc, _ := ctx.(*BindContext)
 	return builder.copyNode(bc, nodeID)
 }
 
 // export converts the package-private vectorSortContext into the exported
-// vectorplan.VectorSortContext that crosses the plugin boundary.
-func (v *vectorSortContext) export() *vectorplan.VectorSortContext {
+// planplugin.VectorSortContext that crosses the plugin boundary.
+func (v *vectorSortContext) export() *planplugin.VectorSortContext {
 	if v == nil {
 		return nil
 	}
-	return &vectorplan.VectorSortContext{
+	return &planplugin.VectorSortContext{
 		ProjNode:       v.projNode,
 		SortNode:       v.sortNode,
 		ScanNode:       v.scanNode,

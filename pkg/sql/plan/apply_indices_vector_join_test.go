@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/stretchr/testify/require"
@@ -456,7 +456,7 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	mti := newVectorJoinHnswIndex()
 	newNodeID, applied, err := p.Plan().ApplyForSort(
 		tc.builder, vecCtx.export(), exportMultiTableIndex(mti), tc.projNodeID,
-		vectorplan.ApplyForSortOpts{})
+		planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	require.Equal(t, tc.projNodeID, newNodeID)

@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -5459,7 +5459,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		// ivfpq_create/ivfpq_search, …) are registered there by their
 		// plugins' init() so each algorithm can own its table-function
 		// plumbing without editing this switch.
-		if b, ok := vectorplan.TableFunc(id); ok {
+		if b, ok := planplugin.TableFunc(id); ok {
 			nodeId, err = b(builder, tbl, ctx, exprs, children)
 		} else {
 			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)

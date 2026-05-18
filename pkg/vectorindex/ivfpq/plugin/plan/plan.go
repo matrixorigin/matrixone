@@ -26,15 +26,15 @@
 // Instead the plugin operates against pkg/sql/plan/vectorplan, a leaf
 // sub-package both sides import:
 //
-//	vectorplan.PlanBuilder          — interface, implemented by
+//	planplugin.PlanBuilder          — interface, implemented by
 //	                                  *plan.QueryBuilder. Carries every
 //	                                  bind-tag / node-assembly primitive
 //	                                  the lifted body needs.
-//	vectorplan.VectorSortContext    — captured ORDER BY context (exported
+//	planplugin.VectorSortContext    — captured ORDER BY context (exported
 //	                                  mirror of plan.vectorSortContext).
-//	vectorplan.MultiTableIndexRef   — exported mirror of
+//	planplugin.MultiTableIndexRef   — exported mirror of
 //	                                  plan.MultiTableIndex.
-//	vectorplan.CompilerContext      — narrow CompilerContext surface
+//	planplugin.CompilerContext      — narrow CompilerContext surface
 //	                                  (just GetContext()).
 //	vectorplan.{DeepCopyExpr,
 //	            BuildFilterPredicateJSON,
@@ -101,7 +101,7 @@ var _ planplugin.Hooks = Hooks{}
 // same true/false verdict as ApplyForSort would, but without mutating any
 // plan state. For IVF-PQ we just run PrepareContext (which is pure) and
 // report whether it produces a context.
-func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortContext, mti *vectorplan.MultiTableIndexRef) (bool, error) {
+func (Hooks) CanApply(pb planplugin.PlanBuilder, vecCtx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
 	ctx, err := PrepareContext(pb, vecCtx, mti)
 	if err != nil {
 		return false, err
@@ -140,11 +140,11 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 // Lifted from applyIndicesForSortUsingIvfpq (was at
 // pkg/sql/plan/apply_indices_ivfpq.go:124).
 func (Hooks) ApplyForSort(
-	pb vectorplan.PlanBuilder,
-	vecCtx *vectorplan.VectorSortContext,
-	mti *vectorplan.MultiTableIndexRef,
+	pb planplugin.PlanBuilder,
+	vecCtx *planplugin.VectorSortContext,
+	mti *planplugin.MultiTableIndexRef,
 	nodeID int32,
-	_ vectorplan.ApplyForSortOpts,
+	_ planplugin.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -400,7 +400,7 @@ func (c *ivfpqIndexContext) NProbe() int64         { return c.nProbe }
 func (c *ivfpqIndexContext) VecLitArg() *plan.Expr { return c.vecLitArg }
 
 // PrepareContext is the lifted body of prepareIvfpqIndexContext.
-func PrepareContext(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortContext, mti *vectorplan.MultiTableIndexRef) (*ivfpqIndexContext, error) {
+func PrepareContext(pb planplugin.PlanBuilder, vecCtx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (*ivfpqIndexContext, error) {
 	if vecCtx == nil || mti == nil {
 		return nil, nil
 	}

@@ -628,7 +628,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	require.NotNil(t, result)
 
 	// The bridge converts the test's *vectorSortContext into an
-	// exported *vectorplan.VectorSortContext before calling
+	// exported *planplugin.VectorSortContext before calling
 	// PrepareContext; compare via export() so the types line up.
 	assert.Equal(t, vecCtx.export(), result.VecCtx)
 	assert.Equal(t, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], result.MetaDef)

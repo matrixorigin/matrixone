@@ -55,7 +55,7 @@ type Hooks struct{}
 // gate scan-node protection. Should reach the same true/false verdict
 // as ApplyForSort, but without mutating any plan state. For IVF-FLAT we
 // run PrepareContext (pure) and report whether it produced a context.
-func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortContext, mti *vectorplan.MultiTableIndexRef) (bool, error) {
+func (Hooks) CanApply(pb planplugin.PlanBuilder, vecCtx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
 	ctx, err := PrepareContext(pb, vecCtx, mti)
 	if err != nil {
 		return false, err
@@ -74,11 +74,11 @@ func (Hooks) CanApply(pb vectorplan.PlanBuilder, vecCtx *vectorplan.VectorSortCo
 // Lifted verbatim from applyIndicesForSortUsingIvfflat
 // (pkg/sql/plan/apply_indices_ivfflat.go:342).
 func (Hooks) ApplyForSort(
-	pb vectorplan.PlanBuilder,
-	vecCtx *vectorplan.VectorSortContext,
-	mti *vectorplan.MultiTableIndexRef,
+	pb planplugin.PlanBuilder,
+	vecCtx *planplugin.VectorSortContext,
+	mti *planplugin.MultiTableIndexRef,
 	nodeID int32,
-	opts vectorplan.ApplyForSortOpts,
+	opts planplugin.ApplyForSortOpts,
 ) (int32, bool, error) {
 	if vecCtx == nil || vecCtx.SortNode == nil || vecCtx.ScanNode == nil {
 		return nodeID, false, nil
@@ -290,9 +290,9 @@ func (Hooks) ApplyForSort(
 // the source scan and the ivf_search function, joining on PK equality.
 // `mode != "pre"` or no remaining filters → post mode.
 func applyPostMode(
-	pb vectorplan.PlanBuilder,
+	pb planplugin.PlanBuilder,
 	ivfCtx *IndexContext,
-	ctx vectorplan.BindContext,
+	ctx planplugin.BindContext,
 	scanNode *plan.Node,
 	tableFuncNodeID, tableFuncTag int32,
 ) int32 {
@@ -338,9 +338,9 @@ func applyPostMode(
 // Returns (joinRootID, nil) on success, (-1, nil) when we should bail
 // out of the rewrite (e.g. PK extraction failed for the second scan).
 func applyPreMode(
-	pb vectorplan.PlanBuilder,
+	pb planplugin.PlanBuilder,
 	ivfCtx *IndexContext,
-	ctx vectorplan.BindContext,
+	ctx planplugin.BindContext,
 	scanNode, tableFuncNode *plan.Node,
 	tableFuncNodeID, tableFuncTag int32,
 	colRefCnt map[[2]int32]int,

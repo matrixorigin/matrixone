@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -63,12 +64,12 @@ var (
 )
 
 func init() {
-	vectorplan.RegisterTableFunc(HNSWCreateFuncName, buildHnswCreate)
-	vectorplan.RegisterTableFunc(HNSWSearchFuncName, buildHnswSearch)
+	planplugin.RegisterTableFunc(HNSWCreateFuncName, buildHnswCreate)
+	planplugin.RegisterTableFunc(HNSWSearchFuncName, buildHnswSearch)
 }
 
 // arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
-func buildHnswCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) < 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
@@ -100,7 +101,7 @@ func buildHnswCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vec
 }
 
 // arg list [param, hnsw.IndexTableConfig (JSON), search_vec]
-func buildHnswSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildHnswSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
@@ -131,7 +132,7 @@ func buildHnswSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vec
 	return pb.AppendNode(node, ctx), nil
 }
 
-func getHnswParams(pb vectorplan.PlanBuilder, fn *tree.FuncExpr) (string, error) {
+func getHnswParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}

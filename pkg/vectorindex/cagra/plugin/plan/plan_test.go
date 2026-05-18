@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/stretchr/testify/assert"
@@ -73,8 +73,8 @@ func cagraScanNode() *pbplan.Node {
 	}
 }
 
-func cagraVecCtx(scanNode *pbplan.Node) *vectorplan.VectorSortContext {
-	return &vectorplan.VectorSortContext{
+func cagraVecCtx(scanNode *pbplan.Node) *planplugin.VectorSortContext {
+	return &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{
 			Func: &pbplan.ObjectRef{ObjName: "l2_distance"},
 			Args: []*pbplan.Expr{
@@ -92,8 +92,8 @@ func cagraVecCtx(scanNode *pbplan.Node) *vectorplan.VectorSortContext {
 	}
 }
 
-func cagraMTI(algoParams string) *vectorplan.MultiTableIndexRef {
-	return &vectorplan.MultiTableIndexRef{
+func cagraMTI(algoParams string) *planplugin.MultiTableIndexRef {
+	return &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: {
 				IndexAlgoParams: algoParams,
@@ -115,51 +115,51 @@ func newBuilder(t *testing.T) *sqlplan.QueryBuilder {
 
 func TestPrepareCagraIndexContext_NilVecCtx(t *testing.T) {
 	b := newBuilder(t)
-	r, err := cagraplan.PrepareContext(b, nil, &vectorplan.MultiTableIndexRef{})
+	r, err := cagraplan.PrepareContext(b, nil, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_NilMultiTableIndex(t *testing.T) {
 	b := newBuilder(t)
-	r, err := cagraplan.PrepareContext(b, &vectorplan.VectorSortContext{}, nil)
+	r, err := cagraplan.PrepareContext(b, &planplugin.VectorSortContext{}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_NilDistFnExpr(t *testing.T) {
 	b := newBuilder(t)
-	r, err := cagraplan.PrepareContext(b, &vectorplan.VectorSortContext{DistFnExpr: nil}, &vectorplan.MultiTableIndexRef{})
+	r, err := cagraplan.PrepareContext(b, &planplugin.VectorSortContext{DistFnExpr: nil}, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_ForceMode(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}},
 		RankOption: &pbplan.RankOption{Mode: "force"},
 	}
-	r, err := cagraplan.PrepareContext(b, v, &vectorplan.MultiTableIndexRef{})
+	r, err := cagraplan.PrepareContext(b, v, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_DescBlocksRewrite(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr:    &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}},
 		SortDirection: pbplan.OrderBySpec_DESC,
 	}
-	r, err := cagraplan.PrepareContext(b, v, &vectorplan.MultiTableIndexRef{})
+	r, err := cagraplan.PrepareContext(b, v, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareCagraIndexContext_NilMetaDef(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
-	mti := &vectorplan.MultiTableIndexRef{
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	mti := &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: nil,
 			catalog.Cagra_TblType_Storage:  {},
@@ -172,8 +172,8 @@ func TestPrepareCagraIndexContext_NilMetaDef(t *testing.T) {
 
 func TestPrepareCagraIndexContext_NilIdxDef(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
-	mti := &vectorplan.MultiTableIndexRef{
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	mti := &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: {},
 			catalog.Cagra_TblType_Storage:  nil,
@@ -186,7 +186,7 @@ func TestPrepareCagraIndexContext_NilIdxDef(t *testing.T) {
 
 func TestPrepareCagraIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI("not valid json")
 	r, err := cagraplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -195,7 +195,7 @@ func TestPrepareCagraIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 
 func TestPrepareCagraIndexContext_OpTypeMismatch(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI(`{"op_type": "vector_cosine_ops"}`)
 	r, err := cagraplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -206,7 +206,7 @@ func TestPrepareCagraIndexContext_OpTypeMismatch(t *testing.T) {
 // returns (nil, nil).
 func TestPrepareCagraIndexContext_OpTypeNotString(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := cagraMTI(`{"op_type": 123}`)
 	r, err := cagraplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -216,7 +216,7 @@ func TestPrepareCagraIndexContext_OpTypeNotString(t *testing.T) {
 func TestPrepareCagraIndexContext_ArgsNotFound(t *testing.T) {
 	b := newBuilder(t)
 	scan := cagraScanNode()
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{
 			Func: &pbplan.ObjectRef{ObjName: "l2_distance"},
 			Args: []*pbplan.Expr{
@@ -308,17 +308,17 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 func TestApplyIndicesForSortUsingCagra_NilGuards(t *testing.T) {
 	b := newBuilder(t)
 
-	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, nil, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, nil, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{SortNode: &pbplan.Node{}}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err = cagraplan.Hooks{}.ApplyForSort(b, &planplugin.VectorSortContext{SortNode: &pbplan.Node{}}, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
@@ -331,7 +331,7 @@ func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
 	v.SortNode = &pbplan.Node{}
 	v.RankOption = &pbplan.RankOption{Mode: "force"}
 
-	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, v, &vectorplan.MultiTableIndexRef{}, 0, vectorplan.ApplyForSortOpts{})
+	got, applied, err := cagraplan.Hooks{}.ApplyForSort(b, v, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(0), got)
@@ -379,7 +379,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 			{Typ: vecTyp, Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
 		},
 	}
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode: scanNode,
 		SortNode: &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode: &pbplan.Node{
@@ -398,7 +398,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 		RankOption: &pbplan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexCagraAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: {
@@ -413,7 +413,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -543,7 +543,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		},
 	}
 
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode:   scanNode,
 		SortNode:   &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode:   projNode,
@@ -558,7 +558,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "included_columns":"price"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexCagraAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: {
@@ -573,7 +573,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -632,7 +632,7 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 			{Typ: vecTyp, Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
 		},
 	}
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode: scanNode,
 		SortNode: &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode: &pbplan.Node{
@@ -651,7 +651,7 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 		RankOption: &pbplan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexCagraAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Cagra_TblType_Metadata: {
@@ -666,7 +666,7 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := cagraplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 }

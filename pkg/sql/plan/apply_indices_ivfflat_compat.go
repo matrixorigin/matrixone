@@ -16,7 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 )
 
@@ -46,19 +46,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		exportVectorSortContextForBridge(vecCtx),
 		exportMultiTableIndexForBridge(multiTableIndex),
 		nodeID,
-		vectorplan.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap},
+		planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap},
 	)
 	return newNodeID, err
 }
 
-func exportVectorSortContextForBridge(v *vectorSortContext) *vectorplan.VectorSortContext {
+func exportVectorSortContextForBridge(v *vectorSortContext) *planplugin.VectorSortContext {
 	if v == nil {
 		return nil
 	}
 	return v.export()
 }
 
-func exportMultiTableIndexForBridge(m *MultiTableIndex) *vectorplan.MultiTableIndexRef {
+func exportMultiTableIndexForBridge(m *MultiTableIndex) *planplugin.MultiTableIndexRef {
 	if m == nil {
 		return nil
 	}

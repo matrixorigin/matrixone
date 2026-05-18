@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/stretchr/testify/assert"
@@ -73,8 +73,8 @@ func ivfpqScanNode() *pbplan.Node {
 	}
 }
 
-func ivfpqVecCtx(scanNode *pbplan.Node) *vectorplan.VectorSortContext {
-	return &vectorplan.VectorSortContext{
+func ivfpqVecCtx(scanNode *pbplan.Node) *planplugin.VectorSortContext {
+	return &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{
 			Func: &pbplan.ObjectRef{ObjName: "l2_distance"},
 			Args: []*pbplan.Expr{
@@ -92,8 +92,8 @@ func ivfpqVecCtx(scanNode *pbplan.Node) *vectorplan.VectorSortContext {
 	}
 }
 
-func ivfpqMTI(algoParams string) *vectorplan.MultiTableIndexRef {
-	return &vectorplan.MultiTableIndexRef{
+func ivfpqMTI(algoParams string) *planplugin.MultiTableIndexRef {
+	return &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: {
 				IndexAlgoParams: algoParams,
@@ -115,51 +115,51 @@ func newBuilder(t *testing.T) *sqlplan.QueryBuilder {
 
 func TestPrepareIvfpqIndexContext_NilVecCtx(t *testing.T) {
 	b := newBuilder(t)
-	r, err := ivfpqplan.PrepareContext(b, nil, &vectorplan.MultiTableIndexRef{})
+	r, err := ivfpqplan.PrepareContext(b, nil, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_NilMultiTableIndex(t *testing.T) {
 	b := newBuilder(t)
-	r, err := ivfpqplan.PrepareContext(b, &vectorplan.VectorSortContext{}, nil)
+	r, err := ivfpqplan.PrepareContext(b, &planplugin.VectorSortContext{}, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_NilDistFnExpr(t *testing.T) {
 	b := newBuilder(t)
-	r, err := ivfpqplan.PrepareContext(b, &vectorplan.VectorSortContext{DistFnExpr: nil}, &vectorplan.MultiTableIndexRef{})
+	r, err := ivfpqplan.PrepareContext(b, &planplugin.VectorSortContext{DistFnExpr: nil}, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_ForceMode(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}},
 		RankOption: &pbplan.RankOption{Mode: "force"},
 	}
-	r, err := ivfpqplan.PrepareContext(b, v, &vectorplan.MultiTableIndexRef{})
+	r, err := ivfpqplan.PrepareContext(b, v, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_DescBlocksRewrite(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr:    &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}},
 		SortDirection: pbplan.OrderBySpec_DESC,
 	}
-	r, err := ivfpqplan.PrepareContext(b, v, &vectorplan.MultiTableIndexRef{})
+	r, err := ivfpqplan.PrepareContext(b, v, &planplugin.MultiTableIndexRef{})
 	assert.NoError(t, err)
 	assert.Nil(t, r)
 }
 
 func TestPrepareIvfpqIndexContext_NilMetaDef(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
-	mti := &vectorplan.MultiTableIndexRef{
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	mti := &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: nil,
 			catalog.Ivfpq_TblType_Storage:  {},
@@ -172,8 +172,8 @@ func TestPrepareIvfpqIndexContext_NilMetaDef(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_NilIdxDef(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
-	mti := &vectorplan.MultiTableIndexRef{
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	mti := &planplugin.MultiTableIndexRef{
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: {},
 			catalog.Ivfpq_TblType_Storage:  nil,
@@ -186,7 +186,7 @@ func TestPrepareIvfpqIndexContext_NilIdxDef(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI("not valid json")
 	r, err := ivfpqplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -195,7 +195,7 @@ func TestPrepareIvfpqIndexContext_InvalidAlgoParamsJSON(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_OpTypeMismatch(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI(`{"op_type": "vector_cosine_ops"}`)
 	r, err := ivfpqplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -206,7 +206,7 @@ func TestPrepareIvfpqIndexContext_OpTypeMismatch(t *testing.T) {
 // returns (nil, nil).
 func TestPrepareIvfpqIndexContext_OpTypeNotString(t *testing.T) {
 	b := newBuilder(t)
-	v := &vectorplan.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
+	v := &planplugin.VectorSortContext{DistFnExpr: &pbplan.Function{Func: &pbplan.ObjectRef{ObjName: "l2_distance"}}}
 	mti := ivfpqMTI(`{"op_type": 123}`)
 	r, err := ivfpqplan.PrepareContext(b, v, mti)
 	assert.NoError(t, err)
@@ -216,7 +216,7 @@ func TestPrepareIvfpqIndexContext_OpTypeNotString(t *testing.T) {
 func TestPrepareIvfpqIndexContext_ArgsNotFound(t *testing.T) {
 	b := newBuilder(t)
 	scan := ivfpqScanNode()
-	v := &vectorplan.VectorSortContext{
+	v := &planplugin.VectorSortContext{
 		DistFnExpr: &pbplan.Function{
 			Func: &pbplan.ObjectRef{ObjName: "l2_distance"},
 			Args: []*pbplan.Expr{
@@ -331,17 +331,17 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 func TestApplyIndicesForSortUsingIvfpq_NilGuards(t *testing.T) {
 	b := newBuilder(t)
 
-	got, applied, err := ivfpqplan.Hooks{}.ApplyForSort(b, nil, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err := ivfpqplan.Hooks{}.ApplyForSort(b, nil, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = ivfpqplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err = ivfpqplan.Hooks{}.ApplyForSort(b, &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
 
-	got, applied, err = ivfpqplan.Hooks{}.ApplyForSort(b, &vectorplan.VectorSortContext{SortNode: &pbplan.Node{}}, &vectorplan.MultiTableIndexRef{}, 7, vectorplan.ApplyForSortOpts{})
+	got, applied, err = ivfpqplan.Hooks{}.ApplyForSort(b, &planplugin.VectorSortContext{SortNode: &pbplan.Node{}}, &planplugin.MultiTableIndexRef{}, 7, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(7), got)
@@ -354,7 +354,7 @@ func TestApplyIndicesForSortUsingIvfpq_PrepareReturnsNil(t *testing.T) {
 	v.SortNode = &pbplan.Node{}
 	v.RankOption = &pbplan.RankOption{Mode: "force"}
 
-	got, applied, err := ivfpqplan.Hooks{}.ApplyForSort(b, v, &vectorplan.MultiTableIndexRef{}, 0, vectorplan.ApplyForSortOpts{})
+	got, applied, err := ivfpqplan.Hooks{}.ApplyForSort(b, v, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 	assert.NoError(t, err)
 	assert.False(t, applied)
 	assert.Equal(t, int32(0), got)
@@ -404,7 +404,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 			{Typ: vecTyp, Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
 		},
 	}
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode: scanNode,
 		SortNode: &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode: &pbplan.Node{
@@ -423,7 +423,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		RankOption: &pbplan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: {
@@ -438,7 +438,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		},
 	}
 
-	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -570,7 +570,7 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 		},
 	}
 
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode:   scanNode,
 		SortNode:   &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode:   projNode,
@@ -585,7 +585,7 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "included_columns":"price"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: {
@@ -600,7 +600,7 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -661,7 +661,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 			{Typ: vecTyp, Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_VecVal{VecVal: "[1,1,1]"}}}},
 		},
 	}
-	vecCtx := &vectorplan.VectorSortContext{
+	vecCtx := &planplugin.VectorSortContext{
 		ScanNode: scanNode,
 		SortNode: &pbplan.Node{NodeType: pbplan.Node_SORT, Offset: &pbplan.Expr{}},
 		ProjNode: &pbplan.Node{
@@ -680,7 +680,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 		RankOption: &pbplan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
-	mti := &vectorplan.MultiTableIndexRef{
+	mti := &planplugin.MultiTableIndexRef{
 		IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString(),
 		IndexDefs: map[string]*pbplan.IndexDef{
 			catalog.Ivfpq_TblType_Metadata: {
@@ -695,7 +695,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, vectorplan.ApplyForSortOpts{})
+	_, applied, err := ivfpqplan.Hooks{}.ApplyForSort(builder, vecCtx, mti, scanNodeID, planplugin.ApplyForSortOpts{})
 	require.NoError(t, err)
 	require.True(t, applied)
 }

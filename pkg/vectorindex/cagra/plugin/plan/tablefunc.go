@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
@@ -64,11 +65,11 @@ var (
 )
 
 func init() {
-	vectorplan.RegisterTableFunc(CAGRACreateFuncName, buildCagraCreate)
-	vectorplan.RegisterTableFunc(CAGRASearchFuncName, buildCagraSearch)
+	planplugin.RegisterTableFunc(CAGRACreateFuncName, buildCagraCreate)
+	planplugin.RegisterTableFunc(CAGRASearchFuncName, buildCagraSearch)
 }
 
-func buildCagraCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildCagraCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) < 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
@@ -100,7 +101,7 @@ func buildCagraCreate(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx ve
 	return pb.AppendNode(node, ctx), nil
 }
 
-func buildCagraSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx vectorplan.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildCagraSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) != 3 && len(exprs) != 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
@@ -131,7 +132,7 @@ func buildCagraSearch(pb vectorplan.PlanBuilder, tbl *tree.TableFunction, ctx ve
 	return pb.AppendNode(node, ctx), nil
 }
 
-func getCagraParams(pb vectorplan.PlanBuilder, fn *tree.FuncExpr) (string, error) {
+func getCagraParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}

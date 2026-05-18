@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorplan
+package plan
 
 import (
 	"sync"
@@ -42,7 +42,7 @@ func RegisterTableFunc(name string, b TableFuncBuilder) {
 	tableFuncMu.Lock()
 	defer tableFuncMu.Unlock()
 	if _, ok := tableFuncs[name]; ok {
-		panic("vectorplan: duplicate RegisterTableFunc for " + name)
+		panic("planplugin: duplicate RegisterTableFunc for " + name)
 	}
 	tableFuncs[name] = b
 }
