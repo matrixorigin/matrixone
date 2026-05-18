@@ -474,3 +474,64 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.True(t, leftJoinFound, "REPLACE on table with unique secondary index should use legacy LEFT JOIN path")
 	require.True(t, leftJoinHasOr, "LEFT JOIN ON clause should combine PK and UK equality with OR")
 }
+
+// TestBindReplaceWithCompositeUniqueIndex verifies that for tables with a
+// composite unique secondary index the planner generates an AND-chain for the
+// UK parts inside the OR-combined LEFT JOIN ON clause.
+func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "replace into constraint_test.dept_composite_uk(dname, loc) values ('SALES', 'CHICAGO')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Replace)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "dept_composite_uk", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+	)
+	require.NoError(t, err)
+
+	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+	)
+	require.NoError(t, err)
+	require.NotZero(t, rootID)
+
+	// The LEFT JOIN ON clause should be: pk_match OR (dname_match AND loc_match).
+	// Verify that the OR node contains an AND child (the composite UK condition).
+	leftJoinFound := false
+	orHasAndChild := false
+	for _, n := range builder.qry.Nodes {
+		if n.NodeType != planpb.Node_JOIN || n.JoinType != planpb.Node_LEFT {
+			continue
+		}
+		leftJoinFound = true
+		for _, cond := range n.OnList {
+			f := cond.GetF()
+			if f == nil || f.Func == nil || f.Func.ObjName != "or" {
+				continue
+			}
+			for _, arg := range f.Args {
+				if af := arg.GetF(); af != nil && af.Func != nil && af.Func.ObjName == "and" {
+					orHasAndChild = true
+				}
+			}
+		}
+		if orHasAndChild {
+			break
+		}
+	}
+	require.True(t, leftJoinFound, "REPLACE on table with composite unique index should use LEFT JOIN path")
+	require.True(t, orHasAndChild, "OR clause should contain an AND child for composite UK parts")
+}
