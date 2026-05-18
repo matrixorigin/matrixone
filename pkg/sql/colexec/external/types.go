@@ -262,6 +262,7 @@ type ParquetHandler struct {
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	allowRepetition    bool
 
 	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 }
