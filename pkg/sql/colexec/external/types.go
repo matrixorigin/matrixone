@@ -244,11 +244,14 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 }
 
 type ParquetHandler struct {
-	file     *parquet.File
-	offset   int64
-	batchCnt int64
-	cols     []*parquet.Column
-	mappers  []*columnMapper
+	file        *parquet.File
+	offset      int64
+	batchCnt    int64
+	cols        []*parquet.Column
+	mappers     []*columnMapper
+	pages       []parquet.Pages
+	currentPage []parquet.Page
+	pageOffset  []int64
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices []int

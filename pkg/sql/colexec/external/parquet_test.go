@@ -1140,7 +1140,7 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 	}
 
 	var h ParquetHandler
-	err := h.openFile(param)
+	err := h.openFile(param, false)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
 }
@@ -1274,6 +1274,46 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 		got = append(got, vals[:bat.RowCount()]...)
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
+	require.True(t, param.Fileparam.End)
+}
+
+func TestParquet_ScanParquetFile_CountStarNoAttrs(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 2
+	defer func() { maxParquetBatchCnt = save }()
+
+	var buf bytes.Buffer
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+	w := parquet.NewWriter(&buf, schema)
+	values := make([]parquet.Value, page.NumRows())
+	_, _ = page.Values().ReadValues(values)
+	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(values)})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}, ExParam: tree.ExParam{}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+
+	var total int
+	for attempts := 0; attempts < 5 && !param.Fileparam.End; attempts++ {
+		bat := batch.NewWithSize(0)
+		require.NoError(t, scanParquetFile(context.Background(), param, proc, bat))
+		require.LessOrEqual(t, bat.RowCount(), int(maxParquetBatchCnt))
+		total += bat.RowCount()
+	}
+	require.Equal(t, 3, total)
 	require.True(t, param.Fileparam.End)
 }
 
@@ -1639,14 +1679,11 @@ func Test_getData_FinishAndOffset(t *testing.T) {
 	require.NoError(t, h.getData(bat, param, proc))
 	require.Equal(t, 1, bat.RowCount())
 	require.NotNil(t, param.parqh)
-	// Second call -> last row, handler keeps offset until the following EOF.
+	// Second call -> last row and the handler can finish immediately without
+	// requiring another empty read to hit EOF.
 	bat2 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
 	require.NoError(t, h.getData(bat2, param, proc))
 	require.Equal(t, 1, bat2.RowCount())
-	require.NotNil(t, param.parqh)
-
-	bat3 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
-	require.NoError(t, h.getData(bat3, param, proc))
-	require.Equal(t, 0, bat3.RowCount())
 	require.Nil(t, param.parqh)
+	require.True(t, param.Fileparam.End)
 }

@@ -56,17 +56,8 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		}
 	}
 
-	o := param.parqh.offset
-	for _, g := range param.parqh.file.RowGroups() {
-		n := g.NumRows()
-		if o >= n {
-			o -= n
-			continue
-		}
-		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
-	}
-
 	h := param.parqh
+	h.batchCnt = maxParquetBatchCnt
 	if err := h.getData(bat, param, proc); err != nil {
 		return err
 	}
@@ -85,14 +76,14 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	return nil
 }
 
-var maxParquetBatchCnt int64 = 1000
+var maxParquetBatchCnt int64 = 100000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
 		batchCnt:         maxParquetBatchCnt,
 		filepathColIndex: -1,
 	}
-	err := h.openFile(param)
+	err := h.openFile(param, hasPhysicalParquetAttrs(param))
 	if err != nil {
 		return nil, err
 	}
@@ -105,11 +96,34 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	return &h, nil
 }
 
-func (h *ParquetHandler) openFile(param *ExternalParam) error {
+func hasPhysicalParquetAttrs(param *ExternalParam) bool {
+	for _, attr := range param.Attrs {
+		colIdx := int(attr.ColIndex)
+		if colIdx < 0 || colIdx >= len(param.Cols) {
+			return true
+		}
+		if param.Cols[colIdx].Hidden {
+			continue
+		}
+		if param.isHivePartitionCol(attr.ColName) {
+			continue
+		}
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	var r io.ReaderAt
+	var fileSize int64
 	switch {
 	case param.Extern.ScanType == tree.INLINE:
-		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
+		data := util.UnsafeStringToBytes(param.Extern.Data)
+		r = bytes.NewReader(data)
+		fileSize = int64(len(data))
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
@@ -117,14 +131,38 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 		if err != nil {
 			return err
 		}
-		r = &fsReaderAt{
-			fs:       fs,
-			readPath: readPath,
-			ctx:      param.Ctx,
+		if param.Fileparam.FileIndex <= 0 || param.Fileparam.FileIndex > len(param.FileSize) {
+			return moerr.NewInternalErrorf(param.Ctx, "invalid FileIndex %d for FileSize length %d",
+				param.Fileparam.FileIndex, len(param.FileSize))
+		}
+		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
+
+		if param.Extern.ScanType == tree.S3 && prefetchS3 {
+			data := make([]byte, fileSize)
+			vec := fileservice.IOVector{
+				FilePath: readPath,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   fileSize,
+						Data:   data,
+					},
+				},
+			}
+			if err := fs.Read(param.Ctx, &vec); err != nil {
+				return err
+			}
+			r = bytes.NewReader(data)
+		} else {
+			r = &fsReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      param.Ctx,
+			}
 		}
 	}
 	var err error
-	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	h.file, err = parquet.OpenFile(r, fileSize)
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
@@ -160,6 +198,9 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Cols))
 	h.mappers = make([]*columnMapper, len(param.Cols))
+	h.pages = make([]parquet.Pages, len(param.Cols))
+	h.currentPage = make([]parquet.Page, len(param.Cols))
+	h.pageOffset = make([]int64, len(param.Cols))
 	for _, attr := range param.Attrs {
 		colIdx := int(attr.ColIndex)
 		if colIdx < 0 || colIdx >= len(param.Cols) {
@@ -215,9 +256,10 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[colIdx] = physicalCol
 		h.mappers[colIdx] = fn
+		h.pages[colIdx] = physicalCol.Pages()
 	}
 
-	if !h.hasPhysicalCol && (len(h.partitionColIndices) > 0 || h.filepathColIndex >= 0) {
+	if !h.hasPhysicalCol {
 		h.rowCountOnly = true
 	}
 
@@ -422,6 +464,21 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		if !isParquetIntegerSource(st, true) {
 			break
 		}
+		if st.Kind() == parquet.Int32 && isPlainOrSignedIntegerLogical(st) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				if dict := page.Dictionary(); dict != nil {
+					dictData := dict.Page().Data()
+					dictValues := dictData.Int32()
+					indices := data.Int32()
+					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
+						return dictValues[int(idx)]
+					})
+				}
+				return copyPageToVec(mp, page, proc, vec, data.Int32())
+			}
+			break
+		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
 				if st.Kind() == parquet.Int32 {
@@ -487,6 +544,43 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	case types.T_float64:
 		if !isParquetFloatConvertibleSource(st) {
 			break
+		}
+		if st.LogicalType() == nil {
+			switch st.Kind() {
+			case parquet.Double:
+				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					data := page.Data()
+					if dict := page.Dictionary(); dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Double()
+						indices := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+							return dictValues[int(idx)]
+						})
+					}
+					return copyPageToVec(mp, page, proc, vec, data.Double())
+				}
+				break
+			case parquet.Float:
+				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					data := page.Data()
+					if dict := page.Dictionary(); dict != nil {
+						dictData := dict.Page().Data()
+						dictValues := dictData.Float()
+						indices := data.Int32()
+						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
+							return float64(dictValues[int(idx)])
+						})
+					}
+					return copyPageToVecMap(mp, page, proc, vec, data.Float(), func(v float32) float64 {
+						return float64(v)
+					})
+				}
+				break
+			}
+			if mp.mapper != nil {
+				break
+			}
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, float64(0), func(v parquet.Value) (float64, error) {
@@ -1362,6 +1456,11 @@ func isParquetIntegerSource(st parquet.Type, includeBoolean bool) bool {
 	}
 }
 
+func isPlainOrSignedIntegerLogical(st parquet.Type) bool {
+	lt := st.LogicalType()
+	return lt == nil || (lt.Integer != nil && lt.Integer.IsSigned)
+}
+
 func isParquetFloatConvertibleSource(st parquet.Type) bool {
 	switch st.Kind() {
 	case parquet.Int32, parquet.Int64:
@@ -2060,23 +2159,30 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		}
 
 		vec := bat.Vecs[colIdx]
-		pages := col.Pages()
+		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := h.offset
 	L:
 		for n > 0 {
-			page, err := pages.ReadPage()
-			switch {
-			case errors.Is(err, io.EOF):
-				finish = true
-				break L
-			case err != nil:
-				return moerr.ConvertGoError(param.Ctx, err)
+			page := h.currentPage[colIdx]
+			if page == nil {
+				var err error
+				page, err = pages.ReadPage()
+				switch {
+				case errors.Is(err, io.EOF):
+					finish = true
+					break L
+				case err != nil:
+					return moerr.ConvertGoError(param.Ctx, err)
+				}
+				h.currentPage[colIdx] = page
+				h.pageOffset[colIdx] = 0
 			}
 
 			nr := page.NumRows()
-			if nr < o {
-				o -= nr
+			pageOff := h.pageOffset[colIdx]
+			if nr <= pageOff {
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
 				continue
 			}
 
@@ -2084,36 +2190,60 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 
-			if o > 0 || o+n < nr {
-				page = page.Slice(o, min(n+o, nr))
+			toRead := min(n, nr-pageOff)
+			readPage := page
+			if pageOff > 0 || toRead < nr {
+				readPage = page.Slice(pageOff, pageOff+toRead)
 			}
-			o = 0
-			n -= page.NumRows()
+			h.pageOffset[colIdx] = pageOff + toRead
+			n -= toRead
 
-			err = h.mappers[colIdx].mapping(page, proc, vec)
+			if h.pageOffset[colIdx] >= nr {
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+			}
+
+			err := h.mappers[colIdx].mapping(readPage, proc, vec)
 			if err != nil {
 				return err
 			}
-		}
-		err := pages.Close()
-		if err != nil {
-			return moerr.ConvertGoError(param.Ctx, err)
 		}
 		length = vec.Length()
 	}
 
 	bat.SetRowCount(length)
 
+	h.offset += int64(length)
+	if h.file != nil && h.offset >= h.file.NumRows() {
+		finish = true
+	}
+
 	if finish {
+		if err := h.closePages(param.Ctx); err != nil {
+			return err
+		}
 		param.parqh = nil
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
 		}
-	} else {
-		h.offset += int64(length)
 	}
 
+	return nil
+}
+
+func (h *ParquetHandler) closePages(ctx context.Context) error {
+	for i, pages := range h.pages {
+		if pages == nil {
+			continue
+		}
+		if err := pages.Close(); err != nil {
+			return moerr.ConvertGoError(ctx, err)
+		}
+		h.pages[i] = nil
+		h.currentPage[i] = nil
+		h.pageOffset[i] = 0
+	}
 	return nil
 }
 
