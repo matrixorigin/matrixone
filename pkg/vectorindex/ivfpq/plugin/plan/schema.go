@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 )
 
 // BuildSecondaryIndexDefs runs during plan-tree construction for
@@ -248,4 +248,17 @@ func (Hooks) BuildSecondaryIndexDefs(
 		})
 	}
 	return indexDefs, tableDefs, nil
+}
+
+// BuildFullTextIndexDefs is unreachable for ivfpq — the plan-build
+// dispatch only routes *tree.FullTextIndex parse trees to the fulltext
+// plugin. Returning an error here makes any misrouting visible.
+func (Hooks) BuildFullTextIndexDefs(
+	_ planplugin.CompilerContext,
+	_ *tree.FullTextIndex,
+	_ map[string]*plan.ColDef,
+	_ []*plan.IndexDef,
+	_ string,
+) ([]*plan.IndexDef, []*plan.TableDef, error) {
+	return nil, nil, moerr.NewNotSupportedNoCtx("ivfpq plugin does not build fulltext indexes")
 }

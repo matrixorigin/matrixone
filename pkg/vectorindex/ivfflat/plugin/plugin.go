@@ -28,16 +28,16 @@
 // # Phases 4b–4g (remaining)
 //
 //   - 4b: collapse the inline `else if catalog.IsIvfIndexAlgo(...)`
-//         fallbacks in pkg/sql/compile/iscp_util.go and other dispatch
-//         sites — they're dead once the plugin is registered. Defer
-//         until 4c lands so registration is safe.
+//     fallbacks in pkg/sql/compile/iscp_util.go and other dispatch
+//     sites — they're dead once the plugin is registered. Defer
+//     until 4c lands so registration is safe.
 //   - 4c: lift compile DDL (handleVectorIvfFlatIndex + 5 helpers).
 //   - 4d: lift buildIvfFlatSecondaryIndexDef.
 //   - 4e: lift apply_indices_ivfflat.go (auto/pre/post mode, two-scan).
 //   - 4f: lift DML sync (appendPreInsertSkVectorPlan + DELETE arms).
 //   - 4g: lift IVF-FLAT case of indexParamsToMap + ivfflat.go
-//         table-function builders. Add init() registration once 4c–4f
-//         are complete (uncomment the `func init()` block below).
+//     table-function builders. Add init() registration once 4c–4f
+//     are complete (uncomment the `func init()` block below).
 package plugin
 
 import (

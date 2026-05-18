@@ -118,9 +118,22 @@ type PlanBuilder interface {
 // Hooks bundles the plan-layer callbacks each plugin must implement.
 type Hooks interface {
 	// BuildSecondaryIndexDefs constructs the IndexDef and TableDef list
-	// for this algorithm's hidden tables. Body lives in the plugin's
-	// schema.go.
+	// for this algorithm's hidden tables, when invoked from a
+	// `CREATE INDEX ... USING <algo>` statement that parses to
+	// *tree.Index. Body lives in the plugin's schema.go.
+	//
+	// The fulltext plugin returns an error from this method — it
+	// receives its parse tree via BuildFullTextIndexDefs instead.
 	BuildSecondaryIndexDefs(ctx CompilerContext, idx *tree.Index,
+		colMap map[string]*plan.ColDef, existedIndexes []*plan.IndexDef,
+		pkeyName string) ([]*plan.IndexDef, []*plan.TableDef, error)
+
+	// BuildFullTextIndexDefs is the parallel builder for fulltext
+	// indexes, which parse to *tree.FullTextIndex (a distinct AST
+	// node from *tree.Index). Vector plugins return a "not a fulltext
+	// index" error from this method; only the fulltext plugin's
+	// implementation is reachable in practice.
+	BuildFullTextIndexDefs(ctx CompilerContext, idx *tree.FullTextIndex,
 		colMap map[string]*plan.ColDef, existedIndexes []*plan.IndexDef,
 		pkeyName string) ([]*plan.IndexDef, []*plan.TableDef, error)
 

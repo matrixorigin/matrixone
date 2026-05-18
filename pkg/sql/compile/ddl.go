@@ -785,12 +785,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 					// 3. Master index
 					err = s.handleMasterIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
-					// 3. FullText index
-					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && vectorplugin.IsVectorIndexAlgo(indexDef.IndexAlgo) {
-					// 4. Plugin-registered vector indexes are aggregated
-					// and handled later by the per-plugin compile hook.
+				} else if !indexDef.Unique && vectorplugin.IsPluginAlgo(indexDef.IndexAlgo) {
+					// 4. Plugin-registered indexes (vector + fulltext)
+					// are aggregated and handled later by the per-plugin
+					// compile hook.
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -2214,9 +2212,10 @@ func (s *Scope) doCreateIndex(
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
-		} else if !indexDef.Unique && vectorplugin.IsVectorIndexAlgo(indexAlgo) {
-			// 4. Vector indexes are aggregated and handled later by
-			// their plugin's HandleCreateIndex.
+		} else if !indexDef.Unique && vectorplugin.IsPluginAlgo(indexAlgo) {
+			// 4. Plugin-registered indexes (vector + fulltext) are
+			// aggregated and handled later by the per-plugin
+			// HandleCreateIndex hook.
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -2224,9 +2223,6 @@ func (s *Scope) doCreateIndex(
 				}
 			}
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
-		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
-			// 5. FullText index
-			err = s.handleFullTextIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		}
 		if err != nil {
 			return err

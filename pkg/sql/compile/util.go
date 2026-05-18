@@ -109,11 +109,6 @@ var (
 	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
 )
 
-var (
-	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
-)
-
-
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
 	// insert data into index table
@@ -525,31 +520,6 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 	return cstrDef
 }
 
-func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) ([]string, error) {
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-	params := indexDef.IndexAlgoParams
-	tblname := indexDef.IndexTableName
-
-	parts := make([]string, 0, len(indexDef.Parts))
-	for _, p := range indexDef.Parts {
-		parts = append(parts, src_alias+"."+p)
-	}
-
-	concat := strings.Join(parts, ",")
-
-	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
-		qryDatabase, tblname,
-		qryDatabase, originalTableDef.Name,
-		src_alias,
-		params,
-		pkColName,
-		concat)
-
-	return []string{sql}, nil
-}
-
-
 // filterColumnsFromParams reads the comma-joined "included_columns" entry
 // stashed in the index algo-params JSON and returns ", src.col1, src.col2, …"
 // — a suffix suitable for appending to the positional arg list of
@@ -580,5 +550,3 @@ func filterColumnsFromParams(indexAlgoParams, srcAlias string) string {
 	}
 	return sb.String()
 }
-
-

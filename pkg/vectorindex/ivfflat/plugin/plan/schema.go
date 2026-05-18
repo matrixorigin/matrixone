@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 )
 
 // BuildSecondaryIndexDefs builds the three hidden tables IVF-FLAT needs:
@@ -129,15 +129,15 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, err
 		}
 		tableDefs[1].Cols[0] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
 		tableDefs[1].Cols[1] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
 		tableDefs[1].Cols[2] = &plan.ColDef{
@@ -189,15 +189,15 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, err
 		}
 		tableDefs[2].Cols[0] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
 		tableDefs[2].Cols[1] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-			Alg:  plan.CompressType_Lz4,
-			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
 		tableDefs[2].Cols[2] = &plan.ColDef{
@@ -246,4 +246,17 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 
 	return indexDefs, tableDefs, nil
+}
+
+// BuildFullTextIndexDefs is unreachable for ivfflat — the plan-build
+// dispatch only routes *tree.FullTextIndex parse trees to the fulltext
+// plugin. Returning an error here makes any misrouting visible.
+func (Hooks) BuildFullTextIndexDefs(
+	_ planplugin.CompilerContext,
+	_ *tree.FullTextIndex,
+	_ map[string]*plan.ColDef,
+	_ []*plan.IndexDef,
+	_ string,
+) ([]*plan.IndexDef, []*plan.TableDef, error) {
+	return nil, nil, moerr.NewNotSupportedNoCtx("ivfflat plugin does not build fulltext indexes")
 }

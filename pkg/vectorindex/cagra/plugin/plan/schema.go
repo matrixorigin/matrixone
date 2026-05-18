@@ -224,3 +224,16 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 	return indexDefs, tableDefs, nil
 }
+
+// BuildFullTextIndexDefs is unreachable for cagra — the plan-build
+// dispatch only routes *tree.FullTextIndex parse trees to the fulltext
+// plugin. Returning an error here makes any misrouting visible.
+func (Hooks) BuildFullTextIndexDefs(
+	_ planplugin.CompilerContext,
+	_ *tree.FullTextIndex,
+	_ map[string]*plan.ColDef,
+	_ []*plan.IndexDef,
+	_ string,
+) ([]*plan.IndexDef, []*plan.TableDef, error) {
+	return nil, nil, moerr.NewNotSupportedNoCtx("cagra plugin does not build fulltext indexes")
+}

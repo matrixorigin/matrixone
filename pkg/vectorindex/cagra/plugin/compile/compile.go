@@ -30,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
 

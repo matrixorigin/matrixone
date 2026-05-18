@@ -434,9 +434,9 @@ func (idx *CagraModel[T]) LoadIndex(
 	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
 	// deferred until after Unpack — we only fetch the raw chunks here.
 	var (
-		cdcWg     sync.WaitGroup
-		cdcErr    error
-		dim       = int(idxcfg.CuvsCagra.Dimensions)
+		cdcWg       sync.WaitGroup
+		cdcErr      error
+		dim         = int(idxcfg.CuvsCagra.Dimensions)
 		eventChunks []vectorindex.EventChunk
 	)
 

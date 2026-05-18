@@ -50,7 +50,7 @@
 //     is the only edit needed to make production binaries and tests
 //     register the algorithm:
 //
-//         _ "github.com/matrixorigin/matrixone/pkg/vectorindex/<foo>/plugin"
+//     _ "github.com/matrixorigin/matrixone/pkg/vectorindex/<foo>/plugin"
 //
 //     For GPU-only algorithms (CAGRA, IVF-PQ), add the blank import to
 //     all_gpu.go instead — it carries //go:build gpu so CPU binaries
@@ -64,6 +64,7 @@
 package all
 
 import (
+	_ "github.com/matrixorigin/matrixone/pkg/fulltext/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 )

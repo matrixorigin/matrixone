@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
@@ -83,14 +84,40 @@ func All() []AlgoPlugin {
 	return out
 }
 
-// IsVectorIndexAlgo reports whether algo is a registered vector index
-// algorithm. Replaces the chain
+// IsVectorIndexAlgo reports whether algo is a registered vector
+// index algorithm (HNSW, CAGRA, IVF-PQ, IVF-FLAT) — i.e. plugin-
+// registered AND not the fulltext algorithm. Replaces the chain
 //
 //	catalog.IsIvfIndexAlgo(a) || catalog.IsHnswIndexAlgo(a) ||
 //	catalog.IsCagraIndexAlgo(a) || catalog.IsIvfpqIndexAlgo(a)
 //
-// at every site that needs to gate "is this a multi-table vector index?".
+// at every site that needs to gate "is this a multi-table vector
+// index?". Use IsFullTextIndexAlgo for fulltext and IsPluginAlgo for
+// "registered with the plugin system, vector OR fulltext".
 func IsVectorIndexAlgo(algo string) bool {
+	if IsFullTextIndexAlgo(algo) {
+		return false
+	}
+	_, ok := Get(algo)
+	return ok
+}
+
+// IsFullTextIndexAlgo reports whether algo is the fulltext index
+// algorithm AND the fulltext plugin is registered.
+func IsFullTextIndexAlgo(algo string) bool {
+	if normalize(algo) != catalog.MOIndexFullTextAlgo.ToString() {
+		return false
+	}
+	_, ok := Get(algo)
+	return ok
+}
+
+// IsPluginAlgo reports whether algo is registered with the plugin
+// system, regardless of kind (vector or fulltext). Use this at
+// dispatch sites that route through the plugin's HandleCreateIndex /
+// Plan() hooks; use IsVectorIndexAlgo / IsFullTextIndexAlgo when the
+// kind matters.
+func IsPluginAlgo(algo string) bool {
 	_, ok := Get(algo)
 	return ok
 }

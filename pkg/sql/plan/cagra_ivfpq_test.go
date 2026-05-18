@@ -1,3 +1,5 @@
+//go:build gpu
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,6 +13,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+// CAGRA / IVF-PQ table-function builder + param tests. Gated on
+// //go:build gpu — those plugins are registered only in the gpu build.
 
 package plan
 

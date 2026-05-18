@@ -18,9 +18,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -129,66 +127,6 @@ func (s *Scope) handleMasterIndexTable(
 	return nil
 }
 
-func (s *Scope) handleFullTextIndexTable(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDef *plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) (err error) {
-	// create hidden tables
-	if indexInfo != nil {
-		if len(indexInfo.GetIndexTables()) != 1 {
-			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-		}
-
-		def := indexInfo.GetIndexTables()[0]
-		err = indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Skip index data population for CCPR tables when this is a CCPR task transaction.
-	// The index data will be synced via CCPR data synchronization instead.
-	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
-		return nil
-	}
-
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	// create ISCP job for Async fulltext index
-	if async {
-		logutil.Infof("fulltext index Async is true")
-		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId,
-			indexDef.IndexName, sinker_type, false, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	} else {
-
-		insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
-		if err != nil {
-			return err
-		}
-
-		for _, insertSQL := range insertSQLs {
-			err = c.runSql(insertSQL)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 	if s.Magic == TableClone {
 		skipFlags := []string{
@@ -217,4 +155,3 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 
 	return fmt.Sprintf("%v", val) == "1", nil
 }
-

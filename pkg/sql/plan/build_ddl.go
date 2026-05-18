@@ -1714,216 +1714,24 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	}
 }
 
-// buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
-//
-// with the following schema
-// create __mo_secondary_xxx (
-//
-//	doc_id src_pk_type,
-//	word varchar,
-//	pos int,
-//	cluster by (word)
-//
-// )
+// buildFullTextIndexTable routes each fulltext index through the
+// fulltext plugin's plan.BuildFullTextIndexDefs hook (lifted body
+// lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
+// batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	p, ok := vectorplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
 	}
-
-	// check duplicate index
-	if len(existedIndexes) > 0 {
-		for _, existedIndex := range existedIndexes {
-			if existedIndex.IndexAlgo == "fulltext" {
-				for _, indexInfo := range indexInfos {
-					if len(indexInfo.KeyParts) != len(existedIndex.Parts) {
-						continue
-					}
-					n := 0
-					for _, keyPart := range indexInfo.KeyParts {
-						for _, ePart := range existedIndex.Parts {
-							if ePart == keyPart.ColName.ColName() {
-								n++
-								break
-							}
-						}
-					}
-
-					if n == len(indexInfo.KeyParts) {
-						return moerr.NewNotSupported(ctx.GetContext(), "Fulltext index are not allowed to use the same column")
-					}
-				}
-			}
-		}
-	}
-
 	for _, indexInfo := range indexInfos {
-		// fulltext only support char, varchar and text
-		for _, keyPart := range indexInfo.KeyParts {
-			nameOrigin := keyPart.ColName.ColNameOrigin()
-			name := keyPart.ColName.ColName()
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' does not exist", nameOrigin))
-			}
-			typid := colMap[name].Typ.Id
-			if !(typid == int32(types.T_text) || typid == int32(types.T_char) ||
-				typid == int32(types.T_varchar) || typid == int32(types.T_json) || typid == int32(types.T_datalink)) {
-				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar, text, datalink and json")
-			}
-		}
-
-		// check parser
-		var parsername string
-		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
-			// set parser ngram
-			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
-			}
-		}
-	}
-
-	for _, indexInfo := range indexInfos {
-
-		// create index definition
-		indexDef := &plan.IndexDef{}
-
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
+			ctx, indexInfo, colMap, existedIndexes, pkeyName,
+		)
 		if err != nil {
 			return err
 		}
-
-		indexParts := make([]string, 0)
-		for _, keyPart := range indexInfo.KeyParts {
-			name := keyPart.ColName.ColName()
-			indexParts = append(indexParts, name)
-		}
-
-		indexDef.Unique = false
-		indexDef.IndexName = indexInfo.Name
-		indexDef.IndexTableName = indexTableName
-		indexDef.IndexAlgo = tree.INDEX_TYPE_FULLTEXT.ToString()
-		indexDef.IndexAlgoTableType = ""
-		indexDef.Parts = indexParts
-		indexDef.TableExist = true
-		if indexInfo.IndexOption != nil {
-			if indexInfo.IndexOption.ParserName != "" {
-				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
-			}
-			indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
-			if err != nil {
-				return err
-			}
-			if indexInfo.IndexOption.Comment != "" {
-				indexDef.Comment = indexInfo.IndexOption.Comment
-			}
-		}
-
-		// create fulltext index hidden table definition
-		// doc_id, pos, word
-		tableDef := &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.FullTextIndex_TblType,
-		}
-
-		// foreign primary key column
-		keyName := catalog.FullTextIndex_TabCol_Id
-		colDef := &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// position (int32)
-		keyName = catalog.FullTextIndex_TabCol_Position
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int32),
-				Width: 32,
-				Scale: -1,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// word (varchar)
-		keyName = catalog.FullTextIndex_TabCol_Word
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		keyName = catalog.FakePrimaryKeyColName
-		colDef = &ColDef{
-			Name:   keyName,
-			Hidden: true,
-			Alg:    plan.CompressType_Lz4,
-			Typ: Type{
-				Id:       int32(types.T_uint64),
-				AutoIncr: true,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-			NotNull: true,
-			Primary: true,
-		}
-
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		tableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{keyName},
-			PkeyColName: keyName,
-		}
-
-		tableDef.ClusterBy = &ClusterByDef{
-			Name: "word",
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.FullTextIndex_TblType,
-			},
-		}
-		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-
-		// append to createTable.IndexTables and createTable.TableDef
-		createTable.IndexTables = append(createTable.IndexTables, tableDef)
-		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
-
+		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
 	return nil
 }
@@ -2470,7 +2278,6 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	__mo_index_centroid_fk_entry vecf32 or vecf64,
 //	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
 // )
-
 
 // validateIncludeColumns enforces DDL-time rules for INCLUDE columns on GPU
 // vector (CAGRA / IVF-PQ) indexes. The execute-time path in

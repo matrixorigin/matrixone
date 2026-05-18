@@ -62,8 +62,8 @@ func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
 		return false, nil
 	}
 
-	// Plugin-registered vector-index algorithms describe their CDC
-	// participation via SyncDescriptor().
+	// Plugin-registered algorithms (vector + fulltext) describe their
+	// CDC participation via SyncDescriptor().
 	if p, ok := vectorplugin.Get(idx.IndexAlgo); ok {
 		d := p.Catalog().SyncDescriptor()
 		if !d.UsesCDC {
@@ -75,10 +75,6 @@ func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
 		return catalog.IsIndexAsync(idx.IndexAlgoParams)
 	}
 
-	// FullText is not a vector index — never gets a plugin.
-	if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
-		return catalog.IsIndexAsync(idx.IndexAlgoParams)
-	}
 	return false, nil
 }
 
@@ -228,10 +224,6 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 		if d := p.Catalog().SyncDescriptor(); d.UsesCDC {
 			return d.SinkerType
 		}
-	}
-	// FullText is not a vector-index plugin.
-	if catalog.IsFullTextIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
 	}
 	panic("getSinkerTypeFromAlgo: invalid sinker type")
 }

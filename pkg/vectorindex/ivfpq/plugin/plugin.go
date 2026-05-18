@@ -29,19 +29,19 @@
 //  3. Copy this directory to pkg/vectorindex/<algo>/plugin/. Rename the
 //     inner package names and update the imports. You'll end up with:
 //
-//         pkg/vectorindex/<algo>/plugin/
-//         ├── plugin.go            -- this file: registry entry point
-//         ├── runtime/runtime.go   -- CatalogHooks (HiddenTableTypes,
-//         │                          DefaultOptions, ExperimentalFlag)
-//         ├── compile/compile.go   -- compile.Hooks (CREATE/ALTER/DROP/SYNC)
-//         └── plan/
-//             ├── plan.go          -- plan.Hooks: thin redirect (~20 LoC)
-//             │                      whose ApplyForSort / CanApply forward
-//             │                      to *QueryBuilder methods in pkg/sql/plan
-//             ├── schema.go        -- BuildSecondaryIndexDefs body
-//             │                      (hidden-table TableDefs + IndexDefs)
-//             └── tablefunc.go     -- <algo>_create / <algo>_search
-//                                     FUNCTION_SCAN builders
+//     pkg/vectorindex/<algo>/plugin/
+//     ├── plugin.go            -- this file: registry entry point
+//     ├── runtime/runtime.go   -- CatalogHooks (HiddenTableTypes,
+//     │                          DefaultOptions, ExperimentalFlag)
+//     ├── compile/compile.go   -- compile.Hooks (CREATE/ALTER/DROP/SYNC)
+//     └── plan/
+//     ├── plan.go          -- plan.Hooks: thin redirect (~20 LoC)
+//     │                      whose ApplyForSort / CanApply forward
+//     │                      to *QueryBuilder methods in pkg/sql/plan
+//     ├── schema.go        -- BuildSecondaryIndexDefs body
+//     │                      (hidden-table TableDefs + IndexDefs)
+//     └── tablefunc.go     -- <algo>_create / <algo>_search
+//     FUNCTION_SCAN builders
 //
 //     Rule of thumb for which sub-package gets the body: lifted code
 //     from pkg/sql/compile/<file>.go → compile/; from pkg/sql/plan/<file>.go
@@ -49,19 +49,19 @@
 //     that don't belong to a SQL pipeline layer.
 //
 //  4. Implement the three Hooks interfaces:
-//       - pkg/vectorindex/plugin/catalog.Hooks  (4 methods — metadata)
-//       - pkg/vectorindex/plugin/compile.Hooks  (~12 methods — DDL execution)
-//       - pkg/vectorindex/plugin/plan.Hooks     (3 methods — schema +
-//                                                two thin ANN redirects)
+//     - pkg/vectorindex/plugin/catalog.Hooks  (4 methods — metadata)
+//     - pkg/vectorindex/plugin/compile.Hooks  (~12 methods — DDL execution)
+//     - pkg/vectorindex/plugin/plan.Hooks     (3 methods — schema +
+//     two thin ANN redirects)
 //     The Go compiler enforces completeness via the `var _ Hooks =
 //     Hooks{}` interface checks in each sub-package.
 //
 //  5. If the algorithm supports ANN `ORDER BY <distfn>(col, v) LIMIT k`,
 //     add the body methods to pkg/sql/plan:
 //
-//         pkg/sql/plan/apply_indices_<algo>.go:
-//             func (builder *QueryBuilder) applyIndicesForSortUsing<Algo>(...)
-//             func (builder *QueryBuilder) prepare<Algo>IndexContext(...)
+//     pkg/sql/plan/apply_indices_<algo>.go:
+//     func (builder *QueryBuilder) applyIndicesForSortUsing<Algo>(...)
+//     func (builder *QueryBuilder) prepare<Algo>IndexContext(...)
 //
 //     Then wire four redirect methods on *QueryBuilder in
 //     pkg/sql/plan/plugin_builder.go (ApplyIndicesForSortUsing<Algo> +
