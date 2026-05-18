@@ -719,7 +719,7 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte, escapeChar by
 			}
 		}
 		if escaped {
-			appendLiteral(&buf, escapeChar)
+			appendLiteral(&buf, rune(escapeChar))
 		}
 		return buf.String()
 	}
