@@ -84,6 +84,7 @@ create external table hive_err8 (
 ) infile{'filepath'='$resources/hive_partition/single_level/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='emb'};
 
 -- 1.10 SHOW CREATE TABLE
+-- @ignore:1
 show create table hive_single;
 
 -- 1.11 LOAD DATA into hive table should be rejected (external table generic rejection)

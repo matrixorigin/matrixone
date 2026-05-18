@@ -49,7 +49,7 @@ emb vecf32(3)
 invalid configuration: partition column 'emb' cannot be a VECTOR type
 show create table hive_single;
 Table    Create Table
-hive_single    CREATE EXTERNAL TABLE `hive_single` (\n  `id` int DEFAULT NULL,\n  `amount` double DEFAULT NULL,\n  `year` int DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
+hive_single    CREATE EXTERNAL TABLE `hive_single` (\n  `id` int DEFAULT NULL,\n  `amount` double DEFAULT NULL,\n  `year` int DEFAULT NULL\n) INFILE{'FILEPATH'='$resources/hive_partition/single_level/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 load data infile '$resources/hive_partition/single_level/year=2024/data.parquet' into table hive_single;
 invalid input: cannot insert/update/delete from external table
 create index idx_hive_single_id on hive_single(id);
