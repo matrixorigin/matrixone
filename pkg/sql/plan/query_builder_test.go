@@ -989,7 +989,7 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
 			require.NoError(t, err)
 
-			sortNodes := collectSortNodes(logicPlan.GetQuery())
+			sortNodes := collectReachableSortNodes(logicPlan.GetQuery())
 			require.Equal(t, tt.sortCount, len(sortNodes))
 			if tt.sortCount == 0 {
 				return
@@ -1002,17 +1002,39 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 	}
 }
 
-func collectSortNodes(query *plan.Query) []*plan.Node {
-	if query == nil {
+func collectReachableSortNodes(query *plan.Query) []*plan.Node {
+	if query == nil || len(query.Steps) == 0 {
 		return nil
 	}
 
 	var sortNodes []*plan.Node
-	for _, node := range query.Nodes {
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
 		if node.NodeType == plan.Node_SORT {
 			sortNodes = append(sortNodes, node)
 		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
 	}
+
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+
 	return sortNodes
 }
 
