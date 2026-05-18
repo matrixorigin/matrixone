@@ -834,6 +834,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			return nil
 		}
+	case types.T_json:
+		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToJson(proc.Ctx, mp, page, proc, vec)
+		}
 	}
 	if mp.mapper != nil {
 		return mp
@@ -1004,6 +1011,74 @@ func processStringToFixed[T any](
 			return wrapParseError(ctx, i, parseErr)
 		}
 		ret[i+length] = val
+	}
+	return nil
+}
+
+func processStringToJson(
+	ctx context.Context,
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+) error {
+	numRows := int(page.NumRows())
+	if numRows == 0 {
+		return nil
+	}
+
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+
+	var loader strLoader
+	var indices []int32
+	dict := page.Dictionary()
+	if dict == nil {
+		loader.init(page.Data())
+		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
+			return err
+		}
+	} else {
+		loader.init(dict.Page().Data())
+		data := page.Data()
+		indices = data.Int32()
+		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
+			return err
+		}
+		if err := ensureDictionaryIndexes(ctx, int(dict.Len()), indices); err != nil {
+			return err
+		}
+	}
+
+	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+		return err
+	}
+	for i := 0; i < numRows; i++ {
+		if nc.isNull(i) {
+			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var data []byte
+		if dict == nil {
+			data = loader.loadNext()
+		} else {
+			idx := indices[loader.next]
+			loader.next++
+			data = loader.loadAt(idx)
+		}
+
+		val, parseErr := types.ParseSliceToByteJson(bytes.TrimSpace(data))
+		if parseErr != nil {
+			return wrapParseError(ctx, i, parseErr)
+		}
+		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	return nil
 }
