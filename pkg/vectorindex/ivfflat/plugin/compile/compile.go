@@ -52,11 +52,6 @@ import (
 // Stays in lock-step with pkg/vectorindex/idxcron/executor.go:56.
 const actionIvfflatReindex = "ivfflat_reindex"
 
-// IvfflatIndexFlag is the experimental-feature flag gating IVF-FLAT DDL.
-// Matches pkg/frontend/variables.go's `experimental_ivf_index` (legacy
-// name — predates the IVF-PQ split).
-const IvfflatIndexFlag = "experimental_ivf_index"
-
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
 
@@ -112,13 +107,12 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 
 // runCreateOrReindex is the shared body for HandleCreateIndex /
 // HandleReindex. Lifted from Scope.handleVectorIvfFlatIndex.
+//
+// Note: unlike HNSW/CAGRA/IVF-PQ, IVF-FLAT is NOT gated by its
+// experimental flag at DDL time — the legacy handler on main never
+// checked one. The `experimental_ivf_index` variable still flows
+// through IdxcronMetadata below for downstream consumers.
 func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
-	if ok, err := ctx.IsExperimentalEnabled(IvfflatIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_ivf_index is not enabled")
-	}
-
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")

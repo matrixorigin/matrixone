@@ -40,12 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
-
-// HnswIndexFlag is the experimental-feature flag gating HNSW DDL. Must
-// match the constant in pkg/sql/compile/ddl_index_algo.go.
-const HnswIndexFlag = "experimental_hnsw_index"
 
 // insertIntoHnswIndexTableFormat is the SQL template used to populate the
 // HNSW index storage table. Lifted from pkg/sql/compile/util.go:118.
@@ -58,7 +55,7 @@ type Hooks struct{}
 // HandleCreateIndex is lifted from Scope.handleVectorHnswIndex
 // (pkg/sql/compile/ddl_index_algo.go:627).
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	if ok, err := ctx.IsExperimentalEnabled(HnswIndexFlag); err != nil {
+	if ok, err := ctx.IsExperimentalEnabled(hnswruntime.HnswIndexFlag); err != nil {
 		return err
 	} else if !ok {
 		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")

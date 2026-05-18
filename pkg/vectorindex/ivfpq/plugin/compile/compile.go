@@ -54,12 +54,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/compile"
 )
-
-// IvfpqIndexFlag is the experimental-feature flag gating IVF-PQ DDL. Must
-// match the constant in pkg/sql/compile/ddl_index_algo.go.
-const IvfpqIndexFlag = "experimental_ivfpq_index"
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
 // IVF-PQ index storage table. Lifted from pkg/sql/compile/util.go:126.
@@ -91,7 +88,7 @@ type Hooks struct{}
 // (pkg/sql/compile/ddl_index_algo.go:802).
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627)
-	if ok, err := ctx.IsExperimentalEnabled(IvfpqIndexFlag); err != nil {
+	if ok, err := ctx.IsExperimentalEnabled(ivfpqruntime.IvfpqIndexFlag); err != nil {
 		return err
 	} else if !ok {
 		return moerr.NewInternalErrorNoCtx("experimental_ivfpq_index is not enabled")

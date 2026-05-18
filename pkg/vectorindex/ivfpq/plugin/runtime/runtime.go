@@ -75,10 +75,14 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
-// ExperimentalFlag: IVF-PQ is gated by `experimental_ivfpq_index` — the
-// same flag the plugin's HandleCreateIndex checks via
-// CompileContext.IsExperimentalEnabled.
-func (CatalogHooks) ExperimentalFlag() string { return "experimental_ivfpq_index" }
+// IvfpqIndexFlag is the experimental-feature flag gating IVF-PQ DDL.
+// Single source of truth; both the catalog gate (pkg/sql/compile/util.go
+// via ExperimentalFlag) and the per-plugin HandleCreateIndex gate
+// reference this constant.
+const IvfpqIndexFlag = "experimental_ivfpq_index"
+
+// ExperimentalFlag: IVF-PQ DDL is gated by IvfpqIndexFlag.
+func (CatalogHooks) ExperimentalFlag() string { return IvfpqIndexFlag }
 
 // SupportedOpTypes maps the SQL-visible op_type strings (e.g.
 // "vector_l2_ops") to a stable internal identifier. Used by plan-side

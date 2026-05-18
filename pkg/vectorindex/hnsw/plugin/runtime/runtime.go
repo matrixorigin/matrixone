@@ -44,10 +44,14 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
-// ExperimentalFlag: HNSW is gated by `experimental_hnsw_index` — the
-// same flag the plugin's HandleCreateIndex checks via
-// CompileContext.IsExperimentalEnabled.
-func (CatalogHooks) ExperimentalFlag() string { return "experimental_hnsw_index" }
+// HnswIndexFlag is the experimental-feature flag gating HNSW DDL. Single
+// source of truth; both the catalog gate (pkg/sql/compile/util.go via
+// ExperimentalFlag) and the per-plugin HandleCreateIndex gate reference
+// this constant.
+const HnswIndexFlag = "experimental_hnsw_index"
+
+// ExperimentalFlag: HNSW DDL is gated by HnswIndexFlag.
+func (CatalogHooks) ExperimentalFlag() string { return HnswIndexFlag }
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))

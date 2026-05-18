@@ -65,10 +65,13 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
-// ExperimentalFlag — IVF-FLAT is gated by `experimental_ivf_index` (note:
-// `_ivf_index`, not `_ivfflat_index` — the variable name predates the
-// IVF-PQ split).
-func (CatalogHooks) ExperimentalFlag() string { return "experimental_ivf_index" }
+// ExperimentalFlag — IVF-FLAT is NOT gated. The legacy handler on main
+// (Scope.handleVectorIvfFlatIndex) never checked `experimental_ivf_index`
+// at DDL time, so returning "" here preserves that behavior: the gate at
+// pkg/sql/compile/util.go skips when the flag is empty. The variable
+// itself still exists and flows through IdxcronMetadata for downstream
+// consumers.
+func (CatalogHooks) ExperimentalFlag() string { return "" }
 
 // SupportedOpTypes returns IVF-FLAT's metric registry. IVF uses a
 // distinct metric table from HNSW/USearch (OpTypeToIvfMetric).

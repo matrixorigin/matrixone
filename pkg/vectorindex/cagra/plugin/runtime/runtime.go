@@ -50,10 +50,14 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	}
 }
 
-// ExperimentalFlag: CAGRA is gated by `experimental_cagra_index` — the
-// same flag the plugin's HandleCreateIndex checks via
-// CompileContext.IsExperimentalEnabled.
-func (CatalogHooks) ExperimentalFlag() string { return "experimental_cagra_index" }
+// CagraIndexFlag is the experimental-feature flag gating CAGRA DDL.
+// Single source of truth; both the catalog gate (pkg/sql/compile/util.go
+// via ExperimentalFlag) and the per-plugin HandleCreateIndex gate
+// reference this constant.
+const CagraIndexFlag = "experimental_cagra_index"
+
+// ExperimentalFlag: CAGRA DDL is gated by CagraIndexFlag.
+func (CatalogHooks) ExperimentalFlag() string { return CagraIndexFlag }
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToUsearchMetric))
