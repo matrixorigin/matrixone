@@ -1005,6 +1005,30 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY)", // mixed eq + non-eq predicates -> two pullup-added GroupBy entries
 		"SELECT * FROM NATION where (select count(*) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",                   // count(*) with mixed eq + non-eq predicates
 		"SELECT * FROM NATION where (select avg(R_REGIONKEY) from REGION where N_NAME = R_NAME and R_REGIONKEY < N_REGIONKEY) = 1",           // avg with mixed eq + non-eq predicates
+		`SELECT * FROM NATION n1 WHERE EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE NOT EXISTS (
+			SELECT 1 FROM NATION n2 WHERE EXISTS (
+				SELECT 1 FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT EXISTS subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated IN subquery
+		`SELECT * FROM NATION n1 WHERE n1.N_NATIONKEY NOT IN (
+			SELECT n2.N_NATIONKEY FROM NATION n2 WHERE n2.N_NATIONKEY IN (
+				SELECT n3.N_NATIONKEY FROM NATION n3
+				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY = n1.N_NATIONKEY
+			)
+		)`, // two-level correlated NOT IN subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
