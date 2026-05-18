@@ -1366,20 +1366,48 @@ func TestIsHivePartitionCol_NotEnabled(t *testing.T) {
 }
 
 func TestRefreshPartitionValues(t *testing.T) {
+	proc := testutil.NewProc(t)
 	param := &ExternalParam{}
 	param.Extern = &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			HivePartitioning:  true,
 			HivePartitionCols: []string{"year", "month"},
+			HivePartitionColTypes: []tree.HivePartColType{
+				{Id: int32(types.T_int32), NullAbility: true},
+				{Id: int32(types.T_varchar), NullAbility: true},
+			},
 		},
 	}
 	param.Extern.Filepath = "/data"
 	param.Fileparam = &ExFileparam{Filepath: "/data/year=2025/month=06/file.parquet"}
 
-	err := param.refreshPartitionValues()
+	err := param.refreshPartitionValues(proc)
 	require.NoError(t, err)
 	assert.Equal(t, "2025", param.currentPartValues["year"])
 	assert.Equal(t, "06", param.currentPartValues["month"])
+}
+
+func TestRefreshPartitionValues_ValidatesUnprojectedPartitionValue(t *testing.T) {
+	proc := testutil.NewProc(t)
+	basePath := "/warehouse/lake"
+	param := &ExternalParam{}
+	param.Extern = &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath:              basePath,
+			HivePartitioning:      true,
+			HivePartitionCols:     []string{"year"},
+			HivePartitionColTypes: []tree.HivePartColType{{Id: int32(types.T_int32), NullAbility: true}},
+		},
+	}
+	param.Fileparam = &ExFileparam{Filepath: basePath + "/year=abc/data.parquet"}
+
+	err := param.refreshPartitionValues(proc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "partition value type conversion failed")
+	assert.Contains(t, err.Error(), "col=year")
+	assert.Contains(t, err.Error(), "value='abc'")
+	assert.Contains(t, err.Error(), "path=year=abc/data.parquet")
+	assert.NotContains(t, err.Error(), basePath)
 }
 
 func TestFillConstantVector_Int(t *testing.T) {

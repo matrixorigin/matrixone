@@ -440,6 +440,7 @@ create external table hive_invalid_type (
     year int
 ) infile{'filepath'='$resources/hive_partition/invalid_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='year'};
 select * from hive_invalid_type;
+select count(*) from hive_invalid_type;
 
 -- 10.2 URL-encoded directory name containing '%' should report error (P0 known limitation)
 drop table if exists hive_url_encoded;

@@ -47,7 +47,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 
 	if param.parqh == nil {
 		var err error
-		if err = param.refreshPartitionValues(); err != nil {
+		if err = param.refreshPartitionValues(proc); err != nil {
 			return err
 		}
 		param.parqh, err = newParquetHandler(param)
