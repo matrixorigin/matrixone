@@ -4012,10 +4012,6 @@ func (builder *QueryBuilder) appendAggNode(
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}
-	if builder.isForUpdate {
-		err = moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
-		return
-	}
 
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_AGG,
@@ -4724,11 +4720,14 @@ func (builder *QueryBuilder) bindView(
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
-		}
 		subCtx := NewBindContext(builder, ctx)
+		// Nested SELECT must not inherit FOR UPDATE: the outer collectLockTargets
+		// recurses into all TABLE_SCAN nodes (including ones inside derived tables),
+		// so the derived subplan itself should be built without lock injection.
+		savedIsForUpdate := builder.isForUpdate
+		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
+		builder.isForUpdate = savedIsForUpdate
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
