@@ -16,10 +16,10 @@ package objectio
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -270,7 +270,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 
 	defer func() {
 		if r := recover(); r != nil {
-			call.err = fmt.Errorf("dedup load panic: %v", r)
+			call.err = moerr.NewInternalErrorNoCtxf("dedup load panic: %v", r)
 			metaLoadMu.Lock()
 			delete(metaLoadCalls, key)
 			metaLoadMu.Unlock()
