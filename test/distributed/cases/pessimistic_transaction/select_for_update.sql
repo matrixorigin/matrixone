@@ -847,3 +847,82 @@ drop table if exists su_join_t2;
 drop table if exists su_join_t3;
 drop table if exists su_join_nat1;
 drop table if exists su_join_nat2;
+
+-- =====================================================================
+-- FOR UPDATE with CTE, derived tables, EXISTS/IN subqueries and aggregates
+-- =====================================================================
+
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;
+create table su_fu_main(id int primary key, company_id int, status int);
+create table su_fu_ref(id int primary key, province varchar(32));
+insert into su_fu_main values(1,10,1),(2,20,1),(3,30,1),(4,40,1),(5,50,1);
+insert into su_fu_ref values(10,'p1'),(20,'p2'),(30,'p3'),(40,'p4'),(50,'p5');
+
+-- cte + join + for update
+begin;
+with target as (select id, company_id from su_fu_main order by id limit 3)
+select t.id, t.company_id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 99 where id = 1;
+-- @session}
+commit;
+select * from su_fu_main where id = 1;
+
+-- derived table + for update
+begin;
+select * from (select id, company_id from su_fu_main order by id limit 3) t for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 88 where id = 2;
+-- @session}
+commit;
+select * from su_fu_main where id = 2;
+
+-- derived table joined to a base table + for update
+begin;
+select m.id, m.company_id, r.province from su_fu_main m
+  join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
+  for update;
+commit;
+
+-- exists subquery + for update (only locks outer rows, matches MySQL)
+begin;
+select id, company_id from su_fu_main t
+  where exists (select 1 from su_fu_ref r where r.id = t.company_id)
+  for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 77 where id = 3;
+-- @session}
+commit;
+select * from su_fu_main where id = 3;
+
+-- in subquery + for update
+begin;
+select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
+commit;
+
+-- aggregate + for update
+begin;
+select company_id, count(*) from su_fu_main group by company_id for update;
+commit;
+
+-- aggregate + group by + having + for update
+begin;
+select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
+commit;
+
+-- subquery in select list + for update
+begin;
+select id, (select province from su_fu_ref r where r.id = m.company_id) p
+  from su_fu_main m where id <= 2 for update;
+commit;
+
+-- cleanup
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;
