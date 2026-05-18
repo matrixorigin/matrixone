@@ -2460,6 +2460,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
+			if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+				continue
+			}
+
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
