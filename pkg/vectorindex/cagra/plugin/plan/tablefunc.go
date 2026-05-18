@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
 // CAGRA table-function plumbing — the build*/search* node constructors
@@ -74,7 +73,7 @@ func buildCagraCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pl
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(cagraBuildIndexColDefs)
+	colDefs := planplugin.DeepCopyColDefList(cagraBuildIndexColDefs)
 	params, err := getCagraParams(pb, tbl.Func)
 	if err != nil {
 		return 0, err
@@ -106,7 +105,7 @@ func buildCagraSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pl
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(CAGRASearchColDefs)
+	colDefs := planplugin.DeepCopyColDefList(CAGRASearchColDefs)
 
 	params, err := getCagraParams(pb, tbl.Func)
 	if err != nil {

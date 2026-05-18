@@ -79,7 +79,7 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 	}
 
 	kColPos := int32(1)
-	bindTag := builder.GenNewBindTag()
+	bindTag := builder.genNewBindTag()
 
 	makeNode := func(tableCnt, outcnt, selectivity float64) *planpb.Node {
 		return &planpb.Node{
@@ -230,7 +230,7 @@ func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
 			}
 		}()
 
-		builder.WithSuspendedScanProtection(scanID, func() {
+		builder.withSuspendedScanProtection(scanID, func() {
 			assert.False(t, builder.isScanProtected(scanID))
 			panic("boom")
 		})

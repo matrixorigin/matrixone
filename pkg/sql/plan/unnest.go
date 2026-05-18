@@ -95,7 +95,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.GenNewBindTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

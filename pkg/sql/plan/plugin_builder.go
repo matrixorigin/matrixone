@@ -20,128 +20,154 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
-// init populates the cross-package function variables in vectorplan so the
-// vector-index plugin's plan-rewrite body can use them without taking a
-// direct dependency on pkg/sql/plan.
-// init populates the cross-package function variables in vectorplan
-// whose bodies still live in pkg/sql/plan. Phase 5b moved 6 standalone
-// helpers (DeepCopyRankOption, MakeRuntimeFilter, the two over-fetch
-// calculators, ParseIncludedColumnsFromParams, MakePlan2StringConstExprWithType)
-// into vectorplan as real functions; what's left here is the
-// dependency-heavy or type-adapter-needing rump.
+// init publishes schema/tablefunc helper bodies to the planplugin
+// package as function variables. Plugin schema.go and tablefunc.go call
+// these (cross-package) instead of importing pkg/sql/plan directly,
+// which would create a cycle.
 func init() {
-	vectorplan.DeepCopyExpr = DeepCopyExpr
-	vectorplan.DeepCopyColDefList = DeepCopyColDefList
-	vectorplan.ReplaceDistFnExprsWithScoreCol = replaceDistFnExprsWithScoreCol
-
-	vectorplan.CreateIndexDef = CreateIndexDef
-	vectorplan.MakeHiddenColDefByName = MakeHiddenColDefByName
-	vectorplan.ValidateIncludeColumns = validateIncludeColumnsForPlugin
-	vectorplan.VectorSearchProviderChildren = vectorSearchProviderChildrenForPlugin
-}
-
-// vectorSearchProviderChildrenForPlugin adapts vectorSearchProviderChildren
-// (which takes *vectorSortContext) to planplugin.VectorSortContext.
-func vectorSearchProviderChildrenForPlugin(vc *planplugin.VectorSortContext) []int32 {
-	if vc == nil {
-		return nil
-	}
-	return vectorSearchProviderChildren(&vectorSortContext{
-		providerNodeID: vc.ProviderNodeID,
-		vecArgExpr:     vc.VecArgExpr,
-	})
+	planplugin.CreateIndexDef = CreateIndexDef
+	planplugin.MakeHiddenColDefByName = MakeHiddenColDefByName
+	planplugin.ValidateIncludeColumns = validateIncludeColumnsForPlugin
+	planplugin.DeepCopyColDefList = DeepCopyColDefList
 }
 
 // validateIncludeColumnsForPlugin adapts validateIncludeColumns to the
 // narrower planplugin.CompilerContext the plugin uses. Dispatch always
-// passes a real *plan.CompilerContext, so the assertion is total at call
-// time; the second return is only for the compiler's exhaustiveness.
+// passes a real *plan.CompilerContext, so the assertion is total at
+// call time.
 func validateIncludeColumnsForPlugin(ctx planplugin.CompilerContext,
 	includeCols []*tree.UnresolvedName, colMap map[string]*plan.ColDef,
 	vecColName, pkeyName string) error {
 	return validateIncludeColumns(ctx.(CompilerContext), includeCols, colMap, vecColName, pkeyName)
 }
 
-// *QueryBuilder satisfies planplugin.PlanBuilder. The compile-time
-// assertion below catches any signature drift between the interface
-// and the concrete type — add a new method to planplugin.PlanBuilder
-// and forget to implement it (or rename it), and this line breaks the
-// build.
+// *QueryBuilder satisfies planplugin.PlanBuilder. Compile-time check
+// catches signature drift.
 var _ planplugin.PlanBuilder = (*QueryBuilder)(nil)
 
-// Most interface methods are already defined on *QueryBuilder under
-// the same exported names (after Phase 5 renames: GenNewBindTag,
-// GenNewMsgTag, GetArgsFromDistFn, etc.). The remaining definitions
-// here are genuine type-adapters that bridge the plugin's `any`
-// BindContext to the internal *BindContext, or that funnel a
-// standalone helper through a method.
+// keep "context" import live (used by GetContext signature on PlanBuilder).
+var _ = context.TODO
+
+// Three base facade methods needed by per-plugin tablefunc.go to
+// construct FUNCTION_SCAN nodes.
+
+func (builder *QueryBuilder) GenNewBindTag() int32 { return builder.genNewBindTag() }
 
 func (builder *QueryBuilder) AppendNode(node *plan.Node, ctx planplugin.BindContext) int32 {
 	bc, _ := ctx.(*BindContext)
 	return builder.appendNode(node, bc)
 }
 
-func (builder *QueryBuilder) AddBinding(nodeID int32, alias tree.AliasClause, ctx planplugin.BindContext) error {
-	bc, _ := ctx.(*BindContext)
-	return builder.addBinding(nodeID, alias, bc)
+// GetContext is the *QueryBuilder.GetContext defined in query_builder.go.
+
+// Per-algo redirect methods. The plugin's Hooks.ApplyForSort body is a
+// one-liner that calls one of these; this method then converts the
+// exported types back to internal and invokes the real
+// `applyIndicesForSortUsing<Algo>` body in pkg/sql/plan.
+//
+// All bodies share the same shape: convert vctx + mti, call internal
+// method (which returns (int32, error)), report applied=(nodeID != newID).
+
+func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	newID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vc, m)
+	return newID, newID != nodeID, err
 }
 
-func (builder *QueryBuilder) CtxByNode(id int32) planplugin.BindContext {
-	if int(id) < 0 || int(id) >= len(builder.ctxByNode) {
-		return nil
+func (builder *QueryBuilder) ApplyIndicesForSortUsingCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	newID, err := builder.applyIndicesForSortUsingCagra(nodeID, vc, m)
+	return newID, newID != nodeID, err
+}
+
+func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	newID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vc, m)
+	return newID, newID != nodeID, err
+}
+
+func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfflat(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	newID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vc, m, opts.ColRefCnt, opts.IdxColMap)
+	return newID, newID != nodeID, err
+}
+
+// CanApply<Algo> — non-destructive probe used by detectVectorGuard. We
+// fold it into the prepareXxxIndexContext probe — returns true if the
+// context is non-nil (i.e. the index can satisfy this query).
+
+func (builder *QueryBuilder) CanApplyHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	ctx, err := builder.prepareHnswIndexContext(vc, m)
+	if err != nil {
+		return false, err
 	}
-	return builder.ctxByNode[id]
+	return ctx != nil, nil
 }
 
-func (builder *QueryBuilder) Query() *plan.Query { return builder.qry }
-
-// _ = context.TODO is kept so this file still imports "context".
-var _ = context.TODO
-
-func (builder *QueryBuilder) ResolveVariable(name string, isSystemVar, isGlobalVar bool) (any, error) {
-	return builder.compCtx.ResolveVariable(name, isSystemVar, isGlobalVar)
-}
-
-// ValidateVectorIndexSortRewrite is a thin adapter that takes the
-// exported planplugin.VectorSortContext (mirrors the unexported
-// vectorSortContext used internally). Only the sortDirection field is
-// actually inspected, so the copy is cheap.
-func (builder *QueryBuilder) ValidateVectorIndexSortRewrite(vc *planplugin.VectorSortContext) (bool, error) {
-	if vc == nil {
-		return builder.validateVectorIndexSortRewrite(nil)
+func (builder *QueryBuilder) CanApplyCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	ctx, err := builder.prepareCagraIndexContext(vc, m)
+	if err != nil {
+		return false, err
 	}
-	return builder.validateVectorIndexSortRewrite(&vectorSortContext{
-		projNode:      vc.ProjNode,
-		sortNode:      vc.SortNode,
-		scanNode:      vc.ScanNode,
-		childNode:     vc.ChildNode,
-		orderExpr:     vc.OrderExpr,
-		distFnExpr:    vc.DistFnExpr,
-		sortDirection: vc.SortDirection,
-		limit:         vc.Limit,
-		rankOption:    vc.RankOption,
-	})
+	return ctx != nil, nil
 }
 
-func (builder *QueryBuilder) BindFuncByName(name string, args []*plan.Expr) (*plan.Expr, error) {
-	return BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+func (builder *QueryBuilder) CanApplyIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	ctx, err := builder.prepareIvfpqIndexContext(vc, m)
+	if err != nil {
+		return false, err
+	}
+	return ctx != nil, nil
 }
 
-func (builder *QueryBuilder) ReplaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
-	replaceColumnsForNode(node, projMap)
+func (builder *QueryBuilder) CanApplyIvfflat(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
+	vc, m := fromPlanplugin(vctx, mti)
+	ctx, err := builder.prepareIvfIndexContext(vc, m)
+	if err != nil {
+		return false, err
+	}
+	return ctx != nil, nil
 }
 
-func (builder *QueryBuilder) CopyNode(ctx planplugin.BindContext, nodeID int32) int32 {
-	bc, _ := ctx.(*BindContext)
-	return builder.copyNode(bc, nodeID)
+// fromPlanplugin converts the exported plugin-facing types back to
+// internal pkg/sql/plan types so the real body methods can take them
+// directly.
+func fromPlanplugin(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (*vectorSortContext, *MultiTableIndex) {
+	var vc *vectorSortContext
+	if vctx != nil {
+		vc = &vectorSortContext{
+			projNode:       vctx.ProjNode,
+			sortNode:       vctx.SortNode,
+			scanNode:       vctx.ScanNode,
+			childNode:      vctx.ChildNode,
+			orderExpr:      vctx.OrderExpr,
+			distFnExpr:     vctx.DistFnExpr,
+			sortDirection:  vctx.SortDirection,
+			limit:          vctx.Limit,
+			rankOption:     vctx.RankOption,
+			providerNodeID: vctx.ProviderNodeID,
+			vecArgExpr:     vctx.VecArgExpr,
+		}
+	}
+	var m *MultiTableIndex
+	if mti != nil {
+		m = &MultiTableIndex{
+			IndexAlgo:       mti.IndexAlgo,
+			IndexAlgoParams: mti.IndexAlgoParams,
+			IndexDefs:       mti.IndexDefs,
+		}
+	}
+	return vc, m
 }
 
-// export converts the package-private vectorSortContext into the exported
-// planplugin.VectorSortContext that crosses the plugin boundary.
-func (v *vectorSortContext) export() *planplugin.VectorSortContext {
+// toPlanplugin is the inverse — used at the dispatch site in
+// apply_indices.go to hand the plugin the exported view.
+func (v *vectorSortContext) toPlanplugin() *planplugin.VectorSortContext {
 	if v == nil {
 		return nil
 	}
@@ -157,5 +183,16 @@ func (v *vectorSortContext) export() *planplugin.VectorSortContext {
 		RankOption:     v.rankOption,
 		ProviderNodeID: v.providerNodeID,
 		VecArgExpr:     v.vecArgExpr,
+	}
+}
+
+func toPlanpluginMti(m *MultiTableIndex) *planplugin.MultiTableIndexRef {
+	if m == nil {
+		return nil
+	}
+	return &planplugin.MultiTableIndexRef{
+		IndexAlgo:       m.IndexAlgo,
+		IndexAlgoParams: m.IndexAlgoParams,
+		IndexDefs:       m.IndexDefs,
 	}
 }

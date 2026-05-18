@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
 // IVF-FLAT table-function plumbing — the build*/search* node constructors
@@ -86,7 +85,7 @@ func buildIvfflatCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx 
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 2).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(ivfflatBuildIndexColDefs)
+	colDefs := planplugin.DeepCopyColDefList(ivfflatBuildIndexColDefs)
 	params, err := getIvfflatTblFuncParams(pb, tbl.Func)
 	if err != nil {
 		return 0, err
@@ -123,7 +122,7 @@ func buildIvfflatSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx 
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(IVFFLATSearchColDefs)
+	colDefs := planplugin.DeepCopyColDefList(IVFFLATSearchColDefs)
 	params, err := getIvfflatTblFuncParams(pb, tbl.Func)
 	if err != nil {
 		return 0, err

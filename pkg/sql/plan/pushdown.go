@@ -729,7 +729,7 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
 	scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
 
-	orderFuncTag := builder.GenNewBindTag()
+	orderFuncTag := builder.genNewBindTag()
 	scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
 	projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
 		Typ: orderFunc.Typ,

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 )
 
 // IVF-PQ table-function plumbing — the build*/search* node constructors
@@ -85,7 +84,7 @@ func buildIvfpqCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pl
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(ivfpqBuildIndexColDefs)
+	colDefs := planplugin.DeepCopyColDefList(ivfpqBuildIndexColDefs)
 	params, err := getIvfpqParams(pb, tbl.Func)
 	if err != nil {
 		return 0, err
@@ -124,7 +123,7 @@ func buildIvfpqSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pl
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
 
-	colDefs := vectorplan.DeepCopyColDefList(IVFPQSearchColDefs)
+	colDefs := planplugin.DeepCopyColDefList(IVFPQSearchColDefs)
 
 	params, err := getIvfpqParams(pb, tbl.Func)
 	if err != nil {

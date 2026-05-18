@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -38,15 +37,15 @@ import (
 // CatalogHooks.HiddenTableTypes() returned earlier; the framework keys
 // downstream maps by this.
 //
-// Helpers available from vectorplan (populated by pkg/sql/plan's init):
+// Helpers available from planplugin (populated by pkg/sql/plan's init):
 //
-//	vectorplan.CreateIndexDef         — constructs the *plan.IndexDef
+//	planplugin.CreateIndexDef         — constructs the *plan.IndexDef
 //	                                    (serializes algo params from
 //	                                    indexInfo.IndexOption into JSON)
-//	vectorplan.MakeHiddenColDefByName — builds a hidden composite-PK
+//	planplugin.MakeHiddenColDefByName — builds a hidden composite-PK
 //	                                    placeholder column (used for the
 //	                                    storage table's compound PK)
-//	vectorplan.ValidateIncludeColumns — validates INCLUDE column list
+//	planplugin.ValidateIncludeColumns — validates INCLUDE column list
 //	                                    against colMap + pk constraints
 //
 // Lifted from pkg/sql/plan/build_ddl.go:3114-3353 (the deleted
@@ -89,7 +88,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 
 	if indexInfo.IndexOption != nil {
-		if err := vectorplan.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
+		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -108,7 +107,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Ivfpq_TblType_Metadata,
 			Cols:      make([]*plan.ColDef, 4),
 		}
-		indexDefs[0], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
+		indexDefs[0], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -180,7 +179,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Ivfpq_TblType_Storage,
 			Cols:      make([]*plan.ColDef, 5),
 		}
-		indexDefs[1], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Storage, indexParts, false)
+		indexDefs[1], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Storage, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -225,7 +224,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
-		tableDefs[1].Cols[4] = vectorplan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
 		tableDefs[1].Cols[4].Primary = true
 

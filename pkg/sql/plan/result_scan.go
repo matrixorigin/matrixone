@@ -129,7 +129,7 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		},
 		Stats:        &plan.Stats{},
 		TableDef:     tableDef,
-		BindingTags:  []int32{builder.GenNewBindTag()},
+		BindingTags:  []int32{builder.genNewBindTag()},
 		NotCacheable: true,
 	}
 	nodeID := builder.appendNode(node, ctx)

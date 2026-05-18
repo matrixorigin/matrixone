@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorplan
+package plan
 
 import (
 	"bytes"
 	"encoding/json"
 	"strings"
 
+	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 // Shared predicate-pushdown helpers for GPU vector indexes that use the
-// C++ FilterStore / eval_filter_bitmap_cpu path (CAGRA + IVFPQ). Lifted
-// in Phase 5b from pkg/sql/plan/filter_predicate.go — both that file and
-// the IVF-PQ / CAGRA plugin packages use it, so it belongs in this leaf
-// package rather than in pkg/sql/plan.
+// C++ FilterStore / eval_filter_bitmap_cpu path (CAGRA + IVFPQ).
 //
 // The output is a JSON array of predicate objects, parsed on the C++ side by
 // parse_preds() in cgo/cuvs/filter.hpp. The array's entries are implicitly
@@ -69,6 +68,32 @@ const PKHostIdVirtualName = "__mo_pk_host_id"
 // kHostIdColIdx (0xFFFFFFFFu) via static_cast<uint32_t>(i64) on the C++ side.
 const pkHostIdSentinelCol = -1
 
+// parseIncludedColumnsFromParams reads the comma-joined "included_columns"
+// entry from an index's algo-params JSON. Returns nil when the key is absent
+// or empty (treated as "no INCLUDE columns declared").
+func parseIncludedColumnsFromParams(indexAlgoParams string) ([]string, error) {
+	if indexAlgoParams == "" {
+		return nil, nil
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
+	if err != nil {
+		return nil, nil
+	}
+	joined, err := val.StrictString()
+	if err != nil || joined == "" {
+		return nil, nil
+	}
+	raw := strings.Split(joined, ",")
+	out := make([]string, 0, len(raw))
+	for _, n := range raw {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
 // filterJSONPred mirrors one entry of the predicate array (see file header
 // for the full schema). omitempty lets a single struct cover every op:
 // scalar comparisons use Val; "between" uses Lo+Hi; "in" uses Vals;
@@ -82,7 +107,7 @@ type filterJSONPred struct {
 	Vals []any  `json:"vals,omitempty"`
 }
 
-// BuildFilterPredicateJSON walks scanNode.FilterList-style predicates and
+// buildFilterPredicateJSON walks scanNode.FilterList-style predicates and
 // peels off those that reference only INCLUDE columns or the source table's
 // primary key. Peeled predicates are serialized into the CAGRA/IVFPQ filter
 // JSON array; unrecognized or mixed-reference predicates stay as residual
@@ -99,7 +124,7 @@ type filterJSONPred struct {
 //   - predsJSON:  JSON array (empty "" if nothing peeled)
 //   - serialized: the source exprs that made it into predsJSON
 //   - residual:   the remainder that stays on scanNode.FilterList
-func BuildFilterPredicateJSON(
+func buildFilterPredicateJSON(
 	filters []*plan.Expr,
 	scanNode *plan.Node,
 	includeColumns []string,
@@ -138,11 +163,11 @@ func BuildFilterPredicateJSON(
 		return "", nil, residual, nil
 	}
 	// SetEscapeHTML(false): the default json.Marshal escapes <, >, & as
-	// <, >, & for safety when the JSON ends up embedded in
-	// an HTML page. Our output goes to the C++ parse_preds() in filter.hpp
-	// whose op_from_string does a literal-string compare against "<", "<=",
-	// ">", ">=" — if parse_string there doesn't unescape \u sequences, the
-	// escaped form would be rejected. Emit the unescaped form to be safe.
+	// <, >, & for safety when the JSON ends up embedded in an
+	// HTML page. Our output goes to the C++ parse_preds() in filter.hpp whose
+	// op_from_string does a literal-string compare against "<", "<=", ">",
+	// ">=" — if parse_string there doesn't unescape \u sequences, the escaped
+	// form would be rejected. Emit the unescaped form to be safe.
 	var jb bytes.Buffer
 	enc := json.NewEncoder(&jb)
 	enc.SetEscapeHTML(false)

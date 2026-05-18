@@ -2071,14 +2071,8 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			}
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN &&
-			// due to the inaccuracy of stats.Rowsize, currently only the
-			// large-payload vector-index hidden tables are supported.
-			// (IVF-FLAT entries, HNSW storage, CAGRA storage, IVF-PQ
-			// storage — all contain the chunked blob index data.)
-			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries ||
-				node.TableDef.TableType == catalog.Hnsw_TblType_Storage ||
-				node.TableDef.TableType == catalog.Cagra_TblType_Storage ||
-				node.TableDef.TableType == catalog.Ivfpq_TblType_Storage) &&
+			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
+			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
 			stats.Rowsize > RowSizeThreshold &&
 			stats.BlockNum > LargeBlockThresholdForOneCN {
 			ret = ExecTypeAP_ONECN

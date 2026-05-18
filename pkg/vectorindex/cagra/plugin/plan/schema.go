@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -64,7 +63,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	}
 
 	if indexInfo.IndexOption != nil {
-		if err := vectorplan.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
+		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -83,7 +82,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Cagra_TblType_Metadata,
 			Cols:      make([]*plan.ColDef, 4),
 		}
-		indexDefs[0], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
+		indexDefs[0], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -155,7 +154,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.Cagra_TblType_Storage,
 			Cols:      make([]*plan.ColDef, 5),
 		}
-		indexDefs[1], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
+		indexDefs[1], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -200,7 +199,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
-		tableDefs[1].Cols[4] = vectorplan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
 		tableDefs[1].Cols[4].Primary = true
 

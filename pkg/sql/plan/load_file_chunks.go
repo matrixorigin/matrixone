@@ -52,7 +52,7 @@ func (builder *QueryBuilder) buildLoadFileChunks(tbl *tree.TableFunction, ctx *B
 			},
 			Cols: loadFileChunksColDefs,
 		},
-		BindingTags:     []int32{builder.GenNewBindTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

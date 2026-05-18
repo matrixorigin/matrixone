@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -2394,7 +2393,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		utIdx := i - 1
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
-			lastTag = builder.GenNewBindTag()
+			lastTag = builder.genNewBindTag()
 			leftNodeTag := builder.qry.Nodes[newNodes[lastNewNodeIdx]].BindingTags[0]
 			newNodeID := builder.appendNode(&plan.Node{
 				NodeType:    unionTypes[utIdx],
@@ -2413,7 +2412,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	lastNodeID := newNodes[0]
 	for i := 1; i < len(newNodes); i++ {
 		utIdx := i - 1
-		lastTag = builder.GenNewBindTag()
+		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -2425,9 +2424,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// set ctx base on selects[0] and it's ctx
-	ctx.groupTag = builder.GenNewBindTag()
-	ctx.aggregateTag = builder.GenNewBindTag()
-	ctx.projectTag = builder.GenNewBindTag()
+	ctx.groupTag = builder.genNewBindTag()
+	ctx.aggregateTag = builder.genNewBindTag()
+	ctx.projectTag = builder.genNewBindTag()
 	for i, v := range ctx.headings {
 		ctx.aliasMap[v] = &aliasItem{
 			idx: int32(i),
@@ -2559,7 +2558,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				},
 			})
 		}
-		ctx.resultTag = builder.GenNewBindTag()
+		ctx.resultTag = builder.genNewBindTag()
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -2642,7 +2641,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			cteBindType:   CteBindTypeInitStmt,
 			cte:           cteRef,
 			recScanNodeId: -1})
-	initCtx.sinkTag = builder.GenNewBindTag()
+	initCtx.sinkTag = builder.genNewBindTag()
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
 		err = err1
@@ -2932,13 +2931,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	astRankOption := stmt.RankOption
 	astTimeWindow := stmt.TimeWindow
 
-	ctx.groupTag = builder.GenNewBindTag()
-	ctx.aggregateTag = builder.GenNewBindTag()
-	ctx.projectTag = builder.GenNewBindTag()
-	ctx.windowTag = builder.GenNewBindTag()
-	ctx.sampleTag = builder.GenNewBindTag()
+	ctx.groupTag = builder.genNewBindTag()
+	ctx.aggregateTag = builder.genNewBindTag()
+	ctx.projectTag = builder.genNewBindTag()
+	ctx.windowTag = builder.genNewBindTag()
+	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
-		ctx.timeTag = builder.GenNewBindTag() // ctx.timeTag > 0
+		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
 		if astTimeWindow.Sliding != nil {
 			ctx.sliding = true
 		}
@@ -3316,7 +3315,7 @@ func (builder *QueryBuilder) bindSelectClause(
 				Children:    []int32{nodeID},
 				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
 				LockTargets: lockTargets,
-				BindingTags: []int32{builder.GenNewBindTag()},
+				BindingTags: []int32{builder.genNewBindTag()},
 			}
 
 			if astLimit == nil {
@@ -3942,7 +3941,7 @@ func (builder *QueryBuilder) bindValues(
 		NodeType:     plan.Node_VALUE_SCAN,
 		RowsetData:   rowSetData,
 		TableDef:     tableDef,
-		BindingTags:  []int32{builder.GenNewBindTag()},
+		BindingTags:  []int32{builder.genNewBindTag()},
 		Uuid:         nodeUUID[:],
 		NotCacheable: true,
 	}, ctx)
@@ -4251,7 +4250,7 @@ func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID
 		})
 	}
 
-	ctx.resultTag = builder.GenNewBindTag()
+	ctx.resultTag = builder.genNewBindTag()
 	return builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: ctx.results,
@@ -4868,7 +4867,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				Stats:        nil,
 				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
 				TableDef:     tableDef,
-				BindingTags:  []int32{builder.GenNewBindTag()},
+				BindingTags:  []int32{builder.genNewBindTag()},
 				ScanSnapshot: snapshot,
 			}, ctx)
 
@@ -4933,7 +4932,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ObjRef:       obj,
 			TableDef:     tableDef,
 			ExternScan:   externScan,
-			BindingTags:  []int32{builder.GenNewBindTag()},
+			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
 
@@ -5073,12 +5072,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	return
 }
 
-func (builder *QueryBuilder) GenNewBindTag() int32 {
+func (builder *QueryBuilder) genNewBindTag() int32 {
 	builder.nextBindTag++
 	return builder.nextBindTag
 }
 
-func (builder *QueryBuilder) GenNewMsgTag() (ret int32) {
+func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
 	// start from 1, and 0 means do not handle with message
 	builder.nextMsgTag++
 	return builder.nextMsgTag
@@ -5445,6 +5444,14 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
 		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
+	case "hnsw_create":
+		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
+	case "hnsw_search":
+		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
+	case "ivf_create":
+		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
+	case "ivf_search":
+		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	case "parse_jsonl_data":
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
@@ -5453,17 +5460,16 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	case "load_file_chunks":
 		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
+	case "cagra_create":
+		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
+	case "cagra_search":
+		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
+	case "ivfpq_create":
+		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
+	case "ivfpq_search":
+		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
-		// Fall through to the vector-index plugin registry. Per-algorithm
-		// table-function builders (cagra_create/cagra_search,
-		// ivfpq_create/ivfpq_search, …) are registered there by their
-		// plugins' init() so each algorithm can own its table-function
-		// plumbing without editing this switch.
-		if b, ok := planplugin.TableFunc(id); ok {
-			nodeId, err = b(builder, tbl, ctx, exprs, children)
-		} else {
-			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
-		}
+		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
 	return nodeId, err
 }

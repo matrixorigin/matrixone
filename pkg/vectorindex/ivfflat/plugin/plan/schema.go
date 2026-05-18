@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/vectorplan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -74,7 +73,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 			Cols:      make([]*plan.ColDef, 2),
 		}
-		indexDefs[0], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
+		indexDefs[0], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -125,7 +124,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 			Cols:      make([]*plan.ColDef, 4),
 		}
-		indexDefs[1], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
+		indexDefs[1], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -151,7 +150,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
-		tableDefs[1].Cols[3] = vectorplan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[1].Cols[3] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 		tableDefs[1].Cols[3].Alg = plan.CompressType_Lz4
 		tableDefs[1].Cols[3].Primary = true
 
@@ -185,7 +184,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 			Cols:      make([]*plan.ColDef, 5),
 		}
-		indexDefs[2], err = vectorplan.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
+		indexDefs[2], err = planplugin.CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -223,7 +222,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
-		tableDefs[2].Cols[4] = vectorplan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[2].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 		tableDefs[2].Cols[4].Alg = plan.CompressType_Lz4
 		tableDefs[2].Cols[4].Primary = true
 

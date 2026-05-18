@@ -86,7 +86,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	if node.Stats.HashmapStats.Shuffle {
-		rfTag := builder.GenNewMsgTag()
+		rfTag := builder.genNewMsgTag()
 		node.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
 		return
@@ -148,7 +148,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rfTag := builder.GenNewMsgTag()
+	rfTag := builder.genNewMsgTag()
 
 	for i := range probeExprs {
 		exprType := makeTypeByPlan2Expr(probeExprs[i])

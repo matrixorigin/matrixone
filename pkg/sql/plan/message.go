@@ -96,7 +96,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 
-	msgTag := builder.GenNewMsgTag()
+	msgTag := builder.genNewMsgTag()
 	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
@@ -121,7 +121,7 @@ func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {
 		return
 	}
 
-	msgTag := builder.GenNewMsgTag()
+	msgTag := builder.genNewMsgTag()
 	node.SendMsgList = append(node.SendMsgList, plan.MsgHeader{
 		MsgTag:  msgTag,
 		MsgType: int32(message.MsgJoinMap),

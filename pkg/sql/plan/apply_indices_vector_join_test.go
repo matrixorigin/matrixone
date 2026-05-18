@@ -20,9 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	vectorplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -240,7 +238,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    mainTableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-		BindingTags: []int32{builder.GenNewBindTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}
 	mainScanNodeID := builder.appendNode(mainScanNode, ctx)
 
@@ -248,7 +246,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    providerTableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
-		BindingTags: []int32{builder.GenNewBindTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}
 	var providerFilters []*plan.Expr
 	if opts.providerSingle {
@@ -297,7 +295,7 @@ func newVectorJoinPlanCase(t *testing.T, opts vectorJoinPlanOptions) vectorJoinP
 	sortChildID := joinNodeID
 	sortExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: distFnExpr}}
 	if opts.projectProvider {
-		projectTag := builder.GenNewBindTag()
+		projectTag := builder.genNewBindTag()
 		projectNode := &plan.Node{
 			NodeType: plan.Node_PROJECT,
 			Children: []int32{joinNodeID},
@@ -451,14 +449,8 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
 
-	p, ok := vectorplugin.Get(catalog.MoIndexHnswAlgo.ToString())
-	require.True(t, ok, "hnsw plugin must be registered")
-	mti := newVectorJoinHnswIndex()
-	newNodeID, applied, err := p.Plan().ApplyForSort(
-		tc.builder, vecCtx.export(), exportMultiTableIndex(mti), tc.projNodeID,
-		planplugin.ApplyForSortOpts{})
+	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex())
 	require.NoError(t, err)
-	require.True(t, applied)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
 	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
@@ -517,19 +509,19 @@ func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
 		Args: []*plan.Expr{providerArg, scanArg},
 	}
 
-	key, value, found := builder.GetArgsFromDistFnForJoin(distFn, 1, scanTag)
+	key, value, found := builder.getArgsFromDistFnForJoin(distFn, 1, scanTag)
 	require.True(t, found)
 	require.Equal(t, scanArg, key)
 	require.Equal(t, providerArg, value)
 	require.Equal(t, scanArg.Typ, providerArg.Typ)
 
-	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "not_a_distance"},
 		Args: []*plan.Expr{scanArg, providerArg},
 	}, 1, scanTag)
 	require.False(t, found)
 
-	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "l2_distance"},
 		Args: []*plan.Expr{
 			newVectorJoinColExpr(scanTag, 1, "id", intTyp),
@@ -538,7 +530,7 @@ func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
 	}, 1, scanTag)
 	require.False(t, found)
 
-	_, _, found = builder.GetArgsFromDistFnForJoin(&plan.Function{
+	_, _, found = builder.getArgsFromDistFnForJoin(&plan.Function{
 		Func: &plan.ObjectRef{ObjName: "l2_distance"},
 		Args: []*plan.Expr{providerArg, scanArg},
 	}, 2, scanTag)
@@ -578,7 +570,7 @@ func TestVectorProviderNonNullProofBranches(t *testing.T) {
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
 	notNullFloatTyp := plan.Type{Id: int32(types.T_array_float32), NotNullable: true}
 
-	scanTag := builder.GenNewBindTag()
+	scanTag := builder.genNewBindTag()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    newVectorJoinTableDef(false, true),
@@ -600,7 +592,7 @@ func TestVectorProviderNonNullProofBranches(t *testing.T) {
 	require.False(t, builder.isNonNullVectorProviderArg(scanNode, nil))
 	require.False(t, builder.isNonNullVectorProviderArg(scanNode, newVectorJoinStringLitExpr()))
 
-	projectTag := builder.GenNewBindTag()
+	projectTag := builder.genNewBindTag()
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{scanNodeID},
@@ -639,7 +631,7 @@ func TestSingleRowVectorProviderProofBranches(t *testing.T) {
 	ctx := NewBindContext(builder, nil)
 	varcharTyp := plan.Type{Id: int32(types.T_varchar)}
 	floatTyp := plan.Type{Id: int32(types.T_array_float32)}
-	tag := builder.GenNewBindTag()
+	tag := builder.genNewBindTag()
 
 	tableDef := newVectorJoinTableDef(false, false)
 	tableDef.Pkey = nil
@@ -790,7 +782,7 @@ func TestGetDistRangeFromFiltersWithJoinVectorArg(t *testing.T) {
 		}},
 	}
 
-	remainingFilters, distRange := builder.GetDistRangeFromFilters(
+	remainingFilters, distRange := builder.getDistRangeFromFilters(
 		[]*plan.Expr{filter},
 		1,
 		"l2_distance",

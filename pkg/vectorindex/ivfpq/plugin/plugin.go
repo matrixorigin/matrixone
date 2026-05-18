@@ -58,11 +58,10 @@
 //    hook paths. Add a SQL case under test/distributed/cases/vector/.
 //
 // Helpers the plugin may use without re-implementing them:
-//   - pkg/sql/plan/vectorplan      — PlanBuilder facade, shared plan-tree
-//                                    helpers (filter pushdown, dist-fn
-//                                    rewriting), IVF-PQ-style table-fn
-//                                    metadata. Function variables here are
-//                                    populated by pkg/sql/plan's init().
+//   - pkg/vectorindex/plugin/plan  — schema/tablefunc helper function
+//                                    variables (CreateIndexDef,
+//                                    MakeHiddenColDefByName, etc.) wired
+//                                    in pkg/sql/plan's init().
 //   - pkg/sql/util.BuildIndexTableName — generate a hidden table name.
 //   - pkg/vectorindex/cache.Cache  — runtime in-memory index cache.
 //   - pkg/vectorindex/metric       — distance functions, op_type registry.
@@ -70,8 +69,7 @@
 // Helpers the plugin must NOT touch:
 //   - pkg/sql/plan or pkg/sql/compile directly — those packages
 //     blank-import the plugin for init() registration, so the cycle would
-//     break. Always route through the framework hook interfaces and the
-//     vectorplan facade.
+//     break. Always route through the framework hook interfaces.
 //
 // # What this specific file (plugin.go) does
 //

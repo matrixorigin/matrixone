@@ -1,10 +1,10 @@
-// Copyright 2026 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,19 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	planplugin "github.com/matrixorigin/matrixone/pkg/vectorindex/plugin/plan"
-)
-
-// HNSW table-function plumbing — lifted from pkg/sql/plan/hnsw.go (now
-// deleted).
-
-const (
-	HNSWCreateFuncName = "hnsw_create"
-	HNSWSearchFuncName = "hnsw_search"
 )
 
 var (
-	hnswBuildIndexColDefs = []*plan.ColDef{
+	kIVFPQCreateFuncName = "ivfpq_create"
+	kIVFPQSearchFuncName = "ivfpq_search"
+
+	kIVFPQBuildIndexColDefs = []*plan.ColDef{
 		{
 			Name: "status",
 			Typ: plan.Type{
@@ -42,7 +36,7 @@ var (
 		},
 	}
 
-	HNSWSearchColDefs = []*plan.ColDef{
+	kIVFPQSearchColDefs = []*plan.ColDef{
 		{
 			Name: "pkid",
 			Typ: plan.Type{
@@ -62,22 +56,19 @@ var (
 	}
 )
 
-func init() {
-	planplugin.RegisterTableFunc(HNSWCreateFuncName, buildHnswCreate)
-	planplugin.RegisterTableFunc(HNSWSearchFuncName, buildHnswSearch)
-}
-
-// arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
-func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+// arg list [param, ivfpq.IndexTableConfig (JSON), pkid, vec]
+func (builder *QueryBuilder) buildIvfpqCreate(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 	if len(exprs) < 4 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}
 
-	colDefs := planplugin.DeepCopyColDefList(hnswBuildIndexColDefs)
-	params, err := getHnswParams(pb, tbl.Func)
+	colDefs := DeepCopyColDefList(kIVFPQBuildIndexColDefs)
+	params, err := builder.getIvfpqParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
+
+	// remove the first argument and put it to Param
 	exprs = exprs[1:]
 
 	node := &plan.Node{
@@ -86,31 +77,33 @@ func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pla
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:     HNSWCreateFuncName,
+				Name:     kIVFPQCreateFuncName,
 				Param:    []byte(params),
 				IsSingle: true,
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
-	return pb.AppendNode(node, ctx), nil
+	return builder.appendNode(node, ctx), nil
 }
 
-// arg list [param, hnsw.IndexTableConfig (JSON), search_vec]
-func buildHnswSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
+// arg list [param, IndexTableConfig (JSON), search_vec, filter_predicates_json?]
+// The trailing filter_predicates_json is optional — omitted for unfiltered search.
+func (builder *QueryBuilder) buildIvfpqSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	if len(exprs) != 3 && len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
 
-	colDefs := planplugin.DeepCopyColDefList(HNSWSearchColDefs)
+	colDefs := DeepCopyColDefList(kIVFPQSearchColDefs)
 
-	params, err := getHnswParams(pb, tbl.Func)
+	params, err := builder.getIvfpqParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
+	// remove the first argument and put it to Param
 	exprs = exprs[1:]
 
 	node := &plan.Node{
@@ -119,21 +112,21 @@ func buildHnswSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pla
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
-				Name:  HNSWSearchFuncName,
+				Name:  kIVFPQSearchFuncName,
 				Param: []byte(params),
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
-	return pb.AppendNode(node, ctx), nil
+	return builder.appendNode(node, ctx), nil
 }
 
-func getHnswParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
+func (builder *QueryBuilder) getIvfpqParams(fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
 	}
-	return "", moerr.NewNoConfig(pb.GetContext(), "first parameter must be string")
+	return "", moerr.NewNoConfig(builder.GetContext(), "first parameter must be string")
 }
