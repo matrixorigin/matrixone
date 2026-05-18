@@ -1,0 +1,143 @@
+-- @label:bvt
+
+-- YEARWEEK function: 1-argument form
+SELECT yearweek('2026-05-07');
+
+-- YEARWEEK function: 2-argument form with all modes (0-7)
+SELECT yearweek('2026-05-07', 0);
+SELECT yearweek('2026-05-07', 1);
+SELECT yearweek('2026-05-07', 2);
+SELECT yearweek('2026-05-07', 3);
+SELECT yearweek('2026-05-07', 4);
+SELECT yearweek('2026-05-07', 5);
+SELECT yearweek('2026-05-07', 6);
+SELECT yearweek('2026-05-07', 7);
+
+-- YEARWEEK: NULL handling
+SELECT yearweek(NULL);
+SELECT yearweek(NULL, 3);
+
+-- YEARWEEK: DATETIME input
+SELECT yearweek('2026-01-01 12:00:00', 3);
+
+-- YEARWEEK: time portion should be ignored
+SELECT yearweek('2026-05-07 23:59:59', 3), yearweek('2026-05-07 00:00:00', 3);
+
+-- YEARWEEK: with CAST
+SELECT yearweek(cast('2026-05-07' as date), 3);
+SELECT yearweek(cast('2026-05-07 10:00:00' as datetime), 3);
+
+-- YEARWEEK: BIGINT mode (original issue #24236 related)
+SELECT yearweek('2026-05-07', cast(3 as signed));
+SELECT yearweek('2026-05-07', cast(3 as unsigned));
+
+-- YEARWEEK: year boundary - 2024 leap year (Jan 1 is Monday)
+-- Key: YEARWEEK can return a year different from the date's year
+SELECT yearweek('2024-01-01', 0), yearweek('2024-01-01', 1), yearweek('2024-01-01', 2), yearweek('2024-01-01', 3);
+SELECT yearweek('2024-12-31', 0), yearweek('2024-12-31', 1), yearweek('2024-12-31', 2), yearweek('2024-12-31', 3);
+
+-- YEARWEEK: year boundary - 2023 (Jan 1 is Sunday)
+SELECT yearweek('2023-01-01', 0), yearweek('2023-01-01', 1), yearweek('2023-01-01', 2), yearweek('2023-01-01', 3);
+SELECT yearweek('2023-12-31', 0), yearweek('2023-12-31', 1), yearweek('2023-12-31', 2), yearweek('2023-12-31', 3);
+
+-- YEARWEEK: year boundary - 2025 (Jan 1 is Wednesday)
+SELECT yearweek('2025-01-01', 0), yearweek('2025-01-01', 1), yearweek('2025-01-01', 2), yearweek('2025-01-01', 3);
+SELECT yearweek('2025-12-31', 0), yearweek('2025-12-31', 1), yearweek('2025-12-31', 2), yearweek('2025-12-31', 3);
+
+-- YEARWEEK: week 53 cases - year rolls over
+SELECT yearweek('2020-12-31', 1), yearweek('2020-12-31', 3);
+SELECT yearweek('2015-12-31', 1), yearweek('2015-12-31', 3);
+
+-- YEARWEEK: mode as expression
+SELECT yearweek('2026-05-07', 1+2);
+
+-- YEARWEEK: arithmetic (this week vs last week pattern)
+SELECT yearweek('2026-05-07', 3) - yearweek('2026-04-30', 3);
+
+-- YEARWEEK: with table - all modes
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2024-01-01'),(2, '2024-02-29'),(3, '2024-06-15'),(4, '2024-12-31');
+select id, yearweek(d, 0), yearweek(d, 1), yearweek(d, 2), yearweek(d, 3) from t1;
+select id, yearweek(d, 4), yearweek(d, 5), yearweek(d, 6), yearweek(d, 7) from t1;
+drop table t1;
+
+-- YEARWEEK: in WHERE clause (typical "this week" pattern from NL2SQL)
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-11'),(4, '2026-05-12');
+select * from t1 where yearweek(d, 3) = yearweek('2026-05-07', 3);
+drop table t1;
+
+-- YEARWEEK: in ORDER BY
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-03-15'),(2, '2026-01-10'),(3, '2026-07-20'),(4, '2026-05-07');
+select id, d, yearweek(d, 1) as yw from t1 order by yw;
+drop table t1;
+
+-- YEARWEEK: in GROUP BY
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1, '2026-05-04', 10),(2, '2026-05-05', 20),(3, '2026-05-11', 30),(4, '2026-05-12', 40);
+select yearweek(d, 1) as yw, sum(val) from t1 group by yw order by yw;
+drop table t1;
+
+-- YEARWEEK: with DATETIME column
+drop table if exists t1;
+create table t1(id int, dt datetime);
+insert into t1 values(1, '2024-01-01 08:00:00'),(2, '2024-06-15 12:30:00'),(3, '2024-12-31 23:59:59');
+select id, yearweek(dt, 0), yearweek(dt, 3) from t1;
+drop table t1;
+
+-- YEARWEEK: with TIMESTAMP column
+drop table if exists t1;
+create table t1(id int, ts timestamp);
+insert into t1 values(1, '2024-01-01 08:00:00'),(2, '2024-06-15 12:30:00'),(3, '2024-12-31 23:59:59');
+select id, yearweek(ts, 0), yearweek(ts, 3) from t1;
+drop table t1;
+
+-- YEARWEEK: subquery
+SELECT * FROM (SELECT yearweek('2026-05-07', 3) as yw) t WHERE t.yw = 202619;
+
+-- YEARWEEK: HAVING clause
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1,'2026-05-04',10),(2,'2026-05-05',20),(3,'2026-05-11',30),(4,'2026-05-12',40),(5,'2026-05-06',50);
+select yearweek(d, 1) as yw, count(*) as cnt from t1 group by yw having cnt >= 2 order by yw;
+drop table t1;
+
+-- YEARWEEK: JOIN condition
+drop table if exists t1;
+drop table if exists t2;
+create table t1(id int, d date);
+create table t2(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-11');
+insert into t2 values(10, '2026-05-07'),(20, '2026-05-14');
+select t1.id, t2.id from t1 join t2 on yearweek(t1.d, 1) = yearweek(t2.d, 1);
+drop table t1;
+drop table t2;
+
+-- YEARWEEK: INSERT SELECT
+drop table if exists t1;
+drop table if exists t2;
+create table t1(d date);
+create table t2(yw int);
+insert into t1 values('2024-01-01'),('2024-06-15'),('2024-12-31');
+insert into t2 select yearweek(d, 3) from t1;
+select * from t2 order by yw;
+drop table t1;
+drop table t2;
+
+-- YEARWEEK: DISTINCT
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1,'2026-05-04'),(2,'2026-05-05'),(3,'2026-05-06'),(4,'2026-05-11'),(5,'2026-05-12');
+select distinct yearweek(d, 1) as yw from t1 order by yw;
+drop table t1;
+
+-- YEARWEEK: combined with WEEK for cross-check
+SELECT week('2024-12-31', 1), yearweek('2024-12-31', 1);
+SELECT week('2024-12-31', 3), yearweek('2024-12-31', 3);
+SELECT week('2023-01-01', 1), yearweek('2023-01-01', 1);
+SELECT week('2023-01-01', 3), yearweek('2023-01-01', 3);

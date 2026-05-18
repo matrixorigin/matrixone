@@ -1,0 +1,203 @@
+SELECT week('2026-05-07');
+week(2026-05-07)
+18
+SELECT week('2026-05-07', 0);
+week(2026-05-07, 0)
+18
+SELECT week('2026-05-07', 1);
+week(2026-05-07, 1)
+19
+SELECT week('2026-05-07', 2);
+week(2026-05-07, 2)
+18
+SELECT week('2026-05-07', 3);
+week(2026-05-07, 3)
+19
+SELECT week('2026-05-07', 4);
+week(2026-05-07, 4)
+18
+SELECT week('2026-05-07', 5);
+week(2026-05-07, 5)
+18
+SELECT week('2026-05-07', 6);
+week(2026-05-07, 6)
+18
+SELECT week('2026-05-07', 7);
+week(2026-05-07, 7)
+18
+SELECT week(NULL);
+week(null)
+null
+SELECT week(NULL, 3);
+week(null, 3)
+null
+SELECT week('2026-01-01 12:00:00', 3);
+week(2026-01-01 12:00:00, 3)
+1
+SELECT week('2026-05-07 23:59:59', 3), week('2026-05-07 00:00:00', 3);
+week(2026-05-07 23:59:59, 3)    week(2026-05-07 00:00:00, 3)
+19    19
+SELECT week(cast('2026-05-07' as date), 3);
+week(cast(2026-05-07 as date), 3)
+19
+SELECT week(cast('2026-05-07 10:00:00' as datetime), 3);
+week(cast(2026-05-07 10:00:00 as datetime), 3)
+19
+SELECT week('2026-05-07', cast(3 as signed));
+week(2026-05-07, cast(3 as signed))
+19
+SELECT week('2026-05-07', cast(3 as unsigned));
+week(2026-05-07, cast(3 as unsigned))
+19
+SELECT week('2026-05-07', 8), week('2026-05-07', 0);
+week(2026-05-07, 8)    week(2026-05-07, 0)
+18    18
+SELECT week('2026-05-07', 9), week('2026-05-07', 1);
+week(2026-05-07, 9)    week(2026-05-07, 1)
+19    19
+SELECT week('2026-05-07', -1);
+week(2026-05-07, -1)
+18
+SELECT week('2024-01-01', 0), week('2024-01-01', 1), week('2024-01-01', 2), week('2024-01-01', 3);
+week(2024-01-01, 0)    week(2024-01-01, 1)    week(2024-01-01, 2)    week(2024-01-01, 3)
+0    1    53    1
+SELECT week('2024-12-31', 0), week('2024-12-31', 1), week('2024-12-31', 2), week('2024-12-31', 3);
+week(2024-12-31, 0)    week(2024-12-31, 1)    week(2024-12-31, 2)    week(2024-12-31, 3)
+52    53    52    1
+SELECT week('2024-02-29', 0), week('2024-02-29', 1), week('2024-02-29', 2), week('2024-02-29', 3);
+week(2024-02-29, 0)    week(2024-02-29, 1)    week(2024-02-29, 2)    week(2024-02-29, 3)
+8    9    8    9
+SELECT week('2023-01-01', 0), week('2023-01-01', 1), week('2023-01-01', 2), week('2023-01-01', 3);
+week(2023-01-01, 0)    week(2023-01-01, 1)    week(2023-01-01, 2)    week(2023-01-01, 3)
+1    0    1    52
+SELECT week('2023-12-31', 0), week('2023-12-31', 1), week('2023-12-31', 2), week('2023-12-31', 3);
+week(2023-12-31, 0)    week(2023-12-31, 1)    week(2023-12-31, 2)    week(2023-12-31, 3)
+53    52    53    52
+SELECT week('2025-01-01', 0), week('2025-01-01', 1), week('2025-01-01', 2), week('2025-01-01', 3);
+week(2025-01-01, 0)    week(2025-01-01, 1)    week(2025-01-01, 2)    week(2025-01-01, 3)
+0    1    52    1
+SELECT week('2025-12-31', 0), week('2025-12-31', 1), week('2025-12-31', 2), week('2025-12-31', 3);
+week(2025-12-31, 0)    week(2025-12-31, 1)    week(2025-12-31, 2)    week(2025-12-31, 3)
+52    53    52    1
+SELECT week('2023-01-01', 0), week('2023-01-01', 1), week('2023-01-01', 4), week('2023-01-01', 5);
+week(2023-01-01, 0)    week(2023-01-01, 1)    week(2023-01-01, 4)    week(2023-01-01, 5)
+1    0    1    0
+SELECT week('2024-01-01', 0), week('2024-01-01', 1), week('2024-01-01', 4), week('2024-01-01', 5);
+week(2024-01-01, 0)    week(2024-01-01, 1)    week(2024-01-01, 4)    week(2024-01-01, 5)
+0    1    1    1
+SELECT week('2020-12-31', 1), week('2020-12-31', 3);
+week(2020-12-31, 1)    week(2020-12-31, 3)
+53    53
+SELECT week('2015-12-31', 1), week('2015-12-31', 3);
+week(2015-12-31, 1)    week(2015-12-31, 3)
+53    53
+SELECT week('2026-05-07', 1+2);
+week(2026-05-07, 1 + 2)
+19
+SELECT week('2026-05-07', 1) - week('2026-04-30', 1);
+week(2026-05-07, 1) - week(2026-04-30, 1)
+1
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2024-01-01'),(2, '2024-02-29'),(3, '2024-06-15'),(4, '2024-12-31');
+select id, week(d, 0), week(d, 1), week(d, 2), week(d, 3) from t1;
+id    week(d, 0)    week(d, 1)    week(d, 2)    week(d, 3)
+1    0    1    53    1
+2    8    9    8    9
+3    23    24    23    24
+4    52    53    52    1
+select id, week(d, 4), week(d, 5), week(d, 6), week(d, 7) from t1;
+id    week(d, 4)    week(d, 5)    week(d, 6)    week(d, 7)
+1    1    1    1    1
+2    9    9    9    9
+3    24    24    24    24
+4    53    53    1    53
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-07'),(3, '2026-05-11'),(4, '2026-05-12');
+select * from t1 where week(d, 3) = 19;
+id    d
+1    2026-05-04
+2    2026-05-07
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1, '2026-03-15'),(2, '2026-01-10'),(3, '2026-07-20'),(4, '2026-05-07');
+select id, d, week(d, 1) as wk from t1 order by wk;
+id    d    wk
+2    2026-01-10    2
+1    2026-03-15    11
+4    2026-05-07    19
+3    2026-07-20    30
+drop table t1;
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1, '2026-05-04', 10),(2, '2026-05-05', 20),(3, '2026-05-11', 30),(4, '2026-05-12', 40);
+select week(d, 1) as wk, sum(val) from t1 group by wk order by wk;
+wk    sum(val)
+19    30
+20    70
+drop table t1;
+drop table if exists t1;
+create table t1(id int, dt datetime);
+insert into t1 values(1, '2026-01-01 08:00:00'),(2, '2026-05-07 12:30:00'),(3, '2026-12-31 23:59:59');
+select id, week(dt, 0), week(dt, 3) from t1;
+id    week(dt, 0)    week(dt, 3)
+1    0    1
+2    18    19
+3    52    53
+drop table t1;
+drop table if exists t1;
+create table t1(id int, ts timestamp);
+insert into t1 values(1, '2026-01-01 08:00:00'),(2, '2026-05-07 12:30:00'),(3, '2026-12-31 23:59:59');
+select id, week(ts, 0), week(ts, 3) from t1;
+id    week(ts, 0)    week(ts, 3)
+1    0    1
+2    18    19
+3    52    53
+drop table t1;
+SELECT * FROM (SELECT week('2026-05-07', 3) as wk) t WHERE t.wk = 19;
+wk
+19
+drop table if exists t1;
+create table t1(id int, d date, val int);
+insert into t1 values(1,'2026-05-04',10),(2,'2026-05-05',20),(3,'2026-05-11',30),(4,'2026-05-12',40),(5,'2026-05-06',50);
+select week(d, 1) as wk, count(*) as cnt from t1 group by wk having cnt >= 2 order by wk;
+wk    cnt
+19    3
+20    2
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(id int, d date);
+create table t2(id int, d date);
+insert into t1 values(1, '2026-05-04'),(2, '2026-05-11');
+insert into t2 values(10, '2026-05-07'),(20, '2026-05-14');
+select t1.id, t2.id from t1 join t2 on week(t1.d, 1) = week(t2.d, 1);
+id    id
+1    10
+2    20
+drop table t1;
+drop table t2;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(d date);
+create table t2(wk int);
+insert into t1 values('2026-01-01'),('2026-05-07'),('2026-12-31');
+insert into t2 select week(d, 3) from t1;
+select * from t2 order by wk;
+wk
+1
+19
+53
+drop table t1;
+drop table t2;
+drop table if exists t1;
+create table t1(id int, d date);
+insert into t1 values(1,'2026-05-04'),(2,'2026-05-05'),(3,'2026-05-06'),(4,'2026-05-11'),(5,'2026-05-12');
+select distinct week(d, 1) as wk from t1 order by wk;
+wk
+19
+20
+drop table t1;
