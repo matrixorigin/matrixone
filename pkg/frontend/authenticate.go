@@ -3499,10 +3499,14 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		//use secondary role all or none
 		switch sr.SecondaryRoleType {
 		case tree.SecondaryRoleTypeAll:
-			doSetSecondaryRoleAll(ctx, ses)
+			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
+				return err
+			}
 			account.SetUseSecondaryRole(true)
+			ses.InvalidatePrivilegeCache()
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
+			ses.InvalidatePrivilegeCache()
 		}
 	} else if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
@@ -3576,6 +3580,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		account.SetDefaultRole(sr.Role.UserName)
 		//then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		ses.InvalidatePrivilegeCache()
 
 		return err
 	}
