@@ -5,10 +5,7 @@ create table t_live (id int);
 create table t_shadow (id int);
 insert into t_live values (100);
 insert into t_shadow values (200);
-rename table
-  t_live to t_tmp,
-  t_shadow to t_live,
-  t_tmp to t_shadow;
+rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
 select * from t_live;
 id
 200
