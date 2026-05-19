@@ -41,6 +41,8 @@ func TestEventLoggerPoolCleanup(t *testing.T) {
 	LogEvent(ctx, str_to_cache_data_end, held)
 	LogSlowEvent(ctx, time.Nanosecond) // returns slice to pool
 
+	_ = held.data
+
 	// Grab the slice back from the pool and check all args are nil.
 	events := eventsPool.Get().(*[]event)
 	for i, ev := range *events {
