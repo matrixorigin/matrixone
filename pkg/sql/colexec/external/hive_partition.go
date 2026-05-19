@@ -64,6 +64,7 @@ type PartitionOp int
 const (
 	PartOpEq PartitionOp = iota
 	PartOpIn
+	PartOpBetween
 )
 
 // PartitionDiscoveryResult holds the outcome of Hive partition discovery.
@@ -418,7 +419,15 @@ func filterPartitionDir(dirValue string, colType tree.HivePartColType, pred *Par
 	if pred == nil {
 		return true
 	}
-	result := matchPartitionValue(dirValue, pred.Values, colType)
+	var result MatchResult
+	switch pred.Op {
+	case PartOpEq, PartOpIn:
+		result = matchPartitionValue(dirValue, pred.Values, colType)
+	case PartOpBetween:
+		result = matchPartitionRange(dirValue, pred.Values, colType)
+	default:
+		result = MatchUnknown
+	}
 	return result != MatchFalse
 }
 
@@ -524,6 +533,76 @@ func matchUint(dirVal string, predVals []string, bitSize int) MatchResult {
 		}
 	}
 	return MatchFalse
+}
+
+func matchPartitionRange(dirValue string, bounds []string, colType tree.HivePartColType) MatchResult {
+	if len(bounds) != 2 || !canPruneType(colType) {
+		return MatchUnknown
+	}
+	switch types.T(colType.Id) {
+	case types.T_int8:
+		return matchIntRange(dirValue, bounds[0], bounds[1], 8)
+	case types.T_int16:
+		return matchIntRange(dirValue, bounds[0], bounds[1], 16)
+	case types.T_int32:
+		return matchIntRange(dirValue, bounds[0], bounds[1], 32)
+	case types.T_int64:
+		return matchIntRange(dirValue, bounds[0], bounds[1], 64)
+	case types.T_uint8:
+		return matchUintRange(dirValue, bounds[0], bounds[1], 8)
+	case types.T_uint16:
+		return matchUintRange(dirValue, bounds[0], bounds[1], 16)
+	case types.T_uint32:
+		return matchUintRange(dirValue, bounds[0], bounds[1], 32)
+	case types.T_uint64:
+		return matchUintRange(dirValue, bounds[0], bounds[1], 64)
+	default:
+		return MatchUnknown
+	}
+}
+
+func matchIntRange(dirVal, lowVal, highVal string, bitSize int) MatchResult {
+	dv, err := strconv.ParseInt(dirVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	lo, err := strconv.ParseInt(lowVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	hi, err := strconv.ParseInt(highVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	if lo > hi {
+		return MatchFalse
+	}
+	if dv < lo || dv > hi {
+		return MatchFalse
+	}
+	return MatchTrue
+}
+
+func matchUintRange(dirVal, lowVal, highVal string, bitSize int) MatchResult {
+	dv, err := strconv.ParseUint(dirVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	lo, err := strconv.ParseUint(lowVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	hi, err := strconv.ParseUint(highVal, 10, bitSize)
+	if err != nil {
+		return MatchUnknown
+	}
+	if lo > hi {
+		return MatchFalse
+	}
+	if dv < lo || dv > hi {
+		return MatchFalse
+	}
+	return MatchTrue
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +730,8 @@ func tryExtractPredicate(tableDef *plan.TableDef, expr *plan.Expr, partColSet ma
 		return tryExtractEqual(tableDef, fn.F.Args, partColSet)
 	case function.IN:
 		return tryExtractIn(tableDef, fn.F.Args, partColSet)
+	case function.BETWEEN:
+		return tryExtractBetween(tableDef, fn.F.Args, partColSet)
 	default:
 		return PartitionPredicate{}, false
 	}
@@ -714,6 +795,19 @@ func tryExtractIn(tableDef *plan.TableDef, args []*plan.Expr, partColSet map[str
 	default:
 		return PartitionPredicate{}, false
 	}
+}
+
+func tryExtractBetween(tableDef *plan.TableDef, args []*plan.Expr, partColSet map[string]bool) (PartitionPredicate, bool) {
+	if len(args) != 3 {
+		return PartitionPredicate{}, false
+	}
+	colName, colOk := getPartColName(tableDef, args[0], partColSet)
+	lowVal, lowOk := getLiteralString(args[1])
+	highVal, highOk := getLiteralString(args[2])
+	if !colOk || !lowOk || !highOk {
+		return PartitionPredicate{}, false
+	}
+	return PartitionPredicate{ColName: colName, Op: PartOpBetween, Values: []string{lowVal, highVal}}, true
 }
 
 // extractVecValues decodes a folded LiteralVec into string values for pruning.
