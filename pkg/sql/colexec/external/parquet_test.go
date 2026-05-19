@@ -360,6 +360,18 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows INT")
 	})
 
+	t.Run("unsigned int64 to int64 overflow", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Uint(64), []parquet.Value{
+			parquet.ValueOf(uint64(1 << 63)),
+		})
+
+		vec := vector.NewVec(types.T_int64.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows BIGINT")
+	})
+
 	t.Run("double to float", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
 			parquet.DoubleValue(1.5),
@@ -1204,6 +1216,14 @@ func TestParquet_openFile_localNYI(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
 }
 
+func TestParquetShouldPrefetchS3Parquet(t *testing.T) {
+	require.True(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, maxParquetS3PrefetchSize+1))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, false, maxParquetS3PrefetchSize))
+	require.False(t, shouldPrefetchS3Parquet(tree.INFILE, true, maxParquetS3PrefetchSize))
+	require.False(t, shouldPrefetchS3Parquet(tree.S3, true, -1))
+}
+
 func TestParquet_prepare_missingColumn(t *testing.T) {
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
@@ -1334,6 +1354,39 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	}
 	require.Equal(t, []int32{10, 20, 30}, got)
 	require.True(t, param.Fileparam.End)
+}
+
+func TestParquet_ScanParquetFile_MappingErrorClosesPages(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Uint(64)})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{
+		{parquet.ValueOf(uint64(1<<63)).Level(0, 0, 0)},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	bat := vectorBatch([]types.Type{types.T_int64.ToType()})
+	err = scanParquetFile(context.Background(), param, proc, bat)
+	require.ErrorContains(t, err, "overflows BIGINT")
+	require.NotNil(t, param.parqh)
+	require.Len(t, param.parqh.pages, 1)
+	require.Nil(t, param.parqh.pages[0])
+	require.Nil(t, param.parqh.currentPage[0])
+	require.Zero(t, param.parqh.pageOffset[0])
 }
 
 func TestParquet_ScanParquetFile_CountStarNoAttrs(t *testing.T) {
