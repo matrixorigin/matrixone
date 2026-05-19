@@ -189,7 +189,9 @@ func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper
 				return err
 			}
 		case bytejson.TpCodeLiteral:
-			if err := rs.Append(0, true); err != nil {
+			// Non-null literal (e.g., boolean true/false) is a scalar, return 1.
+			// JSON null literal is already handled by bj.IsNull() above.
+			if err := rs.Append(1, false); err != nil {
 				return err
 			}
 		default:
