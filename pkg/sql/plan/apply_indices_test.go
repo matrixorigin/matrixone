@@ -1019,6 +1019,46 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
 }
 
+func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &IndexDef{
+		IndexName:      "idx_price",
+		Parts:          []string{"price", catalog.FakePrimaryKeyColName},
+		Unique:         false,
+		IndexTableName: "__mo_index_secondary_idx_price",
+	}
+
+	node := &planpb.Node{
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{
+				catalog.FakePrimaryKeyColName: 0,
+				"price":                       1,
+			},
+			Cols: []*planpb.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+				{Name: "price", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+			Pkey:    &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			Indexes: []*planpb.IndexDef{idxDef},
+		},
+		Stats: &planpb.Stats{
+			TableCnt:    100000,
+			Outcnt:      float64(InFilterCardLimitNonPK),
+			Selectivity: 0.05,
+		},
+		FilterList: []*planpb.Expr{
+			makeRangeFilterExpr(bindTag, 1, ">=", 99),
+			makeRangeFilterExpr(bindTag, 1, "<=", 299),
+		},
+	}
+
+	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
+	require.Equal(t, -1, idxPos)
+	require.Nil(t, filterIdx)
+}
+
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
@@ -1385,4 +1425,26 @@ func TestRangeFilterConstValue(t *testing.T) {
 	val2 := rangeFilterConstValue(filter2.GetF())
 	require.NotNil(t, val2)
 	assert.Equal(t, int64(42), val2.GetLit().GetI64Val())
+}
+
+func TestIsRangeOp(t *testing.T) {
+	tests := []struct {
+		op       string
+		expected bool
+	}{
+		{">=", true},
+		{">", true},
+		{"<=", true},
+		{"<", true},
+		{"in_range", true},
+		{"=", false},
+		{"in", false},
+		{"between", false},
+		{"or", false},
+		{"prefix_in_range", false},
+	}
+	for _, tt := range tests {
+		fn := &planpb.Function{Func: &planpb.ObjectRef{ObjName: tt.op}}
+		assert.Equal(t, tt.expected, isRangeOp(fn), "isRangeOp(%q)", tt.op)
+	}
 }
