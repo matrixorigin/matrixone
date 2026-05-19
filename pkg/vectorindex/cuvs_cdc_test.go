@@ -654,3 +654,227 @@ func TestCdcLoadEventsSql(t *testing.T) {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ResolveIncludeColumns + EncodeIncludeRow (Phase 3.5 CDC INCLUDE support)
+// ---------------------------------------------------------------------------
+
+// nameToPosMap is a tiny helper for the tests below.
+func nameToPosMap(names ...string) map[string]int32 {
+	m := make(map[string]int32, len(names))
+	for i, n := range names {
+		m[n] = int32(i)
+	}
+	return m
+}
+
+// constTypes returns a colTypeID function backed by a fixed slice. The
+// position->type mapping matches the source-table column layout the
+// writer sees at construction.
+func constTypes(typeIDs ...int32) func(int32) int32 {
+	return func(pos int32) int32 {
+		if int(pos) < 0 || int(pos) >= len(typeIDs) {
+			return -1
+		}
+		return typeIDs[int(pos)]
+	}
+}
+
+func TestResolveIncludeColumns_Empty(t *testing.T) {
+	bindings, colMeta, ibpr, err := ResolveIncludeColumns("", nameToPosMap("pk", "v"), constTypes(23, 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindings != nil || colMeta != "" || ibpr != 0 {
+		t.Fatalf("empty include cols should return zero values: %v %q %d", bindings, colMeta, ibpr)
+	}
+
+	// Whitespace-only also yields empty.
+	bindings, _, _, err = ResolveIncludeColumns("   ", nameToPosMap("pk"), constTypes(23))
+	if err != nil || bindings != nil {
+		t.Fatalf("whitespace-only should be empty, got err=%v bindings=%v", err, bindings)
+	}
+}
+
+func TestResolveIncludeColumns_SingleInt64(t *testing.T) {
+	// pk(int64=23) at pos 0; category(int64=23) at pos 1.
+	bindings, colMeta, ibpr, err := ResolveIncludeColumns(
+		"category",
+		nameToPosMap("pk", "category"),
+		constTypes(23, 23),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 || bindings[0].Name != "category" || bindings[0].Pos != 1 ||
+		bindings[0].TypeCode != 1 || bindings[0].SizeBytes != 8 {
+		t.Fatalf("unexpected binding: %#v", bindings)
+	}
+	if !strings.Contains(colMeta, `"name":"category"`) || !strings.Contains(colMeta, `"type":1`) {
+		t.Fatalf("unexpected colMeta: %s", colMeta)
+	}
+	// 8 bytes data + 1 byte null mask = 9.
+	if ibpr != 9 {
+		t.Fatalf("includeBytesPerRow: got %d, want 9", ibpr)
+	}
+}
+
+func TestResolveIncludeColumns_MultiMixedTypes(t *testing.T) {
+	// pk(int64) at 0; i32 col(int32=22) at 1; f32 col(float32=30) at 2;
+	// f64 col(float64=31) at 3; u64 col(uint64=28) at 4.
+	bindings, _, ibpr, err := ResolveIncludeColumns(
+		"i32, f32, f64, u64",
+		nameToPosMap("pk", "i32", "f32", "f64", "u64"),
+		constTypes(23, 22, 30, 31, 28),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 4 {
+		t.Fatalf("want 4 bindings, got %d", len(bindings))
+	}
+	wantCodes := []int{0, 2, 3, 4}
+	wantSizes := []int{4, 4, 8, 8}
+	for i, b := range bindings {
+		if b.TypeCode != wantCodes[i] || b.SizeBytes != wantSizes[i] {
+			t.Fatalf("binding %d: got type=%d size=%d, want type=%d size=%d",
+				i, b.TypeCode, b.SizeBytes, wantCodes[i], wantSizes[i])
+		}
+	}
+	// 4+4+8+8 data + ceil(4/8)=1 null mask = 25.
+	if ibpr != 25 {
+		t.Fatalf("includeBytesPerRow: got %d, want 25", ibpr)
+	}
+}
+
+func TestResolveIncludeColumns_UnknownColumn(t *testing.T) {
+	_, _, _, err := ResolveIncludeColumns(
+		"nosuch",
+		nameToPosMap("pk", "v"),
+		constTypes(23, 30),
+	)
+	if err == nil || !strings.Contains(err.Error(), `column "nosuch" not found`) {
+		t.Fatalf("expected not-found error, got %v", err)
+	}
+}
+
+func TestResolveIncludeColumns_UnsupportedType(t *testing.T) {
+	// String type (not int/float/uint64) at pos 1.
+	const someUnsupportedTypeID = 12 // T_varchar or similar; not in the supported list
+	_, _, _, err := ResolveIncludeColumns(
+		"name",
+		nameToPosMap("pk", "name"),
+		constTypes(23, someUnsupportedTypeID),
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported INCLUDE type") {
+		t.Fatalf("expected unsupported-type error, got %v", err)
+	}
+}
+
+func TestEncodeIncludeRow_Empty(t *testing.T) {
+	got, err := EncodeIncludeRow(nil, []any{1, 2, 3}, 0)
+	if err != nil || got != nil {
+		t.Fatalf("empty bindings should return nil bytes, got err=%v len=%d", err, len(got))
+	}
+}
+
+func TestEncodeIncludeRow_AllTypes(t *testing.T) {
+	bindings := []IncludeBinding{
+		{Name: "i32", Pos: 1, TypeCode: 0, SizeBytes: 4},
+		{Name: "i64", Pos: 2, TypeCode: 1, SizeBytes: 8},
+		{Name: "f32", Pos: 3, TypeCode: 2, SizeBytes: 4},
+		{Name: "f64", Pos: 4, TypeCode: 3, SizeBytes: 8},
+		{Name: "u64", Pos: 5, TypeCode: 4, SizeBytes: 8},
+	}
+	ibpr := 4 + 8 + 4 + 8 + 8 + 1 // 5 cols + 1 null-mask byte
+
+	row := []any{
+		"pk-ignored",
+		int32(0x11223344),
+		int64(-1),
+		float32(1.5),
+		float64(2.5),
+		uint64(0xFFFFFFFFFFFFFFFF),
+	}
+	out, err := EncodeIncludeRow(bindings, row, ibpr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != ibpr {
+		t.Fatalf("byte length: got %d, want %d", len(out), ibpr)
+	}
+	if binary.LittleEndian.Uint32(out[0:4]) != 0x11223344 {
+		t.Fatalf("i32 bytes wrong")
+	}
+	if int64(binary.LittleEndian.Uint64(out[4:12])) != -1 {
+		t.Fatalf("i64 bytes wrong")
+	}
+	if math.Float32frombits(binary.LittleEndian.Uint32(out[12:16])) != 1.5 {
+		t.Fatalf("f32 bytes wrong")
+	}
+	if math.Float64frombits(binary.LittleEndian.Uint64(out[16:24])) != 2.5 {
+		t.Fatalf("f64 bytes wrong")
+	}
+	if binary.LittleEndian.Uint64(out[24:32]) != 0xFFFFFFFFFFFFFFFF {
+		t.Fatalf("u64 bytes wrong")
+	}
+	// null mask: no nulls, last byte must be 0.
+	if out[ibpr-1] != 0 {
+		t.Fatalf("null mask should be 0, got %#x", out[ibpr-1])
+	}
+}
+
+func TestEncodeIncludeRow_NullsSetBits(t *testing.T) {
+	bindings := []IncludeBinding{
+		{Name: "a", Pos: 0, TypeCode: 1, SizeBytes: 8},
+		{Name: "b", Pos: 1, TypeCode: 1, SizeBytes: 8},
+		{Name: "c", Pos: 2, TypeCode: 1, SizeBytes: 8},
+	}
+	ibpr := 8*3 + 1
+	// a is non-null; b is NULL; c is NULL.
+	row := []any{int64(7), nil, nil}
+	out, err := EncodeIncludeRow(bindings, row, ibpr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bit 1 + bit 2 set in the mask => 0b00000110 = 0x06.
+	if out[ibpr-1] != 0x06 {
+		t.Fatalf("null mask: got %#x, want 0x06", out[ibpr-1])
+	}
+	if int64(binary.LittleEndian.Uint64(out[0:8])) != 7 {
+		t.Fatalf("non-null value wrong")
+	}
+}
+
+func TestEncodeIncludeRow_TypeMismatch(t *testing.T) {
+	bindings := []IncludeBinding{
+		{Name: "i32", Pos: 0, TypeCode: 0, SizeBytes: 4},
+	}
+	row := []any{"not an int32"}
+	_, err := EncodeIncludeRow(bindings, row, 4+1)
+	if err == nil || !strings.Contains(err.Error(), "expected int32") {
+		t.Fatalf("expected type mismatch error, got %v", err)
+	}
+}
+
+func TestEncodeIncludeRow_LargerMask(t *testing.T) {
+	// 9 cols → null mask is 2 bytes (ceil(9/8)).
+	bindings := make([]IncludeBinding, 9)
+	for i := range bindings {
+		bindings[i] = IncludeBinding{Name: fmt.Sprintf("c%d", i), Pos: int32(i), TypeCode: 1, SizeBytes: 8}
+	}
+	ibpr := 8*9 + 2
+	row := make([]any, 9)
+	for i := range row {
+		row[i] = nil // all nulls
+	}
+	out, err := EncodeIncludeRow(bindings, row, ibpr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maskStart := ibpr - 2
+	// Bits 0-7 = 0xFF (first byte), bit 8 = 0x01 (second byte).
+	if out[maskStart] != 0xFF || out[maskStart+1] != 0x01 {
+		t.Fatalf("null mask bytes: got %#x %#x, want 0xFF 0x01", out[maskStart], out[maskStart+1])
+	}
+}
