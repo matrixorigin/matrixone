@@ -253,6 +253,8 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
+var zombieSelfCheckTimeout = 2 * time.Second
+
 // checkZombieReplicas queries live shard membership for each locally-known
 // voting (shardID, replicaID) pair and returns the set of pairs whose
 // replicaID is no longer present in the cluster's membership map.
@@ -288,8 +290,10 @@ var getShardMembershipFn = getShardMembership
 // The check is best-effort: if no peer answers authoritatively (RPC
 // failure, address is self, or every peer reports "shard unknown"), the
 // shard is treated as "not a zombie" so legitimate cold-start scenarios
-// are not blocked.
-func (l *store) checkZombieReplicas(shards []metadata.LogShard) map[zombieKey]struct{} {
+// are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
+// if the budget expires, any replicas not already classified are treated as
+// not-a-zombie and normal startup continues.
+func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
 	zombies := make(map[zombieKey]struct{})
 	if len(shards) == 0 {
 		return zombies
@@ -301,13 +305,21 @@ func (l *store) checkZombieReplicas(shards []metadata.LogShard) map[zombieKey]st
 	}
 
 	logger := l.runtime.Logger()
+	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
+	defer cancel()
 	for _, rec := range shards {
+		if ctx.Err() != nil {
+			return zombies
+		}
 		if rec.NonVoting {
 			continue
 		}
 		var authoritative, presentReplies int
 		for _, address := range addresses {
-			members, ok, err := getShardMembershipFn(l.cfg.UUID, address, rec.ShardID)
+			if ctx.Err() != nil {
+				return zombies
+			}
+			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
 			if err != nil {
 				logger.Warn("zombie self-check: getShardMembership failed",
 					zap.String("address", address),
@@ -380,13 +392,16 @@ func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
 	return ok
 }
 
-func (l *store) startReplicas() error {
+func (l *store) startReplicas(ctx context.Context) error {
 	l.mu.Lock()
 	shards := make([]metadata.LogShard, 0)
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(ctx, shards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	l.mu.skippedZombies = zombies
 	l.mu.Unlock()
