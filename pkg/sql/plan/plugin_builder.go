@@ -134,6 +134,38 @@ func (builder *QueryBuilder) CanApplyIvfflat(vctx *planplugin.VectorSortContext,
 	return ctx != nil, nil
 }
 
+// toPlanplugin converts the internal pkg/sql/plan types to the exported
+// plugin-facing types so the centralised dispatch in apply_indices.go can
+// hand a *VectorSortContext / *MultiTableIndexRef to p.Plan().CanApply /
+// p.Plan().ApplyForSort. Inverse of fromPlanplugin.
+func toPlanplugin(vc *vectorSortContext, m *MultiTableIndex) (*planplugin.VectorSortContext, *planplugin.MultiTableIndexRef) {
+	var vctx *planplugin.VectorSortContext
+	if vc != nil {
+		vctx = &planplugin.VectorSortContext{
+			ProjNode:       vc.projNode,
+			SortNode:       vc.sortNode,
+			ScanNode:       vc.scanNode,
+			ChildNode:      vc.childNode,
+			OrderExpr:      vc.orderExpr,
+			DistFnExpr:     vc.distFnExpr,
+			SortDirection:  vc.sortDirection,
+			Limit:          vc.limit,
+			RankOption:     vc.rankOption,
+			ProviderNodeID: vc.providerNodeID,
+			VecArgExpr:     vc.vecArgExpr,
+		}
+	}
+	var mti *planplugin.MultiTableIndexRef
+	if m != nil {
+		mti = &planplugin.MultiTableIndexRef{
+			IndexAlgo:       m.IndexAlgo,
+			IndexAlgoParams: m.IndexAlgoParams,
+			IndexDefs:       m.IndexDefs,
+		}
+	}
+	return vctx, mti
+}
+
 // fromPlanplugin converts the exported plugin-facing types back to
 // internal pkg/sql/plan types so the real body methods can take them
 // directly.

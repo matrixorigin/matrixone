@@ -16,18 +16,12 @@ package compile
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-const (
-	hnswIndexFlag  = "experimental_hnsw_index"
-	cagraIndexFlag = "experimental_cagra_index"
-	ivfpqIndexFlag = "experimental_ivfpq_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -128,20 +122,16 @@ func (s *Scope) handleMasterIndexTable(
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-	if s.Magic == TableClone {
-		skipFlags := []string{
-			hnswIndexFlag,
-			cagraIndexFlag,
-			ivfpqIndexFlag,
-		}
-
-		// if the scope is a table clone means we are trying to
-		// clone a table that has an experimental index type,
-		// if the source table (we want clone) exists already, we can just skip the flag check.
-		// (the source table existence check has done before this check, so skip at here is fine)
-		if slices.Index(skipFlags, flag) != -1 {
-			return true, nil
-		}
+	if s.Magic == TableClone && isPluginExperimentalFlag(flag) {
+		// A table-clone scope inherits the source table's index set,
+		// which was already created (and gated) when the source went
+		// in. Re-checking the experimental gate at clone time would
+		// reject existing tables every time the operator demotes the
+		// flag back to off — surprising, and not what the legacy
+		// behaviour did. Allow any plugin-declared experimental flag
+		// to skip the gate at clone; non-plugin flags fall through to
+		// the normal resolve.
+		return true, nil
 	}
 
 	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
@@ -154,4 +144,23 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 	}
 
 	return fmt.Sprintf("%v", val) == "1", nil
+}
+
+// isPluginExperimentalFlag reports whether flag matches any registered
+// plugin's catalog.Hooks.ExperimentalFlag() value. Derives the skip set
+// from the plugin registry at call time so a new plugin that declares
+// an experimental flag automatically participates in the table-clone
+// bypass — no manual update to this file required. Plugins that return
+// "" from ExperimentalFlag() (e.g. IVF-FLAT, fulltext) are naturally
+// excluded.
+func isPluginExperimentalFlag(flag string) bool {
+	if flag == "" {
+		return false
+	}
+	for _, p := range indexplugin.All() {
+		if p.Catalog().ExperimentalFlag() == flag {
+			return true
+		}
+	}
+	return false
 }
