@@ -324,5 +324,11 @@ load data infile {'filepath'='$resources/parquet/Iris.parquet', 'format'='parque
 select count(*) from parquet_01;
 
 
+-- issue#24287: load parquet date32 to DATETIME
+drop table if exists pq_date32_datetime;
+create table pq_date32_datetime(date_col datetime, value int);
+load data infile {'filepath'='$resources/load_data/date32_datetime.parq', 'format'='parquet'} into table pq_date32_datetime;
+select * from pq_date32_datetime;
+
 -- post
 drop database parq;
