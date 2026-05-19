@@ -111,6 +111,14 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		}
 	}
 
+	// Skip index data population for CCPR tables when this is a CCPR task
+	// transaction. The index data will be synced via CCPR data
+	// synchronization instead.
+	originalTableDef := ctx.OriginalTableDef()
+	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
+		return nil
+	}
+
 	// 3. clear the cache
 	key := indexDefs[catalog.Ivfpq_TblType_Storage].IndexTableName
 	cache.Cache.Remove(key)
@@ -136,7 +144,15 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			return err
 		}
 	}
-	return nil
+
+	// 6. IVF-PQ is AlwaysAsync: register a CDC task that appends
+	// post-build changes to the storage table's tag=1 event log (see
+	// IvfpqSync). startFromNow=true because step 5 already populated
+	// the tag=0 chunk — CDC consumes from this watermark forward.
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
+	indexName := indexDefs[catalog.Ivfpq_TblType_Metadata].IndexName
+	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, true, "", originalTableDef)
 }
 
 // HandleReindex runs during ALTER … REINDEX. For IVF-PQ this is just the

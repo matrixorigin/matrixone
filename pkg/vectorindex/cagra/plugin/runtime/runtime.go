@@ -77,15 +77,20 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
-// SyncDescriptor: CAGRA does not participate in ISCP CDC or idxcron
-// today — its hidden tables are rebuilt synchronously inside
-// HandleCreateIndex / HandleReindex, not maintained out-of-band. Flip
-// UsesCDC to true (with SinkerType: SinkerType_IndexSync, AlwaysAsync
-// per-param or always) when the actual CDC pipeline lands for CAGRA.
-// Likewise, set IdxcronAction once Action_Cagra_Reindex lands in
-// pkg/vectorindex/idxcron/executor.go.
+// SyncDescriptor: CAGRA is always async via ISCP CDC. The initial
+// build at CREATE INDEX populates the storage tag=0 chunk; CDC then
+// appends tag=1 event chunks at the fixed CdcTailId sentinel as the
+// source table mutates (see pkg/vectorindex/cagra/sync.go for the
+// append-only log architecture).
+//
+// AlwaysAsync=true mirrors HNSW — CDC is the canonical post-build
+// data-flow path for CAGRA, not a per-index opt-in. No idxcron action.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
-	return catalogplugin.SyncDescriptor{}
+	return catalogplugin.SyncDescriptor{
+		UsesCDC:     true,
+		SinkerType:  catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync: true,
+	}
 }
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's

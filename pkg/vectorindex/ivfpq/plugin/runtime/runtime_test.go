@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -71,9 +72,12 @@ func TestIvfpqSupportedOpTypes(t *testing.T) {
 }
 
 func TestIvfpqSyncDescriptor(t *testing.T) {
-	// IVF-PQ has no CDC / idxcron wiring today; zero value.
-	require.Equal(t, "", CatalogHooks{}.SyncDescriptor().IdxcronAction)
-	require.False(t, CatalogHooks{}.SyncDescriptor().UsesCDC)
+	// IVF-PQ is AlwaysAsync via ISCP CDC (Phase 4 wiring). Mirrors CAGRA.
+	d := CatalogHooks{}.SyncDescriptor()
+	require.Equal(t, "", d.IdxcronAction)
+	require.True(t, d.UsesCDC)
+	require.True(t, d.AlwaysAsync)
+	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 }
 
 func TestIvfpqParamsFromTree_Defaults(t *testing.T) {

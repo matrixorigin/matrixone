@@ -66,6 +66,28 @@ func (c *IndexConsumer) SqlWriter() IndexSqlWriter { return c.sqlWriter }
 // for. Useful for diagnostics inside plugin Hooks.
 func (c *IndexConsumer) Algo() string { return c.algo }
 
+// SqlBufSendCh exposes the channel on which the framing layer delivers
+// writer SQL / CDC JSON blobs. Plugin Hooks.Run impls read from this
+// channel and stop when it closes (signalling end-of-iteration).
+func (c *IndexConsumer) SqlBufSendCh() <-chan []byte { return c.sqlBufSendCh }
+
+// RunTxn wraps sqlexec.RunTxnWithSqlContext bound to this consumer's
+// connection plumbing (engine, txn client, CN UUID) and the retriever's
+// account ID. Plugin Hooks.Run impls living outside pkg/iscp use this
+// to execute SQL / drive a sync object inside a properly scoped txn
+// without needing access to the consumer's private fields.
+func (c *IndexConsumer) RunTxn(
+	ctx context.Context,
+	r DataRetriever,
+	timeout time.Duration,
+	cb func(sqlproc *sqlexec.SqlProcess) error,
+) error {
+	return sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, _ any) error {
+			return cb(sqlproc)
+		})
+}
+
 func NewIndexConsumer(cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,

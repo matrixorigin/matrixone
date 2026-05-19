@@ -69,6 +69,14 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		}
 	}
 
+	// Skip index data population for CCPR tables when this is a CCPR task
+	// transaction. The index data will be synced via CCPR data
+	// synchronization instead.
+	originalTableDef := ctx.OriginalTableDef()
+	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
+		return nil
+	}
+
 	key := indexDefs[catalog.Cagra_TblType_Storage].IndexTableName
 	cache.Cache.Remove(key)
 
@@ -91,7 +99,16 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			return err
 		}
 	}
-	return nil
+
+	// CAGRA is AlwaysAsync: register a CDC task that appends post-build
+	// changes to the storage table's tag=1 event log (see CagraSync).
+	// startFromNow=true because the build SQL above already populated
+	// the tag=0 chunk — CDC only needs to consume from this watermark
+	// forward.
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
+	indexName := indexDefs[catalog.Cagra_TblType_Metadata].IndexName
+	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, true, "", originalTableDef)
 }
 
 // HandleReindex: same code path as create. CAGRA does not support

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -68,8 +69,14 @@ func TestCagraSupportedOpTypes(t *testing.T) {
 }
 
 func TestCagraSyncDescriptor(t *testing.T) {
-	require.Equal(t, "", CatalogHooks{}.SyncDescriptor().IdxcronAction)
-	require.False(t, CatalogHooks{}.SyncDescriptor().UsesCDC)
+	// CAGRA is AlwaysAsync via ISCP CDC (Phase 3 wiring) — initial
+	// build at CREATE INDEX populates tag=0 chunk; CDC appends tag=1
+	// events thereafter. No idxcron action.
+	d := CatalogHooks{}.SyncDescriptor()
+	require.Equal(t, "", d.IdxcronAction)
+	require.True(t, d.UsesCDC)
+	require.True(t, d.AlwaysAsync)
+	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
 }
 
 func TestCagraParamsFromTree_Defaults(t *testing.T) {
