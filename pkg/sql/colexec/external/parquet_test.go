@@ -878,27 +878,38 @@ func TestParquet_Dictionary_Date_Time_Timestamp(t *testing.T) {
 func TestParquet_Mappers_MoreIntsAndStringDict(t *testing.T) {
 	proc := testutil.NewProc(t)
 	// Non-dict small int mappings from INT32
-	st := parquet.Int32Type
-	page := st.NewPage(0, 4, encoding.Int32Values([]int32{1, -1, 255, -128}))
-	var buf bytes.Buffer
-	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
-	w := parquet.NewWriter(&buf, schema)
-	vals := make([]parquet.Value, page.NumRows())
-	_, _ = page.Values().ReadValues(vals)
-	_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	require.NoError(t, err)
-	col := f.Root().Column("c")
+	for _, tc := range []struct {
+		name   string
+		dt     types.T
+		values []int32
+	}{
+		{name: "uint8", dt: types.T_uint8, values: []int32{0, 1, 128, 255}},
+		{name: "int8", dt: types.T_int8, values: []int32{-128, -1, 0, 127}},
+		{name: "uint16", dt: types.T_uint16, values: []int32{0, 1, 255, 65535}},
+		{name: "int16", dt: types.T_int16, values: []int32{-32768, -1, 255, 32767}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := parquet.Int32Type
+			page := st.NewPage(0, len(tc.values), encoding.Int32Values(tc.values))
+			var buf bytes.Buffer
+			schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(st)})
+			w := parquet.NewWriter(&buf, schema)
+			vals := make([]parquet.Value, page.NumRows())
+			_, _ = page.Values().ReadValues(vals)
+			_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+			col := f.Root().Column("c")
 
-	for _, dt := range []types.T{types.T_uint8, types.T_int8, types.T_uint16, types.T_int16} {
-		vec := vector.NewVec(types.New(dt, 0, 0))
-		var h ParquetHandler
-		mp := h.getMapper(col, plan.Type{Id: int32(dt), NotNullable: true})
-		require.NotNil(t, mp, "mapper for %v", dt)
-		require.NoError(t, mp.mapping(page, proc, vec))
-		require.Equal(t, 4, vec.Length())
+			vec := vector.NewVec(types.New(tc.dt, 0, 0))
+			var h ParquetHandler
+			mp := h.getMapper(col, plan.Type{Id: int32(tc.dt), NotNullable: true})
+			require.NotNil(t, mp, "mapper for %v", tc.dt)
+			require.NoError(t, mp.mapping(page, proc, vec))
+			require.Equal(t, len(tc.values), vec.Length())
+		})
 	}
 
 	// Dictionary-encoded string mapping
