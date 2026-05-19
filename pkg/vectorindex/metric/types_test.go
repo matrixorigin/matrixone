@@ -24,9 +24,10 @@ import (
 
 // TestValidQuantization_DrivenByCuvsMap pins ValidQuantization to the
 // cuvs map. The previous shape had a hand-maintained list inside the
-// validator that drifted from QuantizationNameToType; iterating the map
-// here means any future entry added or removed has to update both or the
-// test catches it.
+// validator that drifted from the (single) NameToType map — float16
+// was accepted by the validator but missing from the map; float64 was
+// the reverse. Iterating the map here means any future entry added or
+// removed has to update both or the test catches it.
 func TestValidQuantization_DrivenByCuvsMap(t *testing.T) {
 	require.NotEmpty(t, CuvsQuantizationNameToType)
 	for name := range CuvsQuantizationNameToType {

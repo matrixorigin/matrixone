@@ -29,10 +29,10 @@ import (
 // own per-algorithm mockable variable (ivfpq_runSql / cagra_runSql / …).
 type runSqlFunc func(*sqlexec.SqlProcess, string) (executor.Result, error)
 
-// quoteIdent wraps `ident` in backticks and doubles any embedded backticks —
-// the standard MySQL identifier escape. Without this, a column or table name
-// containing a backtick (e.g. `a“b`) would break out of the quoted-identifier
-// context and let an attacker append arbitrary SQL.
+// quoteIdent wraps ident in backticks and doubles any embedded backticks —
+// the standard MySQL identifier escape. Without this, a column or table
+// name containing a backtick (e.g. "a`b") would break out of the
+// quoted-identifier context and let an attacker append arbitrary SQL.
 func quoteIdent(ident string) string {
 	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
 }

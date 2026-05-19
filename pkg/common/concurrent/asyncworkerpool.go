@@ -208,10 +208,10 @@ func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource
 // signalStop closes w.stopCh exactly once. NOTE: w.tasks is intentionally
 // NOT closed. The previous design closed it from receiver-side code (Stop
 // and the signal handler), which races against Submit and panics with
-// "send on closed channel" when a producer wins the CAS-check but loses
+// "send on closed channel" when a producer wins the CAS check but loses
 // to close. Workers select on both w.tasks and w.stopCh, so they exit
-// cleanly without the channel needing to be closed; Submit also
-// selects on w.stopCh and refuses new tasks once it fires.
+// cleanly without the channel needing to be closed; Submit also selects
+// on w.stopCh and refuses new tasks once it fires.
 func (w *AsyncWorkerPool) signalStop() {
 	if w.stopped.CompareAndSwap(false, true) {
 		close(w.stopCh)
