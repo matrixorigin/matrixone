@@ -394,6 +394,64 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
 }
 
+func TestAcquireFlushSlotUsesSoftLimitAfterTimeout(t *testing.T) {
+	oldFlushSemaphore := flushSemaphore
+	oldFlushSoftSemaphore := flushSoftSemaphore
+	oldFlushSemaphoreAcquireTimeout := flushSemaphoreAcquireTimeout
+	defer func() {
+		flushSemaphore = oldFlushSemaphore
+		flushSoftSemaphore = oldFlushSoftSemaphore
+		flushSemaphoreAcquireTimeout = oldFlushSemaphoreAcquireTimeout
+	}()
+
+	flushSemaphore = make(chan struct{}, 1)
+	flushSoftSemaphore = make(chan struct{}, 1)
+	flushSemaphoreAcquireTimeout = time.Millisecond
+	flushSemaphore <- struct{}{}
+
+	release, err := acquireFlushSlot(context.Background())
+	require.NoError(t, err)
+	require.Len(t, flushSoftSemaphore, 1)
+	release()
+	require.Len(t, flushSoftSemaphore, 0)
+}
+
+func TestAcquireFlushSlotDoesNotBypassSoftLimit(t *testing.T) {
+	oldFlushSemaphore := flushSemaphore
+	oldFlushSoftSemaphore := flushSoftSemaphore
+	oldFlushSemaphoreAcquireTimeout := flushSemaphoreAcquireTimeout
+	defer func() {
+		flushSemaphore = oldFlushSemaphore
+		flushSoftSemaphore = oldFlushSoftSemaphore
+		flushSemaphoreAcquireTimeout = oldFlushSemaphoreAcquireTimeout
+	}()
+
+	flushSemaphore = make(chan struct{}, 1)
+	flushSoftSemaphore = make(chan struct{}, 1)
+	flushSemaphoreAcquireTimeout = time.Millisecond
+	flushSemaphore <- struct{}{}
+	flushSoftSemaphore <- struct{}{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		release, err := acquireFlushSlot(ctx)
+		if release != nil {
+			release()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Failf(t, "acquireFlushSlot returned before a slot was available", "err=%v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
+}
+
 func testInsertS3TableDef() *plan.TableDef {
 	tableDef := &plan.TableDef{
 		Name: "t1",
