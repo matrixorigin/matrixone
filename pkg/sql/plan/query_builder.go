@@ -2516,14 +2516,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeID]
 
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			node.Offset, err = offsetBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -2726,14 +2727,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if s.Limit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if s.Limit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(s.Limit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			offsetExpr, err = offsetBinder.BindExpr(s.Limit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if s.Limit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -3276,7 +3278,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		case tree.UnqualifiedStar:
 			if astLimit != nil && astLimit.Count != nil {
 				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx)
+				limitBinder := NewLimitBinder(builder, ctx, false)
 				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 					return
 				}
@@ -3854,13 +3856,14 @@ func (builder *QueryBuilder) bindLimit(
 	astRankOption *tree.RankOption,
 ) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
 	if astLimit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			if boundOffsetExpr, err = offsetBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
 				return
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 				return
 			}
