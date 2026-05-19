@@ -36,6 +36,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
+	assert.False(t, shouldEnableAlterCopyPipelineFlush(nil))
+	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{}))
+	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{
+		Options: &plan2.AlterCopyOpt{SkipPkDedup: false},
+	}))
+	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{
+		Options: &plan2.AlterCopyOpt{SkipPkDedup: true},
+	}))
+}
+
 func TestScope_AlterTableInplace(t *testing.T) {
 	tableDef := &plan.TableDef{
 		TblId: 282826,
