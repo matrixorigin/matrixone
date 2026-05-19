@@ -993,8 +993,10 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 				ec := fun.Args[2].GetLit().GetSval()
 				if len(ec) == 1 {
 					escapeChar = ec[0]
-				} else {
+				} else if len(ec) == 0 {
 					escapeChar = 0
+				} else {
+					continue
 				}
 			}
 			index1 := strings.IndexByte(str, '_')
