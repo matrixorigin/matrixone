@@ -61,6 +61,49 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+func jsonLengthCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 0 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ts := make([]types.Type, 0, len(inputs))
+	allMatch := true
+
+	// First arg: T_json or MySQL string
+	if inputs[0].Oid == types.T_json || inputs[0].Oid.IsMySQLString() {
+		ts = append(ts, inputs[0])
+	} else {
+		if canCast, _ := fixedImplicitTypeCast(inputs[0], types.T_varchar); canCast {
+			ts = append(ts, types.T_varchar.ToType())
+			allMatch = false
+		} else {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	// Optional second arg: varchar path
+	if len(inputs) > 1 {
+		if inputs[1].Oid == types.T_varchar {
+			ts = append(ts, inputs[1])
+		} else {
+			if canCast, _ := fixedImplicitTypeCast(inputs[1], types.T_varchar); canCast {
+				ts = append(ts, types.T_varchar.ToType())
+				allMatch = false
+			} else {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+		}
+		if len(inputs) > 2 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	if allMatch {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithCast(0, ts)
+}
+
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
 type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
@@ -89,6 +132,73 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var bj bytejson.ByteJson
+		var err error
+		if jsonVec.GetType().Oid == types.T_json {
+			bj = types.DecodeJson(jsonBytes)
+		} else {
+			bj, err = types.ParseSliceToByteJson(jsonBytes)
+			if err != nil {
+				return err
+			}
+		}
+
+		hasPath := len(parameters) > 1
+		if hasPath {
+			pathWrapper := vector.GenerateFunctionStrParameter(parameters[1])
+			pathStr, pIsNull := pathWrapper.GetStrValue(i)
+			if pIsNull {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			parsedPath, err := types.ParseStringToPath(string(pathStr))
+			if err != nil {
+				return err
+			}
+			bj = bj.Query([]*bytejson.Path{&parsedPath})
+		}
+
+		if bj.IsNull() {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		switch bj.Type {
+		case bytejson.TpCodeObject, bytejson.TpCodeArray:
+			if err := rs.Append(int64(bj.GetElemCnt()), false); err != nil {
+				return err
+			}
+		case bytejson.TpCodeLiteral:
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		default:
+			if err := rs.Append(1, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func computeJsonSet(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
