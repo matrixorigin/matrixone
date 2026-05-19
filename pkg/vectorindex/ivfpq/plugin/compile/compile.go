@@ -86,7 +86,24 @@ type Hooks struct{}
 //
 // Lifted from Scope.handleVectorIvfpqIndex
 // (pkg/sql/compile/ddl_index_algo.go:802).
-func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	return h.handleCreate(ctx, indexDefs, false)
+}
+
+// HandleReindex runs during ALTER … REINDEX (foreground forceSync=false)
+// and during idxcron background reindex (forceSync=true). The forceSync
+// branch builds ivfpq_create synchronously inside the txn so the new
+// tag=0 model lands before subsequent steps observe the index — mirrors
+// IVF-FLAT and CAGRA.
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	return h.handleCreate(ctx, indexDefs, forceSync)
+}
+
+// handleCreate is the shared body for HandleCreateIndex and
+// HandleReindex. forceSync controls whether ivfpq_create runs inside
+// the current txn (true — background reindex) or is deferred to the
+// CDC pipeline via InitSQL (false — the always-async default path).
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627)
 	if ok, err := ctx.IsExperimentalEnabled(ivfpqruntime.IvfpqIndexFlag); err != nil {
 		return err
@@ -134,36 +151,41 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		}
 	}
 
-	// 5. build ivfpq index
-	sqls, err = genBuildSQL(ctx, indexDefs)
+	// 5. Generate the ivfpq_create build SQL. forceSync controls when
+	// it actually runs. See CAGRA's compile.go for the full rationale
+	// on why we stash the build SQL as InitSQL rather than passing "".
+	buildSqls, err := genBuildSQL(ctx, indexDefs)
 	if err != nil {
 		return err
 	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
-	}
-
-	// 6. IVF-PQ is AlwaysAsync: register a CDC task that appends
-	// post-build changes to the storage table's tag=1 event log (see
-	// IvfpqSync). startFromNow=true because step 5 already populated
-	// the tag=0 chunk — CDC consumes from this watermark forward.
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
 	indexName := indexDefs[catalog.Ivfpq_TblType_Metadata].IndexName
-	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, true, "", originalTableDef)
-}
 
-// HandleReindex runs during ALTER … REINDEX. For IVF-PQ this is just the
-// same as a fresh CREATE — the same delete-old + populate-new flow. The
-// forceSync flag mirrors IVF-FLAT's semantics (run synchronously inside
-// the transaction); IVF-PQ ignores it.
-//
-// New algorithms: if your rebuild strategy diverges from CREATE (e.g.
-// incremental rebuild), write a separate implementation here.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
-	return h.HandleCreateIndex(ctx, indexDefs)
+	if forceSync {
+		// Background reindex: build ivfpq_create synchronously inside
+		// this txn, then re-register CDC starting from now (the build
+		// produced tag=0; CDC handles only forward changes).
+		for _, sql := range buildSqls {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
+			originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, true, "", originalTableDef)
+	}
+
+	// Always-async path: defer ivfpq_create to the CDC pipeline's
+	// ProcessInitSQL.
+	if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
+		originalTableDef.Name, indexName); err != nil {
+		return err
+	}
+	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef)
 }
 
 // ValidateReindexParams is the per-algo arm of the ALTER … REINDEX

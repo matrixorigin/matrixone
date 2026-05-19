@@ -47,7 +47,27 @@ type Hooks struct{}
 
 // HandleCreateIndex is lifted from Scope.handleVectorCagraIndex
 // (pkg/sql/compile/ddl_index_algo.go:732).
-func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+//
+// CREATE INDEX uses the always-async path (forceSync=false): the
+// cagra_create build is stashed as InitSQL and runs inside the CDC
+// pipeline's first iteration.
+func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	return h.handleCreate(ctx, indexDefs, false)
+}
+
+// HandleReindex runs the same code path as create, but honors
+// forceSync. The idxcron background reindex executor passes
+// forceSync=true so the build happens synchronously inside the txn
+// before the CDC task picks up forward changes. Mirrors IVF-FLAT.
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+	return h.handleCreate(ctx, indexDefs, forceSync)
+}
+
+// handleCreate is the shared body for HandleCreateIndex and
+// HandleReindex. forceSync controls whether cagra_create runs inside
+// the current txn (true — background reindex) or is deferred to the
+// CDC pipeline via InitSQL (false — the always-async default path).
+func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	if ok, err := ctx.IsExperimentalEnabled(cagraruntime.CagraIndexFlag); err != nil {
 		return err
 	} else if !ok {
@@ -90,31 +110,44 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		}
 	}
 
-	sqls, err = genBuildSQL(ctx, indexDefs)
+	buildSqls, err := genBuildSQL(ctx, indexDefs)
 	if err != nil {
 		return err
 	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
-	}
-
-	// CAGRA is AlwaysAsync: register a CDC task that appends post-build
-	// changes to the storage table's tag=1 event log (see CagraSync).
-	// startFromNow=true because the build SQL above already populated
-	// the tag=0 chunk — CDC only needs to consume from this watermark
-	// forward.
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexCagraAlgo.ToString())
 	indexName := indexDefs[catalog.Cagra_TblType_Metadata].IndexName
-	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
-		indexName, sinkerType, true, "", originalTableDef)
-}
 
-// HandleReindex: same code path as create. CAGRA does not support
-// force-sync, so the flag is ignored.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
-	return h.HandleCreateIndex(ctx, indexDefs)
+	if forceSync {
+		// Background reindex: build cagra_create synchronously inside
+		// the current txn so the new tag=0 model lands before
+		// subsequent steps observe the index. Then re-register the
+		// CDC task with startFromNow=true (CDC catches only forward
+		// changes; the build we just ran already produced tag=0).
+		for _, sql := range buildSqls {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
+			originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, true, "", originalTableDef)
+	}
+
+	// Always-async path (CREATE INDEX, foreground reindex): defer the
+	// cagra_create build to the CDC pipeline's ProcessInitSQL step.
+	// cuvs storage needs both tag=0 (model blob) and tag=1 (CDC
+	// events); CagraSync only writes tag=1, so we stash the build SQL
+	// as InitSQL — unlike HNSW which passes "" because HnswSync
+	// derives both layers from the event stream alone.
+	if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(),
+		originalTableDef.Name, indexName); err != nil {
+		return err
+	}
+	return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+		indexName, sinkerType, false, strings.Join(buildSqls, ";"), originalTableDef)
 }
 
 // ValidateReindexParams is a no-op for CAGRA (matches ddl.go:960

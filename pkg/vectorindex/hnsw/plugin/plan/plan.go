@@ -24,6 +24,8 @@ package plan
 
 import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type Hooks struct{}
@@ -38,4 +40,12 @@ func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortCont
 // ApplyForSort redirects to (*plan.QueryBuilder).ApplyIndicesForSortUsingHnsw.
 func (Hooks) ApplyForSort(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return pb.ApplyIndicesForSortUsingHnsw(vctx, mti, nodeID, opts)
+}
+
+// BuildAlterReIndex is a no-op for HNSW. HNSW's reindex is an
+// incremental update (HandleReindex re-runs HandleCreateIndex) and
+// HnswSync derives its state from the event stream, so neither
+// AlgoParamList nor ForceSync are honored.
+func (Hooks) BuildAlterReIndex(_ planplugin.CompilerContext, _ *tree.AlterOptionAlterReIndex, _ *plan.AlterTableAlterReIndex) error {
+	return nil
 }

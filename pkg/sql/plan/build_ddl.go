@@ -3517,24 +3517,21 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			constraintName := string(opt.Name)
 			alterTableReIndex.IndexName = constraintName
 
-			switch opt.KeyType {
-			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList < 0 {
-					return nil, moerr.NewInternalErrorf(
-						ctx.GetContext(),
-						"lists should be >= 0. lists = 0 will keep the original configuration.",
-					)
-				}
-				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
-				alterTableReIndex.ForceSync = opt.ForceSync
-			case tree.INDEX_TYPE_HNSW:
-				// PASS: keep options on change for incremental update
-			default:
+			// Per-algo handling via plan plugin. Each algorithm
+			// validates and populates the fields it cares about
+			// (IndexAlgoParamList, ForceSync). Replaces the hardcoded
+			// switch arms for IVFFLAT/HNSW and unblocks REINDEX for
+			// CAGRA / IVF-PQ.
+			p, ok := indexplugin.Get(opt.KeyType.ToString())
+			if !ok {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					unsupportedErrFmt,
 					opt.KeyType.ToString(),
 				)
+			}
+			if err := p.Plan().BuildAlterReIndex(ctx, opt, alterTableReIndex); err != nil {
+				return nil, err
 			}
 
 			name_not_found := true

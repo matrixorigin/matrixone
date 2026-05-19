@@ -62,3 +62,11 @@ func (Hooks) CanApply(_ planplugin.PlanBuilder, _ *planplugin.VectorSortContext,
 func (Hooks) ApplyForSort(_ planplugin.PlanBuilder, _ *planplugin.VectorSortContext, _ *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return nodeID, false, nil
 }
+
+// BuildAlterReIndex — fulltext does not support ALTER … REINDEX.
+// Hidden-table rebuild semantics for fulltext are different (the
+// docid index is fully derived from the source rows on every CREATE
+// INDEX), so the REINDEX path simply errors here.
+func (Hooks) BuildAlterReIndex(ctx planplugin.CompilerContext, _ *tree.AlterOptionAlterReIndex, _ *plan.AlterTableAlterReIndex) error {
+	return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is not supported for fulltext indexes")
+}
