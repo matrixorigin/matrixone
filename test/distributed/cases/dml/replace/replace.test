@@ -170,3 +170,44 @@ replace into multi_uk_batch (name, email, value) values
   ('c', 'z@a.com', 12);
 select name, email, value from multi_uk_batch order by name;
 drop table multi_uk_batch;
+
+-- NULL values in a UNIQUE column are not equal to each other for uniqueness
+-- purposes, so multiple rows with NULL in the UK column must NOT be collapsed
+-- by the planner's insert dedup. Verify across (1) all-NULL UKs on a table
+-- with real PK, (2) NULL UK on a fake-PK table, and (3) explicit same PK with
+-- NULL UK but different other columns.
+drop table if exists null_uk_real_pk;
+create table null_uk_real_pk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+replace into null_uk_real_pk (name, email, value) values (NULL, NULL, 100), (NULL, NULL, 200);
+select count(*) from null_uk_real_pk;
+drop table null_uk_real_pk;
+
+drop table if exists null_uk_fake_pk;
+create table null_uk_fake_pk (a varchar(50) unique, v int);
+replace into null_uk_fake_pk values (NULL, 100), (NULL, 100);
+select count(*) from null_uk_fake_pk;
+drop table null_uk_fake_pk;
+
+drop table if exists null_uk_mixed;
+create table null_uk_mixed (id int primary key, name varchar(50) unique, value int);
+replace into null_uk_mixed values (1, NULL, 100), (2, NULL, 100);
+select count(*) from null_uk_mixed;
+drop table null_uk_mixed;
+
+-- Two identical VALUES rows in one REPLACE statement must each be processed
+-- as an independent input row. The insert-dedup uses a per-row uuid (not a
+-- content-derived hash) so byte-for-bit identical inputs do not collapse.
+drop table if exists identical_input_rows;
+create table identical_input_rows (id int primary key, name varchar(50) unique, value int);
+replace into identical_input_rows values (1, 'a', 100), (1, 'a', 100);
+select count(*) from identical_input_rows;
+drop table identical_input_rows;
+
+-- Same shape but with a non-PK distinct row mixed in, to confirm the uuid
+-- group id collapses only true fan-out copies of one input row, not adjacent
+-- rows that happen to share insert payload with their neighbour.
+drop table if exists identical_then_distinct;
+create table identical_then_distinct (id int auto_increment primary key, name varchar(50) unique, value int);
+replace into identical_then_distinct (name, value) values ('a', 100), ('a', 100), ('b', 200);
+select count(*) from identical_then_distinct;
+drop table identical_then_distinct;

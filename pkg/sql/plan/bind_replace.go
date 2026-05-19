@@ -63,6 +63,68 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 
+	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
+	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
+
+	oldColName2Idx := make(map[string][2]int32, len(tableDef.Cols)+len(tableDef.Indexes)*2)
+
+	// hasUniqueIdx drives three things below:
+	//   - For fake-PK tables: when false (no PK, no UK), REPLACE behaves like INSERT
+	//     and we skip the LEFT JOIN entirely (would otherwise become a cross join).
+	//   - For real-PK tables: when true, the merged-scan optimization is disabled so
+	//     that a UK-only conflict (no PK conflict) can still locate the old row via
+	//     the legacy LEFT JOIN. Merged scan only captures old columns on a PK match.
+	//   - When true, a per-input-row uuid column is materialized below and used as
+	//     the MULTI_UPDATE insert-dedup group id. This collapses LEFT-JOIN OR
+	//     fan-out (each fan-out copy of one input row shares the same uuid) while
+	//     keeping two genuinely distinct VALUES rows independent — including the
+	//     edge case where both rows have identical content (uuid is volatile and
+	//     issued per row at the projection that produces it).
+	hasUniqueIdx := false
+	for _, idxDef := range tableDef.Indexes {
+		if idxDef.Unique {
+			hasUniqueIdx = true
+			break
+		}
+	}
+
+	// When the OR'd LEFT JOIN path is in use, materialize a uuid column on the
+	// new-row pipeline BEFORE the LEFT JOIN OR so fan-out copies share the same
+	// uuid value. Use a Node_PROJECT (uuid() is volatile so the PROJECT is not
+	// eligible for removeSimpleProjections folding — it stays in the tree and
+	// is evaluated once per source row).
+	var rowUUIDColPosInSelect int32 = -1
+	if hasUniqueIdx {
+		uuidExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "uuid", nil)
+		if err != nil {
+			return 0, err
+		}
+		uuidProjTag := builder.genNewBindTag()
+		uuidProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+1)
+		for i, expr := range selectNode.ProjectList {
+			uuidProjList = append(uuidProjList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: int32(i),
+					},
+				},
+			})
+		}
+		rowUUIDColPosInSelect = int32(len(uuidProjList))
+		uuidProjList = append(uuidProjList, uuidExpr)
+
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: uuidProjList,
+			Children:    []int32{lastNodeID},
+			BindingTags: []int32{uuidProjTag},
+		}, bindCtx)
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectTag = uuidProjTag
+	}
+
 	fullProjTag := builder.genNewBindTag()
 	fullProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+len(tableDef.Cols))
 	for i, expr := range selectNode.ProjectList {
@@ -75,25 +137,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
-	}
-
-	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
-	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
-
-	oldColName2Idx := make(map[string][2]int32, len(tableDef.Cols)+len(tableDef.Indexes)*2)
-
-	// hasUniqueIdx drives two things below:
-	//   - For fake-PK tables: when false (no PK, no UK), REPLACE behaves like INSERT
-	//     and we skip the LEFT JOIN entirely (would otherwise become a cross join).
-	//   - For real-PK tables: when true, the merged-scan optimization is disabled so
-	//     that a UK-only conflict (no PK conflict) can still locate the old row via
-	//     the legacy LEFT JOIN. Merged scan only captures old columns on a PK match.
-	hasUniqueIdx := false
-	for _, idxDef := range tableDef.Indexes {
-		if idxDef.Unique {
-			hasUniqueIdx = true
-			break
-		}
 	}
 
 	// get old columns from existing main table
@@ -798,23 +841,27 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// When the table has a unique secondary index (or PK + UK combo), the
 	// LEFT JOIN above ORs PK and per-UK equality conditions to find conflicts.
 	// One new row that conflicts on N different old rows fans out into N
-	// pipeline rows. To keep insert idempotent per logical new row, append a
-	// group-id column at the end of finalProjList and tell MULTI_UPDATE to
-	// deduplicate inserts by it. The PK column is unique per new row (auto-
-	// incremented, user-supplied, or generated fake/composite key), so it is
-	// used as the group id. The col reference is bumped by the MULTI_UPDATE
-	// refcount pass and remapped like InsertCols so the upstream PROJECT
-	// preserves it.
+	// pipeline rows. Pin a per-input-row uuid (materialized in the PROJECT
+	// inserted above selectNode) as the MULTI_UPDATE insert-dedup group id:
+	//   - Fan-out copies share the same uuid (LEFT JOIN replicates the LHS
+	//     row verbatim), so only the first occurrence survives the operator's
+	//     dedup and the new row is inserted exactly once.
+	//   - Two genuinely distinct VALUES rows each get an independent uuid —
+	//     even when their content is bit-for-bit identical — so neither is
+	//     silently dropped.
+	//
+	// The col reference is bumped by the MULTI_UPDATE refcount pass and
+	// remapped like InsertCols so the upstream PROJECT preserves it.
 	var replaceGroupIdCol *plan.ColRef
 	if hasUniqueIdx {
-		pkColIdxInFullProj := colName2Idx[tableDef.Name+"."+pkName]
+		uuidColPosInFullProj := rowUUIDColPosInSelect
 		groupIdColPos := int32(len(finalProjList))
 		finalProjList = append(finalProjList, &plan.Expr{
-			Typ: fullProjList[pkColIdxInFullProj].Typ,
+			Typ: fullProjList[uuidColPosInFullProj].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: fullProjTag,
-					ColPos: pkColIdxInFullProj,
+					ColPos: uuidColPosInFullProj,
 				},
 			},
 		})

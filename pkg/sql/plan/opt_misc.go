@@ -234,7 +234,20 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if ne.F.Func.ObjName == "sleep" {
+		// Volatile, per-row functions must not be folded into a child node:
+		// removeSimpleProjections inlines the expression into every upstream
+		// reference, which causes the function to be re-evaluated per row at
+		// the consuming node and lose the once-per-source-row semantics this
+		// PROJECT was placed to enforce.
+		//
+		// "sleep" has been disallowed historically for side-effect reasons;
+		// "uuid" is required by REPLACE INTO's multi-UK fan-out dedup, which
+		// uses a per-input-row uuid materialized above the LEFT JOIN as the
+		// MULTI_UPDATE insert-dedup group id (each LEFT-JOIN fan-out copy must
+		// inherit the same uuid value, which only holds when uuid() is
+		// evaluated once at the upstream PROJECT).
+		switch ne.F.Func.ObjName {
+		case "sleep", "uuid":
 			return false
 		}
 		for _, arg := range ne.F.GetArgs() {

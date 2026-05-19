@@ -115,8 +115,8 @@ func TestReplaceGroupIdDedup_AcrossBatches(t *testing.T) {
 }
 
 // TestReplaceGroupIdDedup_VarlenKey exercises the varlen branch of
-// groupIdKey, used when the table's PK / fake-PK / composite key column is a
-// varchar / varbinary.
+// groupIdKey, used when the planner emits serial_full() (varchar) as the
+// group-id expression for REPLACE INTO with multiple unique keys.
 func TestReplaceGroupIdDedup_VarlenKey(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
@@ -135,4 +135,30 @@ func TestReplaceGroupIdDedup_VarlenKey(t *testing.T) {
 	require.NotNil(t, dedup)
 	defer dedup.Clean(proc.Mp())
 	require.Equal(t, 3, dedup.RowCount(), "varlen dedup: a, b, c")
+}
+
+// TestReplaceGroupIdDedup_ConstVector regression-guards groupIdKey against a
+// constant-vector group-id column. A naive `data[row*width : (row+1)*width]`
+// implementation reads past the single-element backing storage of a const
+// vector; this asserts that every row maps to the same key and no panic
+// occurs.
+func TestReplaceGroupIdDedup_ConstVector(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	constVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 5, proc.Mp())
+	require.NoError(t, err)
+	inBat := batch.New([]string{"group_id"})
+	inBat.SetVector(0, constVec)
+	inBat.SetRowCount(5)
+	defer inBat.Clean(proc.Mp())
+
+	op := &MultiUpdate{InsertGroupIdIdx: 0}
+	op.ctr.insertedGroupIds = map[string]struct{}{}
+
+	dedup, err := op.dedupBatchByGroupId(proc, inBat)
+	require.NoError(t, err)
+	require.NotNil(t, dedup, "const vector with 5 rows of value 42 collapses to one row")
+	defer dedup.Clean(proc.Mp())
+	require.Equal(t, 1, dedup.RowCount())
 }

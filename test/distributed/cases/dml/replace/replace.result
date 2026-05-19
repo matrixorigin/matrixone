@@ -218,3 +218,38 @@ select name, email, value from multi_uk_batch order by name;
 a  ¦  y@a.com  ¦  11  𝄀
 c  ¦  z@a.com  ¦  12
 drop table multi_uk_batch;
+drop table if exists null_uk_real_pk;
+create table null_uk_real_pk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+replace into null_uk_real_pk (name, email, value) values (NULL, NULL, 100), (NULL, NULL, 200);
+select count(*) from null_uk_real_pk;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop table null_uk_real_pk;
+drop table if exists null_uk_fake_pk;
+create table null_uk_fake_pk (a varchar(50) unique, v int);
+replace into null_uk_fake_pk values (NULL, 100), (NULL, 100);
+select count(*) from null_uk_fake_pk;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop table null_uk_fake_pk;
+drop table if exists null_uk_mixed;
+create table null_uk_mixed (id int primary key, name varchar(50) unique, value int);
+replace into null_uk_mixed values (1, NULL, 100), (2, NULL, 100);
+select count(*) from null_uk_mixed;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop table null_uk_mixed;
+drop table if exists identical_input_rows;
+create table identical_input_rows (id int primary key, name varchar(50) unique, value int);
+replace into identical_input_rows values (1, 'a', 100), (1, 'a', 100);
+select count(*) from identical_input_rows;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop table identical_input_rows;
+drop table if exists identical_then_distinct;
+create table identical_then_distinct (id int auto_increment primary key, name varchar(50) unique, value int);
+replace into identical_then_distinct (name, value) values ('a', 100), ('a', 100), ('b', 200);
+select count(*) from identical_then_distinct;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop table identical_then_distinct;

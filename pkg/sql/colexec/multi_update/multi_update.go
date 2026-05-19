@@ -481,21 +481,17 @@ func (update *MultiUpdate) dedupBatchByGroupId(
 }
 
 // groupIdKey encodes one row's group-id column value into a map-friendly key.
-// Varlen types use the raw bytes; fixed-width types use the typed bytes from
-// the vector's backing storage.
+// Delegates to vector.GetRawBytesAt which handles both varlen and fixed-width
+// types correctly, including the const-vector case (raw storage holds a single
+// element and naive row*width slicing would read out of bounds).
 func groupIdKey(vec *vector.Vector, row int) string {
 	if vec.IsNull(uint64(row)) {
 		// All NULL group ids collapse to the same key; in practice the
-		// dedup column is post-PRE_INSERT PK and never NULL, but be safe.
+		// dedup column is serial_full() of NOT-NULL insert columns, but
+		// be defensive.
 		return "\x00\x00<NULL>"
 	}
-	if vec.GetType().IsVarlen() {
-		return string(vec.GetBytesAt(row))
-	}
-	width := vec.GetType().TypeSize()
-	rawData := vec.UnsafeGetRawData()
-	start := row * width
-	return string(rawData[start : start+width])
+	return string(vec.GetRawBytesAt(row))
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {

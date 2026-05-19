@@ -62,6 +62,10 @@ func NewPartitionMultiUpdateFrom(
 	op.MultiUpdateCtx = from.raw.MultiUpdateCtx
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
+	// Propagate the REPLACE INTO group-id column index; without this the
+	// cloned operator falls back to NewArgument()'s zero value and would
+	// either dedup by column 0 (wrong) or silently drop fan-out dedup.
+	op.InsertGroupIdIdx = from.raw.InsertGroupIdIdx
 	op.Engine = from.raw.Engine
 	return NewPartitionMultiUpdate(op, from.tableID)
 }
