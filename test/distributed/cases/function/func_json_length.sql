@@ -12,6 +12,12 @@ SELECT JSON_LENGTH('42') AS result;
 SELECT JSON_LENGTH('{"a":{"b":[1,2,3]}}', '$.a.b') AS result;
 SELECT JSON_LENGTH('{"a":1}', '$.x') AS result;
 
+-- Error: invalid JSON string
+SELECT JSON_LENGTH('not-json');
+
+-- Path with wildcards (multiple matches)
+SELECT JSON_LENGTH('{"a":{"x":1,"y":2}}', '$.a.*') AS result;
+
 -- Table with JSON column
 DROP TABLE IF EXISTS t_json_len;
 CREATE TABLE t_json_len (id INT PRIMARY KEY, payload JSON);

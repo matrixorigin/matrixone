@@ -302,4 +302,24 @@ func TestJsonLengthOperator(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+	// json_length with wildcard path: {"a":{"x":1,"y":2}}, $.a.* → 2
+	{
+		tc := tcTemp{
+			info: "json_length with wildcard path: {\"a\":{\"x\":1,\"y\":2}}, $.a.* -> 2",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":{"x":1,"y":2}}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a.*`},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
 }
