@@ -1448,7 +1448,19 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
-	// Pre-merge paired range conditions (e.g., a > 3 AND a < 10) into in_range.
+	if numParts == 1 {
+		return filters
+	}
+
+	sortKeyPartCols := make(map[int32]struct{}, len(Parts))
+	for _, part := range Parts {
+		if colIdx, ok := tableDef.Name2ColIndex[part]; ok {
+			sortKeyPartCols[colIdx] = struct{}{}
+		}
+	}
+
+	// Pre-merge paired range conditions on composite sort-key parts
+	// (e.g., pk_a = 1 AND pk_b > 3 AND pk_b < 10) into in_range.
 	colLowerBounds := make(map[int32]int) // colPos -> filter index
 	colUpperBounds := make(map[int32]int) // colPos -> filter index
 	for i, expr := range filters {
@@ -1458,6 +1470,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		col, isLower := classifyRangeBound(fn)
 		if col == nil {
+			continue
+		}
+		if _, ok := sortKeyPartCols[col.ColPos]; !ok {
 			continue
 		}
 		if isLower {
@@ -1532,10 +1547,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		filters[lowerIdx] = merged
 		filters[upperIdx] = makePlan2BoolConstExprWithType(true)
 		col2filter[colPos] = lowerIdx
-	}
-
-	if numParts == 1 {
-		return filters
 	}
 
 	filterIdx := make([]int, 0, numParts)
