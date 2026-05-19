@@ -259,6 +259,10 @@ func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) CreateTS() timestamp.Timestamp {
 	panic("unimplemented")
 }

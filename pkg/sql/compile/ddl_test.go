@@ -991,8 +991,8 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 
-		// Use a real TxnMeta so TxnRef() returns a mutable pointer
-		// and we can verify the restore.
+		// Use a real TxnMeta so the mock can simulate UpdateSnapshot
+		// and SetSnapshotTS mutations.
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Pessimistic,
 			Isolation:  txn.TxnIsolation_RC,
@@ -1011,8 +1011,12 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
-		txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
+		txnOp.EXPECT().SetSnapshotTS(origSnapshotTS).Do(
+			func(ts timestamp.Timestamp) {
+				txnMeta.SnapshotTS = ts
+			}).Times(1)
 
+		var advancedSnapshotTS timestamp.Timestamp
 		// Key assertion: UpdateSnapshot must be called exactly once with
 		// an HLC timestamp (we accept any value since HLC Now is dynamic).
 		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -1022,6 +1026,7 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 					"UpdateSnapshot should be called with HLC Now > origSnapshotTS")
 				// Simulate what real UpdateSnapshot does: advance SnapshotTS.
 				txnMeta.SnapshotTS = ts
+				advancedSnapshotTS = ts
 				return nil
 			}).Times(1)
 
@@ -1032,7 +1037,12 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		// Return non-numeric string to skip CCPR check (strconv.ParseUint will fail)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
 		// Relations returns an error to stop execution after the snapshot advance.
-		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
+		mockDb.EXPECT().Relations(gomock.Any()).DoAndReturn(
+			func(_ context.Context) ([]string, error) {
+				assert.Equal(t, advancedSnapshotTS, txnMeta.SnapshotTS,
+					"Relations must run while DropDatabase is using the advanced SnapshotTS")
+				return nil, moerr.NewInternalErrorNoCtx("stop here")
+			}).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
@@ -1082,7 +1092,10 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
-		txnOp.EXPECT().TxnRef().Return(&txnMeta).AnyTimes()
+		txnOp.EXPECT().SetSnapshotTS(origSnapshotTS).Do(
+			func(ts timestamp.Timestamp) {
+				txnMeta.SnapshotTS = ts
+			}).Times(1)
 
 		// Key assertion: UpdateSnapshot must NOT be called for non-RC txn.
 		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).Times(0)
@@ -1093,8 +1106,12 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		// Return non-numeric string to skip CCPR check (strconv.ParseUint will fail)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
-		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
-		mockDb.EXPECT().Relations(gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("stop here")).AnyTimes()
+		mockDb.EXPECT().Relations(gomock.Any()).DoAndReturn(
+			func(_ context.Context) ([]string, error) {
+				assert.Equal(t, origSnapshotTS, txnMeta.SnapshotTS,
+					"Non-RC DropDatabase must not advance SnapshotTS before Relations")
+				return nil, moerr.NewInternalErrorNoCtx("stop here")
+			}).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()

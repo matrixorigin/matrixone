@@ -92,6 +92,11 @@ func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")

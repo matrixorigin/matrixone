@@ -167,7 +167,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	defer func() {
 		// Restore SnapshotTS so that tombstone transfer in subsequent
 		// statements is not affected by the temporary advancement.
-		txnOp.TxnRef().SnapshotTS = origSnapshotTS
+		txnOp.SetSnapshotTS(origSnapshotTS)
 	}()
 
 	// handle sub
