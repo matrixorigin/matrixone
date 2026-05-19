@@ -57,8 +57,12 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	// NULL check: reject NULL in LIMIT/OFFSET with a clear message.
-	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok && cExpr.Lit.GetIsnull() {
-		return nil, moerr.NewSyntaxError(b.GetContext(), "LIMIT/OFFSET cannot be NULL")
+	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok && cExpr.Lit != nil && cExpr.Lit.GetIsnull() {
+		clause := "LIMIT"
+		if b.isOffset {
+			clause = "OFFSET"
+		}
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "%s cannot be NULL", clause)
 	}
 
 	if expr.Typ.Id != int32(types.T_uint64) {

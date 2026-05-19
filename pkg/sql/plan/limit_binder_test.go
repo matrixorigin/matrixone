@@ -112,7 +112,7 @@ func TestLimitBinder_LimitNull(t *testing.T) {
 
 	_, err := bindLimitExpr(t, astLimit.Count, false)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "LIMIT/OFFSET cannot be NULL")
+	require.Contains(t, err.Error(), "LIMIT cannot be NULL")
 }
 
 func TestLimitBinder_OffsetNull(t *testing.T) {
@@ -121,7 +121,7 @@ func TestLimitBinder_OffsetNull(t *testing.T) {
 
 	_, err := bindLimitExpr(t, astLimit.Offset, true)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "LIMIT/OFFSET cannot be NULL")
+	require.Contains(t, err.Error(), "OFFSET cannot be NULL")
 }
 
 func TestLimitBinder_LimitString(t *testing.T) {
