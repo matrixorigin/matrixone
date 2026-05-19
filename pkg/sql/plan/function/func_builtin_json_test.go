@@ -42,6 +42,18 @@ func TestJsonLengthCheckFn(t *testing.T) {
 	ret = jsonLengthCheckFn(nil, []types.Type{})
 	require.Equal(t, failedFunctionParametersWrong, ret.status)
 
+	// Invalid: first arg cannot cast to varchar
+	ret = jsonLengthCheckFn(nil, []types.Type{types.T_geometry.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, ret.status)
+
+	// Valid: 2 args with second arg castable to varchar (succeedWithCast on path)
+	ret = jsonLengthCheckFn(nil, []types.Type{types.T_json.ToType(), types.T_int64.ToType()})
+	require.Equal(t, succeedWithCast, ret.status)
+
+	// Invalid: second arg cannot cast to varchar
+	ret = jsonLengthCheckFn(nil, []types.Type{types.T_json.ToType(), types.T_geometry.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, ret.status)
+
 	// Invalid: 3 args
 	ret = jsonLengthCheckFn(nil, []types.Type{types.T_json.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()})
 	require.Equal(t, failedFunctionParametersWrong, ret.status)
