@@ -2,123 +2,161 @@ drop table if exists test_value_window;
 create table test_value_window (id int, year_col int, revenue decimal(10, 2), category varchar(20));
 insert into test_value_window values (1, 2020, 1000.00, 'A'), (2, 2021, 1500.00, 'A'), (3, 2022, 1800.00, 'A'), (4, 2023, 2000.00, 'A'), (5, 2020, 500.00, 'B'), (6, 2021, 600.00, 'B'), (7, 2022, 750.00, 'B');
 select id, year_col, revenue, LAG(revenue) over (order by year_col) as prev_revenue from test_value_window where category = 'A';
-id	year_col	revenue	prev_revenue
-1	2020	1000.00	null
-2	2021	1500.00	1000.00
-3	2022	1800.00	1500.00
-4	2023	2000.00	1800.00
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  prev_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  null  𝄀
+2  ¦  2021  ¦  1500.00  ¦  1000.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  1500.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  1800.00
 select id, year_col, revenue, LEAD(revenue) over (order by year_col) as next_revenue from test_value_window where category = 'A';
-id	year_col	revenue	next_revenue
-1	2020	1000.00	1500.00
-2	2021	1500.00	1800.00
-3	2022	1800.00	2000.00
-4	2023	2000.00	null
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  next_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  1500.00  𝄀
+2  ¦  2021  ¦  1500.00  ¦  1800.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  2000.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  null
 select id, year_col, revenue, FIRST_VALUE(revenue) over (order by year_col) as first_revenue from test_value_window where category = 'A';
-id	year_col	revenue	first_revenue
-1	2020	1000.00	1000.00
-2	2021	1500.00	1000.00
-3	2022	1800.00	1000.00
-4	2023	2000.00	1000.00
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  first_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  1000.00  𝄀
+2  ¦  2021  ¦  1500.00  ¦  1000.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  1000.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  1000.00
 select id, year_col, revenue, LAST_VALUE(revenue) over (order by year_col rows between unbounded preceding and unbounded following) as last_revenue from test_value_window where category = 'A';
-id	year_col	revenue	last_revenue
-1	2020	1000.00	2000.00
-2	2021	1500.00	2000.00
-3	2022	1800.00	2000.00
-4	2023	2000.00	2000.00
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  last_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  2000.00  𝄀
+2  ¦  2021  ¦  1500.00  ¦  2000.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  2000.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  2000.00
 select id, year_col, revenue, NTH_VALUE(revenue, 1) over (order by year_col) as first_revenue from test_value_window where category = 'A';
-id	year_col	revenue	first_revenue
-1	2020	1000.00	1000.00
-2	2021	1500.00	1000.00
-3	2022	1800.00	1000.00
-4	2023	2000.00	1000.00
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  first_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  1000.00  𝄀
+2  ¦  2021  ¦  1500.00  ¦  1000.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  1000.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  1000.00
 select id, year_col, revenue, category, LAG(revenue) over (partition by category order by year_col) as prev_revenue from test_value_window order by category, year_col;
-id	year_col	revenue	category	prev_revenue
-1	2020	1000.00	A	null
-2	2021	1500.00	A	1000.00
-3	2022	1800.00	A	1500.00
-4	2023	2000.00	A	1800.00
-5	2020	500.00	B	null
-6	2021	600.00	B	500.00
-7	2022	750.00	B	600.00
+➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  category[12,-1,0]  ¦  prev_revenue[3,10,2]  𝄀
+1  ¦  2020  ¦  1000.00  ¦  A  ¦  null  𝄀
+2  ¦  2021  ¦  1500.00  ¦  A  ¦  1000.00  𝄀
+3  ¦  2022  ¦  1800.00  ¦  A  ¦  1500.00  𝄀
+4  ¦  2023  ¦  2000.00  ¦  A  ¦  1800.00  𝄀
+5  ¦  2020  ¦  500.00  ¦  B  ¦  null  𝄀
+6  ¦  2021  ¦  600.00  ¦  B  ¦  500.00  𝄀
+7  ¦  2022  ¦  750.00  ¦  B  ¦  600.00
 select id, category, LAG(category) over (order by id) as prev_category from test_value_window where category = 'A';
-id	category	prev_category
-1	A	null
-2	A	A
-3	A	A
-4	A	A
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  prev_category[12,-1,0]  𝄀
+1  ¦  A  ¦  null  𝄀
+2  ¦  A  ¦  A  𝄀
+3  ¦  A  ¦  A  𝄀
+4  ¦  A  ¦  A
 select id, category, LEAD(category) over (order by id) as next_category from test_value_window where category = 'A';
-id	category	next_category
-1	A	A
-2	A	A
-3	A	A
-4	A	null
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  next_category[12,-1,0]  𝄀
+1  ¦  A  ¦  A  𝄀
+2  ¦  A  ¦  A  𝄀
+3  ¦  A  ¦  A  𝄀
+4  ¦  A  ¦  null
 select id, category, FIRST_VALUE(category) over (order by id) as first_category from test_value_window where category = 'A';
-id	category	first_category
-1	A	A
-2	A	A
-3	A	A
-4	A	A
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  first_category[12,-1,0]  𝄀
+1  ¦  A  ¦  A  𝄀
+2  ¦  A  ¦  A  𝄀
+3  ¦  A  ¦  A  𝄀
+4  ¦  A  ¦  A
 select id, category, LAST_VALUE(category) over (order by id rows between unbounded preceding and unbounded following) as last_category from test_value_window where category = 'A';
-id	category	last_category
-1	A	A
-2	A	A
-3	A	A
-4	A	A
+➤ id[4,32,0]  ¦  category[12,-1,0]  ¦  last_category[12,-1,0]  𝄀
+1  ¦  A  ¦  A  𝄀
+2  ¦  A  ¦  A  𝄀
+3  ¦  A  ¦  A  𝄀
+4  ¦  A  ¦  A
 drop table if exists test_null_window;
 create table test_null_window (id int, val int);
 insert into test_null_window values (1, 100), (2, null), (3, 300), (4, null);
 select id, val, LAG(val) over (order by id) as prev_val from test_null_window;
-id	val	prev_val
-1	100	null
-2	null	100
-3	300	null
-4	null	300
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  prev_val[4,32,0]  𝄀
+1  ¦  100  ¦  null  𝄀
+2  ¦  null  ¦  100  𝄀
+3  ¦  300  ¦  null  𝄀
+4  ¦  null  ¦  300
 select id, val, LEAD(val) over (order by id) as next_val from test_null_window;
-id	val	next_val
-1	100	null
-2	null	300
-3	300	null
-4	null	null
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  next_val[4,32,0]  𝄀
+1  ¦  100  ¦  null  𝄀
+2  ¦  null  ¦  300  𝄀
+3  ¦  300  ¦  null  𝄀
+4  ¦  null  ¦  null
 select id, val, FIRST_VALUE(val) over (order by id) as first_val from test_null_window;
-id	val	first_val
-1	100	100
-2	null	100
-3	300	100
-4	null	100
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  first_val[4,32,0]  𝄀
+1  ¦  100  ¦  100  𝄀
+2  ¦  null  ¦  100  𝄀
+3  ¦  300  ¦  100  𝄀
+4  ¦  null  ¦  100
 drop table if exists test_null_window;
 drop table if exists test_int_types;
 create table test_int_types (id int, val_i8 tinyint, val_i16 smallint, val_i32 int, val_i64 bigint);
 insert into test_int_types values (1, 10, 100, 1000, 10000), (2, 20, 200, 2000, 20000), (3, 30, 300, 3000, 30000);
 select id, LAG(val_i8) over (order by id) as prev_i8 from test_int_types;
-id	prev_i8
-1	null
-2	10
-3	20
+➤ id[4,32,0]  ¦  prev_i8[-6,8,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  10  𝄀
+3  ¦  20
 select id, LAG(val_i64) over (order by id) as prev_i64 from test_int_types;
-id	prev_i64
-1	null
-2	10000
-3	20000
+➤ id[4,32,0]  ¦  prev_i64[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  10000  𝄀
+3  ¦  20000
 select id, LEAD(val_i32) over (order by id) as next_i32 from test_int_types;
-id	next_i32
-1	2000
-2	3000
-3	null
+➤ id[4,32,0]  ¦  next_i32[4,32,0]  𝄀
+1  ¦  2000  𝄀
+2  ¦  3000  𝄀
+3  ¦  null
 drop table if exists test_int_types;
 drop table if exists test_float_types;
 create table test_float_types (id int, val_f32 float, val_f64 double);
 insert into test_float_types values (1, 1.1, 1.11), (2, 2.2, 2.22), (3, 3.3, 3.33);
 select id, LAG(val_f32) over (order by id) as prev_f32 from test_float_types;
-id	prev_f32
-1	null
-2	1.1
-3	2.2
+➤ id[4,32,0]  ¦  prev_f32[7,24,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.1  𝄀
+3  ¦  2.2
 select id, LEAD(val_f64) over (order by id) as next_f64 from test_float_types;
-id	next_f64
-1	2.22
-2	3.33
-3	null
+➤ id[4,32,0]  ¦  next_f64[8,54,0]  𝄀
+1  ¦  2.22  𝄀
+2  ¦  3.33  𝄀
+3  ¦  null
 drop table if exists test_float_types;
+drop table if exists test_decimal_window;
+create table test_decimal_window (id int, val decimal(10, 4));
+insert into test_decimal_window values (1, 100.1234), (2, 200.5678);
+select id, val, lead(val, 1, -1) over (order by id) as lead_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  200.5678  𝄀
+2  ¦  200.5678  ¦  -1.0000
+select id, val, lag(val, 1, -1) over (order by id) as lag_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lag_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  -1.0000  𝄀
+2  ¦  200.5678  ¦  100.1234
+select id, val, lead(val, 1, -999) over (order by id) as lead_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  200.5678  𝄀
+2  ¦  200.5678  ¦  -999.0000
+select id, val, lag(val, 1, 0) over (order by id) as lag_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lag_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  0.0000  𝄀
+2  ¦  200.5678  ¦  100.1234
+select id, val, lag(val, 1, cast(-1 as decimal(10, 4))) over (order by id) as lag_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lag_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  -1.0000  𝄀
+2  ¦  200.5678  ¦  100.1234
+select id, val, lead(id, 1, -1) over (order by id) as lead_id from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_id[4,32,0]  𝄀
+1  ¦  100.1234  ¦  2  𝄀
+2  ¦  200.5678  ¦  -1
+select id, revenue, lag(revenue, 1, -1) over (order by year_col) as lag_revenue from test_value_window where category = 'A';
+➤ id[4,32,0]  ¦  revenue[3,10,2]  ¦  lag_revenue[3,10,2]  𝄀
+1  ¦  1000.00  ¦  -1.00  𝄀
+2  ¦  1500.00  ¦  1000.00  𝄀
+3  ¦  1800.00  ¦  1500.00  𝄀
+4  ¦  2000.00  ¦  1800.00
+select id, val, lead(val, 2, -1) over (order by id) as lead_val from test_decimal_window order by id;
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_val[3,10,4]  𝄀
+1  ¦  100.1234  ¦  -1.0000  𝄀
+2  ¦  200.5678  ¦  -1.0000
+drop table if exists test_decimal_window;
 drop role if exists lag;
 drop role if exists lead;
 drop table if exists test_value_window;
