@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -58,6 +57,15 @@ type IndexConsumer struct {
 
 var _ Consumer = new(IndexConsumer)
 
+// SqlWriter returns the writer this consumer is paired with. Used by
+// plugin Hooks.Run impls that need to dispatch on the writer's
+// concrete type (e.g. HNSW picking RunHnsw[float32] vs [float64]).
+func (c *IndexConsumer) SqlWriter() IndexSqlWriter { return c.sqlWriter }
+
+// Algo returns the algorithm string this consumer's writer was built
+// for. Useful for diagnostics inside plugin Hooks.
+func (c *IndexConsumer) Algo() string { return c.algo }
+
 func NewIndexConsumer(cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
@@ -68,7 +76,11 @@ func NewIndexConsumer(cnUUID string,
 	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
 
 	for _, idx := range tableDef.Indexes {
-		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+		// Any algorithm that has registered an iscp.Hooks participates
+		// in CDC; the registry is the single source of truth. Replaces
+		// the previous IsHnswIndexAlgo / IsIvfIndexAlgo /
+		// IsFullTextIndexAlgo chain.
+		if idx.TableExist && HasHooks(idx.IndexAlgo) {
 			key := idx.IndexName
 			if key == info.IndexName {
 				if len(ie.algo) == 0 {
@@ -99,6 +111,17 @@ func NewIndexConsumer(cnUUID string,
 	}
 
 	return c, nil
+}
+
+// RunIndex drives one ISCP consumer iteration for SQL-based index
+// algorithms (fulltext, IVF-FLAT). It drains SQL statements from the
+// consumer's send channel and executes them against the hidden tables,
+// committing each statement individually for snapshot data and under
+// one long-lived transaction for tail data. Used as the default Run
+// implementation by plugin Hooks whose writer produces SQL rather than
+// a JSON CDC blob.
+func RunIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	runIndex(c, ctx, errch, r)
 }
 
 func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
@@ -178,6 +201,18 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 			return
 		}
 	}
+}
+
+// RunHnsw drives one ISCP consumer iteration for HNSW indexes. It
+// reads JSON CDC blobs from the writer's send channel, applies them
+// to an in-memory HnswSync graph via Update, then flushes the model
+// to the hidden tables via Save when the channel closes. Used as the
+// Run implementation by HNSW's plugin Hooks.
+//
+// The generic parameter T is the vector element type (float32 or
+// float64), matched against the writer type at the call site.
+func RunHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	runHnsw[T](c, ctx, errch, r)
 }
 
 func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
@@ -281,18 +316,16 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 }
 
 func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
-
-	switch c.sqlWriter.(type) {
-	case *HnswSqlWriter[float32]:
-		// init HnswSync[float32]
-		runHnsw[float32](c, ctx, errch, r)
-	case *HnswSqlWriter[float64]:
-		// init HnswSync[float64]
-		runHnsw[float64](c, ctx, errch, r)
-	default:
-		// run fulltext/ivfflat index
-		runIndex(c, ctx, errch, r)
+	// Plugin Hooks own the per-algorithm consumer loop. HNSW's Run
+	// type-switches the writer to pick the right RunHnsw[T]
+	// specialisation; IVF-FLAT and fulltext delegate to RunIndex.
+	// Replaces the hardcoded switch that previously lived here.
+	h, ok := GetHooks(c.algo)
+	if !ok {
+		errch <- moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo)
+		return
 	}
+	h.Run(c, ctx, errch, r)
 }
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {

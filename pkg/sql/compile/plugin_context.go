@@ -26,6 +26,11 @@ import (
 	// vector-index plugin's init() fires whenever compile is loaded
 	// (production via cmd/mo-service and every test that exercises compile).
 	_ "github.com/matrixorigin/matrixone/pkg/indexplugin/all"
+
+	// And the parallel ISCP-hook wiring (kept in a separate sub-package
+	// to avoid the pkg/iscp ↔ pkg/sql/plan ↔ indexplugin/all cycle —
+	// see pkg/indexplugin/iscp/import.go for the rationale).
+	_ "github.com/matrixorigin/matrixone/pkg/indexplugin/iscp"
 )
 
 // pluginCompileCtx adapts a *Scope + *Compile to compileplugin.CompileContext

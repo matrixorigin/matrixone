@@ -102,20 +102,16 @@ var _ IndexSqlWriter = new(FulltextSqlWriter)
 var _ IndexSqlWriter = new(IvfflatSqlWriter)
 var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 
-// check algo type to return the correct sql writer
+// NewIndexSqlWriter dispatches to the per-algorithm writer via the
+// iscp Hooks registry. Replaces the hardcoded fulltext / ivfflat /
+// hnsw switch — new algorithms register a Hooks impl (see
+// pkg/sql/compile/iscp_register.go) and slot in automatically.
 func NewIndexSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	algo = catalog.ToLower(algo)
-	switch algo {
-	case catalog.MOIndexFullTextAlgo.ToString():
-		return NewFulltextSqlWriter(algo, jobID, info, tabledef, indexdef)
-	case catalog.MoIndexIvfFlatAlgo.ToString():
-		return NewIvfflatSqlWriter(algo, jobID, info, tabledef, indexdef)
-	case catalog.MoIndexHnswAlgo.ToString():
-		return NewHnswSqlWriter(algo, jobID, info, tabledef, indexdef)
-	default:
-		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: invalid algo type: %s", algo))
-
+	h, ok := GetHooks(algo)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: no iscp.Hooks registered for algo %s", algo))
 	}
+	return h.NewSqlWriter(jobID, info, tabledef, indexdef)
 }
 
 // Implementation of Base Index SqlWriter
