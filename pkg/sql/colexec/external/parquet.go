@@ -659,7 +659,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			})
 		}
 	case types.T_float32:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (float32, error) {
@@ -684,7 +684,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			})
 		}
 	case types.T_float64:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(st.LogicalType()) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processStringToFixed(proc.Ctx, mp, page, proc, vec,
 					func(data []byte) (float64, error) {
@@ -2246,6 +2246,13 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 
 func isDecimalLogicalType(lt *format.LogicalType) bool {
 	return lt != nil && lt.Decimal != nil
+}
+
+func parquetDecimalScale(st parquet.Type) int32 {
+	if lt := st.LogicalType(); lt != nil && lt.Decimal != nil {
+		return lt.Decimal.Scale
+	}
+	return 0
 }
 
 func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {

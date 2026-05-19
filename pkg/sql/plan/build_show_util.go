@@ -1024,6 +1024,30 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
+func formatStrLit(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s) + 2)
+	buf.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\'':
+			buf.WriteString("''")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\x00':
+			buf.WriteString("\\0")
+		default:
+			buf.WriteByte(s[i])
+		}
+	}
+	buf.WriteByte('\'')
+	return buf.String()
+}
+
 func formatStr(str string) string {
 	tmp := strings.Replace(str, "`", "``", -1)
 	strLen := len(tmp)
