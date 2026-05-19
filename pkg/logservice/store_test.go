@@ -1506,6 +1506,34 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 	assert.False(t, called, "should not call getShardMembership when no address is configured")
 }
 
+func TestCheckZombieReplicas_DiscoveryOnlyIsNotChecked(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	called := false
+	orig := getShardMembershipFn
+	defer func() { getShardMembershipFn = orig }()
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		called = true
+		return map[uint64]string{8: "10.0.0.8:1"}, true, nil
+	}
+
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			DiscoveryAddress: "10.0.0.100:32001",
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+
+	shards := []metadata.LogShard{{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+		ReplicaID:      7,
+	}}
+	zombies := l.checkZombieReplicas(context.Background(), shards)
+	assert.Empty(t, zombies)
+	assert.False(t, called,
+		"discovery-address-only mode routes through a proxy, not concrete peers")
+}
+
 // TestCheckZombieReplicas_SkipsSelfAddress guards against the first pitfall
 // flagged in #24300 review: the pre-revision code probed the first configured
 // address, which may be the local logservice listener. startReplicas runs
