@@ -1054,6 +1054,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+	if stmt.Param != nil {
+		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -3576,6 +3581,23 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
 	if tableDef.TableType == catalog.SystemExternalRel {
 		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+	}
+	return nil
+}
+
+func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				switch attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey, *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+				}
+			}
+		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
 	}
 	return nil
 }

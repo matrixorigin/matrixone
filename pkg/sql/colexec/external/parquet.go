@@ -390,9 +390,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint8(0), func(v parquet.Value) (uint8, error) {
-				if st.Kind() == parquet.Int32 {
-					return uint8(v.Int32()), nil
-				}
 				val, err := parquetValueToUint64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
@@ -409,9 +406,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int8(0), func(v parquet.Value) (int8, error) {
-				if st.Kind() == parquet.Int32 {
-					return int8(v.Int32()), nil
-				}
 				val, err := parquetValueToInt64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
@@ -428,9 +422,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int16(0), func(v parquet.Value) (int16, error) {
-				if st.Kind() == parquet.Int32 {
-					return int16(v.Int32()), nil
-				}
 				val, err := parquetValueToInt64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
@@ -447,9 +438,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint16(0), func(v parquet.Value) (uint16, error) {
-				if st.Kind() == parquet.Int32 {
-					return uint16(v.Int32()), nil
-				}
 				val, err := parquetValueToUint64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
@@ -481,9 +469,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, int32(0), func(v parquet.Value) (int32, error) {
-				if st.Kind() == parquet.Int32 {
-					return v.Int32(), nil
-				}
 				val, err := parquetValueToInt64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
@@ -509,9 +494,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, uint32(0), func(v parquet.Value) (uint32, error) {
-				if st.Kind() == parquet.Int32 {
-					return v.Uint32(), nil
-				}
 				val, err := parquetValueToUint64(proc.Ctx, st, v)
 				if err != nil {
 					return 0, err
