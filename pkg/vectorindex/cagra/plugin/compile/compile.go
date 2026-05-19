@@ -161,11 +161,24 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
-// IdxcronMetadata: CAGRA has no idxcron action wired today
-// (SyncDescriptor().IdxcronAction==""). Returns (nil, nil) until the executor
-// learns Action_Cagra_Reindex.
-func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
-	return nil, nil
+// IdxcronMetadata pins CAGRA's build-time params into the cron task's
+// metadata blob so the periodic rebuild uses the values the user
+// picked at CREATE INDEX (not whatever the system vars happen to be
+// when the cron fires hours/days later).
+//
+// FrontendProbeVar gates background re-entry — if cagra_threads_search
+// can't be resolved we're being called from the cron executor's own
+// ALTER REINDEX context and the existing task metadata is authoritative.
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		FrontendProbeVar: "cagra_threads_search",
+		Capture: []string{
+			"cagra_threads_build",
+			"cagra_max_index_capacity",
+			"lower_case_table_names",
+			"experimental_cagra_index",
+		},
+	})
 }
 
 // genDeleteSQL is lifted from pkg/sql/compile/util.go:666.

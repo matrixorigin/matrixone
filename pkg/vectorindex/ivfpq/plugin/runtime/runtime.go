@@ -43,6 +43,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// actionIvfpqReindex mirrors idxcron.Action_*. Inlined here to avoid
+// importing pkg/vectorindex/idxcron (would create a cycle).
+const actionIvfpqReindex = "ivfpq_reindex"
+
 // Compile-time interface check.
 var _ catalogplugin.Hooks = CatalogHooks{}
 
@@ -106,19 +110,19 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
-// SyncDescriptor: IVF-PQ is always async via ISCP CDC. The initial
-// build at CREATE INDEX populates the storage tag=0 chunk; CDC then
-// appends tag=1 event chunks at the fixed CdcTailId sentinel as the
-// source table mutates (see pkg/vectorindex/ivfpq/sync.go for the
-// append-only log architecture). Mirrors CAGRA.
-//
-// AlwaysAsync=true — CDC is the canonical post-build data-flow path
-// for IVF-PQ. No idxcron action.
+// SyncDescriptor: IVF-PQ mirrors CAGRA — always async via ISCP CDC
+// (event-level deltas) AND participates in idxcron (periodic model
+// rebuild). See pkg/vectorindex/cagra/plugin/runtime/runtime.go's
+// SyncDescriptor for the full rationale.
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:     true,
-		SinkerType:  catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync: true,
+		UsesCDC:                 true,
+		SinkerType:              catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:             true,
+		IdxcronAction:           actionIvfpqReindex,
+		IdxcronFrontendProbeVar: "ivfpq_threads_search",
+		IdxcronAlgoToken:        "IVFPQ",
+		IdxcronListsAware:       false,
 	}
 }
 
@@ -147,6 +151,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 		res[catalog.IndexAlgoParamOpType] = metric.OpType_L2Distance
 	}
 
+	if idx.IndexOption.Async {
+		res[catalog.Async] = "true"
+	}
+
 	if len(idx.IndexOption.Quantization) > 0 {
 		quantize := catalog.ToLower(idx.IndexOption.Quantization)
 		if !metric.ValidQuantization(quantize) {
@@ -170,6 +178,18 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if joined := joinIncludeColumns(idx.IndexOption.IncludeColumns); len(joined) > 0 {
 		res[catalog.IncludedColumns] = joined
 	}
+
+	// Idxcron cadence knobs — see CAGRA's runtime.go for the rationale.
+	if idx.IndexOption.AutoUpdate {
+		res[catalog.AutoUpdate] = "true"
+	}
+	if idx.IndexOption.Day > 0 {
+		res[catalog.Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+	}
+	if idx.IndexOption.Hour > 0 {
+		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
 	return res, nil
 }
 

@@ -153,6 +153,25 @@ type SyncDescriptor struct {
 	// Empty string disables the gate (the caller always proceeds).
 	// Only meaningful when IdxcronAction != "".
 	IdxcronFrontendProbeVar string
+
+	// IdxcronAlgoToken is the algorithm keyword the idxcron executor
+	// uses when constructing the cron-triggered ALTER REINDEX SQL —
+	// e.g. "IVFFLAT", "CAGRA", "IVFPQ". Empty when IdxcronAction == ""
+	// (this algorithm has no cron rebuild).
+	//
+	// Consumed by pkg/vectorindex/idxcron/executor.go's plugin-driven
+	// dispatch in place of the previously hardcoded "IVFFLAT" literal.
+	IdxcronAlgoToken string
+
+	// IdxcronListsAware enables the IVF-FLAT-specific lists/nsample
+	// heuristic inside the idxcron executor's checkIndexUpdatable:
+	//
+	//   - skip the rebuild when the source table has fewer rows than nlist
+	//   - shrink kmeans_train_percent when dataset > 256 * nlist
+	//
+	// false for cuvs algorithms (CAGRA, IVF-PQ) which have no "lists"
+	// or training-sample concept — they always rebuild on cadence.
+	IdxcronListsAware bool
 }
 
 // AlterTableCloneBehavior declares the per-hidden-table semantics

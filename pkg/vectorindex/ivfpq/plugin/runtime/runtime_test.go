@@ -72,12 +72,16 @@ func TestIvfpqSupportedOpTypes(t *testing.T) {
 }
 
 func TestIvfpqSyncDescriptor(t *testing.T) {
-	// IVF-PQ is AlwaysAsync via ISCP CDC (Phase 4 wiring). Mirrors CAGRA.
+	// IVF-PQ: AlwaysAsync CDC + idxcron periodic rebuild
+	// (Phase 4 / 3.9 wiring). Mirrors CAGRA.
 	d := CatalogHooks{}.SyncDescriptor()
-	require.Equal(t, "", d.IdxcronAction)
 	require.True(t, d.UsesCDC)
 	require.True(t, d.AlwaysAsync)
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
+	require.Equal(t, "ivfpq_reindex", d.IdxcronAction)
+	require.Equal(t, "ivfpq_threads_search", d.IdxcronFrontendProbeVar)
+	require.Equal(t, "IVFPQ", d.IdxcronAlgoToken)
+	require.False(t, d.IdxcronListsAware)
 }
 
 func TestIvfpqParamsFromTree_Defaults(t *testing.T) {

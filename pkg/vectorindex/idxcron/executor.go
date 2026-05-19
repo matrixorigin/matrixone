@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -35,6 +37,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// findReindexAlgo locates the plugin whose SyncDescriptor.IdxcronAction
+// matches the cron task's action string. Returns (descriptor, true)
+// on a hit; the caller reads IdxcronAlgoToken / IdxcronListsAware off
+// the descriptor. Replaces the hardcoded action switch — new
+// algorithms participate in idxcron by setting their SyncDescriptor
+// fields, no edits needed here.
+func findReindexAlgo(action string) (catalogplugin.SyncDescriptor, bool) {
+	for _, p := range indexplugin.All() {
+		d := p.Catalog().SyncDescriptor()
+		if d.IdxcronAction == action {
+			return d, true
+		}
+	}
+	return catalogplugin.SyncDescriptor{}, false
+}
 
 /*
 +----------------+---------------------+------+------+---------+-------+---------+
@@ -109,13 +127,30 @@ type IndexUpdateStatus struct {
 // Case 1: ivf_train_percent * dsize < 30 * nlist, always re-index
 // Case 2: 30 * nlist < ivf_train_percent * dsize < 256 * nlist, re-index every week
 // Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
-func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64, interval time.Duration) (ok bool, reason string, err error) {
+func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64, interval time.Duration, listsAware bool) (ok bool, reason string, err error) {
 	now := time.Now()
 	createdAt := time.Unix(t.CreatedAt.Unix(), 0)
 	ts := createdAt.Add(interval)
 	if ts.After(now) {
 		// skip update when createdAt + delay is after current time
 		reason = fmt.Sprintf("current time < interval after createdAt (%v < %v)", createdAt.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
+		return
+	}
+
+	// Non-listsAware algorithms (CAGRA, IVF-PQ) skip the IVF-FLAT-specific
+	// nlist / kmeans-train-percent heuristic and just enforce
+	// "lastUpdateAt + interval < now". The rebuild is unconditional on
+	// cadence — cuvs has no training-sample knob to tune.
+	if !listsAware {
+		if t.LastUpdateAt != nil {
+			last := time.Unix(t.LastUpdateAt.Unix(), 0)
+			if last.Add(interval).After(now) {
+				reason = fmt.Sprintf("current time < interval after lastUpdateAt (%v + %v > %v)",
+					last.Format("2006-01-02 15:04:05"), interval, now.Format("2006-01-02 15:04:05"))
+				return
+			}
+		}
+		ok = true
 		return
 	}
 
@@ -381,16 +416,28 @@ func getTableDefFunc(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbnam
 	return
 }
 
-// return status as SQL to update mo_index_update
-func runIvfflatReindex(ctx context.Context,
+// runReindex is the shared per-task body the cron executor invokes for
+// any algorithm whose SyncDescriptor declares an IdxcronAction. The
+// descriptor's IdxcronAlgoToken decides which keyword the eventual
+// ALTER REINDEX SQL uses, and IdxcronListsAware gates the IVF-FLAT
+// nlist / training-sample heuristic.
+//
+// Lifted from the IVF-FLAT-specific runIvfflatReindex; the body is
+// algorithm-agnostic apart from the listsAware branches.
+func runReindex(ctx context.Context,
 	txnEngine engine.Engine,
 	txnClient client.TxnClient,
 	cnUUID string,
 	task *IndexUpdateTaskInfo,
-	currentHour int) (updated bool, reason string, err error) {
+	currentHour int,
+	d catalogplugin.SyncDescriptor) (updated bool, reason string, err error) {
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
+		return
+	}
+	if d.IdxcronAlgoToken == "" {
+		err = moerr.NewInternalErrorNoCtxf("idxcron: empty IdxcronAlgoToken for action %q", task.Action)
 		return
 	}
 
@@ -412,20 +459,25 @@ func runIvfflatReindex(ctx context.Context,
 				return moerr.NewInternalErrorNoCtx("table id mimstach")
 			}
 
-			// get number of list from indexDef
+			// Read cadence + (listsAware-only) lists from indexAlgoParams.
+			// Reading fresh each tick lets the user ALTER the index to
+			// change auto_update/day/hour without re-registering the
+			// cron task.
 			lists := int64(0)
 			auto_update := false
 			interval := OneWeek
 			hour := int64(0)
 			for _, idx := range tableDef.Indexes {
 				if idx.IndexName == task.IndexName {
-					listsAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamLists)
-					if err2 != nil {
-						return err2
-					}
-					lists, err2 = listsAst.Int64()
-					if err2 != nil {
-						return err2
+					if d.IdxcronListsAware {
+						listsAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamLists)
+						if err2 != nil {
+							return err2
+						}
+						lists, err2 = listsAst.Int64()
+						if err2 != nil {
+							return err2
+						}
 					}
 
 					autoUpdateAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.AutoUpdate)
@@ -466,7 +518,7 @@ func runIvfflatReindex(ctx context.Context,
 				}
 			}
 
-			if lists == 0 {
+			if d.IdxcronListsAware && lists == 0 {
 				return moerr.NewInternalErrorNoCtx("IVFFLAT index parameter LISTS not found")
 			}
 
@@ -493,7 +545,7 @@ func runIvfflatReindex(ctx context.Context,
 			}
 
 			ok := false
-			ok, reason, err2 = task.checkIndexUpdatable(ctx, dsize, lists, interval)
+			ok, reason, err2 = task.checkIndexUpdatable(ctx, dsize, lists, interval, d.IdxcronListsAware)
 			if err2 != nil {
 				return
 			}
@@ -503,7 +555,8 @@ func runIvfflatReindex(ctx context.Context,
 			}
 
 			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT FORCE_SYNC", task.DbName, task.TableName, task.IndexName)
+			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s FORCE_SYNC",
+				task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken)
 			res, err2 = runReindexSql(sqlproc, sql)
 			if err2 != nil {
 				return
@@ -546,11 +599,11 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 		default:
 		}
 
-		switch t.Action {
-		case Action_Ivfflat_Reindex:
-			updated, reason, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour)
-		default:
-			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
+		d, ok := findReindexAlgo(t.Action)
+		if !ok {
+			err2 = moerr.NewInternalErrorNoCtxf("idxcron: no plugin registered for action %q (task=%v)", t.Action, t)
+		} else {
+			updated, reason, err2 = runReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour, d)
 		}
 
 		if !updated && reason == Reason_Skipped {

@@ -212,11 +212,20 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
-// IdxcronMetadata: IVF-PQ has no idxcron action wired today
-// (SyncDescriptor().IdxcronAction==""). Returns (nil, nil) until the executor
-// learns Action_Ivfpq_Reindex.
-func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
-	return nil, nil
+// IdxcronMetadata pins IVF-PQ's build-time params into the cron task's
+// metadata blob — see CAGRA's compile.go for the rationale.
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		FrontendProbeVar: "ivfpq_threads_search",
+		Capture: []string{
+			"ivfpq_threads_build",
+			"ivfpq_max_index_capacity",
+			"kmeans_train_percent",
+			"kmeans_max_iteration",
+			"lower_case_table_names",
+			"experimental_ivfpq_index",
+		},
+	})
 }
 
 // Compile-time interface check.

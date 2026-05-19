@@ -69,14 +69,16 @@ func TestCagraSupportedOpTypes(t *testing.T) {
 }
 
 func TestCagraSyncDescriptor(t *testing.T) {
-	// CAGRA is AlwaysAsync via ISCP CDC (Phase 3 wiring) — initial
-	// build at CREATE INDEX populates tag=0 chunk; CDC appends tag=1
-	// events thereafter. No idxcron action.
+	// CAGRA: AlwaysAsync CDC + idxcron periodic rebuild
+	// (Phase 3.7 / 3.9 wiring).
 	d := CatalogHooks{}.SyncDescriptor()
-	require.Equal(t, "", d.IdxcronAction)
 	require.True(t, d.UsesCDC)
 	require.True(t, d.AlwaysAsync)
 	require.Equal(t, catalogplugin.SinkerType_IndexSync, d.SinkerType)
+	require.Equal(t, "cagra_reindex", d.IdxcronAction)
+	require.Equal(t, "cagra_threads_search", d.IdxcronFrontendProbeVar)
+	require.Equal(t, "CAGRA", d.IdxcronAlgoToken)
+	require.False(t, d.IdxcronListsAware, "cuvs has no nlist heuristic")
 }
 
 func TestCagraParamsFromTree_Defaults(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -184,10 +185,41 @@ func TestIvfpqHandleDropIndex(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(nil, nil))
 }
 
-func TestIvfpqIdxcronMetadata(t *testing.T) {
-	got, err := Hooks{}.IdxcronMetadata(nil)
+func TestIvfpqIdxcronMetadata_Frontend(t *testing.T) {
+	// Frontend probe succeeds (ivfpq_threads_search resolves) → metadata
+	// is captured.
+	ctx := &stubCompileContext{
+		vars: map[string]any{
+			"ivfpq_threads_search":     int64(4),
+			"ivfpq_threads_build":      int64(8),
+			"ivfpq_max_index_capacity": int64(1000000),
+			"lower_case_table_names":   int64(1),
+			"experimental_ivfpq_index": int8(1),
+		},
+	}
+	got, err := Hooks{}.IdxcronMetadata(ctx)
 	require.NoError(t, err)
-	require.Nil(t, got)
+	require.NotEmpty(t, got, "frontend session should produce a metadata blob")
+	require.Contains(t, string(got), "ivfpq_threads_build")
+	require.Contains(t, string(got), "ivfpq_max_index_capacity")
+}
+
+func TestIvfpqIdxcronMetadata_Background(t *testing.T) {
+	// Frontend probe fails (ivfpq_threads_search is unknown to the
+	// stub's resolver) → metadata is nil, signalling background re-entry.
+	ctx := &stubCompileContextProbeFail{}
+	got, err := Hooks{}.IdxcronMetadata(ctx)
+	require.NoError(t, err)
+	require.Nil(t, got, "background invocation should yield nil metadata")
+}
+
+// stubCompileContextProbeFail mirrors stubCompileContext but its
+// ResolveVariable returns an error for any var (simulating the
+// idxcron background context where frontend vars aren't available).
+type stubCompileContextProbeFail struct{ stubCompileContext }
+
+func (s *stubCompileContextProbeFail) ResolveVariable(name string, _, _ bool) (any, error) {
+	return nil, moerr.NewInternalErrorNoCtxf("var %q not available in background context", name)
 }
 
 func TestIvfpqIndexFlagConst(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -180,10 +181,37 @@ func TestCagraHandleDropIndex(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(nil, nil))
 }
 
-func TestCagraIdxcronMetadata(t *testing.T) {
-	got, err := Hooks{}.IdxcronMetadata(nil)
+func TestCagraIdxcronMetadata_Frontend(t *testing.T) {
+	ctx := &stubCompileContext{
+		vars: map[string]any{
+			"cagra_threads_search":     int64(4),
+			"cagra_threads_build":      int64(8),
+			"cagra_max_index_capacity": int64(1000000),
+			"lower_case_table_names":   int64(1),
+			"experimental_cagra_index": int8(1),
+		},
+	}
+	got, err := Hooks{}.IdxcronMetadata(ctx)
 	require.NoError(t, err)
-	require.Nil(t, got)
+	require.NotEmpty(t, got, "frontend session should produce a metadata blob")
+	require.Contains(t, string(got), "cagra_threads_build")
+	require.Contains(t, string(got), "cagra_max_index_capacity")
+}
+
+func TestCagraIdxcronMetadata_Background(t *testing.T) {
+	ctx := &stubCompileContextProbeFail{}
+	got, err := Hooks{}.IdxcronMetadata(ctx)
+	require.NoError(t, err)
+	require.Nil(t, got, "background invocation should yield nil metadata")
+}
+
+// stubCompileContextProbeFail mirrors stubCompileContext but its
+// ResolveVariable returns an error for every var — simulating the
+// idxcron background context where frontend vars aren't available.
+type stubCompileContextProbeFail struct{ stubCompileContext }
+
+func (s *stubCompileContextProbeFail) ResolveVariable(name string, _, _ bool) (any, error) {
+	return nil, moerr.NewInternalErrorNoCtxf("var %q not available in background context", name)
 }
 
 // experimentalFlagCtx wraps the stub to toggle IsExperimentalEnabled.

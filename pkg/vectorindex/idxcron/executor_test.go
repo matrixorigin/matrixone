@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -238,7 +239,7 @@ func TestCheckIndexUpdatable(t *testing.T) {
 			CreatedAt:    ta.createdAt,
 		}
 
-		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists, OneWeek)
+		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists, OneWeek, true)
 		require.NoError(t, err)
 		require.Equal(t, ta.expected, ok)
 
@@ -388,7 +389,8 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour)
+			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
+				catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected && !ta.skipped, updated)
@@ -463,7 +465,8 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour)
+			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
+				catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true})
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, false, updated)

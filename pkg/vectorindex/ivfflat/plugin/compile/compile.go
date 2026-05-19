@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
@@ -96,13 +95,27 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.
 	return nil
 }
 
-// IdxcronMetadata is lifted from pkg/sql/compile/iscp_util.go:267
-// (getIvfflatMetadata). The original returned a `frontend` bool used by
-// handleIvfIndexRegisterUpdate to skip background invocations — that
-// check now lives in registerIdxcronUpdate below.
+// ivfflatIdxcronSpec captures every system / session var the cron-
+// triggered ALTER REINDEX needs to mirror the user's CREATE INDEX
+// configuration: kmeans tuning, capacity, and the experimental flag.
+// FrontendProbeVar gates background re-entry (returns (nil, nil)
+// from BuildIdxcronMetadata when the cron executor is the caller).
+var ivfflatIdxcronSpec = compileplugin.IdxcronVarSpec{
+	FrontendProbeVar: "ivf_threads_search",
+	Capture: []string{
+		"ivf_threads_build",
+		"kmeans_train_percent",
+		"kmeans_max_iteration",
+		"lower_case_table_names",
+		"experimental_ivf_index",
+	},
+}
+
+// IdxcronMetadata delegates to the shared declarative helper. The
+// previous getIvfflatMetadata function (with its bespoke
+// resolve+marshal loop) is replaced by this 3-line spec declaration.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
-	metadata, _, err := getIvfflatMetadata(ctx)
-	return metadata, err
+	return compileplugin.BuildIdxcronMetadata(ctx, ivfflatIdxcronSpec)
 }
 
 // runCreateOrReindex is the shared body for HandleCreateIndex /
@@ -429,20 +442,21 @@ func ivfIndexEntriesTable(
 }
 
 // registerIdxcronUpdate is lifted from Scope.handleIvfIndexRegisterUpdate
-// (pkg/sql/compile/ddl_index_algo.go:507). The original `frontend` check
-// guards against background (idxcron-triggered) invocations re-registering
-// themselves — preserved here.
+// (pkg/sql/compile/ddl_index_algo.go:507). The previous bespoke
+// `getIvfflatMetadata(...)` call has been replaced with the shared
+// BuildIdxcronMetadata helper — which returns (nil, nil) when the
+// frontend probe fails, signalling background re-entry.
 func registerIdxcronUpdate(
 	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef,
 ) error {
-	metadata, frontend, err := getIvfflatMetadata(ctx)
+	metadata, err := compileplugin.BuildIdxcronMetadata(ctx, ivfflatIdxcronSpec)
 	if err != nil {
 		return err
 	}
-	if !frontend {
-		// background invocation: idxcron itself is the caller, skip
-		// re-registration.
+	if metadata == nil {
+		// background invocation (frontend probe failed) — idxcron
+		// itself is the caller, skip re-registration.
 		logutil.Infof("Background invoke reindex and ignore register index update function call")
 		return nil
 	}
@@ -501,66 +515,3 @@ func ivfIndexDeleteOldEntries(
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "pruning_end")
 }
 
-// getIvfflatMetadata is lifted from pkg/sql/compile/iscp_util.go:267.
-// Returns the marshaled metadata blob plus a `frontend` bool: true when
-// `ivf_threads_search` is resolvable (i.e. the caller is the user
-// frontend, not a background idxcron job).
-func getIvfflatMetadata(ctx compileplugin.CompileContext) ([]byte, bool, error) {
-	// `ivf_threads_search` only exists in the frontend variable table.
-	_, ferr := ctx.ResolveVariable("ivf_threads_search", true, false)
-	frontend := ferr == nil
-
-	threads, err := ctx.ResolveVariable("ivf_threads_build", true, false)
-	if err != nil {
-		return nil, frontend, err
-	}
-	threadsBuild := int64(0)
-	if threads != nil {
-		threadsBuild = threads.(int64)
-	}
-
-	trainPctV, err := ctx.ResolveVariable("kmeans_train_percent", true, false)
-	if err != nil {
-		return nil, frontend, err
-	}
-	kmeansTrainPercent := float64(10)
-	if trainPctV != nil {
-		kmeansTrainPercent = trainPctV.(float64)
-	}
-
-	maxIterV, err := ctx.ResolveVariable("kmeans_max_iteration", true, false)
-	if err != nil {
-		return nil, frontend, err
-	}
-	kmeansMaxIteration := int64(20)
-	if maxIterV != nil {
-		kmeansMaxIteration = maxIterV.(int64)
-	}
-
-	lcV, err := ctx.ResolveVariable("lower_case_table_names", true, false)
-	if err != nil {
-		return nil, frontend, err
-	}
-	lowerCase := int64(1)
-	if lcV != nil {
-		lowerCase = lcV.(int64)
-	}
-
-	expV, err := ctx.ResolveVariable("experimental_ivf_index", true, false)
-	if err != nil {
-		return nil, frontend, err
-	}
-	experimentalIvfIndex := int8(1)
-	if expV != nil {
-		experimentalIvfIndex = expV.(int8)
-	}
-
-	w := sqlexec.NewMetadataWriter()
-	w.AddInt("ivf_threads_build", threadsBuild)
-	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
-	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
-	w.AddInt("lower_case_table_names", lowerCase)
-	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
-	metadata, err := w.Marshal()
-	return metadata, frontend, err
-}

@@ -29,6 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// actionCagraReindex mirrors idxcron.Action_*. Inlined here to avoid
+// importing pkg/vectorindex/idxcron — that import would pull in
+// pkg/indexplugin which transitively reaches us, creating a cycle.
+const actionCagraReindex = "cagra_reindex"
+
 // Compile-time interface check.
 var _ catalogplugin.Hooks = CatalogHooks{}
 
@@ -77,19 +82,26 @@ func (CatalogHooks) SupportedOpTypes() map[string]string {
 	return out
 }
 
-// SyncDescriptor: CAGRA is always async via ISCP CDC. The initial
-// build at CREATE INDEX populates the storage tag=0 chunk; CDC then
-// appends tag=1 event chunks at the fixed CdcTailId sentinel as the
-// source table mutates (see pkg/vectorindex/cagra/sync.go for the
-// append-only log architecture).
+// SyncDescriptor: CAGRA is always async via ISCP CDC (event-level
+// deltas) AND participates in idxcron (periodic model rebuild). The
+// initial cagra_create build runs via the CDC pipeline's InitSQL on
+// first iteration; subsequent source-table mutations stream in as
+// tag=1 events (see pkg/vectorindex/cagra/sync.go). When the user
+// sets auto_update=true, the idxcron task fires on the configured
+// day/hour cadence to refresh tag=0.
 //
-// AlwaysAsync=true mirrors HNSW — CDC is the canonical post-build
-// data-flow path for CAGRA, not a per-index opt-in. No idxcron action.
+// IdxcronListsAware=false: CAGRA has no nlist / training-sample
+// concept, so the executor's checkIndexUpdatable skips the IVF-FLAT
+// heuristic and just enforces "lastUpdateAt + interval < now".
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:     true,
-		SinkerType:  catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync: true,
+		UsesCDC:                 true,
+		SinkerType:              catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:             true,
+		IdxcronAction:           actionCagraReindex,
+		IdxcronFrontendProbeVar: "cagra_threads_search",
+		IdxcronAlgoToken:        "CAGRA",
+		IdxcronListsAware:       false,
 	}
 }
 
@@ -131,6 +143,21 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if idx.IndexOption.Async {
 		res[catalog.Async] = "true"
 	}
+
+	// Idxcron cadence knobs — read fresh by the executor on every cron
+	// tick (executor.go:443+), so users can ALTER these later without
+	// re-registering the task. auto_update=false (default) leaves the
+	// cron firing as a no-op skip.
+	if idx.IndexOption.AutoUpdate {
+		res[catalog.AutoUpdate] = "true"
+	}
+	if idx.IndexOption.Day > 0 {
+		res[catalog.Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+	}
+	if idx.IndexOption.Hour > 0 {
+		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+
 	if len(idx.IndexOption.Quantization) > 0 {
 		quantize := catalog.ToLower(idx.IndexOption.Quantization)
 		if !metric.ValidQuantization(quantize) {
