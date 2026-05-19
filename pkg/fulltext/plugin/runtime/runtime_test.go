@@ -33,6 +33,17 @@ func TestFullTextShouldTruncateHiddenTable(t *testing.T) {
 	require.True(t, CatalogHooks{}.ShouldTruncateHiddenTable("anything"))
 }
 
+func TestFullTextAlterTableCloneBehavior(t *testing.T) {
+	// Fulltext returns the zero value — its single hidden table is
+	// empty at CREATE-INDEX time and async-skip happens at the index
+	// level via SyncDescriptor.
+	b := CatalogHooks{}.AlterTableCloneBehavior()
+	require.Empty(t, b.DeleteBeforeClone)
+	require.Empty(t, b.SkipWhenAsync)
+	require.False(t, b.ContainsDelete(catalog.FullTextIndex_TblType))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.FullTextIndex_TblType))
+}
+
 func TestFullTextDefaultOptions(t *testing.T) {
 	require.Nil(t, CatalogHooks{}.DefaultOptions())
 }

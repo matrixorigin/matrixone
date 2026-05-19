@@ -63,6 +63,32 @@ func (CatalogHooks) ShouldTruncateHiddenTable(algoTableType string) bool {
 	return algoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries
 }
 
+// AlterTableCloneBehavior — IVF-FLAT seeds all three hidden tables
+// during CREATE INDEX on the temp table (a "version=0" metadata row,
+// an initial centroid, and the bootstrapped entries), so the clone
+// loop in cloneUnaffectedIndex must DELETE every target table before
+// copying source rows or each hidden table ends up with the seed
+// duplicated.
+//
+// Additionally, when the index is async its entries table is rebuilt
+// from ts=0 by the ISCP CDC pipeline on the new table once the index
+// re-registers. Cloning entries AND letting CDC rebuild them produces
+// duplicates, so SkipWhenAsync names entries — but only entries:
+// metadata + centroids still need to be cloned so the CDC sinker has
+// a k-means model to write against.
+func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{
+		DeleteBeforeClone: []string{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata,
+			catalog.SystemSI_IVFFLAT_TblType_Centroids,
+			catalog.SystemSI_IVFFLAT_TblType_Entries,
+		},
+		SkipWhenAsync: []string{
+			catalog.SystemSI_IVFFLAT_TblType_Entries,
+		},
+	}
+}
+
 // DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
 // statement carries no WITH(...) clause: lists=1, op_type=l2.
 func (CatalogHooks) DefaultOptions() map[string]string {

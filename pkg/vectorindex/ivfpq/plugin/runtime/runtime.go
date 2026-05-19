@@ -68,6 +68,12 @@ func (CatalogHooks) HiddenTableTypes() []string {
 // state; both hidden tables are derived from source rows and must reset.
 func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 
+// AlterTableCloneBehavior — IVF-PQ leaves both hidden tables empty at
+// CREATE-INDEX time. Mirrors HNSW.
+func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{}
+}
+
 // DefaultOptions is the params map produced when CREATE INDEX is issued
 // without a WITH(...) clause. Return nil if your algorithm requires
 // explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).

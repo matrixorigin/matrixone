@@ -35,6 +35,18 @@ func TestCagraShouldTruncateHiddenTable(t *testing.T) {
 	require.True(t, CatalogHooks{}.ShouldTruncateHiddenTable("anything"))
 }
 
+func TestCagraAlterTableCloneBehavior(t *testing.T) {
+	// CAGRA returns the zero value — hidden tables are empty at
+	// CREATE-INDEX time and async-skip happens at the index level.
+	b := CatalogHooks{}.AlterTableCloneBehavior()
+	require.Empty(t, b.DeleteBeforeClone)
+	require.Empty(t, b.SkipWhenAsync)
+	require.False(t, b.ContainsDelete(catalog.Cagra_TblType_Metadata))
+	require.False(t, b.ContainsDelete(catalog.Cagra_TblType_Storage))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Metadata))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Cagra_TblType_Storage))
+}
+
 func TestCagraDefaultOptions(t *testing.T) {
 	got := CatalogHooks{}.DefaultOptions()
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])

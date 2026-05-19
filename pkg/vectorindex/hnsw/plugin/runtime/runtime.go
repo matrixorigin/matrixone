@@ -42,6 +42,16 @@ func (CatalogHooks) HiddenTableTypes() []string {
 // state; both hidden tables are derived from source rows and must reset.
 func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 
+// AlterTableCloneBehavior — HNSW leaves both hidden tables empty at
+// CREATE-INDEX time (data lands later via sync CROSS APPLY hnsw_create
+// or async CDC), so no DELETE before clone is needed. The "skip clone
+// when async" decision happens at the whole-index level
+// (SyncDescriptor) rather than per table, so SkipWhenAsync stays empty
+// here.
+func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{}
+}
+
 func (CatalogHooks) DefaultOptions() map[string]string {
 	return map[string]string{
 		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,

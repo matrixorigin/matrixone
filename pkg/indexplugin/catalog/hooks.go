@@ -60,6 +60,18 @@ type Hooks interface {
 	// "experimental_ivfpq_index".
 	ExperimentalFlag() string
 
+	// AlterTableCloneBehavior returns the per-hidden-table clone semantics
+	// this algorithm wants applied during ALTER TABLE COPY's
+	// cloneUnaffectedIndex pass. Scope is intentionally narrow — this
+	// hook governs the unaffected-index clone in alter only, not any
+	// other clone or copy path. Most algorithms return the zero value
+	// (no DELETE before clone, no skip on async) — only IVF-FLAT is
+	// non-trivial today, see pkg/vectorindex/ivfflat/plugin/runtime
+	// for the rationale.
+	//
+	// Consumed by pkg/sql/compile/alter.go::cloneUnaffectedIndex.
+	AlterTableCloneBehavior() AlterTableCloneBehavior
+
 	// ShouldTruncateHiddenTable reports whether the hidden table of the
 	// given IndexAlgoTableType (one of HiddenTableTypes()) should be
 	// included in a TRUNCATE TABLE on the source table.
@@ -141,4 +153,61 @@ type SyncDescriptor struct {
 	// Empty string disables the gate (the caller always proceeds).
 	// Only meaningful when IdxcronAction != "".
 	IdxcronFrontendProbeVar string
+}
+
+// AlterTableCloneBehavior declares the per-hidden-table semantics
+// ALTER TABLE COPY's cloneUnaffectedIndex pass must honor for an
+// algorithm. Both lists name IndexAlgoTableType strings (members of
+// HiddenTableTypes()).
+//
+// Scope: this type is consulted only by
+// pkg/sql/compile/alter.go::cloneUnaffectedIndex — the loop that
+// copies an index's hidden tables from the source table onto a
+// schema-modified temp copy. It is not a general "clone an index"
+// API.
+//
+// The zero value means "no special behaviour" — the unaffected-index
+// loop clones each hidden table verbatim from source to the new copy.
+// Today only IVF-FLAT populates both fields; HNSW / CAGRA / IVF-PQ /
+// fulltext leave their hidden tables empty at CREATE-INDEX time, so
+// nothing needs deletion before clone, and their async-skip story is
+// "skip the whole index" (handled by SyncDescriptor.UsesCDC +
+// .AlwaysAsync at the top of cloneUnaffectedIndex), not per table.
+//
+// Field-by-field:
+//
+//	DeleteBeforeClone — hidden tables that were already seeded by the
+//	  CREATE-INDEX side effects of the temp table's DDL (e.g. for
+//	  IVF-FLAT: a "version=0" metadata row, an initial centroid, the
+//	  bootstrapped entries). The clone target must be DELETE'd first
+//	  or the source rows duplicate the seed.
+//	SkipWhenAsync — hidden tables the algorithm rebuilds from ts=0
+//	  via its CDC pipeline on the new table once the index is
+//	  re-registered. Cloning these AND letting CDC rebuild produces
+//	  duplicates. Only consulted when the index's async param is set.
+type AlterTableCloneBehavior struct {
+	DeleteBeforeClone []string
+	SkipWhenAsync     []string
+}
+
+// ContainsDelete reports whether algoTableType is in the
+// DeleteBeforeClone list. Linear scan — list is always <= len(HiddenTableTypes()).
+func (b AlterTableCloneBehavior) ContainsDelete(algoTableType string) bool {
+	for _, t := range b.DeleteBeforeClone {
+		if t == algoTableType {
+			return true
+		}
+	}
+	return false
+}
+
+// ContainsSkipWhenAsync reports whether algoTableType is in the
+// SkipWhenAsync list.
+func (b AlterTableCloneBehavior) ContainsSkipWhenAsync(algoTableType string) bool {
+	for _, t := range b.SkipWhenAsync {
+		if t == algoTableType {
+			return true
+		}
+	}
+	return false
 }

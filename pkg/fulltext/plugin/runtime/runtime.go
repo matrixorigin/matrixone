@@ -41,6 +41,14 @@ func (CatalogHooks) HiddenTableTypes() []string {
 // state; the single hidden table is rebuilt from source rows.
 func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 
+// AlterTableCloneBehavior — fulltext's single hidden table is empty
+// at CREATE-INDEX time (rows land via the populate step or CDC), so
+// no DELETE before clone is needed. Async fulltext is skipped at the
+// whole-index level via SyncDescriptor, not per table.
+func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{}
+}
+
 // DefaultOptions — fulltext defaults are inferred at build time; no
 // statement-level option JSON is required when the WITH(...) clause is
 // omitted. Matches the legacy catalog.IndexParamsToJsonString path

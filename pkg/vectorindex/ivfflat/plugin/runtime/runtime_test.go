@@ -38,6 +38,29 @@ func TestIvfflatShouldTruncateHiddenTable(t *testing.T) {
 	require.False(t, h.ShouldTruncateHiddenTable(catalog.SystemSI_IVFFLAT_TblType_Centroids))
 }
 
+func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
+	b := CatalogHooks{}.AlterTableCloneBehavior()
+
+	// All three hidden tables must be DELETE'd before clone — the
+	// temp table's CREATE INDEX already seeded each with a row
+	// (version=0 metadata, an initial centroid, bootstrapped entries),
+	// and the clone copies source rows on top, so the seed has to go
+	// first or every hidden table ends up duplicated.
+	require.True(t, b.ContainsDelete(catalog.SystemSI_IVFFLAT_TblType_Metadata))
+	require.True(t, b.ContainsDelete(catalog.SystemSI_IVFFLAT_TblType_Centroids))
+	require.True(t, b.ContainsDelete(catalog.SystemSI_IVFFLAT_TblType_Entries))
+	require.False(t, b.ContainsDelete("unknown_table_type"))
+
+	// Only entries is skipped when the index is async — CDC rebuilds
+	// entries from ts=0 on the new table. Metadata + centroids still
+	// have to be cloned so the sinker has a k-means model to write
+	// against.
+	require.False(t, b.ContainsSkipWhenAsync(catalog.SystemSI_IVFFLAT_TblType_Metadata))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.SystemSI_IVFFLAT_TblType_Centroids))
+	require.True(t, b.ContainsSkipWhenAsync(catalog.SystemSI_IVFFLAT_TblType_Entries))
+	require.False(t, b.ContainsSkipWhenAsync("unknown_table_type"))
+}
+
 func TestIvfflatDefaultOptions(t *testing.T) {
 	got := CatalogHooks{}.DefaultOptions()
 	require.Equal(t, "1", got[catalog.IndexAlgoParamLists])

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -919,12 +920,37 @@ func cloneUnaffectedIndexes(
 			return err
 		}
 
-		if !oriIdxTblNames.Unique &&
-			((catalog.IsFullTextIndexAlgo(oriIdxTblNames.IndexAlgo) && async) ||
-				catalog.IsHnswIndexAlgo(oriIdxTblNames.IndexAlgo)) {
-			// skip fultext async index and hsnw index clone because index table may not be fully sync'd
-			logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
-			continue
+		// Skip cloning any plugin-registered index whose hidden tables
+		// are maintained via CDC and may not be fully sync'd at the
+		// moment ALTER fires. The previous shape hardcoded "(fulltext
+		// && async) || hnsw" — equivalent to the plugin's
+		// SyncDescriptor saying "UsesCDC AND (AlwaysAsync OR the
+		// per-param async flag is set)". HNSW carries AlwaysAsync=true
+		// (matches the legacy unconditional HNSW arm); IVF-FLAT and
+		// fulltext have AlwaysAsync=false and gate on the per-index
+		// async param.
+		// Per-algo clone semantics live on the plugin's catalog hooks:
+		//   - SyncDescriptor decides "skip the whole index when async"
+		//     (HNSW always, IVF-FLAT / fulltext when the per-index
+		//     async flag is set).
+		//   - AlterTableCloneBehavior decides per-hidden-table
+		//     DELETE-before-clone and per-hidden-table skip-when-async.
+		//     IVF-FLAT is the only non-trivial case today: all three
+		//     hidden tables get DELETE'd (the CREATE on the temp table
+		//     already seeded them), and entries are additionally
+		//     skipped when async (CDC rebuilds entries from ts=0;
+		//     metadata + centroids must still be cloned so the sinker
+		//     has a k-means model to write against).
+		var cloneBehavior catalogplugin.AlterTableCloneBehavior
+		if !oriIdxTblNames.Unique {
+			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
+				d := p.Catalog().SyncDescriptor()
+				if d.UsesCDC && (d.AlwaysAsync || async) {
+					logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
+					continue
+				}
+				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
+			}
 		}
 
 		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
@@ -943,24 +969,22 @@ func cloneUnaffectedIndexes(
 				continue
 			}
 
-			// IVF index table is NOT empty and clone will have duplicate rows
-			// Delete the table
-			if !oriIdxTblNames.Unique &&
-				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
+			// Hidden tables that were seeded by the temp table's
+			// CREATE-INDEX side effects must be emptied before the
+			// clone copies source rows on top of the seed.
+			if cloneBehavior.ContainsDelete(oriIdxTblName.AlgoTableType) {
 				// delete all content but avoid truncate table with WHERE TRUE
 				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
-				err := c.runSql(sql)
-				if err != nil {
+				if err := c.runSql(sql); err != nil {
 					return err
 				}
 			}
 
-			if !oriIdxTblNames.Unique &&
-				async &&
-				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) &&
-				oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-				// skip async IVF entries index table
-				logutil.Infof("cloneUnaffectedIndex: skip async IVF entries index table %v\n", oriIdxTblName)
+			// Hidden tables the algorithm rebuilds via CDC from ts=0
+			// on the new table — cloning them and letting CDC rebuild
+			// produces duplicates.
+			if async && cloneBehavior.ContainsSkipWhenAsync(oriIdxTblName.AlgoTableType) {
+				logutil.Infof("cloneUnaffectedIndex: skip async index hidden table %v\n", oriIdxTblName)
 				continue
 			}
 

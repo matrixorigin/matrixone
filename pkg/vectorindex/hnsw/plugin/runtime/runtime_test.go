@@ -34,6 +34,20 @@ func TestHnswShouldTruncateHiddenTable(t *testing.T) {
 	require.True(t, CatalogHooks{}.ShouldTruncateHiddenTable("anything"))
 }
 
+func TestHnswAlterTableCloneBehavior(t *testing.T) {
+	// HNSW returns the zero value — its hidden tables are empty at
+	// CREATE-INDEX time (data lands via sync CROSS APPLY hnsw_create
+	// or async CDC), and the whole-index async-skip happens at the
+	// SyncDescriptor level (AlwaysAsync=true).
+	b := CatalogHooks{}.AlterTableCloneBehavior()
+	require.Empty(t, b.DeleteBeforeClone)
+	require.Empty(t, b.SkipWhenAsync)
+	require.False(t, b.ContainsDelete(catalog.Hnsw_TblType_Metadata))
+	require.False(t, b.ContainsDelete(catalog.Hnsw_TblType_Storage))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Hnsw_TblType_Metadata))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Hnsw_TblType_Storage))
+}
+
 func TestHnswDefaultOptions(t *testing.T) {
 	got := CatalogHooks{}.DefaultOptions()
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])

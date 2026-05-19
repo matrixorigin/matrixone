@@ -46,6 +46,12 @@ func (CatalogHooks) HiddenTableTypes() []string {
 // state; both hidden tables are derived from source rows and must reset.
 func (CatalogHooks) ShouldTruncateHiddenTable(_ string) bool { return true }
 
+// AlterTableCloneBehavior — CAGRA leaves both hidden tables empty at
+// CREATE-INDEX time. Mirrors HNSW.
+func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
+	return catalogplugin.AlterTableCloneBehavior{}
+}
+
 func (CatalogHooks) DefaultOptions() map[string]string {
 	return map[string]string{
 		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,

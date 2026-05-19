@@ -38,6 +38,18 @@ func TestIvfpqShouldTruncateHiddenTable(t *testing.T) {
 	require.True(t, h.ShouldTruncateHiddenTable("anything"))
 }
 
+func TestIvfpqAlterTableCloneBehavior(t *testing.T) {
+	// IVF-PQ returns the zero value — hidden tables are empty at
+	// CREATE-INDEX time and async-skip happens at the index level.
+	b := CatalogHooks{}.AlterTableCloneBehavior()
+	require.Empty(t, b.DeleteBeforeClone)
+	require.Empty(t, b.SkipWhenAsync)
+	require.False(t, b.ContainsDelete(catalog.Ivfpq_TblType_Metadata))
+	require.False(t, b.ContainsDelete(catalog.Ivfpq_TblType_Storage))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Metadata))
+	require.False(t, b.ContainsSkipWhenAsync(catalog.Ivfpq_TblType_Storage))
+}
+
 func TestIvfpqDefaultOptions(t *testing.T) {
 	got := CatalogHooks{}.DefaultOptions()
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
