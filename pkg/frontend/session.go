@@ -137,7 +137,8 @@ type Session struct {
 	tempTables map[string]string
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
-	tempTablesRev map[string]string
+	tempTablesRev   map[string]string
+	hasLockedTables atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
