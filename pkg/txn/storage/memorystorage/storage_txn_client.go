@@ -256,11 +256,11 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 }
 
 func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
-	panic("unimplemented")
+	return s.meta.SnapshotTS
 }
 
 func (s *StorageTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
-	panic("unimplemented")
+	s.meta.SnapshotTS = ts
 }
 
 func (s *StorageTxnOperator) CreateTS() timestamp.Timestamp {
