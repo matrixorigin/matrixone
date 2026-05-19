@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"context"
 	goruntime "runtime"
 	"sync/atomic"
 	"time"
@@ -36,17 +37,30 @@ import (
 // flushSemaphore limits concurrent flushS3WriterOnMemoryPressure calls to
 // prevent thundering-herd mpool explosion when many workers are denied memory
 // simultaneously and all try to flush + read objectio metadata at once.
+// The cap is derived from the package-init GOMAXPROCS value and bounded to
+// avoid exceeding the historical flush mpool budget on large CNs.
 var flushSemaphore = make(chan struct{}, flushConcurrency())
+var flushSoftSemaphore = make(chan struct{}, flushSoftConcurrency())
+var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
+
+const (
+	minFlushConcurrency = 4
+	maxFlushConcurrency = 16
+)
 
 func flushConcurrency() int {
 	n := goruntime.GOMAXPROCS(0) / 2
-	if n < 4 {
-		n = 4
+	if n < minFlushConcurrency {
+		n = minFlushConcurrency
 	}
-	if n > 16 {
-		n = 16
+	if n > maxFlushConcurrency {
+		n = maxFlushConcurrency
 	}
 	return n
+}
+
+func flushSoftConcurrency() int {
+	return flushConcurrency() * 2
 }
 
 const opName = "insert"
@@ -292,21 +306,11 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		}
 	}()
 
-	// Limit concurrent flushes to avoid thundering-herd OOM when many
-	// workers are denied memory and all flush simultaneously.
-	// Use a timeout so workers don't hold buffers indefinitely while queued.
-	acquired := false
-	select {
-	case flushSemaphore <- struct{}{}:
-		acquired = true
-	case <-time.After(200 * time.Millisecond):
-		// Timeout: proceed without semaphore to avoid convoy-induced RSS growth.
-	case <-proc.Ctx.Done():
-		return proc.Ctx.Err()
+	release, err := acquireFlushSlot(proc.Ctx)
+	if err != nil {
+		return err
 	}
-	if acquired {
-		defer func() { <-flushSemaphore }()
-	}
+	defer release()
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -334,6 +338,30 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	// acquires by this or other workers see the freed capacity immediately.
 	forcedRefresh(insert.ctr.s3MemThrottler)
 	return nil
+}
+
+func acquireFlushSlot(ctx context.Context) (func(), error) {
+	timer := time.NewTimer(flushSemaphoreAcquireTimeout)
+	defer timer.Stop()
+
+	select {
+	case flushSemaphore <- struct{}{}:
+		return func() { <-flushSemaphore }, nil
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	for {
+		select {
+		case flushSemaphore <- struct{}{}:
+			return func() { <-flushSemaphore }, nil
+		case flushSoftSemaphore <- struct{}{}:
+			return func() { <-flushSoftSemaphore }, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

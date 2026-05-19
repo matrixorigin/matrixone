@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -244,39 +245,46 @@ func LoadBFWithMeta(
 // share the result. This prevents cache stampede under high concurrency.
 //
 // Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
-// deleted. Each waiter copies the result to avoid holding a shared reference
-// that delays GC of the loaded buffer.
+// deleted. Waiters read through metaCache after the load finishes so they do
+// not create one transient copy per concurrent waiter under a cache stampede.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
 	metaLoadMu.Lock()
 	if call, ok := metaLoadCalls[key]; ok {
 		metaLoadMu.Unlock()
 		select {
 		case <-call.done:
+			if v, ok := metaCache.Get(ctx, key); ok {
+				return v, nil
+			}
 			if call.err != nil {
 				return nil, call.err
 			}
-			dst := make([]byte, len(call.val))
-			copy(dst, call.val)
-			return dst, nil
+			return call.val, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
 	call := &loadCall{done: make(chan struct{})}
+	call.err = moerr.NewInternalErrorNoCtx("dedup load did not complete")
 	metaLoadCalls[key] = call
 	metaLoadMu.Unlock()
 
-	call.val, call.err = load()
-	if call.err == nil {
-		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
+	defer func() {
+		close(call.done)
+		metaLoadMu.Lock()
+		delete(metaLoadCalls, key)
+		metaLoadMu.Unlock()
+	}()
+
+	val, err := load()
+	if err != nil {
+		call.err = err
+		return nil, err
 	}
-	close(call.done)
-
-	metaLoadMu.Lock()
-	delete(metaLoadCalls, key)
-	metaLoadMu.Unlock()
-
-	return call.val, call.err
+	metaCache.Set(ctx, key, val, int64(len(val)))
+	call.val = val
+	call.err = nil
+	return val, nil
 }
 
 func FastLoadObjectMeta(

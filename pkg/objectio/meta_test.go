@@ -15,8 +15,14 @@
 package objectio
 
 import (
-	"github.com/stretchr/testify/assert"
+	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildMetaData(t *testing.T) {
@@ -26,4 +32,145 @@ func TestBuildMetaData(t *testing.T) {
 		assert.Equal(t, i, blkMeta.BlockHeader().Sequence())
 		assert.Equal(t, uint16(30), blkMeta.BlockHeader().ColumnCount())
 	}
+}
+
+func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 1
+	started := make(chan struct{})
+	release := make(chan struct{})
+	panicDone := make(chan bool, 1)
+
+	go func() {
+		panicDone <- assert.Panics(t, func() {
+			_, _ = dedupLoad(context.Background(), key, func() ([]byte, error) {
+				close(started)
+				<-release
+				panic("boom")
+			})
+		})
+	}()
+
+	<-started
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			return nil, errors.New("unexpected waiter load")
+		})
+		waiterDone <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	assert.True(t, <-panicDone)
+	err := <-waiterDone
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "dedup load did not complete")
+
+	metaLoadMu.Lock()
+	_, ok := metaLoadCalls[key]
+	metaLoadMu.Unlock()
+	assert.False(t, ok)
+
+	v, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+		return []byte("ok"), nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("ok"), v)
+}
+
+func TestDedupLoadCleansUpAfterLoadError(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 3
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ownerDone := make(chan error, 1)
+
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			close(started)
+			<-release
+			return nil, errors.New("owner load failed")
+		})
+		ownerDone <- err
+	}()
+	waiterDone := make(chan error, 1)
+	<-started
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			return nil, errors.New("unexpected waiter load")
+		})
+		waiterDone <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	err := <-ownerDone
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "owner load failed")
+	err = <-waiterDone
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "owner load failed")
+
+	metaLoadMu.Lock()
+	_, ok := metaLoadCalls[key]
+	metaLoadMu.Unlock()
+	assert.False(t, ok)
+}
+
+func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 2
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	ownerDone := make(chan error, 1)
+
+	go func() {
+		_, err := dedupLoad(ctx, key, func() ([]byte, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		ownerDone <- err
+	}()
+	<-started
+
+	var waiterLoadCount atomic.Int32
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			waiterLoadCount.Add(1)
+			return nil, errors.New("unexpected waiter load")
+		})
+		waiterDone <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	assert.ErrorIs(t, <-ownerDone, context.Canceled)
+	assert.ErrorIs(t, <-waiterDone, context.Canceled)
+	assert.Zero(t, waiterLoadCount.Load())
+
+	metaLoadMu.Lock()
+	_, ok := metaLoadCalls[key]
+	metaLoadMu.Unlock()
+	assert.False(t, ok)
 }
