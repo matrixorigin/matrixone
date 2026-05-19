@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,15 +24,23 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,6 +54,148 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterTable{
 		Options: &plan2.AlterCopyOpt{SkipPkDedup: true},
 	}))
+}
+
+type alterCopyInsertSpyExecutor struct {
+	insertSQL    string
+	insertErr    error
+	insertCtx    context.Context
+	insertOption executor.StatementOption
+}
+
+func (e *alterCopyInsertSpyExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	if sql == e.insertSQL {
+		e.insertCtx = ctx
+		e.insertOption = opts.StatementOption()
+		return executor.Result{}, e.insertErr
+	}
+	return executor.Result{}, nil
+}
+
+func (e *alterCopyInsertSpyExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return nil
+}
+
+func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
+	insertErr := errors.New("stop after insert-copy")
+
+	for _, tc := range []struct {
+		name              string
+		skipPkDedup       bool
+		wantPipelineFlush bool
+	}{
+		{
+			name:              "skip pk dedup false",
+			skipPkDedup:       false,
+			wantPipelineFlush: false,
+		},
+		{
+			name:              "skip pk dedup true",
+			skipPkDedup:       true,
+			wantPipelineFlush: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			proc.Base.SessionInfo.TimeZone = time.Local
+
+			serviceID := "alter-copy-pipeline-flush-" + tc.name
+			lockSvc := mock_lock.NewMockLockService(ctrl)
+			lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
+			proc.Base.LockService = lockSvc
+			require.Equal(t, serviceID, proc.GetService())
+
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+
+			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+
+			tableDef := &plan.TableDef{
+				TblId: 1,
+				Name:  "dept",
+			}
+			copyTableDef := &plan.TableDef{
+				TblId: 2,
+				Name:  "dept_copy",
+			}
+			alterTable := &plan2.AlterTable{
+				Database:          "test",
+				TableDef:          tableDef,
+				CopyTableDef:      copyTableDef,
+				CreateTmpTableSql: "create table dept_copy",
+				InsertTmpDataSql:  "insert into dept_copy select * from dept",
+				Options:           &plan2.AlterCopyOpt{SkipPkDedup: tc.skipPkDedup},
+			}
+			s := &Scope{
+				Magic: AlterTable,
+				Plan: &plan.Plan{
+					Plan: &plan2.Plan_Ddl{
+						Ddl: &plan2.DataDefinition{
+							DdlType: plan2.DataDefinition_ALTER_TABLE,
+							Definition: &plan2.DataDefinition_AlterTable{
+								AlterTable: alterTable,
+							},
+						},
+					},
+				},
+			}
+
+			originRel := mock_frontend.NewMockRelation(ctrl)
+			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+			copyRel := mock_frontend.NewMockRelation(ctrl)
+			copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+				TblId: 2,
+				Name:  "dept_copy",
+			}).AnyTimes()
+
+			mockDb := mock_frontend.NewMockDatabase(ctrl)
+			mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
+			mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+			spyExec := &alterCopyInsertSpyExecutor{
+				insertSQL: alterTable.InsertTmpDataSql,
+				insertErr: insertErr,
+			}
+			rt := moruntime.DefaultRuntime()
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+
+			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
+			c.pn = s.Plan
+			origCtx := proc.Ctx
+
+			err := s.AlterTableCopy(c)
+			require.ErrorIs(t, err, insertErr)
+			require.Same(t, origCtx, proc.Ctx)
+			require.NotNil(t, spyExec.insertCtx)
+			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
+
+			if tc.skipPkDedup {
+				require.Same(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
+			} else {
+				require.Nil(t, spyExec.insertOption.AlterCopyDedupOpt())
+			}
+		})
+	}
 }
 
 func TestScope_AlterTableInplace(t *testing.T) {
