@@ -22,22 +22,39 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-func TestValidQuantization(t *testing.T) {
-	require.True(t, ValidQuantization(Quantization_F32_Str))
-	require.True(t, ValidQuantization(Quantization_F16_Str))
-	require.True(t, ValidQuantization(Quantization_INT8_Str))
-	require.True(t, ValidQuantization(Quantization_UINT8_Str))
-	// f64 is not in the validation list
+// TestValidQuantization_DrivenByCuvsMap pins ValidQuantization to the
+// cuvs map. The previous shape had a hand-maintained list inside the
+// validator that drifted from the (single) NameToType map — float16
+// was accepted by the validator but missing from the map; float64 was
+// the reverse. Iterating the map here means any future entry added or
+// removed has to update both or the test catches it.
+func TestValidQuantization_DrivenByCuvsMap(t *testing.T) {
+	require.NotEmpty(t, CuvsQuantizationNameToType)
+	for name := range CuvsQuantizationNameToType {
+		require.True(t, ValidQuantization(name), "validator rejected cuvs-mapped name %q", name)
+	}
+	// float64 is usearch-only; cuvs does not support it, and the
+	// validator drives the cuvs CREATE INDEX path.
 	require.False(t, ValidQuantization(Quantization_F64_Str))
 	require.False(t, ValidQuantization("bogus"))
 	require.False(t, ValidQuantization(""))
 }
 
-func TestQuantizationNameToType(t *testing.T) {
-	require.Equal(t, Quantization_F32, QuantizationNameToType[Quantization_F32_Str])
-	require.Equal(t, Quantization_F64, QuantizationNameToType[Quantization_F64_Str])
-	require.Equal(t, Quantization_INT8, QuantizationNameToType[Quantization_INT8_Str])
-	require.Equal(t, Quantization_UINT8, QuantizationNameToType[Quantization_UINT8_Str])
+func TestUsearchQuantizationNameToType(t *testing.T) {
+	require.Equal(t, Quantization_F32, UsearchQuantizationNameToType[Quantization_F32_Str])
+	require.Equal(t, Quantization_F16, UsearchQuantizationNameToType[Quantization_F16_Str])
+	require.Equal(t, Quantization_F64, UsearchQuantizationNameToType[Quantization_F64_Str])
+	require.Equal(t, Quantization_INT8, UsearchQuantizationNameToType[Quantization_INT8_Str])
+	require.Equal(t, Quantization_UINT8, UsearchQuantizationNameToType[Quantization_UINT8_Str])
+}
+
+func TestCuvsQuantizationNameToType(t *testing.T) {
+	require.Equal(t, Quantization_F32, CuvsQuantizationNameToType[Quantization_F32_Str])
+	require.Equal(t, Quantization_F16, CuvsQuantizationNameToType[Quantization_F16_Str])
+	require.Equal(t, Quantization_INT8, CuvsQuantizationNameToType[Quantization_INT8_Str])
+	require.Equal(t, Quantization_UINT8, CuvsQuantizationNameToType[Quantization_UINT8_Str])
+	_, ok := CuvsQuantizationNameToType[Quantization_F64_Str]
+	require.False(t, ok, "cuvs map must not include float64")
 }
 
 func TestMaxFloat(t *testing.T) {

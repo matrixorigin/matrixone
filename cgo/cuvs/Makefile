@@ -28,13 +28,16 @@ INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PR
 # -fopenmp is forwarded to the host compiler via -Xcompiler so OpenMP pragmas
 # in filter.hpp's eval_filter_bitmap_cpu compile and parallelise instead of
 # being dropped with a -Wunknown-pragmas warning.
-# -march=native lets the host compiler auto-vectorize the cmp loops in
-# filter.hpp's eval_pred_word_typed using AVX2 (Zen 3 / Skylake+); without it
-# the inner per-row cmp + sete + shl-eax,cl + or stays scalar. The flag pins
-# the binary to the build host's ISA tier — swap for an explicit tier
-# (e.g. -mavx2 -mbmi2 -mfma or -march=znver3 / -march=haswell) when building
-# for a heterogeneous deployment.
-NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=native" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
+#
+# HOST_ARCH gates the auto-vectorize ISA tier used by the host compiler for
+# the cmp loops in filter.hpp's eval_pred_word_typed. Default is -march=haswell
+# (AVX2 + BMI2 + FMA, the lowest tier we ship), so the shipped artifact runs
+# on any x86_64 datacenter node from Haswell forward. To target a newer floor
+# at build time, pass HOST_ARCH=znver3 / skylake-avx512 / native — but NEVER
+# leave HOST_ARCH=native in CI artifacts: deploying onto an older node will
+# fail with SIGILL the moment an AVX-512 (or newer) instruction executes.
+HOST_ARCH ?= haswell
+NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
     -gencode arch=compute_86,code=sm_86 \
