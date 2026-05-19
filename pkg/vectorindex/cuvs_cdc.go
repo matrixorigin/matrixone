@@ -21,6 +21,7 @@ import (
 	"hash/crc32"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
@@ -430,6 +431,187 @@ func CdcIncludeBytesPerRow(colMetaJSON string) (int, error) {
 	}
 	total += (len(sizes) + 7) / 8 // trailing per-row null mask
 	return total, nil
+}
+
+// IncludeBinding is one INCLUDE column's resolved binding to a source-table
+// column. Built once at CDC writer construction via ResolveIncludeColumns
+// and re-used per row to encode the include byte stream.
+type IncludeBinding struct {
+	Name      string // canonical column name
+	Pos       int32  // index into the row []any delivered by ISCP
+	TypeCode  int    // colmeta type code: 0=int32, 1=int64, 2=float32, 3=float64, 4=uint64
+	SizeBytes int    // element size derived from TypeCode (4 or 8)
+}
+
+// Source-table type IDs (mirror pkg/container/types.T constants) that
+// INCLUDE columns may use. Kept inline so cuvs_cdc.go stays free of a
+// pkg/container/types import — these values are public-API stable.
+const (
+	srcTypeIDInt32   = 22
+	srcTypeIDInt64   = 23
+	srcTypeIDUint64  = 28
+	srcTypeIDFloat32 = 30
+	srcTypeIDFloat64 = 31
+)
+
+// ResolveIncludeColumns parses the comma-separated names in
+// includedColumns and resolves each against the source table's column
+// layout. nameToPos maps a column name to its position in the row []any
+// delivered by ISCP; colTypeID returns the source-table type ID
+// (matching pkg/container/types.T values) for that position.
+//
+// Returns:
+//   - bindings: per-column resolved (Pos, TypeCode, SizeBytes), declaration order
+//   - colMetaJSON: shape that IncludeColSizes / SplitIncludeBytes consume
+//     (so writer and sync agree on layout by construction)
+//   - includeBytesPerRow: total bytes per row (per-col data + null-mask)
+//
+// All zero when includedColumns is empty.
+func ResolveIncludeColumns(
+	includedColumns string,
+	nameToPos map[string]int32,
+	colTypeID func(pos int32) int32,
+) ([]IncludeBinding, string, int, error) {
+	trimmed := strings.TrimSpace(includedColumns)
+	if trimmed == "" {
+		return nil, "", 0, nil
+	}
+	parts := strings.Split(trimmed, ",")
+	bindings := make([]IncludeBinding, 0, len(parts))
+	for _, raw := range parts {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		pos, ok := nameToPos[name]
+		if !ok {
+			return nil, "", 0, moerr.NewInternalErrorNoCtxf(
+				"ResolveIncludeColumns: column %q not found in source table", name)
+		}
+		typeCode, sizeBytes, err := includeTypeFromSrcID(name, colTypeID(pos))
+		if err != nil {
+			return nil, "", 0, err
+		}
+		bindings = append(bindings, IncludeBinding{
+			Name:      name,
+			Pos:       pos,
+			TypeCode:  typeCode,
+			SizeBytes: sizeBytes,
+		})
+	}
+	if len(bindings) == 0 {
+		return nil, "", 0, nil
+	}
+
+	// Build colMetaJSON: [{"name":"foo","type":1},...]
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, b := range bindings {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"name":"`)
+		sb.WriteString(b.Name)
+		sb.WriteString(`","type":`)
+		sb.WriteString(strconv.Itoa(b.TypeCode))
+		sb.WriteByte('}')
+	}
+	sb.WriteByte(']')
+	colMetaJSON := sb.String()
+
+	includeBytesPerRow, err := CdcIncludeBytesPerRow(colMetaJSON)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return bindings, colMetaJSON, includeBytesPerRow, nil
+}
+
+func includeTypeFromSrcID(name string, srcTypeID int32) (typeCode, sizeBytes int, err error) {
+	switch srcTypeID {
+	case srcTypeIDInt32:
+		return 0, 4, nil
+	case srcTypeIDInt64:
+		return 1, 8, nil
+	case srcTypeIDFloat32:
+		return 2, 4, nil
+	case srcTypeIDFloat64:
+		return 3, 8, nil
+	case srcTypeIDUint64:
+		return 4, 8, nil
+	default:
+		return 0, 0, moerr.NewInternalErrorNoCtxf(
+			"ResolveIncludeColumns: column %q has unsupported INCLUDE type id %d "+
+				"(supported: int32, int64, uint64, float32, float64)", name, srcTypeID)
+	}
+}
+
+// EncodeIncludeRow encodes one row's INCLUDE column values into the
+// row-major byte layout consumed by IncludeColSizes / SplitIncludeBytes:
+//
+//	col0_value || col1_value || ... || null_mask
+//
+// where null_mask is ceil(ncols/8) bytes, LSB-first within each byte
+// (bit i = 1 means binding i is NULL). row[binding.Pos] supplies the
+// native Go value (int32 / int64 / uint64 / float32 / float64) or nil.
+//
+// Returns nil when bindings is empty.
+func EncodeIncludeRow(bindings []IncludeBinding, row []any, includeBytesPerRow int) ([]byte, error) {
+	if len(bindings) == 0 || includeBytesPerRow == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, includeBytesPerRow)
+	maskStart := includeBytesPerRow - (len(bindings)+7)/8
+	off := 0
+	for i, b := range bindings {
+		v := row[b.Pos]
+		if v == nil {
+			buf[maskStart+i/8] |= 1 << (i % 8)
+			off += b.SizeBytes
+			continue
+		}
+		switch b.TypeCode {
+		case 0: // int32
+			x, ok := v.(int32)
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"EncodeIncludeRow: column %q expected int32, got %T", b.Name, v)
+			}
+			binary.LittleEndian.PutUint32(buf[off:], uint32(x))
+		case 1: // int64
+			x, ok := v.(int64)
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"EncodeIncludeRow: column %q expected int64, got %T", b.Name, v)
+			}
+			binary.LittleEndian.PutUint64(buf[off:], uint64(x))
+		case 2: // float32
+			x, ok := v.(float32)
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"EncodeIncludeRow: column %q expected float32, got %T", b.Name, v)
+			}
+			binary.LittleEndian.PutUint32(buf[off:], math.Float32bits(x))
+		case 3: // float64
+			x, ok := v.(float64)
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"EncodeIncludeRow: column %q expected float64, got %T", b.Name, v)
+			}
+			binary.LittleEndian.PutUint64(buf[off:], math.Float64bits(x))
+		case 4: // uint64
+			x, ok := v.(uint64)
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"EncodeIncludeRow: column %q expected uint64, got %T", b.Name, v)
+			}
+			binary.LittleEndian.PutUint64(buf[off:], x)
+		default:
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"EncodeIncludeRow: column %q unknown type code %d", b.Name, b.TypeCode)
+		}
+		off += b.SizeBytes
+	}
+	return buf, nil
 }
 
 // IncludeColSizes returns the per-column elem size in bytes for a colMetaJSON.

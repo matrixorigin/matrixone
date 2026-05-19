@@ -159,6 +159,35 @@ func (s *IvfpqSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 	return nil
 }
 
+// AppendRecords mirrors CagraSync.AppendRecords — appends pre-encoded
+// EncodeEventRecord byte chunks from the CDC writer to the pending
+// buffer. See pkg/vectorindex/cagra/sync.go for the rationale.
+func (s *IvfpqSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) error {
+	pos := 0
+	for pos < len(recordBytes) {
+		op := vectorindex.CdcOp(recordBytes[pos])
+		var n int
+		switch op {
+		case vectorindex.CdcOpDelete:
+			n = 9 // op (1) + pkid (8)
+		case vectorindex.CdcOpInsert:
+			n = 9 + 4*s.dim + s.includeBytesPerRow
+		default:
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"IvfpqSync.AppendRecords: unknown op %d at offset %d", op, pos))
+		}
+		if pos+n > len(recordBytes) {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"IvfpqSync.AppendRecords: truncated record at offset %d (need %d, have %d)",
+				pos, n, len(recordBytes)-pos))
+		}
+		s.pendingSizes = append(s.pendingSizes, n)
+		pos += n
+	}
+	s.pendingRecords = append(s.pendingRecords, recordBytes...)
+	return nil
+}
+
 func (s *IvfpqSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32, include []byte) error {
 	if op == vectorindex.CdcOpInsert {
 		if len(vec) != s.dim {

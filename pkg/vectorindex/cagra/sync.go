@@ -198,6 +198,42 @@ func (s *CagraSync) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorI
 	return nil
 }
 
+// AppendRecords appends pre-encoded EncodeEventRecord byte chunks
+// produced by the CDC writer (pkg/vectorindex/cagra/plugin/iscp) to
+// the pending buffer. Used by RunCuvs (pkg/iscp) when draining the
+// consumer's send channel — skips the per-event EncodeEventRecord
+// call that Update does internally, so the wire format is the same
+// bytes Save will eventually flush to the storage table.
+//
+// Walks the byte stream once to recover per-record sizes for
+// pendingSizes (cheap: each record's size is determined by its op
+// byte + the index's dim + includeBytesPerRow).
+func (s *CagraSync) AppendRecords(_ *sqlexec.SqlProcess, recordBytes []byte) error {
+	pos := 0
+	for pos < len(recordBytes) {
+		op := vectorindex.CdcOp(recordBytes[pos])
+		var n int
+		switch op {
+		case vectorindex.CdcOpDelete:
+			n = 9 // op (1) + pkid (8)
+		case vectorindex.CdcOpInsert:
+			n = 9 + 4*s.dim + s.includeBytesPerRow
+		default:
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"CagraSync.AppendRecords: unknown op %d at offset %d", op, pos))
+		}
+		if pos+n > len(recordBytes) {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"CagraSync.AppendRecords: truncated record at offset %d (need %d, have %d)",
+				pos, n, len(recordBytes)-pos))
+		}
+		s.pendingSizes = append(s.pendingSizes, n)
+		pos += n
+	}
+	s.pendingRecords = append(s.pendingRecords, recordBytes...)
+	return nil
+}
+
 // appendRecord encodes a single record onto the pending buffer.
 func (s *CagraSync) appendRecord(op vectorindex.CdcOp, pkid int64, vec []float32, include []byte) error {
 	if op == vectorindex.CdcOpInsert {
