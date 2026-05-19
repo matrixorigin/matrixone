@@ -849,6 +849,96 @@ func TestLockOpResetClearsLockCount(t *testing.T) {
 	require.Nil(t, arg.ctr.retryError)
 }
 
+func TestLockWithRetryStopsAfterMaxAttempts(t *testing.T) {
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	oldMaxRetry := maxLockRetryAttempts
+	defaultWaitTimeOnRetryLock = time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = time.Hour // large budget, won't be exhausted
+	maxLockRetryAttempts = 3
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+		maxLockRetryAttempts = oldMaxRetry
+	}()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
+	txnOp.EXPECT().HasLockTable(uint64(1)).Return(false).AnyTimes()
+
+	// 1 (LockWithMayUpgrade) + maxLockRetryAttempts (3) = 4 calls total
+	lockSvc.EXPECT().
+		Lock(gomock.Any(), uint64(1), gomock.Any(), []byte("txn1"), gomock.Any()).
+		Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")).
+		Times(4)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx, lockSvc, 1, nil, []byte("txn1"),
+		lock.LockOptions{}, txnOp, nil, nil,
+		LockOptions{}, types.Type{},
+	)
+	elapsed := time.Since(start)
+
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	// After maxLockRetryAttempts + initial call, function returns.
+	// With 1ms backoff per retry, should complete well under 500ms.
+	require.Less(t, elapsed, 500*time.Millisecond)
+}
+
+func TestLockWithRetryBackoffTiming(t *testing.T) {
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	oldMaxRetry := maxLockRetryAttempts
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = time.Hour
+	maxLockRetryAttempts = 3
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+		maxLockRetryAttempts = oldMaxRetry
+	}()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
+	txnOp.EXPECT().HasLockTable(uint64(1)).Return(false).AnyTimes()
+
+	// Each Lock call returns retryable. 4 calls total.
+	lockSvc.EXPECT().
+		Lock(gomock.Any(), uint64(1), gomock.Any(), []byte("txn1"), gomock.Any()).
+		Return(lock.Result{}, moerr.NewBackendCannotConnectNoCtx("retryable")).
+		Times(4)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx, lockSvc, 1, nil, []byte("txn1"),
+		lock.LockOptions{}, txnOp, nil, nil,
+		LockOptions{}, types.Type{},
+	)
+	elapsed := time.Since(start)
+
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+
+	// Backoff: attempt1=0, attempt2=100ms→capped50ms, attempt3=200ms→capped50ms
+	// Total ≈ 100ms minimum.
+	require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+	require.Less(t, elapsed, 500*time.Millisecond)
+}
+
 func runLockNonBlockingOpTest(
 	t *testing.T,
 	tables []uint64,
