@@ -271,9 +271,9 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 
 	defer func() {
 		metaLoadMu.Lock()
+		close(call.done)
 		delete(metaLoadCalls, key)
 		metaLoadMu.Unlock()
-		close(call.done)
 	}()
 
 	call.val, call.err = load()

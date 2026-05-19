@@ -628,6 +628,25 @@ func TestLockRetryHighMemoryUsesBoundedQueue(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
 }
 
+func TestLockRetryHighMemoryQueueHonorsBackendRetryDeadline(t *testing.T) {
+	oldSlots := lockRetryHighMemorySlots
+	defer func() {
+		lockRetryHighMemorySlots = oldSlots
+	}()
+
+	lockRetryHighMemorySlots = make(chan struct{}, 1)
+	lockRetryHighMemorySlots <- struct{}{}
+
+	state := lockRetryState{
+		backendRetryDeadline: time.Now().Add(20 * time.Millisecond),
+		useMemoryRetrySlot:   true,
+	}
+	start := time.Now()
+	require.False(t, waitToRetryLock(context.Background(), time.Second, &state))
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
+	require.Less(t, time.Since(start), 100*time.Millisecond)
+}
+
 func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
 	oldPressure := getLockRetryMemoryPressureLevel
 	oldBudget := defaultMaxWaitTimeOnRetryBackendLock

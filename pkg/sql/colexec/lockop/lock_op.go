@@ -873,19 +873,35 @@ func canRetryLock(
 
 func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
 	if retryState.useMemoryRetrySlot {
-		select {
-		case lockRetryHighMemorySlots <- struct{}{}:
-			defer func() { <-lockRetryHighMemorySlots }()
-		case <-ctx.Done():
-			return false
-		}
 		if !retryState.backendRetryDeadline.IsZero() {
 			remaining := time.Until(retryState.backendRetryDeadline)
 			if remaining <= 0 {
 				return false
 			}
+			deadlineTimer := time.NewTimer(remaining)
+			defer deadlineTimer.Stop()
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			case <-deadlineTimer.C:
+				return false
+			}
+
+			remaining = time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
 			if remaining < wait {
 				wait = remaining
+			}
+		} else {
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
 			}
 		}
 	}
