@@ -1,4 +1,3 @@
--- JSON_LENGTH function tests
 SELECT JSON_LENGTH(NULL) AS result;
 result
 null
@@ -35,17 +34,11 @@ result
 SELECT JSON_LENGTH('{"a":1}', '$.x') AS result;
 result
 null
-
--- Error: invalid JSON string
 SELECT JSON_LENGTH('not-json');
 invalid input: json text not-json
-
--- Path with wildcards (multiple matches)
 SELECT JSON_LENGTH('{"a":{"x":1,"y":2}}', '$.a.*') AS result;
 result
 2
-
--- Table with JSON column
 DROP TABLE IF EXISTS t_json_len;
 CREATE TABLE t_json_len (id INT PRIMARY KEY, payload JSON);
 INSERT INTO t_json_len VALUES (1, '{"meta":{"level":{"nested":{"value":{"deep":"2924"}},"flag":true}}}');

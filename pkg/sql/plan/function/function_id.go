@@ -910,7 +910,7 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
-	"json_length":                   JSON_LENGTH,
+	"json_length":                    JSON_LENGTH,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,
