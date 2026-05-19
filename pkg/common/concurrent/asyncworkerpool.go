@@ -15,6 +15,7 @@
 package concurrent
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"runtime"
@@ -190,19 +191,13 @@ func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource
 		select {
 		case <-w.sigc: // Wait for a signal
 			logutil.Info("AsyncWorkerPool received shutdown signal, stopping...")
-			if w.stopped.CompareAndSwap(false, true) {
-				close(w.stopCh) // Signal run() to stop.
-				close(w.tasks)  // Close tasks channel here.
-			}
+			w.signalStop()
 		case err := <-w.errch: // Listen for errors from worker goroutines
 			logutil.Error("AsyncWorkerPool received internal error, stopping...", zap.Error(err))
 			if w.firstError.Load() == nil {
 				w.firstError.Store(err)
 			}
-			if w.stopped.CompareAndSwap(false, true) {
-				close(w.stopCh) // Signal run() to stop.
-				close(w.tasks)  // Close tasks channel here.
-			}
+			w.signalStop()
 		case <-w.stopCh: // Listen for internal stop signal from w.Stop()
 			logutil.Info("AsyncWorkerPool signal handler received internal stop signal, exiting...")
 			// Do nothing, just exit. w.Stop() will handle the rest.
@@ -210,18 +205,38 @@ func (w *AsyncWorkerPool) Start(initFn func(res any) error, stopFn func(resource
 	}()
 }
 
-// Stop signals the worker to terminate.
-func (w *AsyncWorkerPool) Stop() {
+// signalStop closes w.stopCh exactly once. NOTE: w.tasks is intentionally
+// NOT closed. The previous design closed it from receiver-side code (Stop
+// and the signal handler), which races against Submit and panics with
+// "send on closed channel" when a producer wins the CAS check but loses
+// to close. Workers select on both w.tasks and w.stopCh, so they exit
+// cleanly without the channel needing to be closed; Submit also selects
+// on w.stopCh and refuses new tasks once it fires.
+func (w *AsyncWorkerPool) signalStop() {
 	if w.stopped.CompareAndSwap(false, true) {
-		close(w.stopCh) // Signal run() to stop.
-		close(w.tasks)  // Close tasks channel here.
+		close(w.stopCh)
 	}
+}
+
+// Stop signals the worker to terminate and waits for it to finish.
+func (w *AsyncWorkerPool) Stop() {
+	w.signalStop()
 	w.wg.Wait()
 	w.AsyncTaskResultStore.Stop() // Signal the result store to stop
 }
 
-// Submit sends a task to the worker.
+// Submit sends a task to the worker. Blocks if the task buffer is full
+// (buffer size = nthread) until either:
+//   - the worker accepts the task — returns (jobID, nil), or
+//   - the pool is stopped via Stop / signal / internal error — returns
+//     (0, error).
+//
+// Callers that cannot tolerate unbounded blocking on a saturated buffer
+// must use SubmitContext with a context.Context deadline.
 func (w *AsyncWorkerPool) Submit(fn func(res any) (any, error)) (uint64, error) {
+	// Fast-path: a pool that has already stopped fails immediately
+	// without allocating a jobID. The select below handles the race
+	// where Stop fires *during* the send.
 	if w.stopped.Load() {
 		return 0, moerr.NewInternalErrorNoCtx("cannot submit task: worker is stopped")
 	}
@@ -230,8 +245,44 @@ func (w *AsyncWorkerPool) Submit(fn func(res any) (any, error)) (uint64, error) 
 		ID: jobID,
 		Fn: fn,
 	}
-	w.tasks <- task
-	return jobID, nil
+	// Race-safe send. Go's select picks at random when multiple cases
+	// are ready, so this does not guarantee stop-first ordering — but
+	// combined with the fast-path above, post-Stop Submit() always
+	// returns an error, and a Submit() that wins the race against
+	// Stop simply queues a task whose Wait() is then unblocked when
+	// AsyncTaskResultStore.Stop() fires.
+	select {
+	case <-w.stopCh:
+		return 0, moerr.NewInternalErrorNoCtx("cannot submit task: worker is stopped")
+	case w.tasks <- task:
+		return jobID, nil
+	}
+}
+
+// SubmitContext is Submit with a caller-supplied deadline / cancellation
+// signal. Returns the context's error if it fires before the worker
+// accepts the task. The pool-stopped path still wins over a still-live
+// context — callers should treat that as "drop the task" the same way.
+func (w *AsyncWorkerPool) SubmitContext(ctx context.Context, fn func(res any) (any, error)) (uint64, error) {
+	if w.stopped.Load() {
+		return 0, moerr.NewInternalErrorNoCtx("cannot submit task: worker is stopped")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	jobID := w.GetNextJobID()
+	task := &AsyncTask{
+		ID: jobID,
+		Fn: fn,
+	}
+	select {
+	case <-w.stopCh:
+		return 0, moerr.NewInternalErrorNoCtx("cannot submit task: worker is stopped")
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case w.tasks <- task:
+		return jobID, nil
+	}
 }
 
 func (w *AsyncWorkerPool) workerLoop(wg *sync.WaitGroup) {
