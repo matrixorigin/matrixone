@@ -4140,6 +4140,9 @@ func dateToInt(d types.Date) int32 {
 func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
+	if !types.UnitIsDayOrLarger(iTyp) {
+		return moerr.NewInvalidInputNoCtx("INT date does not support sub-day interval (HOUR/MINUTE/SECOND); cast to DATETIME first")
+	}
 
 	rs := vector.MustFunctionResult[int32](result)
 	rsVec := rs.GetResultVector()
@@ -4181,6 +4184,9 @@ func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 func DateIntAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
+	if !types.UnitIsDayOrLarger(iTyp) {
+		return moerr.NewInvalidInputNoCtx("INT date does not support sub-day interval (HOUR/MINUTE/SECOND); cast to DATETIME first")
+	}
 
 	rs := vector.MustFunctionResult[int32](result)
 	rsVec := rs.GetResultVector()

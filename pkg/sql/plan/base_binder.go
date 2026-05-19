@@ -1688,6 +1688,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int32) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
