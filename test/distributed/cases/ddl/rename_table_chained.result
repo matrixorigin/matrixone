@@ -1,0 +1,40 @@
+drop database if exists test_rename_chain;
+create database test_rename_chain;
+use test_rename_chain;
+create table t_live (id int);
+create table t_shadow (id int);
+insert into t_live values (100);
+insert into t_shadow values (200);
+rename table
+  t_live to t_tmp,
+  t_shadow to t_live,
+  t_tmp to t_shadow;
+select * from t_live;
+id
+200
+select * from t_shadow;
+id
+100
+drop table t_live, t_shadow;
+create table a (id int);
+create table b (id int);
+insert into a values (1);
+insert into b values (2);
+rename table a to c, b to a;
+select * from a;
+id
+2
+select * from c;
+id
+1
+drop table a, c;
+create table x (id int);
+create table y (id int);
+rename table x to y;
+table y already exists
+drop table if exists x, y;
+create table m (id int);
+create table n (id int);
+rename table m to xx, m to yy;
+no such table test_rename_chain.m
+drop database test_rename_chain;
