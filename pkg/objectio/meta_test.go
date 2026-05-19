@@ -17,7 +17,6 @@ package objectio
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,7 +72,7 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	assert.Equal(t, "boom", <-panicDone)
 	err := <-waiterDone
 	assert.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "dedup load panic"))
+	assert.Contains(t, err.Error(), "dedup load did not complete")
 
 	metaLoadMu.Lock()
 	_, ok := metaLoadCalls[key]
