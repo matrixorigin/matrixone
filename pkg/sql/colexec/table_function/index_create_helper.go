@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,11 +29,19 @@ import (
 // own per-algorithm mockable variable (ivfpq_runSql / cagra_runSql / …).
 type runSqlFunc func(*sqlexec.SqlProcess, string) (executor.Result, error)
 
+// quoteIdent wraps `ident` in backticks and doubles any embedded backticks —
+// the standard MySQL identifier escape. Without this, a column or table name
+// containing a backtick (e.g. `a“b`) would break out of the quoted-identifier
+// context and let an attacker append arbitrary SQL.
+func quoteIdent(ident string) string {
+	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+}
+
 // fetchSrcTableRowCount runs `SELECT count(*) FROM `db`.`src“ and returns the
 // row count. Used by index create paths to auto-populate IndexCapacity when
 // the user did not set it upfront.
 func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src string) (int64, error) {
-	sql := fmt.Sprintf("SELECT count(*) FROM `%s`.`%s`", db, src)
+	sql := fmt.Sprintf("SELECT count(*) FROM %s.%s", quoteIdent(db), quoteIdent(src))
 	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return 0, err
