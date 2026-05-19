@@ -1,5 +1,3 @@
-//go:build gpu
-
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
