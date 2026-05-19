@@ -4332,6 +4332,79 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 	)
 }
 
+func TestLockWaitTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Use a long-lived context so it doesn't interfere with LockWaitTimeout.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 acquires and holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 tries to lock the same row with a 1-second LockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 1 // 1 second
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			// Should time out after ~1 second, not immediately and not indefinitely.
+			require.Error(t, err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+			require.Less(t, elapsed, 3*time.Second)
+		},
+	)
+}
+
+func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Short context to bound the test.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
+			// Should be blocked until ctx expires (no default timeout interception).
+			option2 := option
+			option2.LockWaitTimeout = 0 // no session timeout; fall back to config default
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			// Should have waited for the context timeout (~2s), not failed immediately.
+			require.Error(t, err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+		},
+	)
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)

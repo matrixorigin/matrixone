@@ -8,5 +8,5 @@ if [ "${GOPATH}" == "" ];then
 fi
 
 # https://github.com/gogo/protobuf.git@v1.3.2
-${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR --gogofast_out=paths=source_relative:. operations.proto
+${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR:/usr/include --gogofast_out=paths=source_relative:. operations.proto
 goimports -w *pb.go

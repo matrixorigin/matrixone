@@ -163,7 +163,15 @@ func (l *localLockTable) doLock(
 			l.options.beforeWait(c)()
 		}
 
-		v := c.w.wait(c.ctx, l.logger)
+		waitCtx := c.ctx
+		// Session-level SET lock_wait_timeout takes highest priority (passed via
+		// pb.LockOptions)
+		if d := time.Duration(c.opts.LockWaitTimeout) * time.Second; d > 0 {
+			var cancel context.CancelFunc
+			waitCtx, cancel = context.WithTimeout(c.ctx, d)
+			defer cancel()
+		}
+		v := c.w.wait(waitCtx, l.logger)
 
 		if l.options.afterWait != nil {
 			l.options.afterWait(c)()

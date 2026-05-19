@@ -137,6 +137,14 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	}
 }
 
+// WithTxnLockWaitTimeout sets the session-level lock wait timeout on the txn.
+// If set, the lock service will use this value instead of the global config.
+func WithTxnLockWaitTimeout(timeout time.Duration) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.lockWaitTimeout = timeout
+	}
+}
+
 // WithTxnCreateBy set txn create by.
 func WithTxnCreateBy(
 	accountID uint32,
@@ -298,6 +306,7 @@ type txnOperator struct {
 		skipWaitPushClient bool
 		options            txn.TxnOptions
 		waitActiveHandle   func()
+		lockWaitTimeout    time.Duration
 	}
 }
 
@@ -625,6 +634,16 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 
 func (tc *txnOperator) GetWaitActiveCost() time.Duration {
 	return tc.reset.waitActiveCost
+}
+
+// LockWaitTimeoutFromTxn returns the lock wait timeout from a txn operator, or 0.
+// This avoids exposing LockWaitTimeout on the TxnOperator interface while still
+// allowing lock_op to read the session-level timeout.
+func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
+	if tc, ok := op.(*txnOperator); ok {
+		return tc.opts.lockWaitTimeout
+	}
+	return 0
 }
 
 func (tc *txnOperator) notifyActive() {

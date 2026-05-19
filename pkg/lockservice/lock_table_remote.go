@@ -33,6 +33,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// defaultLockRPCTimeout is the timeout for lock RPC calls. This should be
+	// long enough to accommodate reasonable lock waits but short enough to avoid
+	// indefinite goroutine blocking when the remote lock service is unhealthy.
+	defaultLockRPCTimeout = 5 * time.Minute
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
@@ -92,7 +99,13 @@ func (l *remoteLockTable) lock(
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
-	resp, err := l.client.Send(ctx, req)
+
+	// Apply a timeout to the RPC call to prevent goroutines from blocking
+	// indefinitely when the remote lock service is unresponsive.
+	rpcCtx, cancel := context.WithTimeout(ctx, defaultLockRPCTimeout)
+	defer cancel()
+	resp, err := l.client.Send(rpcCtx, req)
+
 	txn.Lock()
 
 	// txn closed
