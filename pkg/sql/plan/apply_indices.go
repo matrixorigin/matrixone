@@ -1529,6 +1529,9 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 				lowerIdx, hasLower := colLowerBounds[rangeCol.ColPos]
 				upperIdx, hasUpper := colUpperBounds[rangeCol.ColPos]
 				if hasLower && hasUpper && int32(i) == min(lowerIdx, upperIdx) {
+					if shouldSkipLargeRangeIndexByStats(node) {
+						continue
+					}
 					return idxPos, []int32{lowerIdx, upperIdx}
 				}
 			}
@@ -1537,16 +1540,21 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 				if numParts > 1 && hasUnsafeRangeOp(fn) {
 					continue
 				}
-				if isRangeOp(fn) && node.Stats != nil && node.Stats.TableCnt >= 50000 {
-					if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(InFilterCardLimitNonPK) {
-						continue
-					}
+				if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(node) {
+					continue
 				}
 			}
 			return idxPos, []int32{int32(i)}
 		}
 	}
 	return -1, nil
+}
+
+func shouldSkipLargeRangeIndexByStats(node *plan.Node) bool {
+	if node == nil || node.Stats == nil || node.Stats.TableCnt < 50000 {
+		return false
+	}
+	return node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(InFilterCardLimitNonPK)
 }
 
 // hasUnsafeRangeOp returns true if fn (or any OR arm within it) uses <= or >
