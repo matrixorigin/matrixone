@@ -704,11 +704,12 @@ var supportedStringBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
-				if len(inputs) == 2 {
+			if len(inputs) == 2 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(0)
 				}
-				if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+			} else if len(inputs) == 3 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() && inputs[2].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(1)
 				}
 			}

@@ -31,4 +31,21 @@ select * from t_like_escape where a like 'a%b' escape '';
 -- 9. Multi-char escape should report error
 select * from t_like_escape where a like 'a\_b' escape 'ab';
 
+-- 10. Row-dependent ESCAPE from a column
+drop table if exists t_like_esc_col;
+create table t_like_esc_col (val varchar(100), esc varchar(1));
+insert into t_like_esc_col values ('a_b', '\\'), ('a_c', '\\'), ('A_B', '\\');
+select * from t_like_esc_col where val like 'a\_b' escape esc;
+
+-- 11. Row-dependent ESCAPE: different escape per row
+insert into t_like_esc_col values ('a_b', '#');
+select * from t_like_esc_col where val like 'a#_b' escape esc;
+
+-- 12. ESCAPE NULL returns NULL for all rows
+select * from t_like_escape where a like 'a_b' escape null;
+
+-- 13. NOT LIKE ESCAPE NULL also returns no rows
+select * from t_like_escape where a not like 'a_b' escape null;
+
+drop table t_like_esc_col;
 drop table t_like_escape;

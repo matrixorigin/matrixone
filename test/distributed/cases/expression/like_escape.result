@@ -33,4 +33,20 @@ a_b
 a%b
 select * from t_like_escape where a like 'a\_b' escape 'ab';
 invalid input: Incorrect arguments: escape character must be a single character
+-- 10. Row-dependent ESCAPE from a column
+drop table if exists t_like_esc_col;
+create table t_like_esc_col (val varchar(100), esc varchar(1));
+insert into t_like_esc_col values ('a_b', '\\'), ('a_c', '\\'), ('A_B', '\\');
+select * from t_like_esc_col where val like 'a\_b' escape esc;
+val	esc
+a_b	\
+insert into t_like_esc_col values ('a_b', '#');
+select * from t_like_esc_col where val like 'a#_b' escape esc;
+val	esc
+a_b	#
+select * from t_like_escape where a like 'a_b' escape null;
+a
+select * from t_like_escape where a not like 'a_b' escape null;
+a
+drop table t_like_esc_col;
 drop table t_like_escape;

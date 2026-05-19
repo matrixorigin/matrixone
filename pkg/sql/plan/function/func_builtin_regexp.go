@@ -94,30 +94,60 @@ func (op *opBuiltInRegexp) likeFn3Args(parameters []*vector.Vector, result vecto
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 
-	ec, null := p3.GetStrValue(0)
-	if null {
-		return op.likeFn(parameters[:2], result, proc, length, selectList)
-	}
-	if len(ec) > 1 {
-		return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
-	}
-
-	esc := byte(0)
-	if len(ec) == 1 {
-		esc = ec[0]
-	}
-	if parameters[1].IsConst() {
+	// Both pattern and escape are const: read escape once and use optimized path.
+	if parameters[1].IsConst() && parameters[2].IsConst() {
+		ec, null := p3.GetStrValue(0)
+		if null {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
 		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, esc, func(i []byte) []byte {
 			return i
 		})
 		if canOptimize {
 			return err
 		}
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return op.regMap.regularMatchForLikeOp(v2, v1, esc)
+		}, selectList)
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(v2, v1, esc)
-	}, selectList)
+	// Pattern or escape varies per row: evaluate per row.
+	// opBinaryBytesBytesToFixedWithErrorCheck only sees args 0,1 so can't
+	// propagate nulls from arg 2 — loop manually.
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		ec, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		match, err := op.regMap.regularMatchForLikeOp(v2, v1, esc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(match, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (op *opBuiltInRegexp) iLikeFn3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -126,30 +156,58 @@ func (op *opBuiltInRegexp) iLikeFn3Args(parameters []*vector.Vector, result vect
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
 	rs := vector.MustFunctionResult[bool](result)
 
-	ec, null := p3.GetStrValue(0)
-	if null {
-		return op.iLikeFn(parameters[:2], result, proc, length, selectList)
-	}
-	if len(ec) > 1 {
-		return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
-	}
-
-	esc := byte(0)
-	if len(ec) == 1 {
-		esc = ec[0]
-	}
-	if parameters[1].IsConst() {
+	// Both pattern and escape are const: read escape once and use optimized path.
+	if parameters[1].IsConst() && parameters[2].IsConst() {
+		ec, null := p3.GetStrValue(0)
+		if null {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
 		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, esc, func(i []byte) []byte {
 			return bytes.ToLower(i)
 		})
 		if canOptimize {
 			return err
 		}
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), esc)
+		}, selectList)
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), esc)
-	}, selectList)
+	// Pattern or escape varies per row: evaluate per row.
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		ec, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		match, err := op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), esc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(match, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
