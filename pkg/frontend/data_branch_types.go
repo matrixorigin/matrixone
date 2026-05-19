@@ -64,13 +64,6 @@ type branchHashmapDeallocator struct {
 var diffTempTableSeq uint64
 
 const (
-	lcaEmpty = iota
-	lcaOther
-	lcaLeft
-	lcaRight
-)
-
-const (
 	maxSqlBatchCnt   = objectio.BlockMaxRows * 10
 	maxSqlBatchSize  = mpool.MB * 32
 	defaultRowBytes  = int64(128)
@@ -84,11 +77,106 @@ type collectRange struct {
 	rel  []engine.Relation
 }
 
+// branchMetaInfo describes the lineage relationship between the two
+// endpoints of a `data branch diff` request, expressed entirely as
+// the DAG paths from the LCA (lowest common ancestor) down to each
+// endpoint.
+//
+// All downstream consumers (decideCollectRange, hashDiff,
+// findDeleteAndUpdateBat, …) derive whatever they need from these
+// paths through the helper methods on this struct, so the path
+// fields are the single source of truth for diff lineage.
+//
+// Path encoding. Index 0 is the LCA itself; the last index is the
+// endpoint. pathFromLCAToXxxTS[i] is the CloneTS of node i (i.e. the
+// moment node i was forked off node i-1). Index 0 holds the LCA's
+// own CloneTS, which is unused for diff purposes — the LCA's own
+// mutation window always starts at its creation commit TS instead.
+//
+// lcaTableId == 0 means "no LCA" (two unrelated tables, or
+// snapshot-only diff on a single table without branch lineage).
+//
+// Running example. Tree (depth 4, 19 nodes, 10 leaves):
+//
+//	          t0
+//	       /   |   \
+//	     t1   t2   t3
+//	    /  \   |   /  \
+//	  t4   t5 t6  t7   t8
+//	 / \   /\ /\  /\   /\
+//	t9 t10 ... ... ... t18
+//
+// For `data branch diff t9 against t0`:
+//
+//	pathFromLCAToTar  = [t0, t1, t4, t9]
+//	pathFromLCAToBase = [t0]
+//
+// For `data branch diff t9 against t11` (t11 sits under t5):
+//
+//	pathFromLCAToTar  = [t1, t4, t9]
+//	pathFromLCAToBase = [t1, t5, t11]
+//
+// For `data branch diff t9 against t13` (t13 sits under t2→t6):
+//
+//	pathFromLCAToTar  = [t0, t1, t4, t9]
+//	pathFromLCAToBase = [t0, t2, t6, t13]
 type branchMetaInfo struct {
-	lcaType      int
-	lcaTableId   uint64
-	tarBranchTS  types.TS
-	baseBranchTS types.TS
+	lcaTableId uint64
+
+	pathFromLCAToTar    []uint64
+	pathFromLCAToTarTS  []types.TS
+	pathFromLCAToBase   []uint64
+	pathFromLCAToBaseTS []types.TS
+}
+
+// hasLCA reports whether tar and base share a common ancestor in the
+// branch DAG.
+func (m *branchMetaInfo) hasLCA() bool {
+	return m.lcaTableId != 0
+}
+
+// tarLCASnapshot is the snapshot of the LCA at which tar's view of
+// the LCA's state is anchored. It feeds tombstone resolution on the
+// tar side: tar's tombstones must be resolved against the LCA at
+// this moment.
+//
+// When tar forked off the LCA (len(pathFromLCAToTar) > 1), the
+// anchor is tar's own first-child CloneTS — the moment tar diverged.
+// When tar IS the LCA (length-1 path), tar inherits the meeting
+// point from base: base's first-child CloneTS, or baseSP if base is
+// also the LCA (case-0 same-table diff).
+func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
+	if len(m.pathFromLCAToTar) > 1 {
+		return m.pathFromLCAToTarTS[1]
+	}
+	if len(m.pathFromLCAToBase) > 1 {
+		return m.pathFromLCAToBaseTS[1]
+	}
+	return baseSP
+}
+
+// baseLCASnapshot is the mirror of tarLCASnapshot for the base side.
+func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
+	if len(m.pathFromLCAToBase) > 1 {
+		return m.pathFromLCAToBaseTS[1]
+	}
+	if len(m.pathFromLCAToTar) > 1 {
+		return m.pathFromLCAToTarTS[1]
+	}
+	return tarSP
+}
+
+// lcaProbeSnapshot is the snapshot used by diffOnBase to fetch the
+// LCA relation handle when the LCA is a third-party node (neither
+// tar nor base). It is the earlier of the two per-side snapshots so
+// the relation handle is valid on both sides' views of the LCA.
+func (m *branchMetaInfo) lcaProbeSnapshot(tarSP, baseSP types.TS) types.TS {
+	t := m.tarLCASnapshot(baseSP)
+	b := m.baseLCASnapshot(tarSP)
+	if t.LT(&b) {
+		return t
+	}
+	return b
 }
 
 type tableStuff struct {
@@ -120,6 +208,23 @@ type tableStuff struct {
 	retPool *retBatchList
 
 	bufPool *sync.Pool
+}
+
+// resolvedSnapshots returns the effective per-side snapshot timestamps:
+// the snapshot bound to {tar,base}Snap when present, otherwise the
+// session's transaction snapshot. Centralized here so every call site
+// (decideCollectRange, diffOnBase, hashDiffIfHasLCA) uses the exact
+// same derivation.
+func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
+	tarSP = types.TimestampToTS(ses.GetTxnHandler().GetTxn().SnapshotTS())
+	baseSP = tarSP
+	if t.tarSnap != nil && t.tarSnap.TS != nil {
+		tarSP = types.TimestampToTS(*t.tarSnap.TS)
+	}
+	if t.baseSnap != nil && t.baseSnap.TS != nil {
+		baseSP = types.TimestampToTS(*t.baseSnap.TS)
+	}
+	return
 }
 
 type batchWithKind struct {
