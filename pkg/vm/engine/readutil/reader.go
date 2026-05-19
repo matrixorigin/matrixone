@@ -669,12 +669,7 @@ func (r *reader) Read(
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
 	}
 
-	var policy fileservice.Policy
-
-	if r.readBlockCnt > r.threshHold {
-		policy = fileservice.SkipMemoryCacheWrites
-	}
-	r.readBlockCnt++
+	policy := r.nextBlockReadPolicy()
 
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
@@ -732,4 +727,15 @@ func GetThresholdForReader(readerNum int) uint64 {
 		return uint64(1024 / readerNum)
 	}
 	return 128
+}
+
+func (r *reader) nextBlockReadPolicy() fileservice.Policy {
+	var policy fileservice.Policy
+	if r.readBlockCnt > r.threshHold {
+		// Long scans should not populate memory cache, nor should they trigger
+		// full-object preloads into disk cache and OS page cache.
+		policy = fileservice.SkipMemoryCacheWrites | fileservice.SkipFullFilePreloads
+	}
+	r.readBlockCnt++
+	return policy
 }
