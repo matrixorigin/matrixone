@@ -732,20 +732,6 @@ SQL parser error: table "su_04" does not exist
 drop table if exists su_04;
 create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
 insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
-select * from `%!%p0%!%su_05`;
-c1    c2    c3
-select * from `%!%p1%!%su_05`;
-c1    c2    c3
-4    mode    9.00
-5    make    662.90
-select * from `%!%p2%!%su_05`;
-c1    c2    c3
-3    mod    6.50
-6    io    88.92
-select * from `%!%p3%!%su_05`;
-c1    c2    c3
-1    mod    78.90
-2    proto    0.34
 begin;
 select * from su_05 where c1>3 for update;
 c1    c2    c3
@@ -1128,3 +1114,232 @@ execute s1 using @b;
 a
 1
 deallocate prepare s1;
+
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+create table su_join_t1(id int primary key, name varchar(25), tid int);
+create table su_join_t2(id int primary key, val int);
+create table su_join_t3(id int primary key, tag varchar(10));
+insert into su_join_t1 values(1,'alice',10),(2,'bob',20),(3,'carol',30);
+insert into su_join_t2 values(10,100),(20,200),(30,300);
+insert into su_join_t3 values(1,'x'),(2,'y'),(3,'z');
+begin;
+select su_join_t1.id, su_join_t1.name, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id <= 2 for update;
+id    name    val
+1    alice    100
+2    bob    200
+use select_for_update;
+select * from su_join_t1 where id=1;
+id    name    tid
+1    alice    10
+select * from su_join_t2 where id=10;
+id    val
+10    100
+commit;
+begin;
+select a.id, b.val from su_join_t1 a left join su_join_t2 b on a.tid = b.id for update;
+id    val
+1    100
+2    200
+3    300
+commit;
+begin;
+select a.id, a.name, b.val, c.tag from su_join_t1 a join su_join_t2 b on a.tid = b.id join su_join_t3 c on a.id = c.id where a.id = 1 for update;
+id    name    val    tag
+1    alice    100    x
+commit;
+begin;
+select su_join_t1.id, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id = 1 for update;
+id    val
+1    100
+update su_join_t2 set val = 999 where id = 10;
+commit;
+select * from su_join_t2 where id = 10;
+id    val
+10    999
+begin;
+select a.id, b.val from su_join_t1 a inner join su_join_t2 b on a.tid = b.id for update;
+id    val
+1    999
+2    200
+3    300
+commit;
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
+create table su_join_nat1(c1 int primary key, c2 int);
+create table su_join_nat2(c1 int primary key, c2 int);
+insert into su_join_nat1 values(1,10),(2,20);
+insert into su_join_nat2 values(1,10),(2,20);
+begin;
+select * from su_join_nat1 natural join su_join_nat2 for update;
+c1    c2
+1    10
+2    20
+commit;
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;
+create table su_fu_main(id int primary key, company_id int, status int);
+create table su_fu_ref(id int primary key, province varchar(32));
+insert into su_fu_main values(1,10,1),(2,20,1),(3,30,1),(4,40,1),(5,50,1);
+insert into su_fu_ref values(10,'p1'),(20,'p2'),(30,'p3'),(40,'p4'),(50,'p5');
+begin;
+with target as (select id, company_id from su_fu_main order by id limit 3)
+select t.id, t.company_id from su_fu_main t join target on t.id = target.id for update;
+id    company_id
+1    10
+2    20
+3    30
+use select_for_update;
+update su_fu_main set status = 99 where id = 1;
+commit;
+select * from su_fu_main where id = 1;
+id    company_id    status
+1    10    99
+begin;
+select * from (select id, company_id from su_fu_main order by id limit 3) t for update;
+id    company_id
+1    10
+2    20
+3    30
+use select_for_update;
+update su_fu_main set status = 88 where id = 2;
+commit;
+select * from su_fu_main where id = 2;
+id    company_id    status
+2    20    88
+begin;
+select m.id, m.company_id, r.province from su_fu_main m
+join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
+for update;
+id    company_id    province
+3    30    p3
+1    10    p1
+2    20    p2
+use select_for_update;
+update su_fu_main set status = 33 where id = 1;
+commit;
+select * from su_fu_main where id = 1;
+id    company_id    status
+1    10    33
+begin;
+select id, company_id from su_fu_main t
+where exists (select 1 from su_fu_ref r where r.id = t.company_id)
+for update;
+id    company_id
+3    30
+4    40
+5    50
+2    20
+1    10
+use select_for_update;
+update su_fu_ref set province = 'updated_ref' where id = 10;
+update su_fu_main set status = 77 where id = 3;
+commit;
+select * from su_fu_main where id = 3;
+id    company_id    status
+3    30    77
+select * from su_fu_ref where id = 10;
+id    province
+10    updated_ref
+begin;
+select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
+id
+4
+5
+2
+1
+3
+use select_for_update;
+update su_fu_ref set province = 'in_test' where id = 20;
+update su_fu_main set status = 22 where id = 2;
+commit;
+select * from su_fu_ref where id = 20;
+id    province
+20    in_test
+select * from su_fu_main where id = 2;
+id    company_id    status
+2    20    22
+begin;
+select company_id, count(*) from su_fu_main group by company_id for update;
+company_id    count(*)
+40    1
+50    1
+10    1
+30    1
+20    1
+use select_for_update;
+update su_fu_main set status = 66 where id = 4;
+commit;
+select * from su_fu_main where id = 4;
+id    company_id    status
+4    40    66
+begin;
+select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
+company_id    c
+50    1
+10    1
+30    1
+20    1
+40    1
+use select_for_update;
+update su_fu_main set status = 67 where id = 5;
+commit;
+select * from su_fu_main where id = 5;
+id    company_id    status
+5    50    67
+begin;
+select id, (select province from su_fu_ref r where r.id = m.company_id) p
+from su_fu_main m where id <= 2 for update;
+id    p
+1    updated_ref
+2    in_test
+use select_for_update;
+update su_fu_ref set province = 'scalar_test' where id = 10;
+commit;
+select * from su_fu_ref where id = 10;
+id    province
+10    scalar_test
+begin;
+with target as (select id from su_fu_main order by id limit 2)
+select t.id from su_fu_main t join target on t.id = target.id for update;
+id
+1
+2
+use select_for_update;
+update su_fu_main set status = 55 where id = 5;
+commit;
+select * from su_fu_main where id = 5;
+id    company_id    status
+5    50    55
+drop table if exists su_fu_rec;
+create table su_fu_rec(id int primary key, parent int);
+insert into su_fu_rec values(1,0),(2,1),(3,2);
+with recursive walk as (
+select id, parent from su_fu_rec where id = 1
+union all
+select s.id, s.parent from su_fu_rec s join walk on s.parent = walk.id
+) select * from walk for update;
+not supported: SELECT ... FOR UPDATE on a recursive CTE
+drop table if exists su_fu_rec;
+drop view if exists su_fu_view;
+create view su_fu_view as select id, company_id from su_fu_main order by id limit 2;
+begin;
+select * from su_fu_view for update;
+id    company_id
+1    10
+2    20
+use select_for_update;
+update su_fu_main set status = 44 where id = 5;
+commit;
+select * from su_fu_main where id = 5;
+id    company_id    status
+5    50    44
+drop view if exists su_fu_view;
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;

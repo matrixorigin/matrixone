@@ -2562,7 +2562,15 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
 	builder.compCtx.SetSnapshot(subCtx.snapshot)
+	// A CTE body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the CTE would emit its own LOCK_OP (e.g. above its
+	// LIMIT) on top of the outer LOCK_OP that collectLockTargets injects
+	// after the outer query's FROM, locking rows that fall outside the final
+	// result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
 	nodeID, err = builder.bindSelect(s, subCtx, false)
+	builder.isForUpdate = savedIsForUpdate
 	builder.compCtx.SetSnapshot(oldSnapshot)
 	if err != nil {
 		return
@@ -2596,6 +2604,14 @@ func (builder *QueryBuilder) bindRecursiveCte(
 ) (nodeID int32, err error) {
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+	}
+	if builder.isForUpdate {
+		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
+		// SINK_SCAN to the outer query. collectLockTargets does not follow
+		// SourceStep, so the outer LOCK_OP would never reach the underlying
+		// base tables -- the query would silently take no lock. Reject this
+		// up front instead of letting the user think rows are locked.
+		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
@@ -3265,32 +3281,6 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
-	if builder.isForUpdate {
-		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
-		pkPos, pkTyp := getPkPos(tableDef, false)
-		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
-		lockTarget := &plan.LockTarget{
-			TableId:            tableDef.TblId,
-			PrimaryColIdxInBat: int32(pkPos),
-			PrimaryColRelPos:   lastTag,
-			PrimaryColTyp:      pkTyp,
-			Block:              true,
-			RefreshTsIdxInBat:  -1, //unsupport now
-		}
-
-		lockNode = &Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{nodeID},
-			TableDef:    tableDef,
-			LockTargets: []*plan.LockTarget{lockTarget},
-			BindingTags: []int32{builder.genNewBindTag()},
-		}
-
-		if astLimit == nil {
-			nodeID = builder.appendNode(lockNode, ctx)
-		}
-	}
-
 	// rewrite right join to left join
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
@@ -3300,6 +3290,27 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 
 		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+	}
+
+	// Lock_OP must sit above WHERE/subquery rewrites so that EXISTS/IN/scalar
+	// subqueries (which get flattened into SEMI/ANTI joins on top of the FROM
+	// tree) restrict the row set the lock observes -- otherwise rows that the
+	// final result set filters out would still get locked.
+	if builder.isForUpdate {
+		lockTargets := builder.collectLockTargets(nodeID)
+		if len(lockTargets) > 0 {
+			lockNode = &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{nodeID},
+				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
+				LockTargets: lockTargets,
+				BindingTags: []int32{builder.genNewBindTag()},
+			}
+
+			if astLimit == nil {
+				nodeID = builder.appendNode(lockNode, ctx)
+			}
+		}
 	}
 
 	// Preprocess aliases
@@ -3842,10 +3853,6 @@ func (builder *QueryBuilder) appendAggNode(
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
-		return
-	}
-	if builder.isForUpdate {
-		err = moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		return
 	}
 
@@ -4583,6 +4590,16 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.cteName = table
 
+	// A view body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the view body could emit its own LOCK_OP (e.g. above an
+	// ORDER BY/LIMIT inside the view) on top of the outer LOCK_OP, locking
+	// rows that fall outside the final result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
+	defer func() {
+		builder.isForUpdate = savedIsForUpdate
+	}()
+
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -4595,11 +4612,14 @@ func (builder *QueryBuilder) bindView(
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
-		}
 		subCtx := NewBindContext(builder, ctx)
+		// Nested SELECT must not inherit FOR UPDATE: the outer collectLockTargets
+		// recurses into all TABLE_SCAN nodes (including ones inside derived tables),
+		// so the derived subplan itself should be built without lock injection.
+		savedIsForUpdate := builder.isForUpdate
+		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
+		builder.isForUpdate = savedIsForUpdate
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
@@ -4809,8 +4829,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
-		} else if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
@@ -5520,4 +5538,80 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// getPartitionColNameFromExpr tries to extract the first column name from a partition expression
+// like "hash(col)". It recursively searches function arguments until it finds a column reference.
+func getPartitionColNameFromExpr(expr *plan.Expr) string {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			switch col := e.F.Args[i].Expr.(type) {
+			case *plan.Expr_Col:
+				return col.Col.Name
+			case *plan.Expr_F:
+				if name := getPartitionColNameFromExpr(e.F.Args[i]); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// collectLockTargets traverses the plan tree rooted at nodeID and collects
+// LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
+// with JOIN tables by locking rows from every table involved in the query.
+//
+// For SEMI / ANTI / SINGLE joins we only walk the left child: the right side
+// (typically the flattened body of an EXISTS / IN / scalar subquery) does not
+// contribute to the outer result rows and must not be locked, matching MySQL's
+// rule that an outer FOR UPDATE does not lock subquery tables.
+func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
+	node := builder.qry.Nodes[nodeID]
+	var targets []*plan.LockTarget
+
+	if node.NodeType == plan.Node_JOIN {
+		switch node.JoinType {
+		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+			if len(node.Children) > 0 {
+				targets = append(targets, builder.collectLockTargets(node.Children[0])...)
+			}
+			return targets
+		}
+	}
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		tableDef := node.GetTableDef()
+		if tableDef != nil && tableDef.Pkey != nil {
+			pkPos, pkTyp := getPkPos(tableDef, false)
+			if pkPos >= 0 {
+				lockTarget := &plan.LockTarget{
+					TableId:            tableDef.TblId,
+					PrimaryColIdxInBat: int32(pkPos),
+					PrimaryColRelPos:   node.BindingTags[0],
+					PrimaryColTyp:      pkTyp,
+					Block:              true,
+					RefreshTsIdxInBat:  -1,
+				}
+
+				if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+					if colName := getPartitionColNameFromExpr(tableDef.Partition.PartitionDefs[0].Def); colName != "" {
+						if pos, ok := tableDef.Name2ColIndex[colName]; ok {
+							lockTarget.HasPartitionCol = true
+							lockTarget.PartitionColIdxInBat = pos
+						}
+					}
+				}
+
+				targets = append(targets, lockTarget)
+			}
+		}
+	}
+
+	for _, childID := range node.Children {
+		targets = append(targets, builder.collectLockTargets(childID)...)
+	}
+
+	return targets
 }
