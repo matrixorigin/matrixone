@@ -2641,6 +2641,14 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
+	if builder.isForUpdate {
+		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
+		// SINK_SCAN to the outer query. collectLockTargets does not follow
+		// SourceStep, so the outer LOCK_OP would never reach the underlying
+		// base tables -- the query would silently take no lock. Reject this
+		// up front instead of letting the user think rows are locked.
+		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
+	}
 	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
 	initCtx.cteName = table
@@ -3315,6 +3323,21 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
+	// rewrite right join to left join
+	builder.rewriteRightJoinToLeftJoin(nodeID)
+	if clause.Where != nil {
+		var boundFilterList []*plan.Expr
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+			return
+		}
+
+		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+	}
+
+	// Lock_OP must sit above WHERE/subquery rewrites so that EXISTS/IN/scalar
+	// subqueries (which get flattened into SEMI/ANTI joins on top of the FROM
+	// tree) restrict the row set the lock observes -- otherwise rows that the
+	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID)
 		if len(lockTargets) > 0 {
@@ -3330,17 +3353,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				nodeID = builder.appendNode(lockNode, ctx)
 			}
 		}
-	}
-
-	// rewrite right join to left join
-	builder.rewriteRightJoinToLeftJoin(nodeID)
-	if clause.Where != nil {
-		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
-			return
-		}
-
-		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
 	}
 
 	// Preprocess aliases
@@ -5711,9 +5723,24 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // collectLockTargets traverses the plan tree rooted at nodeID and collects
 // LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
 // with JOIN tables by locking rows from every table involved in the query.
+//
+// For SEMI / ANTI / SINGLE joins we only walk the left child: the right side
+// (typically the flattened body of an EXISTS / IN / scalar subquery) does not
+// contribute to the outer result rows and must not be locked, matching MySQL's
+// rule that an outer FOR UPDATE does not lock subquery tables.
 func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
+
+	if node.NodeType == plan.Node_JOIN {
+		switch node.JoinType {
+		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+			if len(node.Children) > 0 {
+				targets = append(targets, builder.collectLockTargets(node.Children[0])...)
+			}
+			return targets
+		}
+	}
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := node.GetTableDef()

@@ -882,12 +882,18 @@ update su_fu_main set status = 88 where id = 2;
 commit;
 select * from su_fu_main where id = 2;
 
--- derived table joined to a base table + for update
+-- derived table joined to a base table + for update; both base tables must be locked
 begin;
 select m.id, m.company_id, r.province from su_fu_main m
   join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
   for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 33 where id = 1;
+-- @session}
 commit;
+select * from su_fu_main where id = 1;
 
 -- exists subquery + for update
 -- outer table (su_fu_main) is locked; subquery table (su_fu_ref) must NOT be locked
@@ -906,15 +912,18 @@ select * from su_fu_main where id = 3;
 select * from su_fu_ref where id = 10;
 
 -- in subquery + for update; the subquery actually reads su_fu_ref ids 10/20/30/40/50,
--- and even one of those rows must not be locked
+-- and even one of those rows must not be locked, while the outer su_fu_main rows must be
 begin;
 select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
 -- @session:id=1{
 use select_for_update;
 update su_fu_ref set province = 'in_test' where id = 20;
+-- @wait:0:commit
+update su_fu_main set status = 22 where id = 2;
 -- @session}
 commit;
 select * from su_fu_ref where id = 20;
+select * from su_fu_main where id = 2;
 
 -- aggregate + for update; outer table must be locked
 begin;
@@ -961,6 +970,19 @@ update su_fu_main set status = 55 where id = 5;
 -- @session}
 commit;
 select * from su_fu_main where id = 5;
+
+-- recursive cte + for update is rejected: the body emits SINK_SCAN and the
+-- outer LOCK_OP cannot reach the underlying base tables, so a silent missing
+-- lock is worse than a clean error.
+drop table if exists su_fu_rec;
+create table su_fu_rec(id int primary key, parent int);
+insert into su_fu_rec values(1,0),(2,1),(3,2);
+with recursive walk as (
+  select id, parent from su_fu_rec where id = 1
+  union all
+  select s.id, s.parent from su_fu_rec s join walk on s.parent = walk.id
+) select * from walk for update;
+drop table if exists su_fu_rec;
 
 -- view + for update; view body must not inherit FOR UPDATE state and over-lock
 drop view if exists su_fu_view;
