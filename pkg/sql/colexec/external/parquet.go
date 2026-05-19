@@ -278,15 +278,32 @@ func (*ParquetHandler) getNestedMapper(sc *parquet.Column, dt plan.Type) (*parqu
 	if !ok {
 		return nil, nil
 	}
-	if leaf.Optional() && dt.NotNullable {
+	if leaf.Optional() {
+		// MO array vectors cannot represent NULL elements inside one array row yet.
+		return nil, nil
+	}
+	if sc.Optional() && dt.NotNullable {
+		return nil, nil
+	}
+	maxDefinitionLevel := byte(leaf.MaxDefinitionLevel())
+	if maxDefinitionLevel == 0 {
 		return nil, nil
 	}
 
 	mp := &columnMapper{
 		srcNull:            true,
 		dstNull:            !dt.NotNullable,
-		maxDefinitionLevel: byte(leaf.MaxDefinitionLevel()),
+		maxDefinitionLevel: maxDefinitionLevel,
 		allowRepetition:    true,
+		listCanBeNull:      sc.Optional(),
+		// For required elements, maxDL means "element present" and maxDL-1 means "empty list".
+		listEmptyLevel: maxDefinitionLevel - 1,
+	}
+	if mp.listCanBeNull {
+		if mp.listEmptyLevel == 0 {
+			return nil, nil
+		}
+		mp.listNullLevel = mp.listEmptyLevel - 1
 	}
 	width := int(dt.Width)
 	if width <= 0 {
@@ -1299,6 +1316,7 @@ func processParquetListToArray[T types.RealNumbers](
 	}
 	row := make([]T, 0, capHint)
 	rowNull := false
+	rowEmpty := false
 	rowCount := 0
 	flushRow := func() error {
 		if rowNull {
@@ -1319,21 +1337,33 @@ func processParquetListToArray[T types.RealNumbers](
 			}
 			row = row[:0]
 			rowNull = false
+			rowEmpty = false
 		}
 
-		if v.DefinitionLevel() != int(mp.maxDefinitionLevel) {
-			if v.DefinitionLevel() == 0 && len(row) == 0 {
-				if !mp.dstNull {
-					return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
-				}
-				rowNull = true
-				continue
+		definitionLevel := byte(v.DefinitionLevel())
+		if mp.listCanBeNull && definitionLevel == mp.listNullLevel {
+			if len(row) != 0 || rowEmpty || v.RepetitionLevel() != 0 {
+				return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
 			}
+			if !mp.dstNull {
+				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+			}
+			rowNull = true
+			continue
+		}
+		if definitionLevel == mp.listEmptyLevel {
+			if len(row) != 0 || rowNull || v.RepetitionLevel() != 0 {
+				return moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values")
+			}
+			rowEmpty = true
+			continue
+		}
+		if definitionLevel != mp.maxDefinitionLevel {
 			return moerr.NewInvalidInputf(ctx,
 				"parquet list value cannot map to vector: definition level %d, expected %d",
-				v.DefinitionLevel(), mp.maxDefinitionLevel)
+				definitionLevel, mp.maxDefinitionLevel)
 		}
-		if rowNull {
+		if rowNull || rowEmpty {
 			return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
 		}
 

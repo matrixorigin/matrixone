@@ -252,6 +252,73 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "expected vector dimension 3 != actual dimension 2")
 	})
+
+	t.Run("empty lists", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+			},
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, mp.mapping(page, proc, vec))
+		rows := vector.MustArrayCol[float32](vec)
+		require.Empty(t, rows[0])
+		require.Equal(t, []float32{1, 2}, rows[1])
+		require.Empty(t, rows[2])
+	})
+
+	t.Run("nullable list with empty row", func(t *testing.T) {
+		f, page := writeListNodeAndGetPage(t, parquet.Optional(parquet.List(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 0, 0),
+			},
+			{
+				parquet.NullValue().Level(0, 1, 0),
+			},
+			{
+				parquet.FloatValue(7).Level(0, 2, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.T_array_float32.ToType())
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 3, vec.Length())
+		require.True(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(2))
+		rows := vector.MustArrayCol[float32](vec)
+		require.Empty(t, rows[1])
+		require.Equal(t, []float32{7}, rows[2])
+	})
+
+	t.Run("optional list elements rejected", func(t *testing.T) {
+		f, _ := writeListNodeAndGetPage(t, parquet.List(parquet.Optional(parquet.Leaf(parquet.FloatType))), []parquet.Row{
+			{
+				parquet.NullValue().Level(0, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
+	})
 }
 
 func TestParquetCrossTypeMappings(t *testing.T) {
@@ -569,9 +636,14 @@ func TestParquetPrepareAllocatesByColumnIndex(t *testing.T) {
 
 func writeListAndGetPage(t *testing.T, elem parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
 	t.Helper()
+	return writeListNodeAndGetPage(t, parquet.List(elem), rows)
+}
+
+func writeListNodeAndGetPage(t *testing.T, listNode parquet.Node, rows []parquet.Row) (file *parquet.File, page parquet.Page) {
+	t.Helper()
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
-		"c": parquet.List(elem),
+		"c": listNode,
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows(rows)

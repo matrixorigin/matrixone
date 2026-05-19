@@ -266,6 +266,9 @@ type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
 	allowRepetition    bool
+	listCanBeNull      bool
+	listNullLevel      byte
+	listEmptyLevel     byte
 
 	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 }
