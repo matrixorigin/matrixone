@@ -1833,6 +1833,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		if node.ReplaceGroupIdCol != nil {
+			colRefCnt[[2]int32{node.ReplaceGroupIdCol.RelPos, node.ReplaceGroupIdCol.ColPos}]++
+		}
+
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -1863,6 +1867,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if err != nil {
 					return nil, err
 				}
+			}
+		}
+
+		if node.ReplaceGroupIdCol != nil {
+			colRefCnt[[2]int32{node.ReplaceGroupIdCol.RelPos, node.ReplaceGroupIdCol.ColPos}]--
+			remapInfo.tip = "ReplaceGroupIdCol"
+			remapInfo.srcExprIdx = -1
+			err := builder.remapSingleColRef(node.ReplaceGroupIdCol, childRemapping.globalToLocal, &remapInfo)
+			if err != nil {
+				return nil, err
 			}
 		}
 

@@ -410,11 +410,13 @@ func TestMultiTableUpdate(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
-// TestBindReplaceWithUniqueSecondaryIndex verifies that REPLACE INTO on a table
-// with both an AUTO_INCREMENT PK and a unique secondary index disables the
-// merged-scan optimization and falls back to the legacy LEFT JOIN path with
-// OR'ed unique-key conditions, so unique-key conflicts can be resolved by
-// deleting the old row instead of raising a duplicate-entry error.
+// TestBindReplaceWithUniqueSecondaryIndex verifies that REPLACE INTO on a
+// table with both an AUTO_INCREMENT PK and a unique secondary index disables
+// the merged-scan optimization in favor of the LEFT JOIN OR path so that
+// UK-only conflicts can be resolved by deleting the old row. It also asserts
+// that the PK/UK DEDUP JOIN nodes are skipped (they would otherwise trip on
+// LEFT-JOIN fan-out) and that MULTI_UPDATE carries a ReplaceGroupIdCol used
+// for per-row insert dedup.
 func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	sql := "replace into constraint_test.dept(dname, loc) values ('SALES', 'CHICAGO')"
@@ -454,25 +456,41 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
 
-	leftJoinFound := false
-	leftJoinHasOr := false
+	var (
+		leftJoinFound    bool
+		leftJoinHasOr    bool
+		dedupJoinFound   bool
+		multiUpdateFound bool
+		hasGroupIdCol    bool
+	)
 	for _, n := range builder.qry.Nodes {
-		if n.NodeType != planpb.Node_JOIN || n.JoinType != planpb.Node_LEFT {
-			continue
-		}
-		leftJoinFound = true
-		for _, cond := range n.OnList {
-			if f := cond.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "or" {
-				leftJoinHasOr = true
-				break
+		switch n.NodeType {
+		case planpb.Node_JOIN:
+			switch n.JoinType {
+			case planpb.Node_LEFT:
+				leftJoinFound = true
+				for _, cond := range n.OnList {
+					if f := cond.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "or" {
+						leftJoinHasOr = true
+					}
+				}
+			case planpb.Node_DEDUP:
+				dedupJoinFound = true
 			}
-		}
-		if leftJoinHasOr {
-			break
+		case planpb.Node_MULTI_UPDATE:
+			multiUpdateFound = true
+			if n.ReplaceGroupIdCol != nil {
+				hasGroupIdCol = true
+			}
 		}
 	}
 	require.True(t, leftJoinFound, "REPLACE on table with unique secondary index should use legacy LEFT JOIN path")
 	require.True(t, leftJoinHasOr, "LEFT JOIN ON clause should combine PK and UK equality with OR")
+	require.False(t, dedupJoinFound,
+		"REPLACE on table with unique secondary index should skip PK/UK DEDUP JOIN; LEFT JOIN OR already detects conflicts and fan-out would trip Node_FAIL")
+	require.True(t, multiUpdateFound)
+	require.True(t, hasGroupIdCol,
+		"REPLACE plan must set ReplaceGroupIdCol so MULTI_UPDATE can dedup fan-out inserts per logical new row")
 }
 
 // TestBindReplaceWithCompositeUniqueIndex verifies that for tables with a

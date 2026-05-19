@@ -542,6 +542,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Action = t.Action
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.InsertGroupIdIdx = t.InsertGroupIdIdx
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -802,6 +803,14 @@ func constructMultiUpdate(
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	// REPLACE INTO with multiple unique keys may produce LEFT-JOIN fan-out and
+	// would otherwise insert the same logical new row N times. The plan layer
+	// designates a group-id column (remapped to a local position in the
+	// MULTI_UPDATE input batch); the operator deduplicates inserts by it.
+	arg.InsertGroupIdIdx = -1
+	if node.GetReplaceGroupIdCol() != nil {
+		arg.InsertGroupIdIdx = node.GetReplaceGroupIdCol().ColPos
+	}
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {

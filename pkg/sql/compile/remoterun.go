@@ -796,11 +796,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				updateCtxList[i].PartitionCols[j].ColPos = int32(pos)
 			}
 		}
-		in.MultiUpdate = &pipeline.MultiUpdate{
+		mu := &pipeline.MultiUpdate{
 			AffectedRows:  t.GetAffectedRows(),
 			Action:        uint32(t.Action),
 			UpdateCtxList: updateCtxList,
 		}
+		// Encode 1-based; 0 = disabled (proto3 default).
+		if t.InsertGroupIdIdx >= 0 {
+			mu.InsertGroupIdIdx = t.InsertGroupIdIdx + 1
+		}
+		in.MultiUpdate = mu
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
 			AddAffectedRows:        t.PostDmlCtx.AddAffectedRows,
@@ -1231,6 +1236,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Action = multi_update.UpdateAction(t.Action)
 		arg.IsRemote = true //only remote CN use this function to rebuild MultiUpdate
 		arg.Engine = eng
+		// Decode 1-based wire encoding back to 0-based; 0 = disabled.
+		arg.InsertGroupIdIdx = -1
+		if t.GetInsertGroupIdIdx() > 0 {
+			arg.InsertGroupIdIdx = t.GetInsertGroupIdIdx() - 1
+		}
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {

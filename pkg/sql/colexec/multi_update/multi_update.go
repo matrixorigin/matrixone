@@ -101,6 +101,10 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
 	}
 
+	if update.InsertGroupIdIdx >= 0 && update.ctr.insertedGroupIds == nil {
+		update.ctr.insertedGroupIds = make(map[string]struct{})
+	}
+
 	update.ctr.affectedRows = 0
 	update.ctr.flushed = false
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
@@ -201,7 +205,25 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			return vm.CancelResult, err
 		}
 
-		err = w.append(proc, analyzer, input.Batch)
+		// REPLACE INTO with multiple unique keys: when fan-out is present we
+		// must dedup the insert side per logical new row but keep every
+		// fan-out row on the delete side so all matched old rows are removed.
+		// The s3 writer routes insert and delete columns separately, so a
+		// pre-computed deduped batch can serve the insert sinkers while the
+		// original batch feeds the delete accumulators.
+		appendBat := input.Batch
+		var dedupedBat *batch.Batch
+		if update.InsertGroupIdIdx >= 0 {
+			dedupedBat, err = update.dedupBatchByGroupId(proc, input.Batch)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if dedupedBat != nil {
+				defer dedupedBat.Clean(proc.Mp())
+			}
+		}
+
+		err = w.appendWithInsertDedup(proc, analyzer, appendBat, dedupedBat)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -381,8 +403,21 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 }
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
+	insertBat := bat
+	if update.InsertGroupIdIdx >= 0 {
+		dedupedBat, err := update.dedupBatchByGroupId(proc, bat)
+		if err != nil {
+			return err
+		}
+		if dedupedBat != nil {
+			defer dedupedBat.Clean(proc.Mp())
+			insertBat = dedupedBat
+		}
+	}
+
 	for i, updateCtx := range update.MultiUpdateCtx {
-		// delete rows
+		// delete rows (use the full input batch so every fan-out row's old
+		// rows are deleted, even when the insert side is deduplicated below).
 		if len(updateCtx.DeleteCols) > 0 {
 			err = update.delete_table(proc, analyzer, updateCtx, bat, i)
 			if err != nil {
@@ -390,16 +425,17 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 			}
 		}
 
-		// insert rows
+		// insert rows (use the deduplicated batch when REPLACE INTO group-id
+		// dedup is active, otherwise the original input).
 		if len(updateCtx.InsertCols) > 0 {
 			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			switch tableType {
 			case UpdateMainTable:
-				err = update.insert_main_table(proc, analyzer, i, bat)
+				err = update.insert_main_table(proc, analyzer, i, insertBat)
 			case UpdateUniqueIndexTable:
-				err = update.insert_unique_index_table(proc, analyzer, i, bat)
+				err = update.insert_unique_index_table(proc, analyzer, i, insertBat)
 			case UpdateSecondaryIndexTable:
-				err = update.insert_secondary_index_table(proc, analyzer, i, bat)
+				err = update.insert_secondary_index_table(proc, analyzer, i, insertBat)
 			}
 			if err != nil {
 				return
@@ -408,6 +444,58 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 	}
 
 	return nil
+}
+
+// dedupBatchByGroupId returns a new batch containing only the first occurrence
+// of each group-id value (tracked across batches via ctr.insertedGroupIds).
+// Returns (nil, nil) when no shrinking is needed (every row's group id is
+// fresh). The caller owns the returned batch and must Clean it.
+func (update *MultiUpdate) dedupBatchByGroupId(
+	proc *process.Process,
+	bat *batch.Batch,
+) (*batch.Batch, error) {
+	rowCount := bat.RowCount()
+	if rowCount == 0 {
+		return nil, nil
+	}
+	groupVec := bat.Vecs[update.InsertGroupIdIdx]
+	set := update.ctr.insertedGroupIds
+	sels := make([]int64, 0, rowCount)
+	for i := 0; i < rowCount; i++ {
+		key := groupIdKey(groupVec, i)
+		if _, exists := set[key]; exists {
+			continue
+		}
+		set[key] = struct{}{}
+		sels = append(sels, int64(i))
+	}
+	if len(sels) == rowCount {
+		return nil, nil
+	}
+	dup, err := bat.Dup(proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	dup.Shrink(sels, false)
+	return dup, nil
+}
+
+// groupIdKey encodes one row's group-id column value into a map-friendly key.
+// Varlen types use the raw bytes; fixed-width types use the typed bytes from
+// the vector's backing storage.
+func groupIdKey(vec *vector.Vector, row int) string {
+	if vec.IsNull(uint64(row)) {
+		// All NULL group ids collapse to the same key; in practice the
+		// dedup column is post-PRE_INSERT PK and never NULL, but be safe.
+		return "\x00\x00<NULL>"
+	}
+	if vec.GetType().IsVarlen() {
+		return string(vec.GetBytesAt(row))
+	}
+	width := vec.GetType().TypeSize()
+	rawData := vec.UnsafeGetRawData()
+	start := row * width
+	return string(rawData[start : start+width])
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {

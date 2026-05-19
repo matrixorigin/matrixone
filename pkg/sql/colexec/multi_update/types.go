@@ -75,6 +75,13 @@ type MultiUpdate struct {
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
 
+	// InsertGroupIdIdx, when >= 0, points at a column in each input batch
+	// whose value identifies a logical new row across LEFT JOIN fan-out. Used
+	// by REPLACE INTO with multiple unique keys to insert each new row exactly
+	// once even when several fan-out rows carry the same insert payload.
+	// Default -1 = disabled.
+	InsertGroupIdIdx int32
+
 	Engine engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
@@ -104,6 +111,11 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+
+	// REPLACE INTO insert deduplication state (see MultiUpdate.InsertGroupIdIdx).
+	// Tracks which group-id values have already been inserted across batches in
+	// the current pipeline run; reset between Calls via Reset().
+	insertedGroupIds map[string]struct{}
 }
 
 type MultiUpdateCtx struct {
@@ -148,6 +160,10 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 		update.ctr.s3Writer.reset(proc)
 	}
 
+	if update.ctr.insertedGroupIds != nil {
+		clear(update.ctr.insertedGroupIds)
+	}
+
 	update.ctr.state = vm.Build
 }
 
@@ -174,6 +190,7 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+	update.ctr.insertedGroupIds = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

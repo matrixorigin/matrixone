@@ -138,6 +138,9 @@ message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
   repeated plan.UpdateCtx update_ctx_list = 3;
+  // REPLACE INTO group-id column position (1-based; 0 = disabled). See
+  // plan.Node.replace_group_id_idx for the wire-level encoding rationale.
+  int32 insert_group_id_idx = 4;
 }
 
 message Array {

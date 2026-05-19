@@ -2,73 +2,73 @@ drop table if exists names;
 create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
 replace into names(id, name, age) values(1,"Abby", 24);
 select name, age from names where id = 1;
-name    age
-Abby    24
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Abby  ¦  24
 replace into names(id, name, age) values(1,"Bobby", 25);
 select name, age from names where id = 1;
-name    age
-Bobby    25
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Bobby  ¦  25
 replace into names set id = 2, name = "Ciro";
 select name, age from names where id = 2;
-name    age
-Ciro    null
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Ciro  ¦  null
 replace into names set id = 2, name = "Ciro", age = 17;
 select name, age from names where id = 2;
-name    age
-Ciro    17
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Ciro  ¦  17
 REPLACE INTO names values (2, "Bob", 19);
 select name, age from names where id = 2;
-name    age
-Bob    19
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Bob  ¦  19
 /* comment */ replace into names set id = 2, name = "Dylan";
 select name, age from names where id = 2;
-name    age
-Dylan    null
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Dylan  ¦  null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values (1,1,1), (2,2,2), (3,3,3);
 replace t1 values (1,2,3), (2,3,4);
 select a, b, c from t1;
-a    b    c
-1    1    1
-2    2    2
-3    3    3
-1    2    3
-2    3    4
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  𝄀
+1  ¦  2  ¦  3  𝄀
+2  ¦  3  ¦  4
 create table t4 (a int unique key, b varchar(64));
 replace into t4 values (1, 'a');
 select * from t4;
-a    b
-1    a
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  a
 replace into t4 values (1, 'b');
 select * from t4;
-a    b
-1    b
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  b
 drop table if exists t1;
 create table t1(a int primary key, b int unique, c varchar(255), key(c));
 insert into t1 values (1,1,"1"), (2,2,"2");
 select * from t1;
-a    b    c
-1    1    1
-2    2    2
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 replace into t1 values (1,4,"4"), (3,3,"3");
 select * from t1;
-a    b    c
-2    2    2
-1    4    4
-3    3    3
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
+2  ¦  2  ¦  2  𝄀
+1  ¦  4  ¦  4  𝄀
+3  ¦  3  ¦  3
 create database replace_db;
 use replace_db;
 replace into `replace`.`names` values (2, "Dylan", 20);
 select name, age from `replace`.`names` where id = 2;
-name    age
-Dylan    20
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+Dylan  ¦  20
 drop table if exists c;
 create table c(a int primary key , b int, v vecf32(3));
 replace into c values(1,1,'[1,2,3]');
 select * from c;
-a    b    v
-1    1    [1, 2, 3]
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[12,3,0]  𝄀
+1  ¦  1  ¦  [1, 2, 3]
 drop table c;
 drop table if exists c;
 create table c(a int primary key , b int, v vecf32(3));
@@ -81,8 +81,16 @@ drop table c;
 create table bug_22340 (a int not null auto_increment, a1 int default null, b vecf64(3) DEFAULT NULL COMMENT 'document向量化信息', PRIMARY KEY (`a`), KEY `idx_vec` USING ivfflat (`b`) lists = 1 op_type 'vector_l2_ops');
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 select mo_ctl('dn','flush','replace_db.bug_22340');
-mo_ctl(dn, flush, replace_db.bug_22340)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, replace_db.bug_22340)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
 drop table bug_22340;
 drop database replace_db;
@@ -92,85 +100,121 @@ create table t_null_uk(id int primary key, a int, b varchar(64), unique key(a));
 replace into t_null_uk values (1, NULL, 'first');
 replace into t_null_uk values (2, NULL, 'second');
 select id, a, b from t_null_uk order by id;
-id    a    b
-1    null    first
-2    null    second
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  null  ¦  first  𝄀
+2  ¦  null  ¦  second
 replace into t_null_uk values (3, 1, 'third');
 select id, a, b from t_null_uk order by id;
-id    a    b
-1    null    first
-2    null    second
-3    1    third
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  null  ¦  first  𝄀
+2  ¦  null  ¦  second  𝄀
+3  ¦  1  ¦  third
 drop table t_null_uk;
 drop table if exists t_fake_pk;
 create table t_fake_pk(a int unique key, b varchar(64));
 replace into t_fake_pk values (1, 'hello');
 select * from t_fake_pk;
-a    b
-1    hello
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  hello
 replace into t_fake_pk values (1, 'world');
 select * from t_fake_pk;
-a    b
-1    world
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  world
 replace into t_fake_pk values (2, 'foo');
 select * from t_fake_pk order by a;
-a    b
-1    world
-2    foo
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  world  𝄀
+2  ¦  foo
 drop table t_fake_pk;
 drop table if exists t_odku;
 create table t_odku(id int primary key, name varchar(64), val int);
 insert into t_odku values (1, 'a', 10);
 insert into t_odku values (1, 'b', 20) on duplicate key update name = values(name), val = values(val);
 select * from t_odku;
-id    name    val
-1    b    20
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  val[4,32,0]  𝄀
+1  ¦  b  ¦  20
 drop table t_odku;
 drop table if exists t_pk_uk;
 create table t_pk_uk(id int primary key, a int unique, b varchar(64));
 insert into t_pk_uk values (1, 10, 'first'), (2, 20, 'second');
 replace into t_pk_uk values (1, 30, 'updated');
 select * from t_pk_uk order by id;
-id    a    b
-1    30    updated
-2    20    second
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  30  ¦  updated  𝄀
+2  ¦  20  ¦  second
 drop table t_pk_uk;
 drop table if exists ai_replace_test;
 create table ai_replace_test (id int auto_increment primary key, name varchar(50) unique, value int);
 insert into ai_replace_test (name, value) values ('key1', 100), ('key2', 200);
 replace into ai_replace_test (name, value) values ('key1', 300);
 select * from ai_replace_test order by id;
-id    name    value
-2    key2    200
-3    key1    300
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[4,32,0]  𝄀
+2  ¦  key2  ¦  200  𝄀
+3  ¦  key1  ¦  300
 insert into ai_replace_test (name, value) values ('key3', 400);
 select * from ai_replace_test order by id;
-id    name    value
-2    key2    200
-3    key1    300
-4    key3    400
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  value[4,32,0]  𝄀
+2  ¦  key2  ¦  200  𝄀
+3  ¦  key1  ¦  300  𝄀
+4  ¦  key3  ¦  400
 drop table ai_replace_test;
 drop table if exists ai_composite_uk;
 create table ai_composite_uk (id int auto_increment primary key, a int, b int, value int, unique key uk_ab(a, b));
 insert into ai_composite_uk (a, b, value) values (1, 1, 100), (1, 2, 150), (2, 2, 200);
 replace into ai_composite_uk (a, b, value) values (1, 1, 300);
 select * from ai_composite_uk order by id;
-id    a    b    value
-2    1    2    150
-3    2    2    200
-4    1    1    300
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  value[4,32,0]  𝄀
+2  ¦  1  ¦  2  ¦  150  𝄀
+3  ¦  2  ¦  2  ¦  200  𝄀
+4  ¦  1  ¦  1  ¦  300
 drop table ai_composite_uk;
 drop table if exists ai_multi_uk;
 create table ai_multi_uk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
 insert into ai_multi_uk (name, email, value) values ('n1', 'n1@a.com', 100), ('n2', 'n2@a.com', 200);
 replace into ai_multi_uk (name, email, value) values ('n1', 'n1_new@a.com', 300);
 select * from ai_multi_uk order by id;
-id    name    email    value
-2    n2    n2@a.com    200
-3    n1    n1_new@a.com    300
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  value[4,32,0]  𝄀
+2  ¦  n2  ¦  n2@a.com  ¦  200  𝄀
+3  ¦  n1  ¦  n1_new@a.com  ¦  300
 replace into ai_multi_uk (name, email, value) values ('n_new', 'n2@a.com', 400);
 select * from ai_multi_uk order by id;
-id    name    email    value
-3    n1    n1_new@a.com    300
-4    n_new    n2@a.com    400
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  value[4,32,0]  𝄀
+3  ¦  n1  ¦  n1_new@a.com  ¦  300  𝄀
+4  ¦  n_new  ¦  n2@a.com  ¦  400
 drop table ai_multi_uk;
+drop table if exists multi_uk_fanout;
+create table multi_uk_fanout (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_fanout (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200);
+replace into multi_uk_fanout (name, email, value) values ('a', 'y@a.com', 300);
+select name, email, value from multi_uk_fanout order by name;
+➤ name[12,-1,0]  ¦  email[12,-1,0]  ¦  value[4,32,0]  𝄀
+a  ¦  y@a.com  ¦  300
+drop table multi_uk_fanout;
+drop table if exists multi_uk_fanout3;
+create table multi_uk_fanout3 (id int primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_fanout3 values (1, 'a', 'x@a.com', 100), (2, 'b', 'y@a.com', 200), (3, 'c', 'z@a.com', 300);
+replace into multi_uk_fanout3 values (1, 'b', 'z@a.com', 999);
+select * from multi_uk_fanout3 order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  value[4,32,0]  𝄀
+1  ¦  b  ¦  z@a.com  ¦  999
+drop table multi_uk_fanout3;
+drop table if exists fake_pk_multi_uk;
+create table fake_pk_multi_uk (a varchar(50) unique, b varchar(100) unique, v int);
+insert into fake_pk_multi_uk values ('a', 'x', 100), ('b', 'y', 200);
+replace into fake_pk_multi_uk values ('a', 'y', 300);
+select * from fake_pk_multi_uk order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  v[4,32,0]  𝄀
+a  ¦  y  ¦  300
+drop table fake_pk_multi_uk;
+drop table if exists multi_uk_batch;
+create table multi_uk_batch (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_batch (name, email, value) values
+('a', 'x@a.com', 100), ('b', 'y@a.com', 200), ('c', 'z@a.com', 300);
+replace into multi_uk_batch (name, email, value) values
+('a', 'y@a.com', 11),
+('c', 'z@a.com', 12);
+select name, email, value from multi_uk_batch order by name;
+➤ name[12,-1,0]  ¦  email[12,-1,0]  ¦  value[4,32,0]  𝄀
+a  ¦  y@a.com  ¦  11  𝄀
+c  ¦  z@a.com  ¦  12
+drop table multi_uk_batch;

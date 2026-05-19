@@ -82,10 +82,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldColName2Idx := make(map[string][2]int32, len(tableDef.Cols)+len(tableDef.Indexes)*2)
 
-	// Check whether the table has any unique secondary index.
-	// For fake PK tables with no unique indexes (no PK, no UK), REPLACE behaves like INSERT.
-	// Skip the LEFT JOIN to avoid a cross join (empty join condition) that would incorrectly
-	// match and delete all existing rows.
+	// hasUniqueIdx drives two things below:
+	//   - For fake-PK tables: when false (no PK, no UK), REPLACE behaves like INSERT
+	//     and we skip the LEFT JOIN entirely (would otherwise become a cross join).
+	//   - For real-PK tables: when true, the merged-scan optimization is disabled so
+	//     that a UK-only conflict (no PK conflict) can still locate the old row via
+	//     the legacy LEFT JOIN. Merged scan only captures old columns on a PK match.
 	hasUniqueIdx := false
 	for _, idxDef := range tableDef.Indexes {
 		if idxDef.Unique {
@@ -117,10 +119,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 		}
 	}
-	// Merged-scan is disabled when the table has unique secondary indexes because
-	// a unique-key conflict (without a PK conflict) requires the LEFT JOIN to
-	// retrieve old-row columns for deletion. The merged-scan path only captures
-	// old columns on PK conflict, leaving them NULL when only a UK conflicts.
+	// Merged-scan only handles PK conflicts (it captures old columns from the PK
+	// DEDUP JOIN). A UK-only conflict produces no PK match, leaving the old
+	// columns NULL and surfacing the conflict as a Duplicate Entry. Disable
+	// merged-scan whenever the table has any unique secondary index so the
+	// legacy LEFT JOIN path below (with OR'd PK/UK conditions) can pick up
+	// UK-only conflicts.
 	useMergedMainScan := !isFakePK && !hasMultiPartIdx && !hasUniqueIdx
 	if isFakePK && !hasUniqueIdx {
 		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
@@ -249,42 +253,54 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 		}
 
-		// For fake PK tables, use the first unique key for the LEFT JOIN instead of PK
-		var joinConds []*plan.Expr
-		if isFakePK {
-			// find first unique index to join on
-			for _, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique {
-					continue
-				}
-				for _, part := range idxDef.Parts {
-					colName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[colName]
-					colTyp := tableDef.Cols[colIdx].Typ
-					leftExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colName2Idx[tableDef.Name+"."+colName],
-							},
+		// Build the LEFT JOIN ON list as (optional PK cond) OR
+		// (UK_1 AND-of-parts) OR (UK_2 AND-of-parts) OR ... so that an old row
+		// conflicting on PK OR any unique key is fetched in a single join.
+		//
+		// When several conditions match different old rows for the same new
+		// row, the LEFT JOIN fans out the new row by N. MULTI_UPDATE then uses
+		// ReplaceGroupIdIdx (set below) to keep only the first occurrence of
+		// each new-row group on the insert side; deletes still see every
+		// fan-out row so all matched old rows are removed.
+		buildUKCondition := func(idxDef *plan.IndexDef) *plan.Expr {
+			var parts []*plan.Expr
+			for _, part := range idxDef.Parts {
+				colName := catalog.ResolveAlias(part)
+				colIdx := tableDef.Name2ColIndex[colName]
+				colTyp := tableDef.Cols[colIdx].Typ
+				lExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectTag,
+							ColPos: colName2Idx[tableDef.Name+"."+colName],
 						},
-					}
-					rightExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: oldScanTag,
-								ColPos: colIdx,
-							},
-						},
-					}
-					cond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
-					joinConds = append(joinConds, cond)
+					},
 				}
-				break
+				rExpr := &plan.Expr{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: oldScanTag,
+							ColPos: colIdx,
+						},
+					},
+				}
+				partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
+				parts = append(parts, partCond)
 			}
-		} else {
+			if len(parts) == 0 {
+				return nil
+			}
+			combined := parts[0]
+			for _, c := range parts[1:] {
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{combined, c})
+			}
+			return combined
+		}
+
+		var joinConds []*plan.Expr
+		if !isFakePK {
 			pkPos := tableDef.Name2ColIndex[pkName]
 			pkTyp := tableDef.Cols[pkPos].Typ
 			leftExpr := &plan.Expr{
@@ -307,46 +323,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 			pkCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
 			joinConds = append(joinConds, pkCond)
-
-			for _, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique {
-					continue
-				}
-				var ukPartConds []*plan.Expr
-				for _, part := range idxDef.Parts {
-					colName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[colName]
-					colTyp := tableDef.Cols[colIdx].Typ
-					lExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colName2Idx[tableDef.Name+"."+colName],
-							},
-						},
-					}
-					rExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: oldScanTag,
-								ColPos: colIdx,
-							},
-						},
-					}
-					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
-					ukPartConds = append(ukPartConds, partCond)
-				}
-				var ukCond *plan.Expr
-				if len(ukPartConds) == 1 {
-					ukCond = ukPartConds[0]
-				} else {
-					ukCond = ukPartConds[0]
-					for _, c := range ukPartConds[1:] {
-						ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
-					}
-				}
+		}
+		for _, idxDef := range tableDef.Indexes {
+			if !idxDef.Unique {
+				continue
+			}
+			if ukCond := buildUKCondition(idxDef); ukCond != nil {
 				joinConds = append(joinConds, ukCond)
 			}
 		}
@@ -356,12 +338,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			joinOnList = joinConds
 		} else if len(joinConds) > 1 {
 			combined := joinConds[0]
-			combineOp := "and"
-			if !isFakePK {
-				combineOp = "or"
-			}
 			for _, c := range joinConds[1:] {
-				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), combineOp, []*plan.Expr{combined, c})
+				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{combined, c})
 			}
 			joinOnList = []*plan.Expr{combined}
 		}
@@ -381,8 +359,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}, bindCtx)
 	}
 
-	// detect primary key confliction (skip for fake PK tables)
-	if !isFakePK {
+	// detect primary key confliction (skip for fake PK tables).
+	//
+	// When hasUniqueIdx, the LEFT JOIN above already discovers the conflicting
+	// old row via OR'd PK/UK conditions and emits one pipeline row per matched
+	// old row. The PK DEDUP JOIN here is then both redundant (PK conflict is
+	// already represented in the LEFT JOIN match) and incorrect: its build
+	// hashmap is fed by the post-fan-out pipeline, which legitimately contains
+	// repeated PK values, and Node_FAIL would raise DuplicateEntry on them.
+	// Skip it; engine-level PK constraint catches the rare case where the user
+	// supplies the same PK value twice in one REPLACE batch.
+	if !isFakePK && !hasUniqueIdx {
 		scanTag := builder.genNewBindTag()
 
 		// handle primary/unique key confliction
@@ -495,9 +482,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		lastNodeID = builder.appendNode(dedupJoinNode, bindCtx)
 	}
 
-	// detect unique key confliction
+	// detect unique key confliction.
+	//
+	// Skipped for the same reason as the PK DEDUP JOIN above when hasUniqueIdx:
+	// the LEFT JOIN OR already captured the conflict and the post-fan-out
+	// pipeline contains repeated UK values that would otherwise trip Node_FAIL.
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.Unique {
+		if !idxDef.Unique || hasUniqueIdx {
 			continue
 		}
 
@@ -804,6 +795,35 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 	}
 
+	// When the table has a unique secondary index (or PK + UK combo), the
+	// LEFT JOIN above ORs PK and per-UK equality conditions to find conflicts.
+	// One new row that conflicts on N different old rows fans out into N
+	// pipeline rows. To keep insert idempotent per logical new row, append a
+	// group-id column at the end of finalProjList and tell MULTI_UPDATE to
+	// deduplicate inserts by it. The PK column is unique per new row (auto-
+	// incremented, user-supplied, or generated fake/composite key), so it is
+	// used as the group id. The col reference is bumped by the MULTI_UPDATE
+	// refcount pass and remapped like InsertCols so the upstream PROJECT
+	// preserves it.
+	var replaceGroupIdCol *plan.ColRef
+	if hasUniqueIdx {
+		pkColIdxInFullProj := colName2Idx[tableDef.Name+"."+pkName]
+		groupIdColPos := int32(len(finalProjList))
+		finalProjList = append(finalProjList, &plan.Expr{
+			Typ: fullProjList[pkColIdxInFullProj].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: fullProjTag,
+					ColPos: pkColIdxInFullProj,
+				},
+			},
+		})
+		replaceGroupIdCol = &plan.ColRef{
+			RelPos: finalProjTag,
+			ColPos: groupIdColPos,
+		}
+	}
+
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
@@ -827,10 +847,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// that no child rows reference deleted parent rows.
 
 	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:      plan.Node_MULTI_UPDATE,
-		Children:      []int32{lastNodeID},
-		BindingTags:   []int32{builder.genNewBindTag()},
-		UpdateCtxList: updateCtxList,
+		NodeType:          plan.Node_MULTI_UPDATE,
+		Children:          []int32{lastNodeID},
+		BindingTags:       []int32{builder.genNewBindTag()},
+		UpdateCtxList:     updateCtxList,
+		ReplaceGroupIdCol: replaceGroupIdCol,
 	}, bindCtx)
 
 	return lastNodeID, nil

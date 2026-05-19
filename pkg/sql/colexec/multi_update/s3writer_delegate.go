@@ -246,10 +246,16 @@ func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
 	}
 }
 
-func (writer *s3WriterDelegate) append(
+// appendWithInsertDedup stages one input batch into the per-table sinkers
+// and delete accumulators. The caller may pass a pre-deduplicated batch (used
+// for REPLACE INTO with multi-UK fan-out) to feed the insert sinkers while
+// the delete accumulators still receive every fan-out row; pass nil to fall
+// back to the input batch on both sides.
+func (writer *s3WriterDelegate) appendWithInsertDedup(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	inBatch *batch.Batch,
+	insertBatch *batch.Batch,
 ) (err error) {
 
 	if err = writer.ensureInsertSinkers(proc); err != nil {
@@ -257,6 +263,11 @@ func (writer *s3WriterDelegate) append(
 	}
 
 	mp := proc.Mp()
+
+	insertSource := insertBatch
+	if insertSource == nil {
+		insertSource = inBatch
+	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
 	// Auto-spill S3 writes during Write use proc.Ctx; perfcounter tracking
@@ -266,7 +277,7 @@ func (writer *s3WriterDelegate) append(
 			continue
 		}
 		insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
-		projBat := inBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
+		projBat := insertSource.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 
@@ -275,7 +286,7 @@ func (writer *s3WriterDelegate) append(
 			for insertIdx, inputIdx := range updateCtx.InsertCols {
 				col := updateCtx.TableDef.Cols[insertIdx]
 				if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-					if inBatch.Vecs[inputIdx].HasNull() {
+					if insertSource.Vecs[inputIdx].HasNull() {
 						return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 					}
 				}

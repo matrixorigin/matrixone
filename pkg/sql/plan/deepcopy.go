@@ -251,6 +251,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DirectView:       node.DirectView,
 		RankOption:       DeepCopyRankOption(node.RankOption),
 	}
+	if node.ReplaceGroupIdCol != nil {
+		newNode.ReplaceGroupIdCol = &plan.ColRef{
+			RelPos: node.ReplaceGroupIdCol.RelPos,
+			ColPos: node.ReplaceGroupIdCol.ColPos,
+			Name:   node.ReplaceGroupIdCol.Name,
+		}
+	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
 	for idx, target := range node.LockTargets {

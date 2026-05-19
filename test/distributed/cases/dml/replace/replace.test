@@ -133,3 +133,40 @@ select * from ai_multi_uk order by id;
 replace into ai_multi_uk (name, email, value) values ('n_new', 'n2@a.com', 400);
 select * from ai_multi_uk order by id;
 drop table ai_multi_uk;
+
+-- multi-UK, the new row conflicts on different UKs that hit *different* old
+-- rows: the OR'd LEFT JOIN fans out the new row and MULTI_UPDATE must (a)
+-- delete every matched old row and (b) insert the new row exactly once.
+drop table if exists multi_uk_fanout;
+create table multi_uk_fanout (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_fanout (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200);
+replace into multi_uk_fanout (name, email, value) values ('a', 'y@a.com', 300);
+select name, email, value from multi_uk_fanout order by name;
+drop table multi_uk_fanout;
+
+-- multi-UK, three-way fan-out: PK + two UK each point at different rows.
+drop table if exists multi_uk_fanout3;
+create table multi_uk_fanout3 (id int primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_fanout3 values (1, 'a', 'x@a.com', 100), (2, 'b', 'y@a.com', 200), (3, 'c', 'z@a.com', 300);
+replace into multi_uk_fanout3 values (1, 'b', 'z@a.com', 999);
+select * from multi_uk_fanout3 order by id;
+drop table multi_uk_fanout3;
+
+-- fake-PK + multi UK: same fan-out scenario where the table has no real PK.
+drop table if exists fake_pk_multi_uk;
+create table fake_pk_multi_uk (a varchar(50) unique, b varchar(100) unique, v int);
+insert into fake_pk_multi_uk values ('a', 'x', 100), ('b', 'y', 200);
+replace into fake_pk_multi_uk values ('a', 'y', 300);
+select * from fake_pk_multi_uk order by a;
+drop table fake_pk_multi_uk;
+
+-- multi-UK, multi-row REPLACE batch: each row independently triggers fan-out.
+drop table if exists multi_uk_batch;
+create table multi_uk_batch (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into multi_uk_batch (name, email, value) values
+  ('a', 'x@a.com', 100), ('b', 'y@a.com', 200), ('c', 'z@a.com', 300);
+replace into multi_uk_batch (name, email, value) values
+  ('a', 'y@a.com', 11),
+  ('c', 'z@a.com', 12);
+select name, email, value from multi_uk_batch order by name;
+drop table multi_uk_batch;

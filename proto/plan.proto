@@ -942,6 +942,16 @@ message Node {
   int64 spill_mem = 70;
   repeated string origin_views = 71;
   string direct_view = 72;
+
+  // For REPLACE INTO with multiple unique keys: a reference to a column that
+  // uniquely identifies each logical new row. When set, the MULTI_UPDATE
+  // operator deduplicates inserts by this column so that fan-out rows
+  // produced by the OR'ed LEFT JOIN with old data do not cause the same new
+  // row to be inserted twice. The col reference is bumped during the
+  // MULTI_UPDATE refcount pass and remapped like InsertCols / DeleteCols so
+  // its position in the operator's input batch is well-defined. Optional;
+  // unset means no insert dedup.
+  ColRef replace_group_id_col = 73;
 }
 
 message SnapshotExtraInfo {

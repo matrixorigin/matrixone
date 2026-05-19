@@ -794,19 +794,37 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.NotNil(t, query)
 	assert.Equal(t, plan.Query_INSERT, query.StmtType)
 
-	// Verify plan contains MULTI_UPDATE node
+	// dept has a unique secondary index on dname, so REPLACE uses the
+	// OR'd LEFT JOIN path and skips PK/UK DEDUP JOINs (those would falsely
+	// report duplicates when LEFT-JOIN fan-out repeats the new row). The
+	// MULTI_UPDATE node carries a ReplaceGroupIdCol to dedupe inserts.
 	hasMultiUpdate := false
+	hasMultiUpdateWithGroupId := false
 	hasDedupJoin := false
+	hasLeftJoin := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
+			if node.ReplaceGroupIdCol != nil {
+				hasMultiUpdateWithGroupId = true
+			}
 		}
-		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
-			hasDedupJoin = true
+		if node.NodeType == plan.Node_JOIN {
+			switch node.JoinType {
+			case plan.Node_DEDUP:
+				hasDedupJoin = true
+			case plan.Node_LEFT:
+				hasLeftJoin = true
+			}
 		}
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
-	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+	assert.True(t, hasMultiUpdateWithGroupId,
+		"REPLACE on table with unique secondary index should set ReplaceGroupIdCol on MULTI_UPDATE")
+	assert.True(t, hasLeftJoin,
+		"REPLACE on table with unique secondary index should use LEFT JOIN OR for conflict detection")
+	assert.False(t, hasDedupJoin,
+		"REPLACE on table with unique secondary index should skip PK/UK DEDUP JOIN; LEFT JOIN OR already detects conflicts")
 }
 
 func TestReplaceSelfRefPlanStructure(t *testing.T) {
