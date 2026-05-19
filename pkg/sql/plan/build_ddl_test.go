@@ -465,6 +465,23 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 	}
 }
 
+func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE EXTERNAL TABLE ext_inline_col_key (id INT KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_unique (id INT UNIQUE) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_pk (id INT PRIMARY KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_key (id INT, KEY (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_unique (id INT, UNIQUE KEY uk_id (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_fulltext (doc VARCHAR(100), FULLTEXT ft_doc (doc)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
 func TestBuildAlterTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass

@@ -314,6 +314,54 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows INT")
 	})
 
+	t.Run("signed int32 to int8 overflow", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(128),
+		})
+
+		vec := vector.NewVec(types.T_int8.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int8), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows TINYINT")
+	})
+
+	t.Run("negative signed int32 to uint8", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(-1),
+		})
+
+		vec := vector.NewVec(types.T_uint8.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "negative parquet value")
+	})
+
+	t.Run("negative signed int32 to uint32", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(-1),
+		})
+
+		vec := vector.NewVec(types.T_uint32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "negative parquet value")
+	})
+
+	t.Run("unsigned int32 to int32 overflow", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Uint(32), []parquet.Value{
+			parquet.ValueOf(uint32(1 << 31)),
+		})
+
+		vec := vector.NewVec(types.T_int32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows INT")
+	})
+
 	t.Run("double to float", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
 			parquet.DoubleValue(1.5),
