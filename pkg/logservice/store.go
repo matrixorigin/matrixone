@@ -270,10 +270,11 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // motivated this fix is specific to voting members. Non-voting zombies
 // remain subject to HAKeeper's existing checkZombie cleanup path.
 //
-// For each voting record the probe iterates every configured address
-// (DiscoveryAddress first, then ServiceAddresses), skipping addresses that
-// resolve to this store's own logservice listener — probing self is
-// useless because startReplicas runs before the RPC server has started.
+// For each voting record the probe iterates every configured concrete service
+// address, skipping addresses that resolve to this store's own logservice
+// listener — probing self is useless because startReplicas runs before the RPC
+// server has started. DiscoveryAddress-only deployments skip this check because
+// a reverse proxy address cannot establish unanimity across concrete peers.
 //
 // Every peer's gossip-backed membership view is eventually consistent, so a
 // single authoritative reply is not enough: a stale peer could either hide a
@@ -343,11 +344,13 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 	return zombies
 }
 
-// zombieCheckAddresses returns the ordered list of peer addresses to probe
-// during the zombie self-check. DiscoveryAddress comes first (when set),
-// followed by ServiceAddresses. Entries that resolve to the local logservice
-// listener are filtered out — probing self cannot produce a useful answer
-// because the RPC server has not been started yet at this point.
+// zombieCheckAddresses returns the ordered list of concrete peer addresses to
+// probe during the zombie self-check. DiscoveryAddress is deliberately not
+// used here: it may be a reverse proxy that randomly selects one backend, and
+// a single backend's gossip view cannot satisfy the unanimous-absence rule.
+// Entries that resolve to the local logservice listener are filtered out —
+// probing self cannot produce a useful answer because the RPC server has not
+// been started yet at this point.
 func (l *store) zombieCheckAddresses() []string {
 	selfAddrs := map[string]struct{}{
 		l.cfg.LogServiceListenAddr():  {},
@@ -371,7 +374,6 @@ func (l *store) zombieCheckAddresses() []string {
 		addresses = append(addresses, a)
 	}
 
-	add(l.cfg.HAKeeperClientConfig.DiscoveryAddress)
 	for _, a := range l.cfg.HAKeeperClientConfig.ServiceAddresses {
 		add(a)
 	}
