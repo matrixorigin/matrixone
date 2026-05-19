@@ -28,6 +28,33 @@ func TestEventLogger(t *testing.T) {
 	LogSlowEvent(ctx, time.Nanosecond)
 }
 
+func TestEventLoggerPoolCleanup(t *testing.T) {
+	// Use a large arg to verify it gets zeroed before pool return.
+	type heavy struct {
+		data [1024]byte
+	}
+	held := &heavy{}
+
+	ctx := context.Background()
+	ctx = WithEventLogger(ctx)
+	LogEvent(ctx, str_to_cache_data_begin, held)
+	LogEvent(ctx, str_to_cache_data_end, held)
+	LogSlowEvent(ctx, time.Nanosecond) // returns slice to pool
+
+	// Grab the slice back from the pool and check all args are nil.
+	events := eventsPool.Get().(*[]event)
+	for i, ev := range *events {
+		if ev.args != nil {
+			t.Errorf("event[%d].args = %v, want nil", i, ev.args)
+		}
+		for j, arg := range ev._args {
+			if arg != nil {
+				t.Errorf("event[%d]._args[%d] = %v, want nil", i, j, arg)
+			}
+		}
+	}
+}
+
 func BenchmarkEventLogger(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ctx := context.Background()
