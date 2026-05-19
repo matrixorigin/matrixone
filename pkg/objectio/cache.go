@@ -265,18 +265,11 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 		}
 	}
 	call := &loadCall{done: make(chan struct{})}
+	call.err = moerr.NewInternalErrorNoCtx("dedup load did not complete")
 	metaLoadCalls[key] = call
 	metaLoadMu.Unlock()
 
 	defer func() {
-		if r := recover(); r != nil {
-			call.err = moerr.NewInternalErrorNoCtxf("dedup load panic: %v", r)
-			metaLoadMu.Lock()
-			delete(metaLoadCalls, key)
-			metaLoadMu.Unlock()
-			close(call.done)
-			panic(r)
-		}
 		metaLoadMu.Lock()
 		delete(metaLoadCalls, key)
 		metaLoadMu.Unlock()

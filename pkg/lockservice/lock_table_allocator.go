@@ -30,6 +30,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// keepBindGraceFactor tolerates one missed keep-bind interval before reclaiming
+// stale binds. This avoids premature invalidation during GC pauses or transient
+// network jitter while still bounding how long dead services retain lock tables.
+const keepBindGraceFactor = 2
+
 type lockTableAllocator struct {
 	service         string
 	logger          *log.MOLogger
@@ -375,7 +380,7 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 
 	var values []*serviceBinds
 	for _, b := range l.mu.services {
-		if b.timeout(now, l.keepBindTimeout*2) {
+		if b.timeout(now, l.keepBindTimeout*keepBindGraceFactor) {
 			values = append(values, b)
 		}
 	}
