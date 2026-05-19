@@ -177,10 +177,18 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
-	ses.SetStmtType(getStatementType(statement).GetStatementType())
-	ses.SetQueryType(getStatementType(statement).GetQueryType())
+	stmtTyp := getStatementType(statement).GetStatementType()
+	queryTyp := getStatementType(statement).GetQueryType()
+	ses.SetStmtType(stmtTyp)
+	ses.SetQueryType(queryTyp)
 	ses.SetSqlSourceType(sqlType)
 	ses.SetSqlOfStmt(text)
+	if proc != nil {
+		// RecordStatement mutates the session profile in place; refresh the
+		// process view so statement-dependent cached decisions are recomputed.
+		proc.SetStmtProfile(&ses.stmtProfile)
+	}
+	ses.stmtProfile.SetDivByZeroRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -254,6 +262,27 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func isIgnoreStatement(statement tree.Statement) bool {
+	insertStmt, ok := statement.(*tree.Insert)
+	if !ok {
+		return false
+	}
+	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
+}
+
+func refreshProcessDivByZeroProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
+	if proc == nil || statement == nil {
+		return
+	}
+
+	stmtProfile := proc.GetStmtProfile()
+	stmtProfile.SetDivByZeroRuntimeProfile(
+		getStatementType(statement).GetStatementType(),
+		getStatementType(statement).GetQueryType(),
+		isIgnoreStatement(statement),
+	)
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
@@ -3556,7 +3585,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		// Inject rewrite rules hint before building UserInput (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			query, _ = rewriteSQL(execCtx.reqCtx, ses, query)
+			var rewriteErr error
+			query, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, query)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3599,7 +3633,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		// Inject rewrite rules hint before prepare wrapping (only if enabled)
 		if ses.rewriteEnabled.Load() {
-			sql, _ = rewriteSQL(execCtx.reqCtx, ses, sql)
+			var rewriteErr error
+			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
+			if rewriteErr != nil {
+				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
 		}
 		ses.addSqlCount(1)
 

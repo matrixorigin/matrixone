@@ -227,7 +227,7 @@ func TestLockOpHoldingCacheDataOOM(t *testing.T) {
 				}
 
 				// === Phase 1: TableScan (allocate cache data for each block) ===
-				// Models: readBlockData → LoadColumnsWithMeta → ReadOneBlock → S3FS.Read
+				// Models: readBlockData → LoadColumnsData → ReadOneBlock → S3FS.Read
 				//   → DiskCache.Read → setCachedData → constructorFactory
 				//   → AllocateCacheDataWithHint (THIS is the 225 GiB allocation in crash)
 				decs := make([]malloc.Deallocator, 0, blocksPerScan)

@@ -102,6 +102,7 @@ var (
 	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
 	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
 	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
+	TxnPKChangeCheckBailoutCounter = txnPKChangeCheckCounter.WithLabelValues("bailout")
 
 	txnPKMayBeChangedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
