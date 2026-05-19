@@ -686,6 +686,12 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 	return tc.mu.txn.SnapshotTS
 }
 
+func (tc *txnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.txn.SnapshotTS = ts
+}
+
 func (tc *txnOperator) CreateTS() timestamp.Timestamp {
 	return tc.reset.createTs
 }
