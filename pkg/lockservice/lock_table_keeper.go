@@ -114,9 +114,30 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
-	allBinds := make([]pb.LockTable, 0, len(binds))
+	type bindKey struct {
+		group     uint32
+		table     uint64
+		serviceID string
+		version   uint64
+	}
+
+	allBinds := make([]pb.LockTable, 0, cap(binds))
 	binds = binds[:0]
 	futures = futures[:0]
+	checkedBinds := make(map[bindKey]struct{})
+	maybeHandleRemoteBindChanged := func(bind pb.LockTable) {
+		key := bindKey{
+			group:     bind.Group,
+			table:     bind.Table,
+			serviceID: bind.ServiceID,
+			version:   bind.Version,
+		}
+		if _, ok := checkedBinds[key]; ok {
+			return
+		}
+		checkedBinds[key] = struct{}{}
+		k.maybeHandleRemoteBindChanged(bind)
+	}
 
 	k.groupTables.iter(func(_ uint64, v lockTable) bool {
 		bind := v.getBind()
@@ -147,6 +168,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		}
 		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
+		maybeHandleRemoteBindChanged(bind)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
@@ -157,14 +179,47 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	for idx, f := range futures {
 		v, err := f.Get()
 		if err == nil {
-			releaseResponse(v.(*pb.Response))
+			resp := v.(*pb.Response)
+			if err = resp.UnwrapError(); err != nil {
+				logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+				if canRefreshRemoteBindOnKeepError(err) {
+					maybeHandleRemoteBindChanged(binds[idx])
+				}
+			} else if resp.NewBind != nil {
+				k.service.handleBindChanged(*resp.NewBind)
+			}
+			releaseResponse(resp)
 		} else {
 			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+			maybeHandleRemoteBindChanged(binds[idx])
 		}
 		f.Close()
 		futures[idx] = nil // gc
 	}
 	return futures[:0], binds[:0]
+}
+
+func canRefreshRemoteBindOnKeepError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)
+}
+
+func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
+	newBind, err := getLockTableBind(
+		k.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		k.serviceID,
+		bind.Sharding,
+	)
+	if err != nil {
+		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+		return
+	}
+	if newBind.Changed(bind) {
+		k.service.handleBindChanged(newBind)
+	}
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {

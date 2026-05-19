@@ -1252,6 +1252,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
+			{&tree.LockTableStmt{}},
+			{&tree.UnLockTableStmt{}},
 			{&tree.Use{}},
 		}
 		ctrl := gomock.NewController(t)
@@ -1267,10 +1269,43 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.LockTableStmt{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.UnLockTableStmt{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
+}
+
+func TestLockTablesSessionState(t *testing.T) {
+	ses := &Session{}
+
+	lockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.LockTableStmt{},
+	}
+	_, err := execInFrontend(ses, lockCtx)
+	require.NoError(t, err)
+	require.True(t, ses.hasLockedTables.Load())
+	require.False(t, lockCtx.txnOpt.byCommit)
+
+	unlockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockCtx)
+	require.NoError(t, err)
+	require.True(t, unlockCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
+
+	unlockAgainCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockAgainCtx)
+	require.NoError(t, err)
+	require.False(t, unlockAgainCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
 }
 
 func Test_convert_type(t *testing.T) {
