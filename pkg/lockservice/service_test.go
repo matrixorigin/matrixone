@@ -4405,6 +4405,86 @@ func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
 	)
 }
 
+func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 holds the lock briefly then releases.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			option2 := option
+			option2.LockWaitTimeout = 3 // 3 seconds, more than enough
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(200 * time.Millisecond)
+				require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			}()
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			wg.Wait()
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second) // well within LockWaitTimeout
+		},
+	)
+}
+
+func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Short context to trigger fast timeout.
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
+			// NOT the default 5-minute configLockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 0
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			// Should have completed near the context deadline, not after 5 minutes.
+			require.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second)
+		},
+	)
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
