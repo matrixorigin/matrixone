@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -43,6 +44,8 @@ import (
 )
 
 var maxParquetBatchCnt int64 = 100000
+
+const maxParquetS3PrefetchSize int64 = 128 * 1024 * 1024
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
@@ -125,12 +128,8 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 		}
 		fileSize = param.FileSize[param.Fileparam.FileIndex-1]
 
-		// For S3 sources, pre-read the entire file into memory to avoid
-		// many small random HTTP requests which cause severe performance issues.
-		// Parquet reading involves many small random reads (metadata, page headers, etc.)
-		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
-		if param.Extern.ScanType == tree.S3 && prefetchS3 {
-			data := make([]byte, fileSize)
+		if shouldPrefetchS3Parquet(param.Extern.ScanType, prefetchS3, fileSize) {
+			data := make([]byte, int(fileSize))
 			vec := fileservice.IOVector{
 				FilePath: readPath,
 				Entries: []fileservice.IOEntry{
@@ -156,6 +155,10 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	var err error
 	h.file, err = parquet.OpenFile(r, fileSize)
 	return moerr.ConvertGoError(param.Ctx, err)
+}
+
+func shouldPrefetchS3Parquet(scanType int, prefetchS3 bool, fileSize int64) bool {
+	return scanType == tree.S3 && prefetchS3 && fileSize >= 0 && fileSize <= maxParquetS3PrefetchSize
 }
 
 // findColumnIgnoreCase finds a column in the Parquet schema with case-insensitive matching.
@@ -1828,7 +1831,7 @@ func parquetValueToInt64(ctx context.Context, st parquet.Type, v parquet.Value) 
 	case parquet.Int64:
 		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
 			val := v.Uint64()
-			if val > uint64(1<<63-1) {
+			if val > uint64(math.MaxInt64) {
 				return 0, moerr.NewInvalidInputf(ctx, "parquet value %d overflows BIGINT", val)
 			}
 			return int64(val), nil
@@ -2364,18 +2367,25 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 }
 
 func (h *ParquetHandler) closePages(ctx context.Context) error {
+	var firstErr error
 	for i, pages := range h.pages {
-		if pages == nil {
-			continue
-		}
-		if err := pages.Close(); err != nil {
-			return moerr.ConvertGoError(ctx, err)
+		if pages != nil {
+			if err := pages.Close(); err != nil && firstErr == nil {
+				firstErr = moerr.ConvertGoError(ctx, err)
+			}
 		}
 		h.pages[i] = nil
 		h.currentPage[i] = nil
 		h.pageOffset[i] = 0
 	}
-	return nil
+	return firstErr
+}
+
+func (h *ParquetHandler) closePagesOnError(ctx context.Context, err error) error {
+	if closeErr := h.closePages(ctx); closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+	return err
 }
 
 func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch) error {
@@ -2433,7 +2443,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 					finish = true
 					break L
 				case err != nil:
-					return moerr.ConvertGoError(param.Ctx, err)
+					return h.closePagesOnError(param.Ctx, moerr.ConvertGoError(param.Ctx, err))
 				}
 				h.currentPage[colIdx] = page
 				pageOff = 0
@@ -2449,7 +2459,8 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			}
 
 			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
-				return moerr.NewNYI(param.Ctx, "page has repetition")
+				err := moerr.NewNYI(param.Ctx, "page has repetition")
+				return h.closePagesOnError(param.Ctx, err)
 			}
 
 			// Calculate how many rows to read from this page
@@ -2471,7 +2482,7 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 
 			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
 			if err != nil {
-				return err
+				return h.closePagesOnError(param.Ctx, err)
 			}
 		}
 		length = vec.Length()
