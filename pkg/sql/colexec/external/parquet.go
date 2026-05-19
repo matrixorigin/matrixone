@@ -542,7 +542,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					}
 					return copyPageToVec(mp, page, proc, vec, data.Double())
 				}
-				break
 			case parquet.Float:
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					data := page.Data()
@@ -558,7 +557,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						return float64(v)
 					})
 				}
-				break
 			}
 			if mp.mapper != nil {
 				break
