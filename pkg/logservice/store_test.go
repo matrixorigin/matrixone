@@ -1385,7 +1385,7 @@ func TestCheckZombieReplicas_ReplicaPresent(t *testing.T) {
 	// Stub getShardMembership to report that replicaID 7 is a live member of shard 3.
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		assert.Equal(t, uint64(3), shardID)
 		return map[uint64]string{7: "127.0.0.1:1"}, true, nil
 	}
@@ -1402,7 +1402,7 @@ func TestCheckZombieReplicas_ReplicaPresent(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies)
 }
 
@@ -1410,7 +1410,7 @@ func TestCheckZombieReplicas_ReplicaAbsent(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		// Membership contains replicaID 8 and 9; local metadata claims 7.
 		return map[uint64]string{8: "127.0.0.1:2", 9: "127.0.0.1:3"}, true, nil
 	}
@@ -1427,7 +1427,7 @@ func TestCheckZombieReplicas_ReplicaAbsent(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, ok := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.True(t, ok)
 	assert.Len(t, zombies, 1)
@@ -1437,7 +1437,7 @@ func TestCheckZombieReplicas_RPCFails(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return nil, false, moerr.NewInternalErrorNoCtx("boom")
 	}
 
@@ -1453,7 +1453,7 @@ func TestCheckZombieReplicas_RPCFails(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies, "RPC failure must fall back to not-a-zombie")
 }
 
@@ -1461,7 +1461,7 @@ func TestCheckZombieReplicas_ShardUnknown(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return nil, false, nil
 	}
 
@@ -1477,7 +1477,7 @@ func TestCheckZombieReplicas_ShardUnknown(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies, "unknown shard must fall back to not-a-zombie")
 }
 
@@ -1486,7 +1486,7 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 	called := false
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		called = true
 		return nil, false, nil
 	}
@@ -1501,7 +1501,7 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies)
 	assert.False(t, called, "should not call getShardMembership when no address is configured")
 }
@@ -1516,7 +1516,7 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
 		return map[uint64]string{8: "10.0.0.2:1"}, true, nil
 	}
@@ -1536,7 +1536,7 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.True(t, isZombie, "peer's authoritative answer must still classify the replica as zombie")
 	assert.Equal(t, []string{"10.0.0.2:32001"}, probed,
@@ -1554,7 +1554,7 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
 		switch address {
 		case "10.0.0.1:32001":
@@ -1580,7 +1580,7 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.True(t, isZombie,
 		"the single authoritative peer confirms absence, so the replica is a zombie")
@@ -1598,7 +1598,7 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 	var probed []string
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
 		return map[uint64]string{7: "10.0.0.1:1"}, true, nil
 	}
@@ -1615,7 +1615,7 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies)
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"every address must be probed even after an authoritative answer, so the "+
@@ -1631,7 +1631,7 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		switch address {
 		case "10.0.0.1:32001":
 			// This peer has observed the ADD and lists replica 7.
@@ -1656,7 +1656,7 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies,
 		"at least one peer still lists the replica, so it must not be classified as a zombie")
 }
@@ -1669,7 +1669,7 @@ func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return map[uint64]string{8: "10.0.0.8:1", 9: "10.0.0.9:1"}, true, nil
 	}
 
@@ -1685,7 +1685,7 @@ func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
 		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
 		ReplicaID:      7,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.True(t, isZombie,
 		"all reachable peers agree the replica is absent -> must be classified as zombie")
@@ -1705,7 +1705,7 @@ func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
 	called := false
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		called = true
 		return map[uint64]string{8: "10.0.0.8:1"}, true, nil
 	}
@@ -1723,10 +1723,81 @@ func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
 		ReplicaID:      7,
 		NonVoting:      true,
 	}}
-	zombies := l.checkZombieReplicas(shards)
+	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies, "non-voting replicas must not be classified as zombies")
 	assert.False(t, called,
 		"non-voting replicas must be skipped before any membership RPC is issued")
+}
+
+func TestCheckZombieReplicas_StopsWhenStartupBudgetExpires(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	var probed []string
+	orig := getShardMembershipFn
+	defer func() { getShardMembershipFn = orig }()
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		probed = append(probed, address)
+		<-ctx.Done()
+		return nil, false, ctx.Err()
+	}
+
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+
+	origTimeout := zombieSelfCheckTimeout
+	defer func() { zombieSelfCheckTimeout = origTimeout }()
+	zombieSelfCheckTimeout = 10 * time.Millisecond
+
+	shards := []metadata.LogShard{
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+			ReplicaID:      7,
+		},
+		{
+			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
+			ReplicaID:      8,
+		},
+	}
+	zombies := l.checkZombieReplicas(context.Background(), shards)
+	assert.Empty(t, zombies)
+	assert.Equal(t, []string{"10.0.0.1:32001"}, probed,
+		"the self-check must stop when the startup budget expires")
+}
+
+func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var probed []string
+	orig := getShardMembershipFn
+	defer func() { getShardMembershipFn = orig }()
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		probed = append(probed, address)
+		cancel()
+		return nil, false, ctx.Err()
+	}
+
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+
+	shards := []metadata.LogShard{{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+		ReplicaID:      7,
+	}}
+	zombies := l.checkZombieReplicas(ctx, shards)
+	assert.Empty(t, zombies)
+	assert.Equal(t, []string{"10.0.0.1:32001"}, probed,
+		"the self-check must stop when its parent context is canceled")
 }
 
 func TestStartReplicas_SkipsZombie(t *testing.T) {
@@ -1755,7 +1826,7 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	// Stub getShardMembership: shard 1 membership contains only replica 2.
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return map[uint64]string{2: "127.0.0.1:1"}, true, nil
 	}
 
@@ -1764,7 +1835,7 @@ func TestStartReplicas_SkipsZombie(t *testing.T) {
 	// filtered as self.
 	store.cfg.HAKeeperClientConfig.ServiceAddresses = []string{"10.255.255.1:32001"}
 
-	require.NoError(t, store.startReplicas())
+	require.NoError(t, store.startReplicas(context.Background()))
 
 	info := store.nh.GetNodeHostInfo(dragonboat.DefaultNodeHostInfoOption)
 	started := map[zombieKey]bool{}
