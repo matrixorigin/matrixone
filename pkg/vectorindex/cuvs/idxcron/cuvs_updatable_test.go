@@ -76,7 +76,7 @@ func chunkBytesWithRecords(t *testing.T, n int) []byte {
 		require.NoError(t, err)
 		records = append(records, rec...)
 	}
-	return cuvscdc.FrameCdcChunk(records)
+	return cuvscdc.FrameCdcChunk(records, nil)
 }
 
 // stubSelect returns a runSelectChunkSql replacement that yields a

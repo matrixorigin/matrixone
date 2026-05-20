@@ -260,7 +260,7 @@ func countTag1Records(
 			if len(framed) == 0 {
 				continue
 			}
-			records, err := cuvscdc.UnframeCdcChunk(framed)
+			records, _, err := cuvscdc.UnframeCdcChunk(framed)
 			if err != nil {
 				return 0, moerr.NewInternalErrorNoCtxf(
 					"countTag1Records: unframe chunk: %v", err)

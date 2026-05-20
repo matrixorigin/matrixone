@@ -223,7 +223,7 @@ func TestDecodeEventRecord_StopsAtPad(t *testing.T) {
 
 // TestCdcAppendEventsSql_Empty asserts no SQL for an empty batch.
 func TestCdcAppendEventsSql_Empty(t *testing.T) {
-	if got := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, nil, nil); len(got) != 0 {
+	if got := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, nil, nil, ""); len(got) != 0 {
 		t.Fatalf("expected no SQL for empty batch, got %d", len(got))
 	}
 }
@@ -235,7 +235,7 @@ func TestCdcAppendEventsSql_DeleteOnly(t *testing.T) {
 	ops := []CdcOp{CdcOpDelete, CdcOpDelete, CdcOpDelete, CdcOpDelete}
 	buf, sizes := encodeBatch(t, 4, 0, ops, pkids, nil, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes)
+	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -273,7 +273,7 @@ func TestCdcAppendEventsSql_InsertOnly(t *testing.T) {
 	ops := []CdcOp{CdcOpInsert, CdcOpInsert, CdcOpInsert}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes)
+	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -307,7 +307,7 @@ func TestCdcAppendEventsSql_Mixed(t *testing.T) {
 	vecs := [][]float32{{1, 2, 3, 4}, {5, 6, 7, 8}}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes)
+	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 0, buf, sizes, "")
 	if len(sqls) != 1 {
 		t.Fatalf("expected 1 SQL, got %d", len(sqls))
 	}
@@ -349,7 +349,7 @@ func TestCdcAppendEventsSql_ChunkPacking(t *testing.T) {
 	}
 	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 5, buf, sizes)
+	sqls := CdcAppendEventsSql(testTblcfg(), "idx-1", 5, buf, sizes, "")
 	all := strings.Join(sqls, " ; ")
 	blobs := extractUnhexBlobs(t, all)
 	if len(blobs) != 2 {
@@ -390,7 +390,7 @@ func TestReplayEventLog_DeleteInsertDelete(t *testing.T) {
 	vecs := [][]float32{{1, 2, 3, 4}}
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf)}}
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}
 	state, err := ReplayEventLog(chunks, dim, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +412,7 @@ func TestReplayEventLog_InsertDeleteInsert(t *testing.T) {
 	vecs := [][]float32{{1, 1}, {9, 9}}
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}, dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,8 +442,8 @@ func TestReplayEventLog_MultiChunk(t *testing.T) {
 
 	// Hand them to ReplayEventLog reversed; SortChunks should normalize.
 	chunks := []EventChunk{
-		{ChunkId: 1, Data: FrameCdcChunk(buf1)},
-		{ChunkId: 0, Data: FrameCdcChunk(buf0)},
+		{ChunkId: 1, Data: FrameCdcChunk(buf1, nil)},
+		{ChunkId: 0, Data: FrameCdcChunk(buf0, nil)},
 	}
 	SortChunks(chunks)
 	state, err := ReplayEventLog(chunks, dim, 0)
@@ -472,7 +472,7 @@ func TestReplayEventLog_WithInclude(t *testing.T) {
 		[][]float32{{1, 2}},
 		[][]byte{include},
 	)
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf)}}, dim, includeBytesPerRow)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}, dim, includeBytesPerRow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,6 +484,44 @@ func TestReplayEventLog_WithInclude(t *testing.T) {
 	}
 }
 
+// TestReplayEventLog_CapturesColMetaJSON: when a chunk's frame header
+// section carries colMetaJSON, ReplayState.ColMetaJSON returns it for
+// callers that want a one-shot replay+peek instead of calling
+// PeekColMetaJSON separately.
+func TestReplayEventLog_CapturesColMetaJSON(t *testing.T) {
+	dim := 2
+	colMetaJSON := `[{"name":"a","type":1}]`
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, []byte(colMetaJSON))}}
+	state, err := ReplayEventLog(chunks, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ColMetaJSON != colMetaJSON {
+		t.Fatalf("ColMetaJSON not propagated: got %q, want %q", state.ColMetaJSON, colMetaJSON)
+	}
+	if len(state.Overflow) != 1 {
+		t.Fatalf("expected 1 overflow record (the INSERT), got %d", len(state.Overflow))
+	}
+}
+
+// TestReplayEventLog_NoColMetaJSON: when the header section is empty
+// ReplayState.ColMetaJSON is "" too — the field defaults cleanly.
+func TestReplayEventLog_NoColMetaJSON(t *testing.T) {
+	dim := 2
+	buf, _ := encodeBatch(t, dim, 0,
+		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
+	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil)}}
+	state, err := ReplayEventLog(chunks, dim, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ColMetaJSON != "" {
+		t.Fatalf("expected empty ColMetaJSON, got %q", state.ColMetaJSON)
+	}
+}
+
 // TestReplayEventLog_RejectsCorruptFrame: any framing-level corruption
 // (short input, bad magic, wrong version, length mismatch, CRC mismatch,
 // or bad end magic) must cause replay to fail loudly rather than produce
@@ -492,7 +530,7 @@ func TestReplayEventLog_RejectsCorruptFrame(t *testing.T) {
 	dim := 4
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpDelete}, []int64{1}, nil, nil)
-	good := FrameCdcChunk(buf)
+	good := FrameCdcChunk(buf, nil)
 
 	type corruption struct {
 		name string

@@ -223,7 +223,12 @@ func (s *IvfpqSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	sqls := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes)
+	// Pass the captured colMetaJSON so each emitted chunk's frame
+	// header carries the INCLUDE-column layout. Search-side replay
+	// uses it when no tag=0 sub-index is loaded; with a sub-index
+	// loaded the search prefers the model tar's colMetaJSON, so the
+	// redundancy is harmless.
+	sqls := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
 	if len(sqls) == 0 {
 		return nil
 	}

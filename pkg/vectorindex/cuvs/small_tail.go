@@ -44,22 +44,14 @@ type PendingRecord struct {
 // storage table for this index slice (ALTER REINDEX) or is run
 // once at CREATE INDEX with the table empty.
 //
-// When rows is empty, returns nil. When the index has no INCLUDE
-// columns (includeBytesPerRow == 0), each row's Include must be
-// nil / empty; the encoder rejects mismatches.
-// colMetaJSON is the INCLUDE-column metadata
-// (cuvscdc.ResolveIncludeColumns output, e.g.
-// `[{"name":"a","type":1},...]`). When non-empty it is emitted as a
-// CdcOpHeader record at the very start of chunk_id=0 so the search
-// side can decode subsequent INSERT records when no tag=0 sub-index
-// exists. Empty colMetaJSON skips the header (the index has no
-// INCLUDE columns — includeBytesPerRow is 0 either way).
+// colMetaJSON (cuvscdc.ResolveIncludeColumns output) is embedded in
+// the frame header section of every emitted chunk so the search side
+// can recover the INCLUDE-column layout for tag=1 replay even when no
+// tag=0 sub-index exists. Pass "" for indexes with no INCLUDE columns.
 //
-// rows can be empty: when colMetaJSON is non-empty the writer still
-// emits the header chunk (useful for CREATE INDEX on an empty source
-// where future CDC iterations will append events under the same
-// layout); when rows is empty AND colMetaJSON is empty nothing is
-// emitted.
+// When rows is empty, returns nil. Empty source + INCLUDE columns is
+// handled by the first ongoing CDC iteration (CagraSync.Save /
+// IvfpqSync.Save), which also embeds colMetaJSON in its frames.
 func SaveSmallTailAsCdc(
 	tblcfg vectorindex.IndexTableConfig,
 	rows []PendingRecord,
@@ -67,24 +59,15 @@ func SaveSmallTailAsCdc(
 	includeBytesPerRow int,
 	colMetaJSON string,
 ) ([]string, error) {
-	if len(rows) == 0 && colMetaJSON == "" {
+	if len(rows) == 0 {
 		return nil, nil
 	}
 
-	// Pre-size the buffer: header (5 + len(JSON)) + per-row records.
+	// Pre-size the buffer: 9 (op + pkid) + 4*dim + ibpr bytes per
+	// INSERT record. Avoids ~len(rows) reallocs in EncodeEventRecord.
 	perRow := 9 + 4*dim + includeBytesPerRow
-	records := make([]byte, 0, 5+len(colMetaJSON)+perRow*len(rows))
-	sizes := make([]int, 0, 1+len(rows))
-
-	if colMetaJSON != "" {
-		before := len(records)
-		out, err := EncodeHeaderRecord(records, []byte(colMetaJSON))
-		if err != nil {
-			return nil, err
-		}
-		records = out
-		sizes = append(sizes, len(records)-before)
-	}
+	records := make([]byte, 0, perRow*len(rows))
+	sizes := make([]int, 0, len(rows))
 
 	for _, r := range rows {
 		before := len(records)
@@ -97,5 +80,5 @@ func SaveSmallTailAsCdc(
 		sizes = append(sizes, len(records)-before)
 	}
 
-	return CdcAppendEventsSql(tblcfg, vectorindex.CdcTailId, 0, records, sizes), nil
+	return CdcAppendEventsSql(tblcfg, vectorindex.CdcTailId, 0, records, sizes, colMetaJSON), nil
 }

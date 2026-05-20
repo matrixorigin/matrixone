@@ -37,47 +37,60 @@ import (
 
 // CDC chunk framing.
 //
-// Every tag=1 chunk on the wire is wrapped in a 32-byte frame so corruption
+// Every tag=1 chunk on the wire is wrapped in a frame so corruption
 // (bit flips, truncation, accidental overwrites) is detected at load time
 // rather than silently producing wrong replay state.
 //
-// Layout (all integers little-endian, all fields uint32-aligned, payload
-// starts at a 16-aligned offset):
+// Layout (all integers little-endian, all fields uint32-aligned, header
+// section starts at a 16-aligned offset):
 //
-//	off  size  field
-//	  0  4     magic_start  = 0xCDC51A11
-//	  4  4     version      = 1
-//	  8  4     payload_len  = N
-//	 12  4     reserved     = 0  (room for flags / compression bits)
-//	 16  N     records
-//	16+N 4     crc32        IEEE over bytes [4 .. 16+N)
-//	20+N 4     reserved     = 0
-//	24+N 4     reserved     = 0
-//	28+N 4     magic_end    = 0xCDC51A11
+//	off       size  field
+//	  0       4     magic_start  = 0xCDC51A11
+//	  4       4     version      = 2
+//	  8       4     payload_len  = N (size of records section)
+//	 12       4     header_len   = H (size of header section, 0 when no INCLUDE)
+//	 16       H     header bytes (typically colMetaJSON; aligned, no padding)
+//	 16+H     N     records
+//	 16+H+N   4     crc32        IEEE over bytes [4 .. 16+H+N)
+//	 20+H+N   4     reserved     = 0
+//	 24+H+N   4     reserved     = 0
+//	 28+H+N   4     magic_end    = 0xCDC51A11
 //
-// CRC covers everything between the two magics so a flipped header bit
-// (version, payload_len, reserved) is also detected. Both magics are the
-// same constant; mismatch on either signals truncation or wrong-row
-// corruption.
+// The header section carries the INCLUDE-column metadata JSON when present
+// so each chunk is self-describing: search-side decode of the records can
+// recover includeBytesPerRow without needing a tag=0 sub-index (the
+// small-data-only path), and any chunk read in isolation knows its own
+// layout. Empty header (H=0) is the common case for indexes with no
+// INCLUDE columns; the frame degrades to the original 32-byte overhead.
+//
+// CRC covers the full header+records section so a flipped header bit or
+// drifted header_len is detected. Both magics are the same constant;
+// mismatch on either signals truncation or wrong-row corruption.
 const (
 	cdcChunkMagic    uint32 = 0xCDC51A11
-	cdcChunkVersion  uint32 = 1
+	cdcChunkVersion  uint32 = 2
 	cdcHeaderSize           = 16
 	cdcFooterSize           = 16
-	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 32 bytes
+	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 32 bytes, ex. header section
 )
 
-// FrameCdcChunk wraps the given record bytes into the on-wire chunk frame
-// described above. The returned slice is always exactly len(records)+32
+// FrameCdcChunk wraps the given record bytes (plus an optional header,
+// typically colMetaJSON) into the on-wire chunk frame described above.
+// The returned slice is exactly cdcFrameOverhead + len(header) + len(records)
 // bytes. Exposed so tests can construct framed chunks directly.
-func FrameCdcChunk(records []byte) []byte {
-	out := make([]byte, cdcFrameOverhead+len(records))
+//
+// Pass header=nil when the chunk has no INCLUDE-column metadata.
+func FrameCdcChunk(records, header []byte) []byte {
+	hlen := len(header)
+	rlen := len(records)
+	out := make([]byte, cdcFrameOverhead+hlen+rlen)
 	binary.LittleEndian.PutUint32(out[0:4], cdcChunkMagic)
 	binary.LittleEndian.PutUint32(out[4:8], cdcChunkVersion)
-	binary.LittleEndian.PutUint32(out[8:12], uint32(len(records)))
-	// out[12:16] reserved, already zero
-	copy(out[cdcHeaderSize:cdcHeaderSize+len(records)], records)
-	footerOff := cdcHeaderSize + len(records)
+	binary.LittleEndian.PutUint32(out[8:12], uint32(rlen))
+	binary.LittleEndian.PutUint32(out[12:16], uint32(hlen))
+	copy(out[cdcHeaderSize:cdcHeaderSize+hlen], header)
+	copy(out[cdcHeaderSize+hlen:cdcHeaderSize+hlen+rlen], records)
+	footerOff := cdcHeaderSize + hlen + rlen
 	crc := crc32.ChecksumIEEE(out[4:footerOff])
 	binary.LittleEndian.PutUint32(out[footerOff:footerOff+4], crc)
 	// out[footerOff+4:footerOff+12] reserved, already zero
@@ -85,35 +98,42 @@ func FrameCdcChunk(records []byte) []byte {
 	return out
 }
 
-// UnframeCdcChunk validates the frame and returns the record bytes (aliased
-// into framed). Returns an error on any framing inconsistency: short input,
-// wrong magic, unknown version, length overrun, or CRC mismatch.
-func UnframeCdcChunk(framed []byte) ([]byte, error) {
+// UnframeCdcChunk validates the frame and returns the record bytes plus
+// the header bytes (both aliased into framed). Returns an error on any
+// framing inconsistency: short input, wrong magic, unknown version,
+// length overrun, or CRC mismatch.
+//
+// header is nil when the chunk has no INCLUDE-column metadata (H=0).
+func UnframeCdcChunk(framed []byte) (records, header []byte, err error) {
 	if len(framed) < cdcFrameOverhead {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: chunk too short (%d bytes < %d)", len(framed), cdcFrameOverhead)
 	}
 	if got := binary.LittleEndian.Uint32(framed[0:4]); got != cdcChunkMagic {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
 	if v := binary.LittleEndian.Uint32(framed[4:8]); v != cdcChunkVersion {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: unknown version %d (want %d)", v, cdcChunkVersion)
 	}
 	plen := binary.LittleEndian.Uint32(framed[8:12])
-	if uint64(plen)+uint64(cdcFrameOverhead) != uint64(len(framed)) {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: payload_len %d + overhead %d != chunk size %d",
-			plen, cdcFrameOverhead, len(framed))
+	hlen := binary.LittleEndian.Uint32(framed[12:16])
+	if uint64(plen)+uint64(hlen)+uint64(cdcFrameOverhead) != uint64(len(framed)) {
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: payload_len %d + header_len %d + overhead %d != chunk size %d",
+			plen, hlen, cdcFrameOverhead, len(framed))
 	}
-	records := framed[cdcHeaderSize : cdcHeaderSize+plen]
-	footerOff := cdcHeaderSize + int(plen)
+	footerOff := cdcHeaderSize + int(hlen) + int(plen)
 	gotCrc := binary.LittleEndian.Uint32(framed[footerOff : footerOff+4])
 	wantCrc := crc32.ChecksumIEEE(framed[4:footerOff])
 	if gotCrc != wantCrc {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: crc32 mismatch got=0x%08x want=0x%08x", gotCrc, wantCrc)
 	}
 	if got := binary.LittleEndian.Uint32(framed[footerOff+12 : footerOff+16]); got != cdcChunkMagic {
-		return nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("UnframeCdcChunk: bad end magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
 	}
-	return records, nil
+	if hlen > 0 {
+		header = framed[cdcHeaderSize : cdcHeaderSize+int(hlen)]
+	}
+	records = framed[cdcHeaderSize+int(hlen) : cdcHeaderSize+int(hlen)+int(plen)]
+	return records, header, nil
 }
 
 // CDC event log helpers shared by CAGRA and IVF-PQ.
@@ -124,21 +144,14 @@ func UnframeCdcChunk(framed []byte) ([]byte, error) {
 // state automatically — INSERT-then-DELETE collapses to "deleted", and
 // DELETE-then-INSERT collapses to "in overflow".
 //
-// Record layout (variable size by op, fixed size *per* op except Header):
+// Record layout (variable size by op, fixed size *per* op):
 //
 //	DELETE: op:byte | pkid:int64                                                  // 9 bytes
 //	INSERT: op:byte | pkid:int64 | vec:4*dim | include:K                          // 9 + 4*dim + ibpr
-//	HEADER: op:byte | payload_len:uint32 LE | payload:[]byte                      // 5 + N bytes
 //
-// HEADER carries the index's INCLUDE-column metadata JSON (matching
-// cuvscdc.ResolveIncludeColumns output) so the search-side can decode
-// subsequent INSERT records when no tag=0 sub-index exists for the index
-// slice (small-data-only indexes). Emitted exactly once: as the first
-// record of chunk_id=0 by SaveSmallTailAsCdc. Ongoing CagraSync.Save /
-// IvfpqSync.Save iterations don't re-emit it.
-//
-// The HEADER record is self-describing via its own payload_len, so the
-// decoder doesn't need ibpr to skip past it.
+// INCLUDE-column metadata (colMetaJSON) is NOT a record — it lives in the
+// chunk frame's header section (see FrameCdcChunk). Records are pure
+// event payloads.
 //
 // UPSERT decomposes to DELETE+INSERT at write time (cuvs has no in-place
 // mutate; emitting DELETE first preserves last-event-wins semantics if a
@@ -150,7 +163,6 @@ type CdcOp byte
 const (
 	CdcOpDelete CdcOp = 0
 	CdcOpInsert CdcOp = 1
-	CdcOpHeader CdcOp = 2
 )
 
 // CdcEventRecord is the decoded form of one tag=1 record.
@@ -159,35 +171,11 @@ type CdcEventRecord struct {
 	Pkid    int64
 	Vec     []float32 // populated only for CdcOpInsert
 	Include []byte    // populated only for CdcOpInsert (and only when includeBytesPerRow > 0)
-	Header  []byte    // populated only for CdcOpHeader — the colMetaJSON bytes
-}
-
-// EncodeHeaderRecord appends a CdcOpHeader record carrying payload bytes
-// (typically the index's INCLUDE-column metadata JSON) to dst. Used by
-// SaveSmallTailAsCdc as the first record of chunk_id=0 so the search-side
-// can decode subsequent INSERT records when no tag=0 sub-index exists.
-//
-// Layout: op(1) | payload_len(uint32 LE) | payload(payload_len bytes).
-// The self-describing length lets the decoder skip past the header without
-// knowing the index's includeBytesPerRow.
-func EncodeHeaderRecord(dst, payload []byte) ([]byte, error) {
-	if len(payload) > math.MaxUint32 {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"EncodeHeaderRecord: payload too large (%d > %d)", len(payload), math.MaxUint32)
-	}
-	dst = append(dst, byte(CdcOpHeader))
-	var n [4]byte
-	binary.LittleEndian.PutUint32(n[:], uint32(len(payload)))
-	dst = append(dst, n[:]...)
-	dst = append(dst, payload...)
-	return dst, nil
 }
 
 // EncodeEventRecord appends one record to dst and returns the new slice.
 // vec is required iff op==CdcOpInsert; include is required iff op==CdcOpInsert
 // AND includeBytesPerRow > 0. dim must be the index's dimensionality.
-//
-// CdcOpHeader is not handled here — call EncodeHeaderRecord for headers.
 func EncodeEventRecord(
 	dst []byte,
 	op CdcOp,
@@ -251,30 +239,12 @@ func DecodeEventRecord(
 	dim int,
 	includeBytesPerRow int,
 ) (rec CdcEventRecord, n int, ok bool) {
-	if len(src) < 1 {
+	if len(src) < 9 {
 		return rec, 0, false
 	}
 	op := CdcOp(src[0])
 	switch op {
-	case CdcOpHeader:
-		// HEADER: op(1) | payload_len(4) | payload(payload_len).
-		// Self-describing length so we don't need ibpr to skip past it.
-		if len(src) < 5 {
-			return rec, 0, false
-		}
-		payloadLen := int(binary.LittleEndian.Uint32(src[1:5]))
-		need := 5 + payloadLen
-		if len(src) < need {
-			return rec, 0, false
-		}
-		rec.Op = CdcOpHeader
-		rec.Header = make([]byte, payloadLen)
-		copy(rec.Header, src[5:need])
-		return rec, need, true
 	case CdcOpDelete:
-		if len(src) < 9 {
-			return rec, 0, false
-		}
 		rec.Op = CdcOpDelete
 		rec.Pkid = int64(binary.LittleEndian.Uint64(src[1:9]))
 		return rec, 9, true
@@ -311,17 +281,34 @@ func DecodeEventRecord(
 // size stays within MaxChunkSize. Empty records → no SQL.
 //
 // chunkId starts at startChunkId and increments per emitted chunk.
+//
+// colMetaJSON is the INCLUDE-column metadata (cuvscdc.ResolveIncludeColumns
+// output, e.g. `[{"name":"a","type":1},...]`); when non-empty it is
+// embedded in EVERY emitted chunk's frame header so the search-side can
+// decode the chunk's records (and recover ibpr) without depending on a
+// tag=0 sub-index. Pass "" when the index has no INCLUDE columns.
 func CdcAppendEventsSql(
 	tblcfg vectorindex.IndexTableConfig,
 	indexId string,
 	startChunkId int64,
 	records []byte,
 	recordSizes []int,
+	colMetaJSON string,
 ) []string {
 	if len(records) == 0 || len(recordSizes) == 0 {
 		return nil
 	}
-	maxPayload := vectorindex.MaxChunkSize - cdcFrameOverhead
+	var headerBytes []byte
+	if colMetaJSON != "" {
+		headerBytes = []byte(colMetaJSON)
+	}
+	// Per-chunk byte budget for RECORDS, after accounting for the
+	// frame's fixed overhead and the embedded colMetaJSON header.
+	maxPayload := vectorindex.MaxChunkSize - cdcFrameOverhead - len(headerBytes)
+	if maxPayload <= 0 {
+		// colMetaJSON alone consumes the whole chunk budget — caller bug.
+		return nil
+	}
 	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tblcfg.DbName, tblcfg.IndexTable)
 	var sqls []string
 	var values []string
@@ -343,7 +330,7 @@ func CdcAppendEventsSql(
 			// caller bug.
 			return nil
 		}
-		framed := FrameCdcChunk(records[off : off+used])
+		framed := FrameCdcChunk(records[off:off+used], headerBytes)
 		values = append(values, fmt.Sprintf("('%s', %d, unhex('%s'), %d)",
 			indexId, chunkId, hex.EncodeToString(framed), vectorindex.Tag_CdcEvents))
 		chunkId++
@@ -405,38 +392,24 @@ type OverflowEntry struct {
 	Include []byte
 }
 
-// PeekColMetaJSON returns the colMetaJSON payload of the CdcOpHeader
-// record if it is the first record of chunks[0] (the small-tail writer
-// guarantees this placement). Returns "" when no header is present —
-// either the index has no INCLUDE columns or no small-tail emit ever ran.
+// PeekColMetaJSON returns the colMetaJSON embedded in the first chunk's
+// frame header section. Every chunk carries the header (writer-side
+// invariant of CdcAppendEventsSql), so chunks[0] is always sufficient
+// — no need to sort or scan. Returns "" when the header section is
+// empty (the index has no INCLUDE columns) or chunks is empty.
 //
 // Used by the search side when no tag=0 sub-index has loaded: peek the
 // header to compute includeBytesPerRow BEFORE calling ReplayEventLog
-// (which itself needs ibpr to decode INSERT records). The header record
-// is self-describing via its own payload_len, so the decode here doesn't
-// depend on ibpr.
-//
-// Callers must SortChunks first; an empty chunks slice returns "" / nil.
+// (which itself needs ibpr to decode INSERT records).
 func PeekColMetaJSON(chunks []EventChunk) (string, error) {
 	if len(chunks) == 0 {
 		return "", nil
 	}
-	first := chunks[0]
-	if first.ChunkId != 0 {
-		return "", nil
-	}
-	data, err := UnframeCdcChunk(first.Data)
+	_, header, err := UnframeCdcChunk(chunks[0].Data)
 	if err != nil {
 		return "", err
 	}
-	if len(data) == 0 {
-		return "", nil
-	}
-	rec, _, ok := DecodeEventRecord(data, /*dim=*/ 1, /*ibpr=*/ 0)
-	if !ok || rec.Op != CdcOpHeader {
-		return "", nil
-	}
-	return string(rec.Header), nil
+	return string(header), nil
 }
 
 // ReplayEventLog walks the chunks (assumed sorted by chunk_id) and applies
@@ -460,9 +433,16 @@ func ReplayEventLog(
 	var colMetaJSON string
 
 	for _, ch := range chunks {
-		data, err := UnframeCdcChunk(ch.Data)
+		data, header, err := UnframeCdcChunk(ch.Data)
 		if err != nil {
 			return ReplayState{}, moerr.NewInternalErrorNoCtxf("ReplayEventLog: chunk_id=%d: %v", ch.ChunkId, err)
+		}
+		// Every chunk frame carries the INCLUDE-column layout (when
+		// the index has INCLUDE columns). Last-write-wins; in practice
+		// every chunk's header is identical so the final value matches
+		// the index's true layout.
+		if len(header) > 0 {
+			colMetaJSON = string(header)
 		}
 		for len(data) > 0 {
 			rec, n, ok := DecodeEventRecord(data, dim, includeBytesPerRow)
@@ -475,13 +455,6 @@ func ReplayEventLog(
 					ch.ChunkId, len(ch.Data)-cdcFooterSize-len(data), dim, includeBytesPerRow)
 			}
 			switch rec.Op {
-			case CdcOpHeader:
-				// First-record-of-chunk_id=0 header carries the INCLUDE-
-				// column layout. Capture, don't add to delete/overflow.
-				// A later header (shouldn't happen — emitted once at
-				// small-tail write time) overwrites the previous capture
-				// so the last write wins, matching event-order semantics.
-				colMetaJSON = string(rec.Header)
 			case CdcOpDelete:
 				delete(overflow, rec.Pkid)
 				deleted[rec.Pkid] = struct{}{}

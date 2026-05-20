@@ -185,8 +185,9 @@ func (s *CagraSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	)
 	// Prefer a loaded sub-index's IncludeBytesPerRow + colMetaJSON —
 	// the model file already carries them. Falls back to the
-	// CdcOpHeader record persisted by the small-tail emit path when
-	// no sub-index exists for this index slice.
+	// colMetaJSON embedded in the first tag=1 chunk's frame header
+	// section (writer-side invariant of CdcAppendEventsSql) when no
+	// sub-index exists for this index slice.
 	for _, m := range s.Indexes {
 		if m.Index != nil {
 			includeBytesPerRow = m.IncludeBytesPerRow

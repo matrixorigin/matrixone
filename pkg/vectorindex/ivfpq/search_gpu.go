@@ -155,8 +155,9 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		colMetaJSON        string
 	)
 	// Prefer a loaded sub-index's IncludeBytesPerRow + colMetaJSON.
-	// Falls back to the CdcOpHeader record persisted by the small-tail
-	// emit path when no sub-index exists for this index slice.
+	// Falls back to the colMetaJSON embedded in the first tag=1
+	// chunk's frame header section when no sub-index exists for this
+	// index slice.
 	for _, m := range s.Indexes {
 		if m.Index != nil {
 			includeBytesPerRow = m.IncludeBytesPerRow

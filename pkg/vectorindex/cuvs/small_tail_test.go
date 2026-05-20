@@ -65,7 +65,7 @@ func TestSaveSmallTailAsCdc_NoInclude(t *testing.T) {
 	for _, m := range matches {
 		framed, err := hex.DecodeString(m[1])
 		require.NoError(t, err)
-		records, err := UnframeCdcChunk(framed)
+		records, _, err := UnframeCdcChunk(framed)
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
@@ -112,7 +112,7 @@ func TestSaveSmallTailAsCdc_WithInclude(t *testing.T) {
 	for _, m := range matches {
 		framed, err := hex.DecodeString(m[1])
 		require.NoError(t, err)
-		records, err := UnframeCdcChunk(framed)
+		records, _, err := UnframeCdcChunk(framed)
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
@@ -154,73 +154,52 @@ func TestSaveSmallTailAsCdc_UsesCdcTailId(t *testing.T) {
 	require.Contains(t, sqls[0], "'"+vectorindex.CdcTailId+"'")
 }
 
-// TestSaveSmallTailAsCdc_EmitsHeaderRecord: when colMetaJSON is set,
-// the writer emits a CdcOpHeader record as the first record of
-// chunk_id=0 so the search side can recover the INCLUDE-column layout
-// even with no tag=0 sub-index loaded.
-func TestSaveSmallTailAsCdc_EmitsHeaderRecord(t *testing.T) {
+// TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk: when colMetaJSON
+// is set, every emitted chunk's frame header section carries it so
+// search-side decode works without depending on chunk_id ordering or
+// a tag=0 sub-index.
+func TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk(t *testing.T) {
 	const dim = 2
 	const ibpr = 8
 	colMetaJSON := `[{"name":"a","type":1}]`
 	rows := []PendingRecord{
 		{Pkid: 1, Vec: []float32{0.1, 0.2}, Include: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
+		{Pkid: 2, Vec: []float32{0.3, 0.4}, Include: []byte{9, 10, 11, 12, 13, 14, 15, 16}},
 	}
 	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, dim, ibpr, colMetaJSON)
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 
-	// Parse the first emitted chunk back, walk its records: the first
-	// MUST be CdcOpHeader carrying colMetaJSON; the second is the
-	// INSERT record.
 	re := regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)
-	m := re.FindStringSubmatch(sqls[0])
-	require.NotNil(t, m, "first chunk must have a unhex payload")
-	framed, err := hex.DecodeString(m[1])
-	require.NoError(t, err)
-	records, err := UnframeCdcChunk(framed)
-	require.NoError(t, err)
+	matches := re.FindAllStringSubmatch(strings.Join(sqls, " "), -1)
+	require.NotEmpty(t, matches)
 
-	rec, n, ok := DecodeEventRecord(records, dim, ibpr)
-	require.True(t, ok)
-	require.Equal(t, CdcOpHeader, rec.Op)
-	require.Equal(t, colMetaJSON, string(rec.Header))
-
-	rec, _, ok = DecodeEventRecord(records[n:], dim, ibpr)
-	require.True(t, ok)
-	require.Equal(t, CdcOpInsert, rec.Op)
-	require.Equal(t, int64(1), rec.Pkid)
-}
-
-// TestSaveSmallTailAsCdc_HeaderOnlyNoRows: a CREATE INDEX on an
-// empty source can still emit just the header so future CDC
-// iterations write events under a known layout.
-func TestSaveSmallTailAsCdc_HeaderOnlyNoRows(t *testing.T) {
-	colMetaJSON := `[{"name":"a","type":1}]`
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), nil, 4, 8, colMetaJSON)
-	require.NoError(t, err)
-	require.Len(t, sqls, 1)
-
-	re := regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)
-	m := re.FindStringSubmatch(sqls[0])
-	require.NotNil(t, m)
-	framed, err := hex.DecodeString(m[1])
-	require.NoError(t, err)
-	records, err := UnframeCdcChunk(framed)
-	require.NoError(t, err)
-	rec, _, ok := DecodeEventRecord(records, 4, 8)
-	require.True(t, ok)
-	require.Equal(t, CdcOpHeader, rec.Op)
-	require.Equal(t, colMetaJSON, string(rec.Header))
+	for _, m := range matches {
+		framed, err := hex.DecodeString(m[1])
+		require.NoError(t, err)
+		records, header, err := UnframeCdcChunk(framed)
+		require.NoError(t, err)
+		require.Equal(t, colMetaJSON, string(header),
+			"every chunk's frame header section must carry colMetaJSON")
+		// Records are still pure Delete/Insert event ops (no special
+		// header record in the records section).
+		rec, _, ok := DecodeEventRecord(records, dim, ibpr)
+		require.True(t, ok)
+		require.Equal(t, CdcOpInsert, rec.Op)
+	}
 }
 
 // TestPeekColMetaJSON_RoundTrip: SaveSmallTailAsCdc → PeekColMetaJSON
-// recovers the colMetaJSON without needing dim or ibpr (the header
-// record is self-describing).
+// recovers the colMetaJSON from the chunk frame header.
 func TestPeekColMetaJSON_RoundTrip(t *testing.T) {
 	colMetaJSON := `[{"name":"a","type":1},{"name":"b","type":2}]`
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), nil, 4, 0, colMetaJSON)
+	rows := []PendingRecord{{Pkid: 1, Vec: []float32{1, 2}}}
+	// Note: ibpr=0 here because rows[0].Include is empty; the embedded
+	// colMetaJSON is for the search side's INCLUDE-column wiring, not
+	// the encode-time layout in this contrived test.
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 2, 0, colMetaJSON)
 	require.NoError(t, err)
-	require.Len(t, sqls, 1)
+	require.NotEmpty(t, sqls)
 
 	re := regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)
 	m := re.FindStringSubmatch(sqls[0])
@@ -233,8 +212,8 @@ func TestPeekColMetaJSON_RoundTrip(t *testing.T) {
 	require.Equal(t, colMetaJSON, got)
 }
 
-// TestPeekColMetaJSON_NoHeader: when no header was emitted (empty
-// colMetaJSON) PeekColMetaJSON returns "" without error.
+// TestPeekColMetaJSON_NoHeader: when colMetaJSON is empty the chunk's
+// frame header section is empty too — PeekColMetaJSON returns "".
 func TestPeekColMetaJSON_NoHeader(t *testing.T) {
 	rows := []PendingRecord{{Pkid: 1, Vec: []float32{1, 2, 3, 4}}}
 	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4, 0, "")
