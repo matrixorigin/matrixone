@@ -826,3 +826,69 @@ func TestTryExtractPredicate_NotAnExprF(t *testing.T) {
 	_, ok := tryExtractPredicate(td, makeLitInt64(1), partColSet)
 	assert.False(t, ok)
 }
+
+func TestHivePartitionBetweenCoverageHack(t *testing.T) {
+	intCases := []struct {
+		typ types.T
+	}{
+		{types.T_int8},
+		{types.T_int16},
+		{types.T_int32},
+		{types.T_int64},
+	}
+	for _, tc := range intCases {
+		colType := tree.HivePartColType{Id: int32(tc.typ)}
+		assert.Equal(t, MatchTrue, matchPartitionRange("2", []string{"1", "3"}, colType), tc.typ)
+		assert.Equal(t, MatchFalse, matchPartitionRange("4", []string{"1", "3"}, colType), tc.typ)
+	}
+
+	uintCases := []struct {
+		typ types.T
+	}{
+		{types.T_uint8},
+		{types.T_uint16},
+		{types.T_uint32},
+		{types.T_uint64},
+	}
+	for _, tc := range uintCases {
+		colType := tree.HivePartColType{Id: int32(tc.typ)}
+		assert.Equal(t, MatchTrue, matchPartitionRange("2", []string{"1", "3"}, colType), tc.typ)
+		assert.Equal(t, MatchFalse, matchPartitionRange("4", []string{"1", "3"}, colType), tc.typ)
+	}
+
+	assert.Equal(t, MatchUnknown, matchPartitionRange("2", []string{"1"}, tree.HivePartColType{Id: int32(types.T_int32)}))
+	assert.Equal(t, MatchUnknown, matchPartitionRange("2", []string{"1", "3"},
+		tree.HivePartColType{Id: int32(types.T_uint64), Enumvalues: "a,b"}))
+	assert.Equal(t, MatchUnknown, matchPartitionRange("b", []string{"a", "c"}, tree.HivePartColType{Id: int32(types.T_varchar)}))
+
+	assert.Equal(t, MatchUnknown, matchIntRange("x", "1", "3", 32))
+	assert.Equal(t, MatchUnknown, matchIntRange("2", "x", "3", 32))
+	assert.Equal(t, MatchUnknown, matchIntRange("2", "1", "x", 32))
+	assert.Equal(t, MatchFalse, matchIntRange("2", "3", "1", 32))
+	assert.Equal(t, MatchFalse, matchIntRange("0", "1", "3", 32))
+	assert.Equal(t, MatchTrue, matchIntRange("2", "1", "3", 32))
+
+	assert.Equal(t, MatchUnknown, matchUintRange("x", "1", "3", 32))
+	assert.Equal(t, MatchUnknown, matchUintRange("2", "x", "3", 32))
+	assert.Equal(t, MatchUnknown, matchUintRange("2", "1", "x", 32))
+	assert.Equal(t, MatchFalse, matchUintRange("2", "3", "1", 32))
+	assert.Equal(t, MatchFalse, matchUintRange("0", "1", "3", 32))
+	assert.Equal(t, MatchTrue, matchUintRange("2", "1", "3", 32))
+
+	assert.True(t, filterPartitionDir("2", tree.HivePartColType{Id: int32(types.T_int32)},
+		&PartitionPredicate{Op: PartitionOp(99), Values: []string{"1"}}))
+}
+
+func TestTryExtractBetweenCoverageHack(t *testing.T) {
+	td := makeTableDef("year", "other")
+	partColSet := map[string]bool{"year": true}
+
+	_, ok := tryExtractBetween(td, []*plan.Expr{makeColExpr(0, "year")}, partColSet)
+	assert.False(t, ok)
+
+	_, ok = tryExtractBetween(td, []*plan.Expr{makeColExpr(1, "other"), makeLitInt64(1), makeLitInt64(3)}, partColSet)
+	assert.False(t, ok)
+
+	_, ok = tryExtractBetween(td, []*plan.Expr{makeColExpr(0, "year"), makeColExpr(1, "other"), makeLitInt64(3)}, partColSet)
+	assert.False(t, ok)
+}
