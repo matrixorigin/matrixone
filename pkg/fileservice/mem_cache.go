@@ -67,7 +67,7 @@ func NewMemCache(
 		counterSets: counterSets,
 	}
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
@@ -112,7 +112,7 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
@@ -131,8 +131,10 @@ func NewMemCache(
 			callbackLock := ret.callbacksLock(key)
 			callbackLock.Lock()
 			defer callbackLock.Unlock()
-			if dataCache != nil && dataCache.Contains(key) {
-				return
+			if dataCache != nil {
+				if currentSeq, ok := dataCache.CurrentSeq(key); ok && currentSeq != seq {
+					return
+				}
 			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostEvict {

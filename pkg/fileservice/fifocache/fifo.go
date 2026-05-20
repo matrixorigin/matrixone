@@ -32,11 +32,11 @@ type Cache[K comparable, V any] struct {
 	capacity1    fscache.CapacityFunc
 	keyShardFunc func(K) uint64
 
-	postSet func(ctx context.Context, key K, value V, size int64)
+	postSet func(ctx context.Context, key K, value V, size int64, seq uint64)
 	postGet func(ctx context.Context, key K, value V, size int64)
 	// postEvict is called after an item is evicted from the cache.
 	// It must be safe for concurrent invocation from multiple goroutines.
-	postEvict func(ctx context.Context, key K, value V, size int64)
+	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64)
 
 	shards [numShards]struct {
 		sync.Mutex
@@ -55,6 +55,7 @@ type Cache[K comparable, V any] struct {
 	ghost     Queue[*_CacheItem[K, V]]
 
 	capacityCut atomic.Int64
+	nextSeq     atomic.Uint64
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -64,6 +65,7 @@ type _CacheItem[K comparable, V any] struct {
 	size    int64
 	count   atomic.Int32
 	queue   uint8
+	seq     uint64
 }
 
 const (
@@ -100,9 +102,9 @@ func (c *_CacheItem[K, V]) dec() {
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
-	postSet func(ctx context.Context, key K, value V, size int64),
+	postSet func(ctx context.Context, key K, value V, size int64, seq uint64),
 	postGet func(ctx context.Context, key K, value V, size int64),
-	postEvict func(ctx context.Context, key K, value V, size int64),
+	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
 		capacity: capacity,
@@ -140,6 +142,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 				value:   value,
 				valueOK: true,
 				size:    size,
+				seq:     c.nextSeq.Add(1),
 			}
 			item.count.Store(oldItem.count.Load())
 			// replacing the oldItem. oldItem will be evicted from ghost queue eventually.
@@ -156,6 +159,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 		value:   value,
 		valueOK: true,
 		size:    size,
+		seq:     c.nextSeq.Add(1),
 	}
 	shard.values[key] = item
 
@@ -165,7 +169,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	if item := c.set(ctx, key, value, size); item != nil {
 		if c.postSet != nil {
-			c.postSet(ctx, key, value, size)
+			c.postSet(ctx, key, value, size, item.seq)
 		}
 		// item inserted, enqueue
 		c.enqueue(item)
@@ -247,6 +251,18 @@ func (c *Cache[K, V]) Contains(key K) bool {
 	return ok && item.valueOK
 }
 
+func (c *Cache[K, V]) CurrentSeq(key K) (uint64, bool) {
+	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard.Lock()
+	defer shard.Unlock()
+
+	item, ok := shard.values[key]
+	if !ok || !item.valueOK {
+		return 0, false
+	}
+	return item.seq, true
+}
+
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
@@ -277,7 +293,9 @@ func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) b
 	pe.key = item.key
 	pe.value = item.value
 	pe.size = item.size
+	pe.seq = item.seq
 	oldSize := item.size
+	item.seq = c.nextSeq.Add(1)
 	item.value = value
 	item.size = size
 	switch item.queue {
@@ -290,7 +308,7 @@ func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) b
 	c.queueLock.Unlock()
 	c.postEvictItem(ctx, pe, true)
 	if c.postSet != nil {
-		c.postSet(ctx, key, value, size)
+		c.postSet(ctx, key, value, size, item.seq)
 	}
 	c.Evict(ctx, nil, 0)
 	return true
@@ -301,6 +319,7 @@ type _PendingPostEvict[K comparable, V any] struct {
 	key   K
 	value V
 	size  int64
+	seq   uint64
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
@@ -449,6 +468,7 @@ func purgeItemValue[K comparable, V any](item *_CacheItem[K, V]) (pe _PendingPos
 	pe.key = item.key
 	pe.value = item.value
 	pe.size = item.size
+	pe.seq = item.seq
 	evicted = true
 	item.valueOK = false
 	// Clear item.value while the caller holds the shard lock so future Get
@@ -463,7 +483,7 @@ func (c *Cache[K, V]) postEvictItem(ctx context.Context, pe _PendingPostEvict[K,
 	if !evicted || c.postEvict == nil {
 		return
 	}
-	c.postEvict(ctx, pe.key, pe.value, pe.size)
+	c.postEvict(ctx, pe.key, pe.value, pe.size, pe.seq)
 }
 
 func (c *Cache[K, V]) evictGhost() {

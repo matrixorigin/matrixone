@@ -101,13 +101,13 @@ func NewDiskCache(
 			return maphash.String(seed, key)
 		},
 
-		func(_ context.Context, _ string, _ struct{}, size int64) { // postSet
+		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) { // postSet
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacityFunc()))
 		},
 
 		nil,
-		func(ctx context.Context, path string, _ struct{}, size int64) {
+		func(ctx context.Context, path string, _ struct{}, size int64, _ uint64) {
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacityFunc()))
 			doneUpdate, ok := ret.tryStartUpdate(path)
