@@ -1055,7 +1055,6 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
       }
   }`
 
-	fmt.Printf("%d, %d, %d", len(explain_normal_res), len(explain_verbose_res), len(explain_analyze_res))
 	return []tcTemp{
 		{
 			info: "test mo_explain_phy normal",
