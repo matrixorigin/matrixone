@@ -15,8 +15,10 @@
 package readutil
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/require"
 )
 
 // Add for just pass UT coverage check
@@ -55,6 +57,18 @@ func TestEmptyRelationData(t *testing.T) {
 	})
 
 	require.Equal(t, 0, relData.DataCnt())
+}
+
+func TestReaderNextBlockReadPolicySkipsFullFilePreloadAfterThreshold(t *testing.T) {
+	r := &reader{threshHold: 1}
+
+	require.Zero(t, r.nextBlockReadPolicy())
+	require.Zero(t, r.nextBlockReadPolicy())
+
+	policy := r.nextBlockReadPolicy()
+	require.True(t, policy.Any(fileservice.SkipMemoryCacheWrites))
+	require.True(t, policy.Any(fileservice.SkipFullFilePreloads))
+	require.False(t, policy.CacheFullFile())
 }
 
 //func TestQueryMetadataScan(t *testing.T) {
