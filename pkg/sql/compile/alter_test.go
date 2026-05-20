@@ -88,19 +88,28 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 	insertErr := errors.New("stop after insert-copy")
 
 	for _, tc := range []struct {
-		name              string
-		skipPkDedup       bool
-		wantPipelineFlush bool
+		name               string
+		skipPkDedup        bool
+		nilCtxBeforeInsert bool
+		wantPipelineFlush  bool
 	}{
 		{
-			name:              "skip pk dedup false",
-			skipPkDedup:       false,
-			wantPipelineFlush: false,
+			name:               "skip pk dedup false",
+			skipPkDedup:        false,
+			nilCtxBeforeInsert: false,
+			wantPipelineFlush:  false,
 		},
 		{
-			name:              "skip pk dedup true",
-			skipPkDedup:       true,
-			wantPipelineFlush: true,
+			name:               "skip pk dedup true",
+			skipPkDedup:        true,
+			nilCtxBeforeInsert: false,
+			wantPipelineFlush:  true,
+		},
+		{
+			name:               "skip pk dedup true with nil proc ctx",
+			skipPkDedup:        true,
+			nilCtxBeforeInsert: true,
+			wantPipelineFlush:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,10 +168,20 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
-			copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
-				TblId: 2,
-				Name:  "dept_copy",
-			}).AnyTimes()
+			if tc.nilCtxBeforeInsert {
+				copyRel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef {
+					proc.Ctx = nil
+					return &plan.TableDef{
+						TblId: 2,
+						Name:  "dept_copy",
+					}
+				})
+			} else {
+				copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+					TblId: 2,
+					Name:  "dept_copy",
+				}).AnyTimes()
+			}
 
 			mockDb := mock_frontend.NewMockDatabase(ctrl)
 			mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
@@ -185,9 +204,15 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 
 			err := s.AlterTableCopy(c)
 			require.ErrorIs(t, err, insertErr)
-			require.Same(t, origCtx, proc.Ctx)
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
+
+			if tc.nilCtxBeforeInsert {
+				require.Same(t, spyExec.insertCtx, proc.Ctx)
+				require.NotNil(t, proc.Ctx)
+			} else {
+				require.Same(t, origCtx, proc.Ctx)
+			}
 
 			if tc.skipPkDedup {
 				require.Same(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
